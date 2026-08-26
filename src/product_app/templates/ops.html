@@ -288,7 +288,7 @@
                 <tr><td>Availability</td><td>99% of requests answered non-5xx</td><td><code>http_requests_total</code> status classes</td></tr>
                 <tr><td>HTTP 5xx error rate</td><td>&lt; 1% of requests</td><td>same series — the error-rate tile</td></tr>
                 <tr><td>HTTP request latency</td><td>p95 &lt; 1 s (non-run routes)</td><td>duration histogram buckets — the p95 tile</td></tr>
-                <tr><td>End-to-end query latency</td><td>P50 ≤ 45 s · P95 ≤ 120 s · hard timeout 180 s (NFR-001)</td><td>run-level deadline enforcement + histograms</td></tr>
+                <tr><td>End-to-end query latency</td><td>P50 ≤ 45 s · P95 ≤ 120 s · hard timeout 360 s (NFR-001)</td><td>run-level deadline enforcement + histograms</td></tr>
                 <tr><td>Readiness honesty</td><td>readiness state reflects real capability</td><td>the readiness probe — the readiness tile</td></tr>
               </tbody>
             </table>

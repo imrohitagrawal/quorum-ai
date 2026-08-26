@@ -36,7 +36,7 @@ import time
 from dataclasses import asdict, dataclass
 from decimal import Decimal
 from enum import StrEnum
-from http.client import HTTPException
+from http.client import HTTPException, IncompleteRead
 from math import ceil
 from threading import RLock
 from time import perf_counter
@@ -1233,6 +1233,17 @@ class ProviderExecutionService:
             method="POST",
         )
         try:
+            # The budget clock starts HERE, before ``urlopen``, not after it.
+            # ``urlopen`` returns only once the status line and the whole
+            # header block have been read, and that phase is bounded
+            # per-``recv`` exactly like the body was -- so a header block
+            # dribbled a byte at a time is unbounded in wall clock. Starting
+            # the clock before the call makes the BUDGET cover connect,
+            # request, headers and body together, which is what
+            # ``openrouter_call_budget_seconds`` claims to be. Without this the
+            # claim was false, and a review measured the header phase alone
+            # reaching several times the budget.
+            call_started = time.monotonic()
             with urlopen(request, timeout=settings.openrouter_timeout_seconds) as response:
                 # NOT ``response.read()``. That is bounded per-``recv`` and
                 # therefore not bounded at all in wall clock; see
@@ -1242,7 +1253,7 @@ class ProviderExecutionService:
                 # dispatched and may have been billed.
                 raw_body = _read_body_within_budget(
                     response,
-                    settings.openrouter_call_budget_seconds,
+                    settings.openrouter_call_budget_seconds - (time.monotonic() - call_started),
                     settings.openrouter_timeout_seconds,
                 ).decode()
         except HTTPError as exc:
@@ -1902,6 +1913,11 @@ def _read_body_within_budget(response: Any, budget: float, per_recv: float) -> b
     stall detector keeps working inside the budget rather than being replaced
     by it. If the socket cannot be reached at all the deadline check between
     chunks still bounds the total, at the cost of one already-started ``recv``.
+
+    ``budget`` is what REMAINS of the call's budget, not the whole of it: the
+    caller starts the clock before ``urlopen`` so that connect, request,
+    headers and body share one allowance. Passing the full budget here would
+    leave the header phase unbounded, which is the same defect one layer up.
     """
     deadline = time.monotonic() + budget
     chunks: list[bytes] = []
@@ -1943,6 +1959,32 @@ def _read_body_within_budget(response: Any, budget: float, per_recv: float) -> b
                 f"provider response body read returned {type(chunk).__name__}, not bytes"
             )
         if not chunk:
+            # EOF. That is only the END of the body if the framing agrees.
+            #
+            # ``read()`` -- the call this replaced -- runs ``_safe_read`` and
+            # raises ``IncompleteRead`` when a ``Content-Length`` response ends
+            # early. ``read1`` does not: it returns ``b""`` at EOF whether or
+            # not the declared bytes arrived, so reading in a loop SILENTLY
+            # DROPPED that check. Measured against a loopback server declaring
+            # 4220 bytes and sending 124 before a graceful close:
+            #
+            #     OLD read():  RAISED IncompleteRead
+            #     NEW (before this guard): RETURNED 124 bytes, resp.length=4096
+            #
+            # The delivered prefix was valid JSON, so the pipeline would have
+            # served a truncated answer as complete, priced it, and reported
+            # ``is_truncated=False``. Restoring the check is not optional: it
+            # is the difference between a torn body being classified
+            # ``_DISPATCH_UNMEASURED`` and being billed as a real answer.
+            #
+            # ``HTTPResponse.length`` is the bytes still expected under
+            # ``Content-Length`` framing; it is ``None`` for chunked responses,
+            # which do their own framing check inside ``read1`` and raise there
+            # (verified: a torn chunked body raises ``IncompleteRead`` on both
+            # the old and the new path).
+            remaining_bytes = getattr(response, "length", None)
+            if isinstance(remaining_bytes, int) and remaining_bytes > 0:
+                raise IncompleteRead(b"".join(chunks), remaining_bytes)
             return b"".join(chunks)
         chunks.append(bytes(chunk))
         if reader is None:

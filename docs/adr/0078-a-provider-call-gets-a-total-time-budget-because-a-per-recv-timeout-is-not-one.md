@@ -95,7 +95,7 @@ could have made streaming break the cost ledger. It does not.
 |---|---|---|---|
 | `openrouter_timeout_seconds` | 8.0 | **8.0, unchanged** | worst streamed gap 0.478s → ~17× margin; it is a stall detector and stays one |
 | `openrouter_call_budget_seconds` | *(absent)* | **60.0** | 1.5× the longest call measured (40.170s) |
-| `quorum_run_deadline_seconds` | 180.0 | **300.0** | measured critical path ~124.7s |
+| `quorum_run_deadline_seconds` | 180.0 | **360.0** | measured critical path ~124.7s, and 5 x the call budget is 300 |
 | `tavily_timeout_seconds` | 8.0 | **8.0, unchanged** | never measured; nothing here justifies moving it |
 
 **The budget is enforced as a deadline across the whole body read**, in
@@ -125,7 +125,7 @@ NaN and infinity before any comparison — NaN compares False to every bound, so
 pure range check accepts it, and a NaN deadline makes `remaining <= 0` False
 forever.
 
-### The critical path, and an honest note about 300
+### The critical path, and an honest note about the deadline
 
 Five sequential legs — 4 parallel initial answers, debate round 1, debate round
 2, 5 parallel synthesis sections, judge:
@@ -139,11 +139,70 @@ synthesis leg is measured here for the first time; **the judge leg is still
 ASSUMED at ~5s and has never been probed.**
 
 **180 was not demonstrated to be too small.** 124.7 < 180. This is a margin
-decision, not a fix: 2.4× where 180 bought 1.45×, on legs that are each a
+decision, not a fix: 2.9× where 180 bought 1.45×, on legs that are each a
 max-of-N draw with small N. Two further limits, stated rather than buried:
 **n=6 gives a maximum, never a p95**, and the parallel legs are the slowest of
 4 and of 5 draws respectively, which is worse than the slowest of 6 reps of one
 model.
+
+**360 rather than 300, and a reviewer had to point out why.** The first draft
+of this ADR said 300 and claimed it "keeps the deadline above
+`5 × openrouter_call_budget_seconds`". 5 × 60 = **300**, which is not above
+300 — it is exactly equal, zero margin — and each leg can overshoot its budget
+by up to one already-started `recv` on top, so the true five-leg worst case is
+nearer 340. At 300 the run-level net would have fired on a run that every
+per-call bound considered healthy, which is the opposite of what a safety net
+is for. 360 clears `5 × budget` by 60s.
+
+**This number is NFR-001, NFR-004 and acceptance criterion AC-021.** It is not
+an internal knob: it is published in `docs/11-non-functional-requirements.md`,
+`docs/12-acceptance-criteria.md`, `docs/18-requirement-traceability-matrix.md`,
+`docs/54-ac-to-test-map.md` and on the operator dashboard
+(`templates/ops.html`, "hard timeout 360 s (NFR-001)"). All of them moved with
+it. Changing the code alone would have left the product's stated hard timeout
+false in the one place an operator reads it, and no gate would have noticed —
+a reviewer found it, not CI.
+
+### What the adversarial review changed
+
+Four lenses over the committed diff, then two independent refuters per finding.
+26 raised, 4 refuted, 12 dropped unverified below the cap (all `ADVISORY_DEBT`,
+listed in the pull request rather than discarded), 10 survived. The three that
+changed the shipped code:
+
+**A `CRITICAL_BLOCKER`, and it was a silent one on the paid path.**
+`_read_body_within_budget` treated `read1() == b""` as end-of-body.
+`response.read()` — the call it replaced — runs `_safe_read` and raises
+`IncompleteRead` when a `Content-Length` response ends early; `read1` returns
+`b""` at EOF regardless. Re-measured at the keyboard against a loopback server
+declaring 4220 bytes and sending 124, then closing gracefully:
+
+```
+HONEST Content-Length (control)   OLD read(): RETURNED 124, length=0    NEW: RETURNED 124, length=0
+LYING Content-Length (truncated)  OLD read(): RAISED IncompleteRead     NEW: RETURNED 124, length=4096
+```
+
+The delivered prefix was valid JSON, so a truncated response would have been
+served as a complete answer, priced, and reported `is_truncated=False`. **No
+test in the change used `Content-Length` framing at all** — every server in the
+new test file sets `Transfer-Encoding: chunked` — so the suite was structurally
+blind to it. The guard now consults `HTTPResponse.length` and raises; five tests
+cover it, including the honest-framing partner.
+
+**The budget did not cover the header phase.** `urlopen` returns only once the
+status line and header block are read, and that phase is bounded per-`recv`
+exactly like the body was. Starting the clock after `urlopen` left it unbounded,
+so `config.py`'s "TOTAL wall-clock budget for one provider call" was false as
+written. The clock now starts before `urlopen`.
+
+**`5 × 60 = 300` is not above 300.** See the deadline note above.
+
+Two more survivors were closed with tests rather than code: dropping
+`and not chunks` from the fallback guard let the reader switch from `read1` to
+`read` *mid-body*, stitching a differently-framed read onto a partial one; and
+`openrouter_timeout_seconds` — the other half of `min(per_recv, remaining)` —
+had no validator, so 0 (which makes a socket **non-blocking**, not fast), NaN
+and infinity were all accepted.
 
 ## Rejected alternatives
 
@@ -188,15 +247,27 @@ and 7a).
 
 ## Consequences
 
-- A single provider call can no longer run unbounded. The worst case is 60s plus
-  at most one already-started `recv`.
+- A single provider call can no longer run unbounded. The budget clock starts
+  **before** `urlopen`, so connect, request, headers and body share one
+  allowance; the worst case is 60s plus at most one already-started `recv`.
+  The first version started the clock *after* `urlopen` returned, which left
+  the status-line and header phase bounded per-`recv` only — a reviewer
+  measured that phase alone reaching several times the budget, and the
+  docstring's "total wall-clock budget for one provider call" was false as
+  written until the clock moved.
 - **A slow-but-healthy call that previously completed at, say, 70s will now be
   cut and classified possibly-billed.** No measured call came close — the
   longest was 40.170s — but this is a real behaviour change on the paid path and
   it is the cost of the bound.
-- `quorum_run_deadline_seconds` stays above `5 × openrouter_call_budget_seconds`
-  by construction, pinned by a test, so the run-level net cannot fire on a run
-  every per-call bound considered healthy.
+- `quorum_run_deadline_seconds` (360) stays above
+  `5 × openrouter_call_budget_seconds` (300) by 60s, pinned by a test, so the
+  run-level net cannot fire on a run every per-call bound considered healthy.
+- **`DEBATE_HARD_TIMEOUT_MS` (180s) is now effectively unreachable** and is
+  deliberately left alone. It gates debate round two on elapsed time since
+  round one; with each call bounded at 60s, two rounds cannot reach 180s. It is
+  a separate mechanism with its own tests, and retiring it is a different
+  concern from bounding a call. Recorded here so the next reader does not
+  mistake it for an oversight.
 - **None of this can fire in production today.** `live_execution` is `false`, so
   no live body reaches this code. Like ADR-0075's stance branch and ADR-0077's
   `is_truncated`, it is latent-correct: covered by tests and seven killed

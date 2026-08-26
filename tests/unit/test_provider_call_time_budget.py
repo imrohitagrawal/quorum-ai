@@ -36,9 +36,10 @@ server that sent nothing at all.
 from __future__ import annotations
 
 import json
+import socket
 import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Generator, Iterator
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any
 
@@ -470,3 +471,225 @@ def test_the_deadline_still_bounds_the_read_when_the_socket_cannot_be_reached(
     assert result is not None
     assert result.answer_text == ""
     assert result.usage is None
+
+
+def _raw_server(
+    header_block: bytes, body: bytes, *, header_tick: float = 0.0
+) -> Generator[str, None, None]:
+    """A loopback server that controls its own HTTP framing byte by byte.
+
+    ``HTTPServer`` computes framing for you, which is exactly what these tests
+    must not have: they need a response whose declared ``Content-Length`` can
+    LIE, and a header block that can be dribbled. The request is drained in
+    full before replying and the socket is shut down for write, so the client
+    sees a clean EOF rather than a reset -- an abortive close raises
+    ``ConnectionResetError`` on both the old and new read paths and would hide
+    the very difference under test.
+    """
+
+    def serve(sock: socket.socket) -> None:
+        conn, _ = sock.accept()
+        conn.settimeout(5.0)
+        buf = b""
+        try:
+            while b"\r\n\r\n" not in buf:
+                buf += conn.recv(4096)
+            declared = 0
+            for line in buf.split(b"\r\n"):
+                if line.lower().startswith(b"content-length:"):
+                    declared = int(line.split(b":")[1])
+            rest = buf.split(b"\r\n\r\n", 1)[1]
+            while len(rest) < declared:
+                rest += conn.recv(4096)
+            if header_tick:
+                for i in range(len(header_block)):
+                    conn.sendall(header_block[i : i + 1])
+                    time.sleep(header_tick)
+            else:
+                conn.sendall(header_block)
+            conn.sendall(body)
+            conn.shutdown(socket.SHUT_WR)
+            time.sleep(0.3)
+        except (OSError, ValueError, IndexError):
+            pass
+        finally:
+            conn.close()
+
+    sock = socket.socket()
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.bind(("127.0.0.1", 0))
+    sock.listen(1)
+    threading.Thread(target=serve, args=(sock,), daemon=True).start()
+    try:
+        yield f"http://127.0.0.1:{sock.getsockname()[1]}"
+    finally:
+        sock.close()
+
+
+_COMPLETION = (
+    b'{"choices":[{"finish_reason":"stop","message":{"content":"the answer"}}],'
+    b'"usage":{"prompt_tokens":100,"completion_tokens":900,"total_tokens":1000}}'
+)
+
+
+def _content_length_headers(declared: int) -> bytes:
+    return (
+        b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+        b"Content-Length: %d\r\n\r\n" % declared
+    )
+
+
+def test_a_body_cut_short_of_its_content_length_is_never_served_as_an_answer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """RED when: EOF is treated as end-of-body without checking the framing.
+
+    This is the defect an adversarial reviewer found in the first version of
+    this change, and it is the worst kind: a SILENT one on the paid path.
+    ``response.read()`` -- the call the budget replaced -- runs ``_safe_read``
+    and raises ``IncompleteRead`` when a ``Content-Length`` response ends
+    early. ``read1`` returns ``b""`` at EOF regardless, so reading in a loop
+    dropped the check.
+
+    Measured against this server, declaring 4220 bytes and sending 124:
+
+        OLD read():              RAISED IncompleteRead
+        NEW, before the guard:   RETURNED 124 bytes, resp.length=4096
+
+    The delivered prefix is valid JSON, so the pipeline served a truncated
+    answer as complete, priced it, and reported ``is_truncated=False``. Its
+    positive partner below sends the SAME bytes with an honest header and must
+    still get the real answer -- otherwise "it refused" would be satisfied by a
+    build that refuses everything.
+    """
+    declared = len(_COMPLETION) + 4096
+    server = _raw_server(_content_length_headers(declared), _COMPLETION)
+    base_url = next(server)
+    try:
+        result, _wall = _call_against(monkeypatch, base_url, budget=30.0)
+    finally:
+        server.close()
+    assert result is not None
+    assert result.answer_text == ""
+    assert result.usage is None
+
+
+def test_an_honest_content_length_body_is_served_normally(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The positive partner. RED when: the framing check refuses a COMPLETE
+    ``Content-Length`` response -- which would break every provider whose
+    responses are not chunked.
+
+    Same bytes, same server, only the declared length differs.
+    """
+    server = _raw_server(_content_length_headers(len(_COMPLETION)), _COMPLETION)
+    base_url = next(server)
+    try:
+        result, _wall = _call_against(monkeypatch, base_url, budget=30.0)
+    finally:
+        server.close()
+    assert result is not None
+    assert result.answer_text == "the answer"
+    assert result.usage is not None
+    assert result.usage.completion_tokens == 900
+
+
+def test_the_budget_covers_the_header_phase_not_only_the_body(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """RED when: the budget clock starts AFTER ``urlopen`` returns.
+
+    ``urlopen`` returns only once the status line and the whole header block
+    have been read, and that phase is bounded per-``recv`` exactly like the
+    body was. A header block dribbled one byte at a time is therefore
+    unbounded, and a budget that starts afterwards cannot see it -- so
+    ``openrouter_call_budget_seconds`` would not be the "total wall-clock
+    budget for one provider call" that its own docstring claims.
+
+    This server dribbles ~70 header bytes at 0.05s each, about 3.5s, against a
+    1.5s budget. The literal 4.0s bound is well under the ~3.5s + full body
+    read the un-clocked version would take, and its positive partner is the
+    lower bound proving the dribble really happened.
+    """
+    server = _raw_server(_content_length_headers(len(_COMPLETION)), _COMPLETION, header_tick=0.05)
+    base_url = next(server)
+    try:
+        result, wall = _call_against(monkeypatch, base_url, budget=1.5)
+    finally:
+        server.close()
+    assert wall < 4.0, f"the call ran {wall:.3f}s; a 1.5s budget must cover the headers"
+    assert wall >= 0.5, f"the call ran {wall:.3f}s; the header dribble did not happen"
+    assert result is not None
+    assert result.answer_text == ""
+
+
+def test_the_whole_body_fallback_happens_only_before_any_data_is_collected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """RED when: ``and not chunks`` is dropped from the fallback guard.
+
+    The fallback from ``read1`` to ``read`` exists for test doubles that
+    implement only ``read``. It must happen ONCE, at the start. Without the
+    ``not chunks`` half, a reader can switch mid-body after data is already
+    collected -- appending a second, differently-framed read onto a partial
+    one, which is how a torn body turns into a plausible whole.
+
+    Here ``read1`` yields real bytes first and junk second. With the guard that
+    is a broken transport and the call is refused; without it, the junk sends
+    control to ``read``, whose bytes are appended to the prefix and served.
+    """
+
+    class _SwitchesMidBody:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def read1(self, _n: int) -> object:
+            self.calls += 1
+            return b'{"choices":[{"message":' if self.calls == 1 else object()
+
+        def read(self, *_a: object) -> bytes:
+            return b'{"content":"fabricated"}}]}'
+
+        def __enter__(self) -> _SwitchesMidBody:
+            return self
+
+        def __exit__(self, *_: object) -> None:
+            return None
+
+    monkeypatch.setattr(config.settings, "openrouter_live_execution_enabled", True, raising=False)
+    monkeypatch.setattr("product_app.providers.urlopen", lambda *_a, **_k: _SwitchesMidBody())
+    result = provider_execution_service.call_with_prompt(
+        openrouter_key="sk-or-test",
+        model_id=_MODEL_ID,
+        system_prompt="s",
+        user_prompt="u",
+    )
+    assert result is not None
+    # Never the stitched-together text. The positive partner for this negative
+    # is the honest-Content-Length test above, which proves a real body IS
+    # served.
+    assert result.answer_text == ""
+    assert "fabricated" not in result.answer_text
+
+
+def test_the_per_recv_timeout_is_validated_too(monkeypatch: pytest.MonkeyPatch) -> None:
+    """RED when: ``openrouter_timeout_seconds`` accepts 0, negative or NaN.
+
+    It is the other half of ``min(per_recv, remaining)``. A NaN there makes the
+    ``min`` NaN, and ``settimeout(NaN)`` is not a bound; 0 makes the socket
+    NON-BLOCKING, which is a different mode of operation entirely rather than a
+    fast timeout. The budget validator cross-checks the pair, so leaving this
+    side unconstrained meant the one place that relates them checked only one.
+    """
+    from pydantic import ValidationError
+
+    from product_app.config import Settings
+
+    for bad in (0.0, -1.0, float("nan"), float("inf")):
+        with pytest.raises(ValidationError, match="OPENROUTER_TIMEOUT_SECONDS"):
+            Settings(openrouter_timeout_seconds=bad)
+    # positive partner: a legal value still constructs, and still constrains
+    # the budget above it
+    ok = Settings(openrouter_timeout_seconds=3.0, openrouter_call_budget_seconds=9.0)
+    assert ok.openrouter_timeout_seconds == 3.0

@@ -170,8 +170,10 @@ class Settings(BaseSettings):
 
     # --- Run-level wall-clock deadline (NFR-004 / NFR-001, P3) -----------
     #: Total wall-clock budget for ONE query run, in seconds. docs/11 pins
-    #: the number: NFR-001 "hard timeout at 180 seconds", NFR-004 "a
-    #: completed result or a partial-result explanation within 180 seconds".
+    #: the number: NFR-001 "hard timeout at 360 seconds", NFR-004 "a
+    #: completed result or a partial-result explanation within 360 seconds".
+    #: Those targets moved with this value on 2026-08-26 (ADR-0078); changing
+    #: one without the other makes the product's stated timeout a lie.
     #: On breach the executor degrades the run to an HONEST partial result
     #: (status ``timed_out``) carrying every slot completed so far — never a
     #: bare 500, never a blank. Deliberately generous: it is a safety net, not
@@ -179,7 +181,7 @@ class Settings(BaseSettings):
     #: Env var: ``QUORUM_RUN_DEADLINE_SECONDS``. Values <= 0 are rejected —
     #: 0 must never mean "unlimited".
     #:
-    #: 180 -> 300 on 2026-08-26. The old value's justification was that "the
+    #: 180 -> 360 on 2026-08-26. The old value's justification was that "the
     #: pipeline's own per-call HTTP timeouts keep a healthy run far below
     #: this", and that sentence was false in a way nobody had checked: the
     #: per-call timeout is per-``recv``, so it bounded no call's total time at
@@ -198,12 +200,43 @@ class Settings(BaseSettings):
     #: still ASSUMED at ~5s and has never been probed.
     #:
     #: **180 was not demonstrated to be too small** — 124.7 < 180 — so this is
-    #: a margin decision, not a fix, and ADR-0078 says so. It buys 2.4x over
+    #: a margin decision, not a fix, and ADR-0078 says so. It buys 2.9x over
     #: the measured path where 180 bought 1.45x, on legs that are each a
-    #: max-of-N draw with small N. It also keeps the deadline above
-    #: ``5 x openrouter_call_budget_seconds``, so the net cannot fire on a run
-    #: every per-call bound considered healthy.
-    quorum_run_deadline_seconds: float = 300.0
+    #: max-of-N draw with small N.
+    #:
+    #: 360 rather than 300, and the reason is arithmetic a reviewer had to
+    #: point out: the pipeline is five sequential legs, each now bounded by
+    #: ``openrouter_call_budget_seconds``, so a run in which every leg hits its
+    #: cap takes 5 x 60 = 300s. At a 300s deadline that leaves ZERO margin —
+    #: the run-level net would fire on a run every per-call bound considered
+    #: healthy, and each leg can overshoot its budget by up to one already
+    #: started ``recv`` on top. 360 clears ``5 x budget`` by 60s.
+    #:
+    #: **This number is NFR-001/NFR-004 and acceptance criterion AC-021.** It
+    #: is published in ``docs/11``, ``docs/12``, the traceability matrix, the
+    #: AC-to-test map and the operator dashboard. Moving it here alone would
+    #: leave the product contradicting itself; all of them moved together.
+    quorum_run_deadline_seconds: float = 360.0
+
+    @field_validator("openrouter_timeout_seconds", "tavily_timeout_seconds", mode="after")
+    @classmethod
+    def _per_recv_timeout_is_a_real_timeout(cls, value: float, info: Any) -> float:
+        # The other half of ``min(per_recv, remaining)``. Left unvalidated, the
+        # one place that cross-checks the pair checked only one side.
+        #
+        # Zero is the interesting case and it is NOT "a very short timeout":
+        # ``socket.settimeout(0)`` puts the socket in NON-BLOCKING mode, a
+        # different mode of operation in which a read raises ``BlockingIOError``
+        # rather than waiting. NaN is worse -- it compares False to every bound,
+        # so any range check accepts it, and it poisons ``min`` so the per-chunk
+        # timeout stops being a number at all.
+        name = (info.field_name or "").upper()
+        if not math.isfinite(value) or value <= 0:
+            raise ValueError(
+                f"{name} must be a finite number > 0; 0 puts the socket in "
+                "non-blocking mode and NaN/inf are not bounds at all"
+            )
+        return value
 
     @field_validator("openrouter_call_budget_seconds", mode="after")
     @classmethod
@@ -233,7 +266,7 @@ class Settings(BaseSettings):
         return value
 
     #: Inclusive upper bound on the run deadline (1 hour). A larger value is
-    #: a config mistake, not a policy: the documented budget is 180s, and an
+    #: a config mistake, not a policy: the documented budget is 360s, and an
     #: enormous float would overflow the underlying future-wait primitives
     #: (observed: ``inf`` raises ``OverflowError`` inside ``Future.result``,
     #: which would silently degrade healthy runs). Not configurable.
@@ -254,7 +287,7 @@ class Settings(BaseSettings):
         if value > cls.RUN_DEADLINE_MAX_SECONDS:
             raise ValueError(
                 "QUORUM_RUN_DEADLINE_SECONDS must be <= "
-                f"{cls.RUN_DEADLINE_MAX_SECONDS:g}; the documented budget is 300. "
+                f"{cls.RUN_DEADLINE_MAX_SECONDS:g}; the documented budget is 360. "
                 "Keep it comfortably ABOVE the worst-case healthy run, which is "
                 "five sequential legs each bounded by "
                 "openrouter_call_budget_seconds (plus tavily_timeout_seconds on "
