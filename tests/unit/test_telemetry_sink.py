@@ -357,6 +357,102 @@ def test_the_5xx_evidence_record_reaches_the_durable_billing_file(
     assert lines[0]["error_metadata_present"] is False
 
 
+def _drive_answerless_200(monkeypatch: pytest.MonkeyPatch, *, usage: bool = False) -> Any:
+    """Drive the REAL provider path into a 200 that yields no answer."""
+    _live(monkeypatch)
+    payload: dict[str, Any] = {"error": {"code": 502, "message": "provider down"}}
+    if usage:
+        payload["usage"] = {"prompt_tokens": 40, "completion_tokens": 7, "total_tokens": 47}
+    response = MagicMock()
+    response.read.return_value = json.dumps(payload).encode()
+    response.__enter__ = MagicMock(return_value=response)
+    response.__exit__ = MagicMock(return_value=False)
+    monkeypatch.setattr("product_app.providers.urlopen", MagicMock(return_value=response))
+    return provider_execution_service.call_with_prompt(
+        openrouter_key="sk-or-test",
+        model_id=_MODEL_ID,
+        system_prompt="s",
+        user_prompt="u",
+    )
+
+
+def test_the_answerless_record_reaches_the_durable_billing_file(
+    monkeypatch: pytest.MonkeyPatch, sink_dir: Path
+) -> None:
+    """RED WHEN: the record is emitted below WARNING, or leaves the allowlist.
+
+    Two defects this closes, both demonstrated by an adversarial reviewer
+    against the version of ADR-0077's change that shipped without this test.
+
+    **The level was unpinned.** Changing ``_LOGGER.warning`` to
+    ``_LOGGER.debug`` left the entire suite green, because the only test that
+    asserted the record drove it under
+    ``caplog.at_level(logging.DEBUG, ...)`` -- which captures a DEBUG record
+    just as happily as a WARNING one. Production runs at ``LOG_LEVEL = "INFO"``
+    (``fly.toml``), so the mutant deleted the record from
+    ``telemetry-billing.jsonl`` entirely: measured 1 line -> 0 lines. This test
+    reads the FILE, so a record that never reaches it fails the count.
+
+    **The membership assertion was not a file assertion.** Its sibling in
+    ``test_provider_body_shape_classification.py`` checks five names are in a
+    frozenset, which says nothing about whether a record lands. Severing the
+    allowlist from the handler left that one green.
+
+    The positive partner is
+    ``test_an_unrelated_warning_does_not_reach_the_billing_file`` below.
+    """
+    result = _drive_answerless_200(monkeypatch)
+    # The return value is UNCHANGED by this record (ADR-0077): a blank marker,
+    # not the sentinel. Pinned here so the sink cannot be shown working against
+    # a path that stopped behaving.
+    assert result is not None and result.answer_text == "" and result.usage is None
+    lines = _billing_lines(sink_dir)
+    assert len(lines) == 1, f"expected exactly 1 billing record, got {len(lines)}"
+    assert lines[0]["message"] == "upstream_provider_empty_answer"
+    assert lines[0]["level"] == "WARNING"
+
+
+def test_the_answerless_record_carries_these_fields_and_no_others(
+    monkeypatch: pytest.MonkeyPatch, sink_dir: Path
+) -> None:
+    """RED WHEN: any field is added to or removed from that record.
+
+    An EXACT set, not a subset. The same reviewer showed that adding the
+    outbound ``messages`` to the record's ``extra`` -- putting the user's
+    question verbatim into the durable file -- survived the whole suite,
+    because the only leak guard pinned one specific string from the RESPONSE.
+    A whole-set equality cannot be satisfied by a build that adds anything.
+
+    The seven names outside the custom set are what ``JsonFormatter`` puts on
+    every record; asserting the union means a formatter change is caught here
+    too rather than silently reshaping the issue-105 dataset. (It said "four"
+    on the first attempt and this test is what corrected it -- ``line``,
+    ``function`` and ``module`` are there too.)
+    """
+    _drive_answerless_200(monkeypatch, usage=True)
+    lines = _billing_lines(sink_dir)
+    assert len(lines) == 1
+    assert set(lines[0]) == {
+        # written by ``JsonFormatter`` on every record
+        "timestamp",
+        "level",
+        "logger",
+        "message",
+        "module",
+        "function",
+        "line",
+        # the three this record adds, and nothing else
+        "model_id",
+        "billing_class",
+        "usage_absent",
+    }
+    # ...and the values, so the set equality above cannot be met by three
+    # correctly-named fields carrying nothing.
+    assert lines[0]["billing_class"] == "possibly_billed"
+    assert lines[0]["usage_absent"] is False
+    assert lines[0]["model_id"] == _MODEL_ID
+
+
 def test_an_unrelated_warning_does_not_reach_the_billing_file(sink_dir: Path) -> None:
     """RED WHEN: the sink's filter is removed and it takes the whole root logger.
 

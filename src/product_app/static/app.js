@@ -3030,8 +3030,8 @@
       .filter((a) => a && a.shortened === true);
     if (shortenedAnswers.length) {
       push(
-        `- Incomplete answers: ${shortenedAnswers.length} model answer(s) hit the ` +
-          "length limit Quorum sets on each call and end mid-thought.",
+        `- Incomplete answers: ${shortenedAnswers.length} model answer(s) stopped ` +
+          "before finishing and end mid-thought.",
       );
     }
     if (fs && fs.citation_coverage && fs.citation_coverage.target_met === false) {
@@ -4693,17 +4693,24 @@
     );
     if (tagInfo.fallback) tag.dataset.fallback = "true";
     head.appendChild(tag);
-    // WP-F: ``shortened`` means the provider stopped at its token ceiling, so
-    // the text below ends mid-thought. It crossed the API boundary in WP-D and
-    // nothing rendered it, which left the product presenting an interrupted
-    // answer as the model's complete view. Marked in the head, beside the
-    // provider tag, because it qualifies the whole answer rather than any one
-    // paragraph of it.
+    // WP-F: ``shortened`` means the provider did not finish, so the text below
+    // ends mid-thought. It crossed the API boundary in WP-D and nothing
+    // rendered it, which left the product presenting an interrupted answer as
+    // the model's complete view. Marked in the head, beside the provider tag,
+    // because it qualifies the whole answer rather than any one paragraph of
+    // it.
+    //
+    // The words describe the EFFECT, never the CAUSE. Two causes set the flag
+    // -- the token ceiling and a provider that broke mid-generation -- and the
+    // flag does not say which. These strings said "hit the length limit Quorum
+    // sets on each model call" until 2026-08-26, when the second cause was
+    // added and made that sentence false for an answer the product could not
+    // tell apart.
     if (answer && answer.shortened === true) {
       const short = mkEl("span", "transcript-opening-shortened", "cut off — incomplete");
       short.title =
-        "This answer hit the length limit Quorum sets on each model call, so " +
-        "it ends mid-thought. It is not the model's complete view.";
+        "This answer stopped before it finished, so it ends mid-thought. It " +
+        "is not the model's complete view.";
       head.appendChild(short);
     }
     card.appendChild(head);
