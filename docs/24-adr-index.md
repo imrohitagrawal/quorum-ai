@@ -77,6 +77,7 @@ ways, so the record shows what was believed on a date and what replaced it.
 | [ADR-0071](adr/0071-live-execution-is-the-steady-state-so-the-declaration-is-re-affirmed-not-time-boxed.md) | Live execution is the steady state, so the declaration is re-affirmed rather than time-boxed | Architecture | Accepted — 2026-08-25 |
 | [ADR-0072](adr/0072-a-child-process-is-denied-the-parents-coverage-environment.md) | A child process is denied the parent's coverage environment, in one place, and a gate keeps it that way | Architecture | Accepted — 2026-08-25 |
 | [ADR-0073](adr/0073-sessions-are-as-durable-as-the-cap-that-counts-them.md) | Sessions are as durable as the cap that counts them | Architecture | Accepted — 2026-08-26 |
+| [ADR-0074](adr/0074-a-charge-records-whether-the-run-could-spend.md) | A charge records whether the run could spend, and each rail reads the meter that matches what it protects | Architecture | Accepted — 2026-08-26 |
 
 **This index was itself stale** until 2026-07-30: ADR-0002 had existed since
 2026-07-19 and was never listed here. A hand-maintained index is a derived fact

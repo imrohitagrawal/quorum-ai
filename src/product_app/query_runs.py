@@ -582,9 +582,12 @@ def estimate_query_run(
         threshold_action=estimate.threshold_action,
         confirmed=False,
         # F-01: this is a preview, not a charge. Without this flag an
-        # ALLOW-band estimate records ``cost_guardrail_accepted``, which both
-        # spend guards count — so one logical run is billed twice (once here,
-        # once at create) and an abandoned preview is billed for nothing.
+        # ALLOW-band estimate records an opening-charge type — since #376 that
+        # is ``cost_guardrail_accepted_simulated`` on a live-execution-off
+        # deployment, i.e. production, and ``cost_guardrail_accepted`` otherwise
+        # — and both per-account spend guards count either. So one logical run
+        # would be billed twice (once here, once at create) and an abandoned
+        # preview billed for nothing.
         preview=True,
     )
     return QueryRunEstimateResponse(

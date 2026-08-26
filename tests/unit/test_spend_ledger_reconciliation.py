@@ -28,6 +28,7 @@ from uuid import UUID, uuid4
 
 import pytest
 
+from product_app.config import settings
 from product_app.costs import (
     DAILY_CAP_USD,
     GLOBAL_DAILY_CEILING_USD,
@@ -37,6 +38,7 @@ from product_app.costs import (
 )
 from product_app.feedback_store import (
     COST_ACCEPTED_EVENT,
+    COST_ACCEPTED_SIMULATED_EVENT,
     COST_CHARGE_VOIDED_EVENT,
     COST_RECONCILED_EVENT,
     ChargeOutcome,
@@ -85,6 +87,10 @@ def _charge(
         },
         daily_cap_usd=daily_cap,
         global_ceiling_usd=ceiling,
+        # #376: this helper's payload names ``COST_ACCEPTED_EVENT``, so the row it
+        # books must be the LIVE type — every assertion in this module is about
+        # the live ledger's mechanics (caps, corrections, voids).
+        live_execution=True,
         now=now,
     )
     return outcome, run_id
@@ -98,7 +104,7 @@ def _event_types(store: FeedbackStore, query_run_id: UUID) -> list[str]:
 
 
 def test_the_three_cost_event_type_strings_are_pinned_to_their_literals() -> None:
-    """RED IF: any of these three strings is edited.
+    """RED IF: any of these four strings is edited.
 
     They are the contract with rows ALREADY on the production volume
     (``fly.toml`` pins ``FEEDBACK_DB_PATH`` to a persistent disk). Renaming one
@@ -108,6 +114,11 @@ def test_the_three_cost_event_type_strings_are_pinned_to_their_literals() -> Non
     code and pin nothing (rule 7a).
     """
     assert COST_ACCEPTED_EVENT == "cost_guardrail_accepted"
+    # #376. Pinned for the same reason plus one more: this string IS the
+    # discriminator that keeps a simulated run out of ``global_daily_spend``, so
+    # a typo in it silently puts every simulated run back into the figure the
+    # $5.00 ceiling is compared against.
+    assert COST_ACCEPTED_SIMULATED_EVENT == "cost_guardrail_accepted_simulated"
     assert COST_RECONCILED_EVENT == "cost_reconciled"
     assert COST_CHARGE_VOIDED_EVENT == "cost_charge_voided"
 
@@ -481,6 +492,7 @@ def test_a_charge_whose_write_fails_does_not_report_recorded(
 
 def test_a_reconciliation_corrects_the_in_memory_rail_too(
     store: FeedbackStore,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """RED IF ``reconcile_run_charge`` stops correcting the ring.
 
@@ -493,6 +505,11 @@ def test_a_reconciliation_corrects_the_in_memory_rail_too(
     money figure 20x the truth, shipped by the change that exists to stop
     false money figures.
     """
+    # #376: this test is about a LIVE charge being corrected. ``conftest`` forces
+    # the flag off for the whole suite, and a SIMULATED charge is deliberately
+    # never reconciled (a simulated run's cost_source is always "estimated"), so
+    # without this the durable write is refused and the ring is never reached.
+    monkeypatch.setattr(settings, "openrouter_live_execution_enabled", True)
     configure(store)
     try:
         cost_event_recorder.clear()

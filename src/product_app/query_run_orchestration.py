@@ -934,10 +934,12 @@ def _record_run_billing(
 ) -> ChargeOutcome:
     """Open the one spend-counted charge for a run that is about to execute.
 
-    ``cost_guardrail_accepted`` is the only event type the two spend guards
-    (``CostEstimationService._cumulative_spend_for`` and
-    ``FeedbackStore.daily_spend_for``) count, so this call is the account's
-    bill for this run. It must therefore happen once, and only for a run that
+    The two OPENING-CHARGE event types — ``cost_guardrail_accepted`` and, since
+    #376, ``cost_guardrail_accepted_simulated`` — are what the per-account spend
+    guards (``CostEstimationService._cumulative_spend_for`` and
+    ``FeedbackStore.daily_spend_for``) count, so this call is the account's bill
+    for this run whichever posture books it. Only the LIVE type reaches
+    ``FeedbackStore.global_daily_spend``. It must therefore happen once, and only for a run that
     really runs — see F-01, and ``_void_run_billing`` for the one path that
     takes it back.
 

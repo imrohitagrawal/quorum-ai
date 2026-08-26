@@ -55,8 +55,25 @@ from pydantic import BaseModel, Field
 
 from product_app.catalog_fetcher import _FALLBACK_CATALOG
 from product_app.config import settings
+from product_app.feedback_store import (
+    COST_ACCEPTED_EVENT,
+    COST_ACCEPTED_SIMULATED_EVENT,
+    charge_event_type,
+)
 from product_app.feedback_store import record_event as _record_feedback_event
 from product_app.model_slots import DEFAULT_MODEL_IDS, ModelSlot, openrouter_model_catalog_service
+
+#: The opening-charge event types the IN-MEMORY ring's per-account rail counts
+#: (issue #376). It must match ``feedback_store._ACCOUNT_CHARGE_EVENTS``: the
+#: ring and the durable ledger are two meters over the same runs, and ADR-0051
+#: measured what divergence costs — an account refused at $0.2303 of a $0.25
+#: ring limit while the reconciled durable ledger read $0.011515, a money figure
+#: 20x the truth shown to the user. So the ring counts simulated charges for
+#: exactly the reason ``FeedbackStore.daily_spend_for`` does, and #376 leaves
+#: both per-account rails numerically unchanged.
+_RING_CHARGE_EVENT_TYPES: frozenset[str] = frozenset(
+    {COST_ACCEPTED_EVENT, COST_ACCEPTED_SIMULATED_EVENT}
+)
 
 if TYPE_CHECKING:  # import cycle at runtime; the annotation is a string
     from product_app.feedback_store import ChargeOutcome
@@ -499,9 +516,7 @@ class InMemoryCostEventRecorder:
             self._events = [
                 e
                 for e in self._events
-                if not (
-                    e.query_run_id == query_run_id and e.event_type == "cost_guardrail_accepted"
-                )
+                if not (e.query_run_id == query_run_id and e.event_type in _RING_CHARGE_EVENT_TYPES)
             ]
             return before - len(self._events)
 
@@ -525,7 +540,7 @@ class InMemoryCostEventRecorder:
         with self._lock:
             corrected = 0
             for i, e in enumerate(self._events):
-                if e.query_run_id == query_run_id and e.event_type == "cost_guardrail_accepted":
+                if e.query_run_id == query_run_id and e.event_type in _RING_CHARGE_EVENT_TYPES:
                     self._events[i] = dataclass_replace(e, estimated_cost_usd=actual_cost_usd)
                     corrected += 1
             return corrected
@@ -1061,9 +1076,10 @@ class CostEstimationService:
         #
         # F-01: ``preview=True`` marks a call from ``POST /estimate``, which
         # only shows the user what a run *would* cost — nothing has been spent.
-        # It must NOT record ``cost_guardrail_accepted``, because both spend
-        # guards (``_cumulative_spend_for`` here and
-        # ``FeedbackStore.daily_spend_for``) count exactly that type, so a
+        # It must NOT record an OPENING-CHARGE type (``cost_guardrail_accepted``
+        # or, since #376, ``cost_guardrail_accepted_simulated``), because both
+        # per-account spend guards (``_cumulative_spend_for`` here and
+        # ``FeedbackStore.daily_spend_for``) count both of them, so a
         # preview would bill the account for a run that never happened — and
         # bill it again when the user actually starts the run. The preview is
         # still recorded, under a name that says what happened, so the audit
@@ -1086,7 +1102,22 @@ class CostEstimationService:
         elif global_ceiling_reached:
             event_type = "cost_guardrail_degraded_to_simulation"
         else:
-            event_type = "cost_guardrail_accepted"
+            # Issue #376: the same discriminator the durable charge uses, from
+            # the same function, so a ring entry and its ledger row can never
+            # disagree about which type the charge is.
+            #
+            # NOTE FOR A FUTURE READER: no call site in ``src/`` reaches this
+            # branch today. ``query_runs.py`` calls this method only for BLOCK,
+            # unconfirmed REQUIRE_CONFIRMATION and ``preview=True``, and
+            # ``try_record_run_charge`` calls it only with
+            # ``global_ceiling_reached=True``. The accepted ring entry that
+            # ``_cumulative_spend_for`` counts is written directly at the
+            # RECORDED branch of :meth:`try_record_run_charge` instead. This
+            # branch is kept correct rather than deleted because the mapping
+            # above is the module's documented event-type table.
+            event_type = charge_event_type(
+                live_execution=settings.openrouter_live_execution_enabled
+            )
         cost_event_recorder.record(
             event_type=event_type,
             account_id=account_id,
@@ -1208,8 +1239,28 @@ class CostEstimationService:
             return ChargeOutcome.METERING_UNAVAILABLE
         assert store is not None  # narrowed by feedback_ledger_may_be_metered
 
+        # Issue #376. THE discriminator, read here and nowhere else on this path.
+        #
+        # It is the CONFIG FLAG, not the derived ``/status.live_execution`` and
+        # not an observed per-slot signal, and the choice is load-bearing in the
+        # direction that costs money. ``ProviderExecutionService._live_execution_enabled``
+        # (``providers.py:670``) is ``settings.openrouter_live_execution_enabled and
+        # openrouter_key``, so the flag being false makes a live call impossible
+        # for EVERY slot of this run — the classification can be wrong only in
+        # the over-metering direction (flag on, no key, run books as live and
+        # spends nothing). Keying off anything narrower could label a run that
+        # DID spend as simulated, and a simulated charge is invisible to
+        # ``global_daily_spend`` — dollars escaping the ceiling entirely.
+        #
+        # It is also read BEFORE the run, which is the only time available:
+        # ADR-0016 moved the charge ahead of ``Thread.start()`` because the
+        # worker is what spends. ``settings`` is one module-level instance
+        # (``config.py:527``) built from the environment at import and never
+        # reassigned in ``src/``, so there is no window in which this value can
+        # change between the charge and the run it describes.
+        live_execution = bool(settings.openrouter_live_execution_enabled)
         event = CostGuardrailEvent(
-            event_type="cost_guardrail_accepted",
+            event_type=charge_event_type(live_execution=live_execution),
             account_id=account_id,
             query_run_id=query_run_id,
             estimated_cost_usd=estimated_cost_usd,
@@ -1223,6 +1274,7 @@ class CostEstimationService:
             payload=asdict(event),
             daily_cap_usd=DAILY_CAP_USD,
             global_ceiling_usd=GLOBAL_DAILY_CEILING_USD,
+            live_execution=live_execution,
         )
         if outcome is ChargeOutcome.RECORDED:
             # Ring only: the durable row went in under the store's lock above.
@@ -1933,13 +1985,20 @@ class CostEstimationService:
         the immediate-budget-exhaustion case (a user issuing many
         queries in quick succession), not to enforce a monthly cap.
 
-        Only ``cost_guardrail_accepted`` events count — these are
-        the events where the estimate was charged. ``BLOCK`` events
-        were never billed, ``cost_estimate_previewed`` events are a
-        ``POST /estimate`` preview of a run that has not started
-        (F-01), and ``REQUIRE_CONFIRMATION`` events are
-        also not charged because the request was abandoned or the
-        user cancelled.
+        Only the two opening-charge events count — ``_RING_CHARGE_EVENT_TYPES``,
+        i.e. ``cost_guardrail_accepted`` and
+        ``cost_guardrail_accepted_simulated``. These are the events where the
+        estimate was charged. ``BLOCK`` events were never billed,
+        ``cost_estimate_previewed`` events are a ``POST /estimate`` preview of a
+        run that has not started (F-01), and ``REQUIRE_CONFIRMATION`` events are
+        also not charged because the request was abandoned or the user
+        cancelled.
+
+        THIS RAIL COUNTS SIMULATED RUNS (issue #376), matching
+        ``FeedbackStore.daily_spend_for``. It is a PER-ACCOUNT rail and it is the
+        one that binds first, so the number it produces is unchanged by #376 —
+        only the deployment-wide ``global_daily_spend`` stopped counting them.
+        See ADR-0074.
         """
         total = Decimal("0")
         if cost_event_recorder is None:
@@ -1947,7 +2006,7 @@ class CostEstimationService:
         for event in cost_event_recorder.list_events():
             if event.account_id != account_id:
                 continue
-            if event.event_type != "cost_guardrail_accepted":
+            if event.event_type not in _RING_CHARGE_EVENT_TYPES:
                 continue
             total += event.estimated_cost_usd
         return total

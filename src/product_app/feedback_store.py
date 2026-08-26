@@ -114,8 +114,90 @@ class ChargeOutcome(StrEnum):
     METERING_UNAVAILABLE = "metering_unavailable"
 
 
-#: The event type that OPENS a run's charge, carrying the point estimate.
+#: The event type that OPENS a run's charge for a run whose priced call graph
+#: will be executed LIVE — i.e. ``OPENROUTER_LIVE_EXECUTION_ENABLED`` was true
+#: when the charge was opened, so the run's initial-answer, debate and
+#: synthesis calls go to the real provider and cost real money.
 COST_ACCEPTED_EVENT = "cost_guardrail_accepted"
+
+#: The event type that OPENS a run's charge for a run that will be SIMULATED
+#: (issue #376). Identical payload, identical estimate, identical position in
+#: the run's life — the ONE difference is that
+#: ``settings.openrouter_live_execution_enabled`` was false when the charge was
+#: opened, so ``ProviderExecutionService._live_execution_enabled``
+#: (``providers.py:670``) can never be true for this run and its initial-answer,
+#: debate and synthesis calls spend nothing.
+#:
+#: WHY A SEPARATE EVENT TYPE rather than a flag in the payload. Every meter here
+#: selects on ``event_type`` in SQL or in a Python equality test, so a new type
+#: is excluded from a meter by CONSTRUCTION — a meter that does not name it
+#: cannot count it, and no call site has to remember to filter. This is the same
+#: idiom, for the same reason, as ``cost_guardrail_degraded_to_simulation``
+#: (``costs.record_guardrail_event``), which exists precisely so the global
+#: meter cannot count a run that was degraded to simulation.
+#:
+#: WHAT THIS TYPE CLAIMS, AND ONLY THIS. The run's own model calls — initial
+#: answers, debate, synthesis — could not reach a paid provider, because
+#: ``ProviderExecutionService._live_execution_enabled`` is
+#: ``settings.openrouter_live_execution_enabled and openrouter_key`` and the
+#: first conjunct was false.
+#:
+#: IT CLAIMS NOTHING ABOUT WHAT ELSE THE PROCESS SPENDS, and this comment
+#: deliberately does not enumerate the other paid subsystems or say when they
+#: fire. Two attempts at that list shipped false money claims — the second while
+#: correcting the first — each by reasoning from a gate one level away from the
+#: one that decides. Both times the refutation was already written down in this
+#: repository. So: this store meters charges; it is not the place that knows
+#: what every subsystem does. ``scripts/live_posture_check.py`` and ADR-0013 own
+#: that question and answer it correctly.
+COST_ACCEPTED_SIMULATED_EVENT = "cost_guardrail_accepted_simulated"
+
+#: The event types that OPEN a charge, in the order a reader should think about
+#: them. Both carry ``estimated_cost_usd`` and both are keyed on a
+#: ``query_run_id``; they differ only in whether the run may spend.
+#:
+#: ``_ACCOUNT_CHARGE_EVENTS`` is what the PER-ACCOUNT rail counts, and it counts
+#: BOTH. That is deliberate and is the decision ADR-0074 records: the
+#: per-account cap is the only rail bounding how much work one account can ask
+#: for, so dropping simulated runs from it would turn ``DAILY_CAP_USD`` into no
+#: bound at all on a deployment running with live execution off — which is every
+#: deployment today. Behaviour on that rail is therefore UNCHANGED by #376.
+_ACCOUNT_CHARGE_EVENTS: tuple[str, ...] = (
+    COST_ACCEPTED_EVENT,
+    COST_ACCEPTED_SIMULATED_EVENT,
+)
+
+#: How far back :meth:`FeedbackStore.last_live_charge_at` walks looking for a
+#: parseable timestamp (issue #376 review). ``recorded_at`` is TEXT and nothing
+#: constrains it, so the newest charge row can be unreadable; stopping at the
+#: first row would then report "never spent live" while dated live charges sit
+#: on disk. Sized small on purpose — this runs on the unauthenticated
+#: ``/status`` path and holds the store's single lock (ADR-0002) — and 16 is
+#: already far past the point where "every one of the last N is corrupt" stops
+#: being a timestamp problem and starts being a broken volume, which
+#: ``feedback_db``/``feedback_writes`` are the fields for.
+_LAST_CHARGE_SCAN_LIMIT = 16
+
+#: What the DEPLOYMENT-WIDE rail counts: live charges only. This is the whole
+#: point of issue #376 — ``global_daily_spend()`` feeds
+#: ``/status.global_daily_spend_usd``, the ``/ui/ops`` spend tile and the
+#: ``GLOBAL_DAILY_CEILING_USD`` degrade decision, and before this change all
+#: three were driven by a number that counted simulated runs at their estimate.
+_LIVE_CHARGE_EVENTS: tuple[str, ...] = (COST_ACCEPTED_EVENT,)
+
+
+def charge_event_type(*, live_execution: bool) -> str:
+    """The event type that opens a charge for a run in this execution posture.
+
+    ONE function, called by both writers, so the durable row and the in-process
+    ring cannot disagree about which type a charge is. ``costs.py`` calls it to
+    build the payload and the ring entry;
+    :meth:`FeedbackStore.try_record_cost_charge` calls it to write the row.
+    Before #376 the string was inlined at both, in five separate places in
+    ``costs.py`` alone.
+    """
+    return COST_ACCEPTED_EVENT if live_execution else COST_ACCEPTED_SIMULATED_EVENT
+
 
 #: The event type that CORRECTS a run's charge to what the run really cost
 #: (issue #255). Written once per run, after it reaches a terminal state and
@@ -143,9 +225,18 @@ COST_CHARGE_VOIDED_EVENT = "cost_charge_voided"
 #: direction, i.e. free money. ``COST_CHARGE_VOIDED_EVENT`` is deliberately NOT
 #: metered: losing it leaves the account charged for a run that never ran,
 #: which over-meters, and over-metering is the safe direction.
+#:
+#: ``COST_ACCEPTED_SIMULATED_EVENT`` IS metered (issue #376), and the reason is
+#: the per-account rail, not the global one. ``daily_spend_for`` counts it, so
+#: losing one leaves that account's ``DAILY_CAP_USD`` under-metered by exactly
+#: the estimate — the same free-money direction the live charge is metered for.
+#: If a later change ever drops simulated charges from the per-account rail too,
+#: this entry must come out in the SAME edit, or the store raises a money ERROR
+#: about a row no meter reads.
 _METERED_WRITES = frozenset(
     {
         ("cost", COST_ACCEPTED_EVENT),
+        ("cost", COST_ACCEPTED_SIMULATED_EVENT),
         ("cost", COST_RECONCILED_EVENT),
     }
 )
@@ -293,7 +384,9 @@ class FeedbackStore:
     #: ``/data/feedback_events.sqlite3`` on the persistent volume precisely so
     #: it survives a deploy). ``daily_spend_for`` does not look at
     #: ``query_run_id`` at all — it filters on ``recorder = 'cost' AND
-    #: event_type = 'cost_guardrail_accepted'`` plus the account and the 24 h
+    #: event_type IN (...)`` over ``_ACCOUNT_CHARGE_EVENTS`` (both opening-charge
+    #: types since #376; this said ``= 'cost_guardrail_accepted'`` until then)
+    #: plus the account and the 24 h
     #: window (read its SQL; an earlier revision of this comment said
     #: "``event_type`` alone", which contradicted ``_METERED_WRITE`` above, and
     #: the recorder half is exactly what stops a cost-shaped event written by
@@ -869,13 +962,24 @@ class FeedbackStore:
         *,
         cutoff: datetime,
         account_id: UUID | None,
+        charge_event_types: tuple[str, ...],
     ) -> Decimal:
         """Sum what each charged run in the window really cost. Caller holds the lock.
 
-        Issue #255. A run's charge is OPENED by a ``cost_guardrail_accepted``
-        event carrying the point estimate — the only figure available before the
-        run has happened. Two later events, both keyed on the same
-        ``query_run_id``, can correct it:
+        ``charge_event_types`` names WHICH opening charges this total is over,
+        and it is REQUIRED at every call site on purpose (issue #376). Two rails
+        read this method and they want different answers:
+        ``_ACCOUNT_CHARGE_EVENTS`` (live + simulated) for the per-account cap,
+        ``_LIVE_CHARGE_EVENTS`` (live only) for the deployment-wide ceiling and
+        the operator-facing spend figure. Deriving it from ``account_id is None``
+        instead would tie "which rail" to "which scope" — they are separate
+        questions, and a future per-account live-only reader would silently get
+        the wrong meter.
+
+        Issue #255. A run's charge is OPENED by one of those events, carrying
+        the point estimate — the only figure available before the run has
+        happened. Two later events, both keyed on the same ``query_run_id``, can
+        correct it:
 
         * ``cost_reconciled`` — the run finished and its cost was MEASURED. Its
           ``actual_cost_usd`` replaces the estimate. This is the whole point of
@@ -911,13 +1015,40 @@ class FeedbackStore:
         account_args: tuple[str, ...] = () if account_id is None else (str(account_id),)
 
         # Opening charges. Keyed rows are correctable, NULL-keyed rows are not.
+        # The event-type list is BOUND, not interpolated: it is the one predicate
+        # here whose values now come from a caller argument rather than a module
+        # constant, and an f-string would put caller-supplied text into SQL.
+        #
+        # THE EMPTY TUPLE IS REFUSED, and this guard is not defensive padding.
+        # An earlier revision of this comment claimed an empty tuple "would
+        # produce ``IN ()`` — a syntax error, not a silent sum over nothing".
+        # That is wrong, and wrong in the fail-open direction. SQLite is one of
+        # the few engines that ACCEPTS an empty ``IN ()``; measured on the
+        # version this repo runs:
+        #     >>> sqlite3.sqlite_version
+        #     '3.50.4'
+        #     >>> conn.execute("select count(*) from t where a IN ()").fetchone()
+        #     (0,)
+        # So without this line a caller who passed an empty tuple would get
+        # ``Decimal("0")`` from a ledger full of charges — every rail reading
+        # "nothing spent" while money moved. Unreachable today —
+        # ``grep -c "charge_event_types=" feedback_store.py`` returns 5 and every
+        # one passes a non-empty tuple (module constants, plus one inline
+        # ``(COST_ACCEPTED_SIMULATED_EVENT,)``). That is exactly why this must be
+        # a raise and not a comment: nothing else would ever notice. If it ever
+        # DOES fire it surfaces as a 500 on ``POST /v1/query-runs``, because
+        # ``costs.py`` does not wrap its ``global_daily_spend()`` call — loud,
+        # which is the point.
+        if not charge_event_types:
+            raise ValueError("charge_event_types must not be empty: an empty meter is not a meter")
+        charge_placeholders = ", ".join("?" for _ in charge_event_types)
         charged: dict[str, Decimal] = {}
         total = Decimal("0")
         cursor = self._conn.execute(
             "SELECT query_run_id, payload FROM events "
-            f"WHERE recorder = 'cost' AND event_type = '{COST_ACCEPTED_EVENT}' "
+            f"WHERE recorder = 'cost' AND event_type IN ({charge_placeholders}) "
             f"{account_predicate}AND recorded_at >= ?",
-            (*account_args, cutoff_iso),
+            (*charge_event_types, *account_args, cutoff_iso),
         )
         for row in cursor:
             amount = Decimal(str(json.loads(row["payload"]).get("estimated_cost_usd", "0")))
@@ -982,12 +1113,21 @@ class FeedbackStore:
         a daily total — a busy day could push old events out of the buffer.
         The SQLite sink is durable and append-only.
 
-        Only ``cost_guardrail_accepted`` events open a charge (these are the
-        events where a run was actually billed). ``BLOCK`` events were
-        never billed; ``cost_estimate_previewed`` events are a
-        ``POST /estimate`` preview of a run that has not started (F-01);
-        ``REQUIRE_CONFIRMATION`` events were also not charged
-        because the user abandoned or cancelled.
+        Only the two opening-charge events count — ``cost_guardrail_accepted``
+        and ``cost_guardrail_accepted_simulated``, i.e.
+        ``_ACCOUNT_CHARGE_EVENTS``. ``BLOCK`` events were never billed;
+        ``cost_estimate_previewed`` events are a ``POST /estimate`` preview of a
+        run that has not started (F-01); ``REQUIRE_CONFIRMATION`` events were
+        also not charged because the user abandoned or cancelled.
+
+        THIS RAIL COUNTS SIMULATED RUNS, and issue #376 deliberately left it
+        that way while making :meth:`global_daily_spend` stop counting them. The
+        per-account cap is the only rail that bounds how much work one account
+        can ask for; with live execution off — the posture of every deployment
+        today — dropping simulated charges here would leave ``DAILY_CAP_USD``
+        bounding nothing at all. ADR-0074 records the decision and the rejected
+        alternative. So this method's NUMBER is unchanged by #376; only its
+        docstring is.
 
         A charge is booked at the point ESTIMATE, because that is the only
         figure that exists before the run does, and then corrected to the
@@ -1004,7 +1144,11 @@ class FeedbackStore:
         """
         cutoff = (now or datetime.now(UTC)) - timedelta(hours=24)
         with self._lock:
-            return self._spend_total_locked(cutoff=cutoff, account_id=account_id)
+            return self._spend_total_locked(
+                cutoff=cutoff,
+                account_id=account_id,
+                charge_event_types=_ACCOUNT_CHARGE_EVENTS,
+            )
 
     def global_daily_spend(
         self,
@@ -1013,13 +1157,31 @@ class FeedbackStore:
     ) -> Decimal:
         """Sum what EVERY account's runs in the last 24 hours really cost.
 
-        Issue #100: the deployment-wide spend ceiling. Identical query to
-        :meth:`daily_spend_for` with the ``account_id`` predicate dropped —
-        that is deliberately the whole difference, and since #255 both go
-        through the same :meth:`_spend_total_locked`, so the two stay in sync
-        by construction (same event types, same corrections, same durability
-        rationale, same 24h rolling window) rather than by two authors
-        independently remembering to keep them consistent.
+        Issue #100: the deployment-wide spend ceiling. Two differences from
+        :meth:`daily_spend_for`, both deliberate: the ``account_id`` predicate is
+        dropped, and the charge events counted are ``_LIVE_CHARGE_EVENTS`` —
+        ``cost_guardrail_accepted`` only. Both go through the same
+        :meth:`_spend_total_locked`, so the corrections, the durability
+        rationale and the 24h rolling window stay in sync by construction.
+
+        ISSUE #376 — WHY THIS COUNTS LIVE CHARGES ONLY. Nothing in the charge
+        path consulted ``OPENROUTER_LIVE_EXECUTION_ENABLED``, so a run that
+        spent nothing real still booked a charge at its estimate and this figure
+        counted it. Production ran at ``live_execution: false`` and reported
+        ``global_daily_spend_usd: "0.0676"`` — a number made entirely of runs
+        that could not have spent a cent. Three things read it and all three
+        were wrong in the same direction: ``/status.global_daily_spend_usd``,
+        the ``/ui/ops`` spend tile, and the ``GLOBAL_DAILY_CEILING_USD`` degrade
+        decision — so $5.00 of purely simulated traffic could have degraded
+        every run deployment-wide without a cent being spent.
+
+        WHAT THIS FIGURE IS, stated because #376 must not be read as "this number
+        is now real spend": the total of LIVE run charges booked through
+        :meth:`try_record_cost_charge` in the window, corrected by
+        reconciliations and voids. It is not a total of everything the
+        deployment spends, it never was, and #376 removed nothing from it — see
+        ``COST_ACCEPTED_SIMULATED_EVENT`` for why this docstring does not try to
+        enumerate the other paid subsystems.
 
         A run that gets degraded to simulation by the ceiling this method
         enforces must NOT be counted here — see
@@ -1039,7 +1201,110 @@ class FeedbackStore:
         """
         cutoff = (now or datetime.now(UTC)) - timedelta(hours=24)
         with self._lock:
-            return self._spend_total_locked(cutoff=cutoff, account_id=None)
+            return self._spend_total_locked(
+                cutoff=cutoff,
+                account_id=None,
+                charge_event_types=_LIVE_CHARGE_EVENTS,
+            )
+
+    def global_daily_simulated_spend(
+        self,
+        *,
+        now: datetime | None = None,
+    ) -> Decimal:
+        """The other half of :meth:`global_daily_spend`: simulated charges only.
+
+        Issue #376. Exists so the operator surface SPLITS the old number rather
+        than silently changing what it means. Before this change
+        ``/status.global_daily_spend_usd`` was live + simulated added together;
+        after it, that field is the live half and this is the simulated half,
+        and an operator comparing a dashboard against last week can see where
+        the figure went instead of concluding spend collapsed.
+
+        It is reported, never enforced: no rail reads it. A simulated run's
+        estimate is a statement about a run that could not spend, so thresholding
+        it would re-introduce exactly the defect #376 removed.
+        """
+        cutoff = (now or datetime.now(UTC)) - timedelta(hours=24)
+        with self._lock:
+            return self._spend_total_locked(
+                cutoff=cutoff,
+                account_id=None,
+                charge_event_types=(COST_ACCEPTED_SIMULATED_EVENT,),
+            )
+
+    def last_live_charge_at(self) -> datetime | None:
+        """When this ledger last opened a LIVE charge, or ``None`` if never.
+
+        Issue #376. A spend watchdog has to compare "was live money spent?"
+        against "was a live window declared?", and before this there was no
+        clock on the spend side at all — only a 24h rolling TOTAL, which cannot
+        say WHEN inside that window anything happened. That forced a comparison
+        between a total and a declared span, which is the two-clocks problem the
+        issue describes.
+
+        Deliberately named ``live``: with two opening-charge event types a bare
+        "last charge" would be ambiguous, and the ambiguity is the exact thing
+        this package exists to remove. It reads ``COST_ACCEPTED_EVENT`` rows
+        only, and it is NOT windowed — an operator asking "when did this
+        deployment last spend?" is worst served by ``null`` because the answer
+        is 25 hours old.
+
+        Returns a timezone-aware UTC ``datetime``. Rows are written with
+        ``datetime.now(UTC).isoformat()``, so the stored text carries an offset;
+        a row that somehow lacks one is read as UTC rather than returned naive,
+        because a naive value compared against an aware ``now`` raises.
+
+        ORDERED BY ``id``, NOT BY ``recorded_at``, and that is the whole
+        correctness argument. ``recorded_at`` is TEXT, so ``ORDER BY
+        recorded_at`` is a LEXICOGRAPHIC sort over wall-clock strings, and
+        adversarial review broke it two ways on this very method:
+
+        * A BACKWARD clock step — NTP correction, VM resync, snapshot restore —
+          makes the newest charge stamp EARLIER than an older one, so the
+          lexicographic maximum is a charge that is not the latest. Measured:
+          after writing a live charge stamped 3 h earlier than the previous one,
+          the method kept reporting the previous one. This is not a hypothetical
+          for this file: :meth:`_spend_total_locked`'s own docstring, a few
+          hundred lines up, records a backward step as a demonstrated hazard.
+        * A row with a different UTC OFFSET sorts by its text, not its instant.
+          Measured: a ``+04:00`` row returned as newer than a later ``+00:00``
+          one.
+
+        ``id`` is ``INTEGER PRIMARY KEY``, i.e. insertion order, i.e. the CAUSAL
+        order — which is exactly the argument :meth:`_spend_total_locked`
+        already makes for its own ``ORDER BY id`` ("``id`` is the insertion
+        order and therefore the causal order"). It costs nothing to be
+        consistent with it, and it removes both failures rather than documenting
+        an assumption underneath them. An earlier revision of this docstring
+        argued at length that every stored offset is identical so the text sort
+        is safe; that argument was true and beside the point, because it said
+        nothing about two identical offsets in the wrong time order.
+
+        A MALFORMED ROW DOES NOT ERASE THE FIELD. ``recorded_at`` is TEXT and
+        nothing at the schema level constrains it, so the newest row can be
+        unreadable. Returning ``None`` there would report "this deployment has
+        never spent live" while dated live charges sit on disk — the most
+        dangerous possible answer for a watchdog, and a false one. So this walks
+        back through the most recent ``_LAST_CHARGE_SCAN_LIMIT`` charges and
+        returns the first it can parse. ``None`` still means "no live charge
+        found", which after that scan is overwhelmingly "never".
+        """
+        with self._lock:
+            cursor = self._conn.execute(
+                "SELECT recorded_at FROM events "
+                f"WHERE recorder = 'cost' AND event_type = '{COST_ACCEPTED_EVENT}' "
+                "ORDER BY id DESC LIMIT ?",
+                (_LAST_CHARGE_SCAN_LIMIT,),
+            )
+            rows = cursor.fetchall()
+        for row in rows:
+            try:
+                stamped = datetime.fromisoformat(str(row["recorded_at"]))
+            except ValueError:
+                continue
+            return stamped if stamped.tzinfo is not None else stamped.replace(tzinfo=UTC)
+        return None
 
     def try_record_cost_charge(
         self,
@@ -1050,6 +1315,7 @@ class FeedbackStore:
         payload: dict[str, Any],
         daily_cap_usd: Decimal,
         global_ceiling_usd: Decimal,
+        live_execution: bool,
         now: datetime | None = None,
     ) -> ChargeOutcome:
         """Atomically check both spend rails and open this run's charge.
@@ -1103,6 +1369,15 @@ class FeedbackStore:
                 store stays ignorant of the cost event's shape.
             daily_cap_usd: Per-account cap to test against.
             global_ceiling_usd: Deployment-wide ceiling to test against.
+            live_execution: Whether this run's priced calls will go to the real
+                provider — i.e. ``settings.openrouter_live_execution_enabled``,
+                read by the caller. Picks the opening-charge event type via
+                :func:`charge_event_type`, and that is its ONLY effect: the
+                per-account rail counts both types, so a simulated run is
+                admitted, refused and capped exactly as a live one is. A
+                ``bool`` rather than an event-type string on purpose — the
+                invalid state (a third, unmetered type reaching the ledger) is
+                then unrepresentable rather than merely untested.
             now: Override for test determinism.
 
         Returns:
@@ -1111,14 +1386,28 @@ class FeedbackStore:
         when = now or datetime.now(UTC)
         cutoff = when - timedelta(hours=24)
         with self._lock:
-            already = self._spend_total_locked(cutoff=cutoff, account_id=account_id)
+            # ONE lock hold, two rails, two DIFFERENT meters (issue #376). The
+            # per-account rail counts live + simulated; the global ceiling counts
+            # live only. Both reads stay inside this hold — ADR-0002 pins this
+            # store to one connection and one lock, and moving either read out
+            # reopens the check-and-insert race measured in this docstring.
+            already = self._spend_total_locked(
+                cutoff=cutoff,
+                account_id=account_id,
+                charge_event_types=_ACCOUNT_CHARGE_EVENTS,
+            )
             if already + estimated_cost_usd > daily_cap_usd:
                 return ChargeOutcome.OVER_DAILY_CAP
-            if self._spend_total_locked(cutoff=cutoff, account_id=None) >= global_ceiling_usd:
+            global_spent = self._spend_total_locked(
+                cutoff=cutoff,
+                account_id=None,
+                charge_event_types=_LIVE_CHARGE_EVENTS,
+            )
+            if global_spent >= global_ceiling_usd:
                 return ChargeOutcome.OVER_GLOBAL_CEILING
             landed = self.record(
                 recorder="cost",
-                event_type=COST_ACCEPTED_EVENT,
+                event_type=charge_event_type(live_execution=live_execution),
                 account_id=account_id,
                 query_run_id=query_run_id,
                 recorded_at=when,
@@ -1163,10 +1452,21 @@ class FeedbackStore:
           sites, and a retried POST is the failure mode F-01 closed by call-site
           discipline rather than by a constraint. This is the constraint.
 
+        ISSUE #376 — A SIMULATED RUN IS NEVER RECONCILED, and the guard below is
+        already what refuses it: a ``cost_guardrail_accepted_simulated`` charge
+        puts no ``COST_ACCEPTED_EVENT`` in ``seen``. That is not a gap left
+        open. ``_reconcile_run_billing`` (``query_run_orchestration.py``) returns
+        before calling here unless ``cost_source == "measured"``, and
+        ``_actual_cost``'s own docstring states the reason it never can be: "A
+        demo/simulation run makes no live calls, so there is no captured usage to
+        measure from — it stays ``estimated``." If some future path did reach
+        here for a simulated run, the refusal leaves the estimate standing on the
+        per-account rail — the over-metering direction, which is the safe one.
+
         Returns:
             ``True`` if the reconciliation was written. ``False`` if the run had
-            no open charge in the window, or was already reconciled — in both
-            cases nothing was written and the ledger is unchanged.
+            no open LIVE charge in the window, or was already reconciled — in
+            both cases nothing was written and the ledger is unchanged.
         """
         when = now or datetime.now(UTC)
         cutoff = when - timedelta(hours=24)
@@ -1534,6 +1834,7 @@ def configure_for_tests() -> Iterator[FeedbackStore]:
 # keeps the call-site a one-liner.
 __all__ = [
     "COST_ACCEPTED_EVENT",
+    "COST_ACCEPTED_SIMULATED_EVENT",
     "COST_CHARGE_VOIDED_EVENT",
     "COST_RECONCILED_EVENT",
     "DEFAULT_DB_PATH",
@@ -1543,6 +1844,7 @@ __all__ = [
     "FeedbackStore",
     "WriteHealth",
     "asdict",
+    "charge_event_type",
     "configure",
     "configure_for_tests",
     "get_store",

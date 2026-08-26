@@ -15,6 +15,7 @@ from uuid import UUID
 
 import pytest
 
+from product_app.config import settings
 from product_app.costs import (
     GLOBAL_DAILY_CEILING_USD,
     CostEstimationService,
@@ -308,7 +309,20 @@ class TestRecordGuardrailEventDoesNotPolluteTheMeterWhenDegraded:
             assert seen_extras["client_ip"] == "9.9.9.9"
             assert seen_extras["global_daily_ceiling_usd"] == str(GLOBAL_DAILY_CEILING_USD)
 
-    def test_ordinary_accepted_event_unaffected_when_ceiling_not_reached(self) -> None:
+    def test_ordinary_accepted_event_unaffected_when_ceiling_not_reached(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A non-degraded accepted event on a LIVE deployment moves the meter.
+
+        The live flag has to be set explicitly since #376: ``conftest`` forces
+        it off for the whole suite, and with it off this event is booked as
+        ``cost_guardrail_accepted_simulated`` and the global meter — correctly —
+        does not move. That is the partner test directly below.
+
+        RED IF: the ``global_ceiling_reached`` branch swallows the ordinary
+        accepted case too, so nothing is ever counted as live spend.
+        """
+        monkeypatch.setattr(settings, "openrouter_live_execution_enabled", True)
         with configure_for_tests() as store:
             service = CostEstimationService()
             service.record_guardrail_event(
@@ -321,3 +335,34 @@ class TestRecordGuardrailEventDoesNotPolluteTheMeterWhenDegraded:
             )
             now = datetime.now(UTC)
             assert store.global_daily_spend(now=now) == Decimal("0.03")
+
+    def test_the_same_event_with_live_execution_off_does_not_move_the_meter(
+        self,
+    ) -> None:
+        """Issue #376, at this exact call site: the ONE difference is the flag.
+
+        Identical arguments to the test above, run under the suite's default
+        (and production's) posture. The event is still recorded — it is simply
+        not LIVE spend, so the figure the $5.00 ceiling is compared against
+        stays at zero.
+
+        RED IF: ``record_guardrail_event``'s accepted branch goes back to a
+        hardcoded ``"cost_guardrail_accepted"`` — the meter reads 0.03 on a
+        deployment that could not spend a cent, which is the defect #376 fixed.
+        """
+        assert settings.openrouter_live_execution_enabled is False
+        with configure_for_tests() as store:
+            service = CostEstimationService()
+            service.record_guardrail_event(
+                account_id=ACCOUNT_A,
+                query_run_id=None,
+                estimated_cost_usd=Decimal("0.03"),
+                threshold_action=CostThresholdAction.ALLOW,
+                confirmed=False,
+                global_ceiling_reached=False,
+            )
+            now = datetime.now(UTC)
+            assert store.global_daily_spend(now=now) == Decimal("0")
+            # POSITIVE PARTNER for that zero: the event landed, it is simply
+            # filed under the type no live meter counts.
+            assert store.global_daily_simulated_spend(now=now) == Decimal("0.03")

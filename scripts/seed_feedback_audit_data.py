@@ -27,7 +27,11 @@ from uuid import uuid4
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from product_app.feedback_store import FeedbackStore, configure  # noqa: E402
+from product_app.feedback_store import (  # noqa: E402
+    COST_ACCEPTED_SIMULATED_EVENT,
+    FeedbackStore,
+    configure,
+)
 
 random.seed(42)
 DB_PATH = ROOT / ".data" / "feedback_events.sqlite3"
@@ -86,10 +90,19 @@ def _seed() -> None:
                 "high_stakes_warning_required": random.random() < 0.1,
             },
         )
-        # Cost event.
+        # Cost event. SIMULATED, deliberately (issue #376). This script fabricates
+        # demo data; a ``cost_guardrail_accepted`` row is now a claim that REAL
+        # money moved, and seeded ones would inflate
+        # ``/status.global_daily_spend_usd``, count toward the $5.00 global
+        # ceiling, and hand ``/status.last_live_charge_at`` a fresh timestamp —
+        # which is exactly the signal a spend watchdog exists to trust. The
+        # simulated type keeps every audit-job aggregate identical
+        # (``feedback_audit._aggregate_cost`` does not filter on event type and
+        # keys allowed/blocked on ``threshold_action``) while claiming nothing
+        # about dollars.
         store.record(
             recorder="cost",
-            event_type="cost_guardrail_accepted",
+            event_type=COST_ACCEPTED_SIMULATED_EVENT,
             account_id=account_id,
             query_run_id=run_id,
             recorded_at=started,
