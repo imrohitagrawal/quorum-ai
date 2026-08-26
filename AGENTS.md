@@ -116,8 +116,9 @@ is the rule only.
      `make diff-cover` turned
      `tests/unit/test_not_invoked_is_not_evidence.py::test_classify_model_alignment_always_sets_invoked_explicitly`
      RED with `assert 'invoked=invoked' in 'def _opening_reflected_in_final(...)'`.
-     That test calls `inspect.getsource` (`:279`), which resolves by LINE NUMBER
-     against the file **on disk**, not against the module already imported. The
+     That test calls `inspect.getsource(classify_model_alignment)`, which
+     resolves by LINE NUMBER against the file **on disk**, not against the
+     module already imported. The
      same suite on a stable tree passed in full, that file included.
    Three things follow. **Extend rule 12b from mutators to READERS** — a
    read-only agent that runs the suite gets its own
@@ -141,8 +142,9 @@ is the rule only.
     numbers separately. Recall 23% means one lens misses roughly 77%, so **two is
     a floor, not a ceiling**. Precision 17% means roughly 83% of what any finder
     reports is noise, so **verification is the bottleneck** — which is the half
-    of the old rule that survives. Session evidence, 2026-08-26: four agents on
-    one diff produced four **disjoint** finding sets.
+    of the old rule that survives. Session evidence, recorded 2026-08-26 and
+    inherited here rather than re-measured (n=1): four agents on one diff
+    produced four **disjoint** finding sets.
     **So: keep spending the marginal effort on verifying findings. Do not treat
     "two" as a measured ceiling on finders.**
 11. **Verify every reviewer claim before acting.** **Check the fix, not just the
@@ -234,10 +236,15 @@ is the rule only.
     for the Linux baselines, dump the relevant `outerHTML` on
     `goldenCompletedResp()` before and after and prove it byte-identical.
 
-13f. **Never read a gate's exit status through a pipe.** `make quality 2>&1 | tail -30`
-    reports **tail's** status, not make's. Measured 2026-08-26: it printed
-    `EXIT=0` while `make` had failed `format-check` with `Error 1`. This bit
-    **four times in one session**. Write it as two steps instead:
+13f. **Never read a gate's exit status through a pipe.** A pipeline's status is
+    the LAST command's, so `make quality 2>&1 | tail -30` reports **tail's**.
+    Measured 2026-08-26 on this repo's own target, with one file deliberately
+    misformatted and then restored from a `cp` copy:
+    `( make format-check 2>&1 | tail -3 )` printed
+    `make: *** [format-check] Error 1` and then **exited 0**; the same target
+    redirected to a log file exited **2**. The prior session records this biting
+    four times in one sitting — that count is inherited, the behaviour above is
+    measured. Write it as two steps instead:
     ```bash
     make <target> > /tmp/gate.log 2>&1; echo "EXIT=$?"; tail -30 /tmp/gate.log
     ```

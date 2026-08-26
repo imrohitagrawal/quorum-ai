@@ -83,9 +83,10 @@ Read as two separate numbers rather than one verdict:
 | recall **23.18%** | one lens misses ~77% of real findings | more finders, not fewer |
 | precision **16.65%** | ~83% of what a finder reports is noise | verification is the bottleneck |
 
-Session evidence from 2026-08-26, n=1 and stated as such: four agents reviewing
-one diff produced four **disjoint** finding sets. That is consistent with low
-recall per lens; it is not a replication of anything.
+Session evidence from 2026-08-26, **inherited from that session's record and
+not re-measured here**, n=1: four agents reviewing one diff produced four
+**disjoint** finding sets. That is consistent with low recall per lens; it is
+not a replication of anything.
 
 ### 3. A gate's exit status read through a pipe is the pipe's exit status
 
@@ -98,10 +99,25 @@ $ sh -c 'exit 1' > /dev/null 2>&1; echo "EXIT_DIRECT=$?"
 EXIT_DIRECT=1
 ```
 
-`make quality 2>&1 | tail -30` therefore reports **tail's** status. In the last
-session it printed a passing status while `make` had failed `format-check` with
-`Error 1`. It bit four times in one session, because the habit of piping to
-`tail` is what keeps a long gate log readable.
+`make quality 2>&1 | tail -30` therefore reports **tail's** status. Measured on
+this repo's own target, with one file deliberately misformatted and then
+restored from a `cp` copy:
+
+```
+$ ( make format-check 2>&1 | tail -3 ); echo "EXIT_THROUGH_PIPE=$?"
+Would reformat: src/product_app/untrusted_text.py
+1 file would be reformatted, 351 files already formatted
+make: *** [format-check] Error 1
+EXIT_THROUGH_PIPE=0
+
+$ make format-check > /tmp/fc.log 2>&1; echo "EXIT_DIRECT=$?"
+EXIT_DIRECT=2
+```
+
+The gate printed its own failure and the shell still reported success. The
+prior session records this biting four times in one sitting — that count is
+inherited; the behaviour above is measured here. Piping to `tail` is what keeps
+a long gate log readable, which is exactly why the habit is hard to drop.
 
 Two adjacent traps have the same shape — a cheerful last line that did not set
 the exit code. Both measured here, with `line-length = 100` from
