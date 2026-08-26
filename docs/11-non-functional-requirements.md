@@ -7,7 +7,7 @@ These NFRs apply to the Release 1 MVP query workflow and supporting browser-sess
 ## NFR-001 End-to-end query latency
 
 - Category: Performance.
-- Target: Completed query latency P50 <= 45 seconds, P95 <= 120 seconds, hard timeout at 180 seconds.
+- Target: Completed query latency P50 <= 45 seconds, P95 <= 120 seconds, hard timeout at 360 seconds.
 - Measurement: Server-side workflow duration from accepted query submission to completed or partial-result response.
 - Owner: Engineering lead.
 - Priority: Must.
@@ -51,7 +51,7 @@ These NFRs apply to the Release 1 MVP query workflow and supporting browser-sess
 ## NFR-004 Dependency resilience
 
 - Category: Reliability.
-- Target: At least 95 percent of accepted queries return either a completed result or a partial-result explanation within 180 seconds during MVP validation.
+- Target: At least 95 percent of accepted queries return either a completed result or a partial-result explanation within 360 seconds during MVP validation.
 - Measurement: Query completion status and timeout metrics across provider success, provider failure, and fallback scenarios.
 - Owner: Engineering lead.
 - Priority: Must.

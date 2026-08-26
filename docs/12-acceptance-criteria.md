@@ -154,7 +154,7 @@ Given the final synthesis includes a recommendation, when the recommendation is 
 
 ## AC-021 Hard timeout produces terminal response
 
-Given a query reaches 180 seconds without full completion, when the timeout is reached, then the system returns a completed partial-result response or a terminal failure state with an explanation.
+Given a query reaches 360 seconds without full completion, when the timeout is reached, then the system returns a completed partial-result response or a terminal failure state with an explanation.
 
 - Requirement: FR-010, NFR-001, NFR-004
 - Test: TEST-FR-010, TEST-NFR-001, TEST-NFR-004

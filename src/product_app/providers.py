@@ -36,7 +36,7 @@ import time
 from dataclasses import asdict, dataclass
 from decimal import Decimal
 from enum import StrEnum
-from http.client import HTTPException
+from http.client import HTTPException, IncompleteRead
 from math import ceil
 from threading import RLock
 from time import perf_counter
@@ -1233,8 +1233,29 @@ class ProviderExecutionService:
             method="POST",
         )
         try:
+            # The budget clock starts HERE, before ``urlopen``, not after it.
+            # ``urlopen`` returns only once the status line and the whole
+            # header block have been read, and that phase is bounded
+            # per-``recv`` exactly like the body was -- so a header block
+            # dribbled a byte at a time is unbounded in wall clock. Starting
+            # the clock before the call makes the BUDGET cover connect,
+            # request, headers and body together, which is what
+            # ``openrouter_call_budget_seconds`` claims to be. Without this the
+            # claim was false, and a review measured the header phase alone
+            # reaching several times the budget.
+            call_started = time.monotonic()
             with urlopen(request, timeout=settings.openrouter_timeout_seconds) as response:
-                raw_body = response.read().decode()
+                # NOT ``response.read()``. That is bounded per-``recv`` and
+                # therefore not bounded at all in wall clock; see
+                # ``_read_body_within_budget``. A ``TimeoutError`` from here
+                # lands in the catch-all below and is classified
+                # ``_DISPATCH_UNMEASURED``, which is correct: the request was
+                # dispatched and may have been billed.
+                raw_body = _read_body_within_budget(
+                    response,
+                    settings.openrouter_call_budget_seconds - (time.monotonic() - call_started),
+                    settings.openrouter_timeout_seconds,
+                ).decode()
         except HTTPError as exc:
             # 404 / 400 on the ``:online`` variant is the documented
             # signal that this model does not support the search
@@ -1848,6 +1869,129 @@ def _billing_evidence_shape(exc: HTTPError) -> dict[str, object]:
         provider_name = metadata.get("provider_name") if has_metadata else None
         shape["provider_name_present"] = bool(provider_name)
     return shape
+
+
+#: One ``recv``'s worth of body. Large enough that a healthy response finishes
+#: in a handful of iterations, small enough that ``read1`` returns promptly on a
+#: dribble instead of blocking for a full buffer.
+_BODY_READ_CHUNK_BYTES: int = 65536
+
+
+def _read_body_within_budget(response: Any, budget: float, per_recv: float) -> bytes:
+    """Read a SUCCESS response body in at most ``budget`` seconds total.
+
+    Raises ``TimeoutError`` when the deadline passes with the body incomplete.
+    That is deliberate and is the whole point: ``_post_messages``' catch-all
+    already classifies a post-dispatch exception as ``_DISPATCH_UNMEASURED``,
+    which is the correct reading — tokens were generated and the call may well
+    have been billed, we simply cannot say how much.
+
+    **A socket timeout is per-``recv``, not cumulative.** Before this existed,
+    ``response.read()`` was unbounded in wall clock no matter how small
+    ``openrouter_timeout_seconds`` was set. Measured on loopback, a body
+    dribbled 512 bytes per second through an 8.0s socket timeout that never
+    fired: **12.042 s**. Measured against the live API, 6 paid reps of
+    ``openai/gpt-5-mini`` at ``max_tokens=3000``: wall 25.072-40.170s with a
+    maximum inter-chunk gap of 0.643s, so **0 of 6 could have tripped the 8s
+    cap and 6 of 6 exceeded it on wall clock**.
+
+    Two details are inherited from ``_read_within_budget``, which learned them
+    the expensive way, and one is new:
+
+    * the budget is a DEADLINE re-applied before every chunk, not a single
+      lowered timeout — that sibling's docstring measures the single-timeout
+      version taking 16.051s against a 2s cap;
+    * ``read1`` returns after ONE ``recv`` rather than looping until it has the
+      requested count, which is what stops a slow dribble overrunning inside a
+      single call;
+    * the socket hop is ``response.fp.raw._sock`` — one level shallower than
+      the ``HTTPError`` path's ``exc.fp.fp.raw._sock``. Measured, not assumed:
+      on CPython 3.12 ``fp.raw._sock`` resolves to a ``socket`` on a success
+      response while ``fp.fp.raw._sock`` raises ``AttributeError``.
+
+    The per-chunk timeout is ``min(per_recv, remaining)`` so the existing
+    stall detector keeps working inside the budget rather than being replaced
+    by it. If the socket cannot be reached at all the deadline check between
+    chunks still bounds the total, at the cost of one already-started ``recv``.
+
+    ``budget`` is what REMAINS of the call's budget, not the whole of it: the
+    caller starts the clock before ``urlopen`` so that connect, request,
+    headers and body share one allowance. Passing the full budget here would
+    leave the header phase unbounded, which is the same defect one layer up.
+    """
+    deadline = time.monotonic() + budget
+    chunks: list[bytes] = []
+    reader = getattr(response, "read1", None)
+    if not callable(reader):
+        reader = None
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError(
+                "provider call exceeded its total time budget while reading the body"
+            )
+        with contextlib.suppress(Exception):
+            # Best-effort: the hop is CPython-implementation-specific, and the
+            # deadline check above is what makes the bound total either way.
+            response.fp.raw._sock.settimeout(min(per_recv, remaining))
+        chunk = reader(_BODY_READ_CHUNK_BYTES) if reader is not None else response.read()
+        if not isinstance(chunk, (bytes, bytearray)):
+            # NOT an end condition. ``if not chunk`` would be False for any
+            # truthy non-bytes object, so treating this as EOF is how the first
+            # version of this loop span forever against a ``MagicMock``
+            # response — whose auto-generated ``read1`` returns another
+            # ``MagicMock``, truthy, never empty. The sibling
+            # ``_read_within_budget`` records the same class of hazard: a
+            # transport handing back something other than bytes is BROKEN, not
+            # finished, and calling it "empty" asserts something about the
+            # upstream that is not true.
+            #
+            # Before rejecting it, fall back ONCE to the whole-body ``read``.
+            # A real ``HTTPResponse.read1`` always returns bytes, so this path
+            # is unreachable in production; it exists because a test double may
+            # implement only ``read``, and refusing those would be this
+            # function making a statement about the doubles rather than about
+            # the wire.
+            if reader is not None and not chunks:
+                reader = None
+                continue
+            raise TypeError(
+                f"provider response body read returned {type(chunk).__name__}, not bytes"
+            )
+        if not chunk:
+            # EOF. That is only the END of the body if the framing agrees.
+            #
+            # ``read()`` -- the call this replaced -- runs ``_safe_read`` and
+            # raises ``IncompleteRead`` when a ``Content-Length`` response ends
+            # early. ``read1`` does not: it returns ``b""`` at EOF whether or
+            # not the declared bytes arrived, so reading in a loop SILENTLY
+            # DROPPED that check. Measured against a loopback server declaring
+            # 4220 bytes and sending 124 before a graceful close:
+            #
+            #     OLD read():  RAISED IncompleteRead
+            #     NEW (before this guard): RETURNED 124 bytes, resp.length=4096
+            #
+            # The delivered prefix was valid JSON, so the pipeline would have
+            # served a truncated answer as complete, priced it, and reported
+            # ``is_truncated=False``. Restoring the check is not optional: it
+            # is the difference between a torn body being classified
+            # ``_DISPATCH_UNMEASURED`` and being billed as a real answer.
+            #
+            # ``HTTPResponse.length`` is the bytes still expected under
+            # ``Content-Length`` framing; it is ``None`` for chunked responses,
+            # which do their own framing check inside ``read1`` and raise there
+            # (verified: a torn chunked body raises ``IncompleteRead`` on both
+            # the old and the new path).
+            remaining_bytes = getattr(response, "length", None)
+            if isinstance(remaining_bytes, int) and remaining_bytes > 0:
+                raise IncompleteRead(b"".join(chunks), remaining_bytes)
+            return b"".join(chunks)
+        chunks.append(bytes(chunk))
+        if reader is None:
+            # ``read()`` returns the whole body in one go, so there is nothing
+            # left to loop for. Looping would call it again on an exhausted
+            # stream.
+            return b"".join(chunks)
 
 
 def _read_within_budget(exc: HTTPError, limit: int, budget: float) -> tuple[bytes, bool]:

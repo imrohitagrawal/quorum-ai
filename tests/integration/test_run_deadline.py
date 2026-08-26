@@ -33,7 +33,7 @@ from uuid import uuid4
 import pytest
 from fastapi.testclient import TestClient
 
-from product_app.config import settings
+from product_app.config import Settings, settings
 from product_app.debate import debate_event_recorder, debate_stub_service
 from product_app.main import app
 from product_app.providers import (
@@ -256,7 +256,18 @@ def test_a_breach_between_stages_stops_before_synthesis(
 
 
 def test_a_normal_run_under_the_default_deadline_completes_fully() -> None:
-    assert settings.quorum_run_deadline_seconds == 180.0
+    # This guard's job is to prove the run below is measured against the
+    # SHIPPED default and not a value some earlier test monkeypatched (the
+    # sibling below sets 30.0). It used to be the literal ``== 180.0``, which
+    # did that job and also rotted the moment the default moved: it is what
+    # went red when ADR-0078 raised the deadline to 300, in a test that has
+    # nothing to say about which number is right. Comparing against the
+    # DECLARED default keeps the anti-leak check and cannot go stale
+    # (AGENTS.md rules 1a and 7a).
+    assert (
+        settings.quorum_run_deadline_seconds
+        == Settings.model_fields["quorum_run_deadline_seconds"].default
+    )
     client = TestClient(app)
     body = _run(client, uuid4())
     assert body["status"] == "completed"
