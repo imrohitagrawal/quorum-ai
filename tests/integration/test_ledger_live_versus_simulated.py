@@ -539,6 +539,57 @@ class TestLastLiveChargeAt:
             assert len(_charge_rows(store)) == 3
             assert store.last_live_charge_at() == newest
 
+    def test_an_unparseable_timestamp_reports_no_live_charge_instead_of_raising(
+        self,
+    ) -> None:
+        """``/status`` must not 500 on one malformed row.
+
+        ``recorded_at`` is TEXT, so nothing at the schema level stops a
+        hand-edited or migrated row holding something ``fromisoformat`` cannot
+        read. ``None`` is the honest answer for "there is a row and I cannot
+        date it" — the operator sees no claim rather than a wrong one.
+
+        RED IF: the ``except ValueError`` guard is dropped — this raises, and
+        ``/status``'s own guard turns the whole field null while a valid row
+        exists.
+        """
+        with configure_for_tests() as store:
+            _seed_charges(store, event_type=COST_ACCEPTED_EVENT, count=1, each_usd=Decimal("0.01"))
+            # POSITIVE PARTNER, before corrupting anything: a readable row IS
+            # reported, so the None below is caused by the corruption.
+            assert store.last_live_charge_at() is not None
+
+            store._conn.execute(
+                "UPDATE events SET recorded_at = ? WHERE event_type = ?",
+                ("not-a-timestamp", COST_ACCEPTED_EVENT),
+            )
+            assert store.last_live_charge_at() is None
+
+    def test_a_naive_timestamp_is_read_as_utc_rather_than_returned_naive(self) -> None:
+        """A naive value compared against an aware ``now`` raises TypeError.
+
+        Rows are written with ``datetime.now(UTC).isoformat()``, so this shape
+        should not occur — but the column is TEXT and a watchdog subtracting
+        this from ``now`` is exactly the caller that would crash on it.
+
+        RED IF: the ``replace(tzinfo=UTC)`` fallback is dropped — the value
+        comes back naive and the subtraction below raises
+        ``TypeError: can't subtract offset-naive and offset-aware datetimes``.
+        """
+        with configure_for_tests() as store:
+            _seed_charges(store, event_type=COST_ACCEPTED_EVENT, count=1, each_usd=Decimal("0.01"))
+            store._conn.execute(
+                "UPDATE events SET recorded_at = ? WHERE event_type = ?",
+                ("2026-08-24T17:30:00", COST_ACCEPTED_EVENT),
+            )
+            stamped = store.last_live_charge_at()
+            assert stamped is not None
+            assert stamped.tzinfo is not None
+            assert stamped == datetime(2026, 8, 24, 17, 30, tzinfo=UTC)
+            # The whole point: this is the arithmetic a watchdog does, and it
+            # raises TypeError against a naive value.
+            assert (datetime.now(UTC) - stamped).total_seconds() > 0
+
     def test_it_is_not_windowed_so_an_old_live_charge_is_still_reported(self) -> None:
         """Deliberate: "40 hours ago" beats ``null`` for the operator.
 
