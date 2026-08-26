@@ -1,29 +1,29 @@
 # Session Handoff
 
 ## Date/time
-2026-08-26T08:05:31+05:30
+2026-08-27T01:34:13+05:30
 
 ## Latest narrative handoff
-`docs/analysis/2026-08-26-session-handoff.md` — read this for full context before editing. (today)
+`docs/analysis/2026-08-27-session-handoff.md` — read this for full context before editing. (today)
 
 This file is a mechanical snapshot (branch/git-status/skill-route/live state) —
 regenerated fresh every `make handoff`. The narrative above (what happened,
 what's next, the traps) lives in the dated doc it points to, not here.
 
 ## Current branch/worktree
-docs/session-handoff-2026-08-26
+main
 
 ## Live state (measured fresh by this run, not hand-carried)
 Run `make handoff` again for current numbers instead of trusting this file
 once it ages -- every value below is read from git/gh/`/status` at
 generation time, per #134.
 
-- **`origin/main` tip:** `80b5b2760c2d`
-- **Last commit touching `src/`:** `80b5b2760c2d`
-- **Production vs. last `src/` commit:** unavailable: could not reach https://quorum-ai.fly.dev/status (last src/ commit is 80b5b27)
-- **pytest collected (no execution):** 3741
+- **`origin/main` tip:** `8b2ffdac8e6b`
+- **Last commit touching `src/`:** `8b2ffdac8e6b`
+- **Production vs. last `src/` commit:** unavailable: could not reach https://quorum-ai.fly.dev/status (last src/ commit is 8b2ffda)
+- **pytest collected (no execution):** 3803
 - **e2e lane spec counts:** invariants: 18, ops: 2, degraded: 1
-- **Open issues:** 5
+- **Open issues:** 8
 - **Changed-lines coverage:** not computed here -- `make diff-cover` shares
   coverage data with every pytest-invoking target and races with them if run
   concurrently (AGENTS.md rule 15), so this file does not run it. Run
@@ -86,7 +86,9 @@ Operate, learn, and improve
 
 ## Git status
 ```text
-?? docs/analysis/2026-08-26-session-handoff.md
+?? CONTINUE-DEMO-READINESS-ULTRACODE-PROMPT.md
+?? CONTINUE-TRANSPORT-AND-RULES-ULTRACODE-PROMPT.md
+?? docs/analysis/2026-08-27-session-handoff.md
 ```
 
 ## Diff stat
