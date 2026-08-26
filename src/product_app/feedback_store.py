@@ -1214,6 +1214,33 @@ class FeedbackStore:
         ``datetime.now(UTC).isoformat()``, so the stored text carries an offset;
         a row that somehow lacks one is read as UTC rather than returned naive,
         because a naive value compared against an aware ``now`` raises.
+
+        ``ORDER BY recorded_at DESC`` IS A LEXICOGRAPHIC SORT — ``recorded_at``
+        is TEXT, not a date type — and it agrees with chronological order only
+        because every offset stored is the same one. Both halves measured:
+
+        * Every ``recorded_at`` a writer in ``src/`` supplies is
+          ``datetime.now(UTC)``. Named rather than line-numbered, because a line
+          number in this same docstring invalidates itself the moment the
+          docstring grows — which it did while this was being written. The
+          writers are :meth:`try_record_cost_charge`,
+          :meth:`try_record_cost_reconciliation`, :meth:`void_cost_charge`,
+          :meth:`try_record_session_mint` and the module-level
+          :func:`record_event` — five, and no others. Re-derive with
+          ``grep -n "recorded_at=" src/product_app/feedback_store.py``: it
+          returns seven lines, being those five writes, one READ in
+          :meth:`iter_events` parsing a row back, and this sentence. The ``now``
+          override on each writer is for test determinism.
+        * Within a fixed ``+00:00`` offset the two orders agree even in the form
+          that should worry a reader — a whole-second stamp against a
+          microsecond one in the SAME second. ``'+'`` is 0x2B and ``'.'`` is
+          0x2E, so ``'2026-08-24T17:30:00+00:00' <
+          '2026-08-24T17:30:00.500000+00:00'`` is True, which is also the
+          chronological answer.
+
+        A row written with a DIFFERENT offset would break the sort. Nothing in
+        ``src/`` can produce one, and this note says so out loud rather than
+        leaving it an unstated assumption underneath a money-adjacent figure.
         """
         with self._lock:
             cursor = self._conn.execute(
