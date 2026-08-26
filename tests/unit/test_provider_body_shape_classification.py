@@ -184,6 +184,29 @@ def test_whitespace_only_text_counts_as_no_answer(
     assert len(_events(records, _EMPTY_ANSWER_EVENT)) == 1
 
 
+@pytest.mark.parametrize("finish_reason", ["length", "error", "stop"], ids=str)
+def test_an_empty_completion_carrying_a_finish_reason_still_records(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, finish_reason: str
+) -> None:
+    """RED when: the guard is narrowed to ``not is_visible(content) and not is_truncated``.
+
+    "An empty completion against a tight cap" is the case the shipped comment
+    names by hand, and until this test every answerless body in the file was an
+    error envelope with NO ``choices`` -- so a guard that skipped the record
+    whenever the response also reported truncation would have survived the
+    whole suite while silencing precisely the named case.
+
+    Parametrised over all three reasons rather than just ``"length"``, because
+    a guard keyed on ``finish_reason == "error"`` instead would leave the same
+    hole one value along.
+    """
+    _result, records, posts = _drive(
+        monkeypatch, caplog, _completion(content="", finish_reason=finish_reason)
+    )
+    assert posts[0] == 1
+    assert len(_events(records, _EMPTY_ANSWER_EVENT)) == 1
+
+
 def test_the_answerless_record_states_the_billing_class_and_whether_usage_arrived(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -335,7 +358,14 @@ def test_every_possibly_billed_event_reaches_the_durable_billing_file() -> None:
         "upstream_provider_empty_answer",
     ):
         assert name in telemetry_sink.BILLING_EVENTS, name
-    assert "upstream_provider_call_token_shape" not in telemetry_sink.BILLING_EVENTS
+    # The positive partner, and the first version of it was worthless: it named
+    # ``upstream_provider_call_token_shape``, a string that occurs NOWHERE in
+    # this repository, so the exclusion constrained nothing and the allowlist
+    # could have been widened to admit every event the process emits with this
+    # test still green. The real high-volume event is ``provider_call_tokens``
+    # (``providers.py``, the issue-268 stream), which is emitted roughly once
+    # per provider call and must stay out of the 1 MiB billing file.
+    assert "provider_call_tokens" not in telemetry_sink.BILLING_EVENTS
 
 
 # --- group 3: a provider that did not finish cleanly is not shown as one that did

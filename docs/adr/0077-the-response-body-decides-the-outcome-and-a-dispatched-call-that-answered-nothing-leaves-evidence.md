@@ -69,8 +69,15 @@ above:
    That partial text counts toward `live_count`, the agreement tally and the
    citation-coverage denominator, and the "(shortened)" marker never paints.
 2. A 200 whose body parses but yields no usable answer recorded **nothing at
-   all** — the only dispatched-failure path in the function that logged no
-   event. Reachable without any exotic assumption: a bare `{}`, a truncated but
+   all**. An earlier draft of this sentence called it *"the only dispatched-failure
+   path in the function that logged no event"*, and that was false — a review
+   lens demonstrated a second one, and this ADR contradicted itself about it
+   125 lines later. The `:online` 400/404 arm returns `_SEARCH_REJECTED` after
+   a real HTTP response came back and also logs nothing, before and after this
+   change; it is out of scope here and is recorded under Consequences. The
+   honest claim is narrower: **of the paths that return a value the caller
+   treats as a possible charge, this was the only silent one.** Reachable
+   without any exotic assumption: a bare `{}`, a truncated but
    valid JSON object, a CDN's JSON denial page (`Server: cloudflare` is already
    on every response). Two of the four events that *do* log —
    `upstream_provider_transport_error` and `upstream_provider_body_unreadable` —
@@ -102,11 +109,24 @@ out or breaking, and `tests/unit/test_providers.py` pins it as non-truncation
 on purpose.
 
 **2. A 200 that yields no visible answer emits `upstream_provider_empty_answer`,
-and the return value is unchanged.** The predicate is `is_visible`, matching the
-gate that actually fails the slot in `_live_openrouter_response`, so the two
-cannot disagree about a whitespace-only completion. The record carries
-`model_id`, `billing_class` and `usage_absent` — no part of the body, because a
-provider error string is upstream-controlled text of unbounded length.
+and this record changes no return value.**
+
+The predicate is `is_visible`, matching the gate that actually fails the slot in
+`_live_openrouter_response`, so the two cannot disagree about a whitespace-only
+completion. The record carries `model_id`, `billing_class` and `usage_absent` —
+and nothing else, pinned as a whole-set equality against the file on disk,
+because a provider error string is upstream-controlled text of unbounded length
+and a subset assertion cannot catch a field being ADDED.
+
+*The wording matters here and the first attempt got it wrong.* It said "the
+return value is unchanged", and a reviewer measured that false over a 25-body
+answerless corpus: two of them do return differently on this branch, because
+`is_truncated` flips `False → True` whenever `finish_reason` is `"error"`. That
+is Decision 1 doing its job rather than this record — but a sentence quantified
+over the whole answerless class has to hold for all of it. The four bodies the
+claim is usually read against (an error envelope with and without usage, a bare
+`{}`, a whitespace-only completion) are byte-identical between `origin/main` and
+this branch, verified separately.
 
 **3. Every dispatched-failure record states the billing class it returns, and
 reaches the durable file.** `_log_post_dispatch_failure` now emits
@@ -124,6 +144,37 @@ response and silently downgraded it to `estimated`. It was caught by an
 existing test, `test_malformed_payloads_never_assert_truncation[payload7]`,
 whose "finish_reason is a list" row exists for exactly this. The fix is an
 explicit `isinstance(reason, str)` guard, and the reason is written next to it.
+
+### What the adversarial review changed
+
+Four read-only lenses over the committed diff, then two independent refuters per
+finding — a finding survived only if neither could refute it. 20 raised, 2
+refuted outright, 6 dropped unverified below the cap (all `ADVISORY_DEBT`, all
+listed in the pull request rather than discarded silently), 12 survived.
+
+Five of the twelve were **mutants of the shipped code that the suite did not
+kill**, each demonstrated end to end rather than argued:
+
+| Mutation | Why the suite missed it | Now killed by |
+|---|---|---|
+| `_LOGGER.warning` → `_LOGGER.debug` | the only test asserting the record drove it under `caplog.at_level(DEBUG)`, which captures a DEBUG record just as happily. Under production's `LOG_LEVEL = "INFO"` the billing file went **1 line → 0** | `test_the_answerless_record_reaches_the_durable_billing_file` |
+| `if not is_visible(content) and not is_truncated:` | every answerless body in the file was an error envelope with no `choices`, so nothing covered "an empty completion against a tight cap" — the case the shipped comment names by hand | `test_an_empty_completion_carrying_a_finish_reason_still_records`, over all three reasons |
+| the outbound `messages` added to the record | the leak guard pinned one string from the RESPONSE, so the user's own question could reach the durable file | `test_the_answerless_record_carries_these_fields_and_no_others`, a whole-set equality |
+| `isinstance(reason, str)` → `isinstance(reason, list)` | the malformed-payload rows covered a list but no dict, so a dict `finish_reason` still raised inside the parsing `try` | two new rows, a mapping and a set |
+| the allowlist severed from the handler | the membership test checked five literals against a frozenset and never drove a record to a file | the two file-reading tests above |
+
+A sixth was a test defect of the same kind: the membership test's "positive
+partner" excluded `upstream_provider_call_token_shape`, **a string that occurs
+nowhere in this repository**, so it constrained nothing. The real high-volume
+event is `provider_call_tokens`, and that is what it excludes now.
+
+The remaining findings were prose, and are corrected in place above rather than
+listed here — a false superlative this ADR contradicted itself about, an
+over-quantified claim about return values, a docstring this ADR said had been
+updated when it had not, and two user-visible strings asserting a cause the flag
+cannot distinguish. That last one is the most serious thing the review found:
+without it, this change would have fixed "an interrupted answer is shown as
+complete" by introducing "an interrupted answer is shown with the wrong reason".
 
 ## Rejected alternatives
 
@@ -182,8 +233,21 @@ decide which one to read.
 
 - A provider that fails part-way through is now marked. The served field
   `shortened` means "the provider did not finish", not only "it hit the token
-  ceiling". Its docstring says so, and the set that decides it is named and
-  commented so the next widening is a decision rather than a tidy-up.
+  ceiling". Its docstring says so — the first version of this change did NOT
+  update that docstring while this bullet claimed it did, which a review lens
+  caught — and the set that decides it is named and commented so the next
+  widening is a decision rather than a tidy-up.
+- **Two user-visible strings had to change with it**, and this is the part the
+  widening nearly got wrong. `app.js` told the reader an incomplete answer
+  *"hit the length limit Quorum sets on each model call"* — in the export
+  summary and in the marker's tooltip. That names a CAUSE the flag cannot
+  distinguish, so the second cause would have made the product state something
+  false. Both now describe the EFFECT only ("stopped before finishing", "ends
+  mid-thought"), which is all the flag supports. Neither string is rendered
+  text — one is a `title` attribute and the other is exported Markdown — so no
+  pixel changes and the visual baselines are untouched. The two e2e assertions
+  that cover this surface key on `/Incomplete answers: 1/` and
+  `/incomplete|cut off/i`, neither of which the reworded copy moves.
 - **`is_truncated` cannot fire in production today**, because
   `openrouter_live_execution_enabled` is `false` and no live body reaches this
   code. Like ADR-0075's stance branch, this is latent-correct: covered by tests

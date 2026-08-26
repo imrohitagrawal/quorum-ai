@@ -335,9 +335,21 @@ class InitialModelAnswer(BaseModel):
     #: (no real billing) or when the provider omitted the usage object. Read
     #: by the cost layer to compute a measured actual cost.
     token_usage: TokenUsage | None = None
-    #: WP-D (F-07): this answer was cut short by the provider's token ceiling
-    #: (``finish_reason == "length"``), so the text below is incomplete. Only
-    #: a live provider call can set this — simulated, fallback, failed,
+    #: WP-D (F-07): this answer is NOT the model's complete view, so the text
+    #: below is incomplete. Two causes set it, and the field deliberately does
+    #: not distinguish them — see :data:`_UNCLEAN_FINISH_REASONS`:
+    #:
+    #: * ``finish_reason == "length"`` — the provider's token ceiling cut it
+    #:   off. The original and, until 2026-08-26, the only cause.
+    #: * ``finish_reason == "error"`` — the provider broke part-way through.
+    #:
+    #: Anything user-visible that renders this must therefore describe the
+    #: EFFECT ("ends mid-thought", "not the model's complete view") and never
+    #: assert the CAUSE, because it cannot tell which one applied. Two strings
+    #: in ``app.js`` said "hit the length limit Quorum sets on each call" and
+    #: were corrected when the second cause was added.
+    #:
+    #: Only a live provider call can set this — simulated, fallback, failed,
     #: cancelled and deadline-exceeded answers all keep the ``False`` default,
     #: because none of them was truncated BY A MODEL.
     #:
@@ -2062,11 +2074,19 @@ def _log_call_token_shape(
 #:
 #: * ``"length"`` — the token ceiling cut it off. This is what the field was
 #:   built for (F-07).
-#: * ``"error"`` — the provider broke part-way through. OpenRouter documents
-#:   this as the marker on a MID-STREAM failure frame, alongside a top-level
-#:   ``error`` object; measured 2026-08-26, a body carrying it was previously
-#:   served with ``is_truncated=False``, byte-identical in that respect to a
-#:   healthy completion.
+#: * ``"error"`` — the provider broke part-way through. OpenRouter's error
+#:   documentation gives this as the marker on a MID-STREAM failure frame,
+#:   alongside a top-level ``error`` object. Read 2026-08-26; the STREAMING
+#:   half is the vendor's own written contract. Whether a NON-streaming
+#:   response ever carries it is a separate question and is **UNVERIFIED** —
+#:   settling it needs a paid call to a provider forced to fail mid-generation.
+#:   That gap does not weaken the entry: reporting an unclean stop as unclean
+#:   is correct whether or not this particular upstream emits it here, and the
+#:   opposite error (rule 8c) would be GATING behaviour on an unmeasured
+#:   upstream, which this does not do.
+#:   What IS measured, 2026-08-26: a body carrying it was previously served
+#:   with ``is_truncated=False``, byte-identical in that respect to a healthy
+#:   completion.
 #:
 #: ``"content_filter"`` is deliberately ABSENT. It means the provider refused,
 #: which is a different event from running out or breaking, and

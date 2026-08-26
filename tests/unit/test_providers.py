@@ -381,6 +381,14 @@ class TestPostMessagesTruncationDetection:
             ({"choices": [{"finish_reason": "stop"}]}, "an ordinary stop"),
             ({"choices": [{"finish_reason": "content_filter"}]}, "a non-length reason"),
             ({"choices": [{"finish_reason": ["length"]}]}, "finish_reason is a list"),
+            # Added 2026-08-26 alongside ADR-0077. The list row above pins ONE
+            # unhashable shape, and a guard narrowed to ``isinstance(reason,
+            # list)`` would satisfy it while a dict still raised ``TypeError``
+            # inside the parsing ``try`` -- taking a good, billed, MEASURABLE
+            # response down to ``estimated``. Two shapes, so the guard has to
+            # be about hashability rather than about one type.
+            ({"choices": [{"finish_reason": {"reason": "length"}}]}, "finish_reason is a mapping"),
+            ({"choices": [{"finish_reason": {"length"}}]}, "finish_reason is a set"),
             ({"finish_reason": "length"}, "finish_reason at the top level"),
             ("length", "payload is not a mapping at all"),
             (None, "payload is None"),
