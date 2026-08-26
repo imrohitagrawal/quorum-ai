@@ -417,3 +417,56 @@ def test_a_nan_budget_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
         ).openrouter_call_budget_seconds
         == 25.0
     )
+
+
+def test_the_deadline_still_bounds_the_read_when_the_socket_cannot_be_reached(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """RED when: the between-chunks deadline check is removed.
+
+    Lowering the socket timeout is BEST-EFFORT -- the hop into the connection's
+    socket is CPython-implementation-specific and is wrapped in a suppress. So
+    the helper carries a second, independent bound: it re-checks the deadline
+    before every chunk and gives up itself. Without it, a response object whose
+    socket is unreachable would be back to unbounded, which is precisely the
+    defect this whole change exists to remove.
+
+    The double below has no ``fp`` at all, so the ``settimeout`` call cannot do
+    anything, and it dribbles 64 bytes every 0.2s forever. Only the deadline
+    check can stop it. The literal 5.0s bound is not derived from the 1.0s
+    budget; its positive partner is the lower bound, which proves the reader
+    really did keep yielding data rather than ending on its own.
+    """
+
+    class _UnreachableSocket:
+        """Valid bytes, forever, with no socket to lower a timeout on."""
+
+        def read1(self, _n: int) -> bytes:
+            time.sleep(0.2)
+            return b"y" * 64
+
+        def read(self, *_a: object) -> bytes:  # pragma: no cover - read1 wins
+            return b"y" * 64
+
+        def __enter__(self) -> _UnreachableSocket:
+            return self
+
+        def __exit__(self, *_: object) -> None:
+            return None
+
+    monkeypatch.setattr(config.settings, "openrouter_live_execution_enabled", True, raising=False)
+    monkeypatch.setattr(config.settings, "openrouter_call_budget_seconds", 1.0, raising=False)
+    monkeypatch.setattr("product_app.providers.urlopen", lambda *_a, **_k: _UnreachableSocket())
+    started = time.perf_counter()
+    result = provider_execution_service.call_with_prompt(
+        openrouter_key="sk-or-test",
+        model_id=_MODEL_ID,
+        system_prompt="s",
+        user_prompt="u",
+    )
+    wall = time.perf_counter() - started
+    assert wall < 5.0, f"the read ran {wall:.3f}s with no socket to bound it"
+    assert wall >= 0.9, f"the read ran {wall:.3f}s; it never reached the deadline"
+    assert result is not None
+    assert result.answer_text == ""
+    assert result.usage is None
