@@ -47,9 +47,25 @@ $ curl -s https://quorum-ai.fly.dev/status | python3 -m json.tool
   "judge_enabled": true,
 ```
 
-`$0.0676` is inside the range of one ordinary simulated query — the pinned
-4-slot unit is `$0.0547` judge-off — so it is not evidence of undeclared live
-spend. It is evidence the meter cannot tell the two apart.
+That `$0.0676` is not evidence of undeclared live spend. It is the **exact**
+point estimate of one ordinary simulated run, reproduced here: the four default
+slots, judge configured as `openai/gpt-5-mini`, priced off `_FALLBACK_CATALOG`,
+at a ~1,000-character query.
+
+```
+    33 chars -> point 0.0638  bound 0.1134
+   200 chars -> point 0.0645  bound 0.1136
+  1000 chars -> point 0.0676  bound 0.1146   <- production's figure, to the cent
+  1100 chars -> point 0.0680  bound 0.1147
+```
+
+Two things that does NOT establish, kept apart from the one it does. It does not
+prove the deployment served exactly one run — the figure is a sum, and other
+combinations reach it. It does not prove which model production pins as judge:
+the id is a Fly secret, `grep -n JUDGE fly.toml` returns nothing, and a
+different judge model would land on the same figure at a different query length.
+What it does establish is that the number is fully explained by simulated
+traffic. The meter cannot tell the two apart, which is the defect.
 
 ## Decision
 
