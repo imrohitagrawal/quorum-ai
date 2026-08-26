@@ -78,7 +78,7 @@
           <h2 id="tile-spend-h">Global daily spend</h2>
           <p class="tile-value"><span data-current="spend">—</span></p>
           <p class="tile-slo" data-slo="spend">Ceiling: <span data-current="spend-ceiling">—</span> · <span data-verdict="spend"></span></p>
-          <p class="tile-note">summed across ALL accounts, rolling 24h (issue #100)</p>
+          <p class="tile-note">summed across ALL accounts, rolling 24h (issue #100) — <strong>LIVE charges only</strong> since #376: a run booked while live execution is off spends nothing and is counted in <code>global_daily_simulated_spend_usd</code> on /status instead. <code>$0.00</code> on a simulated deployment is therefore correct, not absent data — a failed read reads <code>no data</code>.</p>
           <p class="tile-why" data-why="spend"><strong>Why this matters:</strong> once this reaches the ceiling every run degrades to local simulation, deployment-wide, until the 24h window rolls over.</p>
           <p class="tile-red" data-red="spend"><strong>When it's at the ceiling:</strong> expected, not a bug — check Sentry for the <code>cost_guardrail_degraded_to_simulation</code> alert for the account/IP breakdown.</p>
         </section>
