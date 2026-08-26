@@ -182,6 +182,9 @@ def _charge(
         },
         daily_cap_usd=daily_cap,
         global_ceiling_usd=GLOBAL_DAILY_CEILING_USD + amount,
+        # #376: a LIVE charge, matching this helper's ``COST_ACCEPTED_EVENT``
+        # payload and the docstring above — the judge rails read the live meter.
+        live_execution=True,
     )
     assert outcome is ChargeOutcome.RECORDED, f"the helper charge itself was refused: {outcome}"
 

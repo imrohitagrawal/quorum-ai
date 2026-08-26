@@ -20,7 +20,11 @@ from product_app.costs import (
     cost_estimation_service,
     cost_event_recorder,
 )
-from product_app.feedback_store import configure_for_tests
+from product_app.feedback_store import (
+    COST_ACCEPTED_EVENT,
+    COST_ACCEPTED_SIMULATED_EVENT,
+    configure_for_tests,
+)
 from product_app.main import app
 from product_app.query_runs import query_run_repository
 from product_app.safety import WARNING_VERSION, WarningType
@@ -54,6 +58,36 @@ DEFAULT_MODEL_IDS = [
 #: deterministic and MEASURED (2026-08-09) at:
 #:   DEFAULT_MODEL_IDS: point 0.0547, bound 0.1043 -- ALLOW (unchanged band
 #:     from pre-ADR-0028, just a higher number: point +73%, bound +35%).
+#:
+#: THOSE TWO FIGURES ARE THE JUDGE-OFF ONES, AND PRODUCTION RUNS JUDGE-ON.
+#: This is the canonical statement of the N=4 money envelope and sixteen other
+#: files cite it, so it has to say which environment each number belongs to.
+#: `tests/conftest.py:138` sets `QUORUM_EVAL_JUDGE_MODEL_ID = ""`, so
+#: `evaluation.judge_configured()` is False for the whole suite and the
+#: estimator does not price the judge. Production does: I curled
+#: `https://quorum-ai.fly.dev/status` on 2026-08-26 and it returned
+#: `"judge_enabled": true`. ADR-0064 made the judge move the POINT estimate as
+#: well as the bound, and nothing went red when it shipped because every
+#: occurrence of `0.1043` outside this file is in a COMMENT, never an assertion.
+#:
+#: MEASURED by me, 2026-08-26, varying `QUORUM_EVAL_JUDGE_MODEL_ID` AND
+#: `QUORUM_EVAL_JUDGE_API_KEY` (`judge_configured()` needs BOTH -- a model id
+#: alone leaves it False) and nothing else, against `_FALLBACK_CATALOG` and a
+#: 33-character query:
+#:   judge OFF                        -> point 0.0547, bound 0.1043
+#:   judge ON, `openai/gpt-5-mini`    -> point 0.0638, bound 0.1134
+#: Both bounds stay under `SOFT_THRESHOLD_USD` (0.15), so the BAND is ALLOW
+#: either way and no test in this file changes its verdict. The judge-ON pair
+#: matches ADR-0064's own table row for 33 chars, independently.
+#:
+#: UNVERIFIED, and it is the reason the judge-ON row names its model: WHICH
+#: model production pins. `judge_enabled: true` proves a key and a model id are
+#: both set, not which. The id is a Fly secret and `fly.toml` does not carry it
+#: (`grep -n JUDGE fly.toml` returns nothing). The judge term is priced from
+#: that id's catalog rate, so a different pinned model gives a different
+#: figure. The check that would settle it: `fly secrets list -a quorum-ai`
+#: shows the name but not the value, so it needs
+#: `fly ssh console -a quorum-ai -C 'printenv QUORUM_EVAL_JUDGE_MODEL_ID'`.
 #:   a single ``anthropic/claude-opus-4`` slot alone, at ANY query length,
 #:     bounds over 0.27 -- straight to BLOCK, never CONFIRM.
 #: So an all-cheap, price-exact mix stays ALLOW even at the max query length
@@ -181,7 +215,11 @@ def test_normal_cost_query_is_accepted_with_cost_estimate() -> None:
     assert Decimal(body["cost_estimate"]["estimated_cost_usd"]) <= Decimal("0.15")
     assert body["cost_estimate"]["threshold_action"] == "allow"
     event = _events_for(account_id)[0]
-    assert event.event_type == "cost_guardrail_accepted"
+    # #376: the suite runs with OPENROUTER_LIVE_EXECUTION_ENABLED=false, which is
+    # also production's posture, so an accepted charge is booked under the
+    # SIMULATED opening-charge type. The band decision and the cardinality below
+    # are what this test is about and neither changed.
+    assert event.event_type == COST_ACCEPTED_SIMULATED_EVENT
     assert event.account_id == account_id
     assert not event.confirmed
     assert not hasattr(event, "query_text")
@@ -223,7 +261,9 @@ def test_a_confirm_band_query_is_admitted_once_confirmed() -> None:
     body = response.json()
     assert body["cost_estimate"]["threshold_action"] == "require_confirmation"
     event = _events_for(account_id)[-1]
-    assert event.event_type == "cost_guardrail_accepted"
+    # #376: live execution is off suite-wide, so the accepted charge is the
+    # simulated type. See the note in test_normal_cost_query_is_accepted_with_cost_estimate.
+    assert event.event_type == COST_ACCEPTED_SIMULATED_EVENT
     assert event.account_id == account_id
     assert event.confirmed
     assert not hasattr(event, "query_text")
@@ -281,7 +321,8 @@ def test_high_cost_query_accepts_matching_confirmation_token() -> None:
 
     assert accepted_response.status_code == 202
     assert accepted_response.json()["cost_estimate"]["threshold_action"] == "require_confirmation"
-    assert _events_for(account_id)[-1].event_type == "cost_guardrail_accepted"
+    # #376: live execution is off suite-wide, so this is the simulated type.
+    assert _events_for(account_id)[-1].event_type == COST_ACCEPTED_SIMULATED_EVENT
     assert _events_for(account_id)[-1].confirmed
 
 
@@ -328,7 +369,19 @@ def test_over_limit_query_is_blocked_even_with_confirmation_shape() -> None:
 
 
 def _billing_events(account_id: UUID) -> list[CostGuardrailEvent]:
-    return [e for e in _events_for(account_id) if e.event_type == "cost_guardrail_accepted"]
+    """Every event that OPENED a charge, whichever posture booked it.
+
+    #376 split the accepted type in two. This helper exists to count how many
+    times one logical run was billed (F-01), which is a question about
+    cardinality and not about live-versus-simulated, so it must see both — a
+    version that named only the live type would report 0 bills on the suite's
+    own live-off posture and pass vacuously.
+    """
+    return [
+        e
+        for e in _events_for(account_id)
+        if e.event_type in (COST_ACCEPTED_EVENT, COST_ACCEPTED_SIMULATED_EVENT)
+    ]
 
 
 def test_estimate_then_create_records_exactly_one_billing_event() -> None:
@@ -385,7 +438,7 @@ def test_estimate_then_create_records_exactly_one_billing_event() -> None:
         # A4: the audit trail still shows that a preview happened — the fix
         # must not be "delete the estimate event".
         types = [e.event_type for e in _events_for(account_id)]
-        assert types == ["cost_confirmation_required", "cost_guardrail_accepted"]
+        assert types == ["cost_confirmation_required", COST_ACCEPTED_SIMULATED_EVENT]
         previews = [
             e for e in _events_for(account_id) if e.event_type == "cost_confirmation_required"
         ]

@@ -177,13 +177,17 @@ BUCKET_A_LITERAL_PIN = (
     "auth.CSRF_HEADER_NAME",
     "main._HSTS_HEADER",
     "model_slots.EXPECTED_SLOT_COUNT",
-    # The three cost event-type strings (#255). A LITERAL pin, not a behaviour
-    # one, because these values are written into a DURABLE table that outlives
-    # every deploy: change one and the meter stops counting every row already
-    # on the production volume — silently, and in the fail-open direction. The
-    # string IS the contract with rows that already exist, which is exactly
-    # "a wrong value is silently harmful and nothing else constrains it".
+    # The four cost event-type strings (#255, #376). A LITERAL pin, not a
+    # behaviour one, because these values are written into a DURABLE table that
+    # outlives every deploy: change one and the meter stops counting every row
+    # already on the production volume — silently, and in the fail-open
+    # direction. The string IS the contract with rows that already exist, which
+    # is exactly "a wrong value is silently harmful and nothing else constrains
+    # it". ``COST_ACCEPTED_SIMULATED_EVENT`` joins them for the same reason and
+    # one more: it is the discriminator that keeps a simulated run out of
+    # ``global_daily_spend``, so a typo in it puts them all back in.
     "feedback_store.COST_ACCEPTED_EVENT",
+    "feedback_store.COST_ACCEPTED_SIMULATED_EVENT",
     "feedback_store.COST_RECONCILED_EVENT",
     "feedback_store.COST_CHARGE_VOIDED_EVENT",
     # --- Added with #145/#160: class-level constants the fixed detector
@@ -206,6 +210,31 @@ BUCKET_A_LITERAL_PIN = (
 #: Pin the BEHAVIOUR, not the literal — these legitimately change, and a literal
 #: pin would teach people to edit the test alongside the code.
 BUCKET_B_PIN_BEHAVIOUR = {
+    # --- Added 2026-08-26 with the live-vs-simulated ledger (#376, ADR-0074) ---
+    "feedback_store._ACCOUNT_CHARGE_EVENTS": (
+        "which opening-charge types the PER-ACCOUNT rail counts. Its membership "
+        "legitimately grows as charge types are added -- what must not move is "
+        "that a simulated charge still fills DAILY_CAP_USD, so an account cannot "
+        "get unbounded free compute. Asserted by tests/integration/"
+        "test_ledger_live_versus_simulated.py::"
+        "TestThePerAccountCapStillCountsSimulatedRuns"
+    ),
+    "feedback_store._LIVE_CHARGE_EVENTS": (
+        "which opening-charge types the DEPLOYMENT-WIDE rail counts. The strings "
+        "themselves are pinned in bucket A; what this needs is the behaviour -- "
+        "simulated traffic far past $5.00 must not degrade the deployment, and "
+        "the same dollars as LIVE charges must. Both asserted by tests/"
+        "integration/test_ledger_live_versus_simulated.py::"
+        "TestSimulatedRunsLeaveTheGlobalMeterAlone"
+    ),
+    "costs._RING_CHARGE_EVENT_TYPES": (
+        "the in-process ring's mirror of _ACCOUNT_CHARGE_EVENTS. A literal pin "
+        "would not catch the failure that matters, which is the two per-account "
+        "rails DIVERGING (ADR-0051 measured that at 20x). Asserted by tests/"
+        "integration/test_ledger_live_versus_simulated.py::"
+        "TestThePerAccountCapStillCountsSimulatedRuns::"
+        "test_the_in_process_ring_counts_simulated_charges_too"
+    ),
     # --- Added 2026-08-26 with session_store.py (ADR-0073) ---
     "session_store.SESSION_TOUCH_PERSIST_INTERVAL_S": (
         "a write-amplification throttle, not a guard. Its error is bounded and "

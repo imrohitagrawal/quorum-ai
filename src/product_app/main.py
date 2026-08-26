@@ -888,6 +888,40 @@ def status_snapshot() -> dict[str, object]:
     unapplied migration) stamps its outcome, so ``unverified`` does not cover for
     a failed boot-time write.
 
+    THE THREE SPEND FIELDS (issue #376). Until #376 there was ONE, and it could
+    not tell live spend from simulated: nothing on the charge path consulted
+    ``OPENROUTER_LIVE_EXECUTION_ENABLED``, so a run that could not spend a cent
+    still booked a charge at its pre-run estimate and this endpoint reported it
+    as spend. Production ran at ``live_execution: false`` and reported
+    ``global_daily_spend_usd: "0.0676"`` on exactly that basis.
+
+    * ``global_daily_spend_usd`` — LIVE charges only, rolling 24 h, USD as a
+      string. This is the figure ``global_daily_ceiling_usd`` is compared
+      against, so simulated traffic can no longer degrade the deployment.
+      **Its meaning changed in #376; its name did not.**
+    * ``global_daily_simulated_spend_usd`` — the other half, same window. It
+      exists so the narrowing above is visible instead of looking like spend
+      collapsed overnight. Reported, never enforced: no rail reads it.
+    * ``last_live_charge_at`` — ISO-8601 UTC instant of the most recent LIVE
+      charge, or ``null`` for never. NOT windowed, deliberately: an operator
+      asking "when did this deployment last spend?" is worst served by ``null``
+      when the honest answer is "40 hours ago". A 24 h total cannot say WHEN
+      inside the window anything happened, which is why a watchdog comparing
+      spend against a declared live window previously had a total on one side
+      and a time span on the other.
+
+    All three are ``null`` when the store is absent or the read raises — never
+    ``"0"``, for the same reason the single field was: a real deployment can
+    genuinely be at zero, and collapsing "no data" into that string hides the
+    difference. The three are read independently, so one failing read does not
+    null the others.
+
+    WHAT THESE FIGURES STILL EXCLUDE, stated so nobody reads
+    ``global_daily_spend_usd: "0"`` as "this deployment spent nothing": the
+    Layer-B judge. It calls the provider on its own key and its spend has never
+    reached this ledger (ADR-0013). ``judge_enabled`` below is the field that
+    tells you whether that second, unbooked meter is running.
+
     ``error_tracking`` is likewise a generic ``active``/``inactive``
     health value: the concrete vendor (and anything else useful for
     targeting it) is deliberately not named on this public surface.
@@ -990,14 +1024,34 @@ def status_snapshot() -> dict[str, object]:
     # here is its own, narrower thing — the ceiling checked at estimate time
     # already fails open the same way — and must not flip the unrelated
     # write-health token).
+    #
+    # Issue #376 splits this into three values read under the same
+    # best-effort posture: the LIVE half (unchanged field name, changed
+    # meaning), the SIMULATED half, and the clock. Each is read in its own
+    # ``try`` so one failing read cannot null the other two — they are three
+    # separate queries and a partial answer beats no answer on an operator
+    # page. ``None`` still means "could not read", never "zero".
     global_daily_spend_usd: str | None
+    global_daily_simulated_spend_usd: str | None
+    last_live_charge_at: str | None
     if store is None:
         global_daily_spend_usd = None
+        global_daily_simulated_spend_usd = None
+        last_live_charge_at = None
     else:
         try:
             global_daily_spend_usd = str(store.global_daily_spend())
         except Exception:  # noqa: BLE001 - status must not 500
             global_daily_spend_usd = None
+        try:
+            global_daily_simulated_spend_usd = str(store.global_daily_simulated_spend())
+        except Exception:  # noqa: BLE001 - status must not 500
+            global_daily_simulated_spend_usd = None
+        try:
+            stamped = store.last_live_charge_at()
+            last_live_charge_at = None if stamped is None else stamped.isoformat()
+        except Exception:  # noqa: BLE001 - status must not 500
+            last_live_charge_at = None
     # Sentry state
     sentry_client = sentry_sdk.get_client()
     sentry_state = "active" if sentry_client.is_active() else "inactive"
@@ -1034,8 +1088,24 @@ def status_snapshot() -> dict[str, object]:
         # can genuinely be at 0.00, and collapsing "no data" into that same
         # string would hide the difference from an operator glancing at
         # this field.
+        #
+        # Issue #376 NARROWED this field: it is now the LIVE half only. Before,
+        # it counted simulated runs at their pre-run estimate, so a deployment
+        # at ``live_execution: false`` reported spend it could not have made —
+        # production read "0.0676" on exactly that basis.
         "global_daily_spend_usd": global_daily_spend_usd,
         "global_daily_ceiling_usd": str(GLOBAL_DAILY_CEILING_USD),
+        # Issue #376. The other half, so the narrowing above is visible rather
+        # than looking like spend collapsed. Reported, never enforced: no rail
+        # reads it.
+        "global_daily_simulated_spend_usd": global_daily_simulated_spend_usd,
+        # Issue #376. When this deployment last opened a LIVE charge, ISO-8601
+        # UTC, or ``null`` for never / unreadable. A 24h TOTAL cannot say WHEN
+        # inside the window anything happened, so a watchdog comparing spend
+        # against a declared live window had a total on one side and a span on
+        # the other. This is the missing clock. NOT windowed — "the last live
+        # charge was 40 hours ago" is a better answer than ``null``.
+        "last_live_charge_at": last_live_charge_at,
         # Whether the optional, PAID Layer-B judge is configured. Until this
         # field existed the judge could be switched on or off — by setting two
         # Fly secrets — with NO external signal at all, and that is a money

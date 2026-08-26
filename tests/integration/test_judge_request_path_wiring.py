@@ -575,6 +575,15 @@ def test_the_judge_dollar_is_inside_the_figure_the_ledger_books(
 
     def _book(*, enable: bool) -> tuple[Any, list[str]]:
         with monkeypatch.context() as mp:
+            # #376: ``_measured_run`` builds a run whose answers landed on
+            # ``ProviderPath.OPENROUTER_SEARCH`` — a genuinely LIVE run, which is
+            # the only kind that can be ``cost_source == "measured"`` and so the
+            # only kind reconciliation ever reaches. The suite forces the live
+            # flag off, so without this the charge is opened as SIMULATED and
+            # ``try_record_cost_reconciliation`` refuses it; both arms then book
+            # the bare estimate and the comparison collapses. No provider call is
+            # made: the run is fabricated and the judge seam is stubbed below.
+            mp.setattr(settings, "openrouter_live_execution_enabled", True)
             if enable:
                 _enable_judge(mp)
             judge_calls = _judge_seam(mp, usage=usage)
