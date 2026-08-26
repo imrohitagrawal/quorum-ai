@@ -1378,6 +1378,39 @@ class ProviderExecutionService:
                 expected=_EXPECTED_BODY_ERRORS,
             )
             return _DISPATCH_UNMEASURED
+        if not is_visible(content):
+            # The ONE dispatched-failure path that used to record nothing at
+            # all. A 200 whose body parses but yields no usable answer — an
+            # error envelope with no ``choices``, an empty completion against a
+            # tight cap, a proxy's JSON denial page, a bare ``{}`` — reached
+            # this point silently, so it could not be counted in the dataset
+            # issue 105 is to be settled from, while every other failure path
+            # logged.
+            #
+            # The RETURN is deliberately unchanged. F-06 finding C: the
+            # provider's own statement of what it charged is extracted above
+            # any emptiness guard and must survive it, so collapsing this to
+            # ``_DISPATCH_UNMEASURED`` would tidily throw away a known charge
+            # and force ``estimated`` on a call whose cost is measured. The
+            # defect here was the silence, not the classification.
+            #
+            # The predicate is ``is_visible``, matching the gate that actually
+            # fails the slot in ``_live_openrouter_response`` — a narrower
+            # ``not content`` would let a whitespace-only completion be dropped
+            # downstream while leaving no record of why.
+            #
+            # No part of the body reaches the record. A provider error string
+            # is upstream-controlled text of unbounded length; ``usage_absent``
+            # carries everything a reader needs to tell a billed dead end from
+            # an unbilled one.
+            _LOGGER.warning(
+                "upstream_provider_empty_answer",
+                extra={
+                    "model_id": model_id,
+                    "billing_class": "possibly_billed",
+                    "usage_absent": usage is None,
+                },
+            )
         # Issue #268's measurement. Emitted OUTSIDE the parsing ``try`` above
         # on purpose: that clause returns ``_DISPATCH_UNMEASURED`` for anything
         # it catches, so an exception raised by instrumentation inside it would
@@ -1929,10 +1962,22 @@ def _log_post_dispatch_failure(
     non-latin-1 character in an ``Authorization`` header raises
     ``UnicodeEncodeError`` whose payload is the header value.
     """
+    # ``billing_class`` is a CONSTANT here, and that is the point rather than an
+    # oversight. Both callers return ``_DISPATCH_UNMEASURED`` unconditionally,
+    # so the record and the return agree by construction; the field exists so
+    # the durable billing file can be read without also reading this function.
+    # Without it, the two most common dispatched failures were the only ones in
+    # the file with no billing verdict on them — and the most expensive live
+    # failure mode (a healthy chunked response abandoned by the per-``recv``
+    # socket timeout) arrives here, as ``upstream_provider_transport_error``.
     _LOGGER.log(
         logging.WARNING if isinstance(exc, expected) else logging.ERROR,
         event,
-        extra={"error_type": type(exc).__name__, "model_id": model_id},
+        extra={
+            "error_type": type(exc).__name__,
+            "model_id": model_id,
+            "billing_class": "possibly_billed",
+        },
     )
 
 
@@ -2011,13 +2056,32 @@ def _log_call_token_shape(
     _TOKEN_LOGGER.info("provider_call_tokens", extra=fields)
 
 
+#: The ``finish_reason`` values that mean the text in hand is NOT the model's
+#: complete view of the question. Deliberately a closed set of two, not "any
+#: reason other than stop":
+#:
+#: * ``"length"`` — the token ceiling cut it off. This is what the field was
+#:   built for (F-07).
+#: * ``"error"`` — the provider broke part-way through. OpenRouter documents
+#:   this as the marker on a MID-STREAM failure frame, alongside a top-level
+#:   ``error`` object; measured 2026-08-26, a body carrying it was previously
+#:   served with ``is_truncated=False``, byte-identical in that respect to a
+#:   healthy completion.
+#:
+#: ``"content_filter"`` is deliberately ABSENT. It means the provider refused,
+#: which is a different event from running out or breaking, and
+#: ``tests/unit/test_providers.py`` pins it as non-truncation on purpose.
+#: Widening this set again is a decision, not a tidy-up.
+_UNCLEAN_FINISH_REASONS: frozenset[str] = frozenset({"length", "error"})
+
+
 def _finish_reason_indicates_truncation(payload: object) -> bool:
-    """Did the provider stop because it hit the token ceiling?
+    """Did the provider stop before it had finished answering?
 
     Reads ``choices[0].finish_reason`` and reports ``True`` only for the
-    documented ``"length"`` value. Every other shape — a payload that is not
-    a mapping, a missing/empty/non-list ``choices``, a non-mapping element,
-    an absent ``finish_reason``, or any other reason (``"stop"``,
+    values in :data:`_UNCLEAN_FINISH_REASONS`. Every other shape — a payload
+    that is not a mapping, a missing/empty/non-list ``choices``, a non-mapping
+    element, an absent ``finish_reason``, or any other reason (``"stop"``,
     ``"content_filter"``, a provider-specific string) — reports ``False``.
 
     The asymmetry is deliberate and is the whole point: ``shortened`` becomes
@@ -2033,7 +2097,19 @@ def _finish_reason_indicates_truncation(payload: object) -> bool:
     first = choices[0]
     if not isinstance(first, dict):
         return False
-    return first.get("finish_reason") == "length"
+    reason = first.get("finish_reason")
+    # The ``isinstance`` is not defensive noise, and it is not free: the
+    # previous form was ``== "length"``, which is total over every type. A set
+    # membership is NOT — ``["length"] in frozenset(...)`` raises
+    # ``TypeError: unhashable type: 'list'``. That call sits inside the parsing
+    # ``try``, so an upstream sending a LIST finish_reason would have taken a
+    # perfectly good, billed, measurable response and downgraded it to
+    # ``estimated``. Caught by
+    # ``test_malformed_payloads_never_assert_truncation[payload7]``, which is
+    # why that test's "finish_reason is a list" row exists.
+    if not isinstance(reason, str):
+        return False
+    return reason in _UNCLEAN_FINISH_REASONS
 
 
 def _extract_usage(payload: object) -> TokenUsage | None:

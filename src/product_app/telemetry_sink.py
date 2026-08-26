@@ -95,6 +95,16 @@ BILLING_EVENTS: frozenset[str] = frozenset(
     {
         "upstream_provider_http_error",
         "upstream_provider_opener_error",
+        # Added 2026-08-26. These three classify a POSSIBLE charge exactly as
+        # the two above do, and were filtered out of the durable file — so the
+        # most expensive live failure mode (a healthy chunked response
+        # abandoned by the per-``recv`` socket timeout, which surfaces as
+        # ``upstream_provider_transport_error``) was invisible in the very
+        # dataset issue 105 is to be settled from. All three are rare, so the
+        # 1 MiB x 4 ceiling below is unaffected.
+        "upstream_provider_transport_error",
+        "upstream_provider_body_unreadable",
+        "upstream_provider_empty_answer",
     }
 )
 
