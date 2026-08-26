@@ -12,8 +12,14 @@ orchestrator computes the strength from the four initial answers
 plus the debate critique, then varies the templated consensus /
 disagreement text by branch. The application-level guarantee is
 that "consensus" means either ≥3 of 4 models substantively agree
-OR the debate converged; otherwise the section honestly says the
-models do not agree.
+OR a moderator read a strict majority of the slots it scored as
+holding one position OR the debate converged; otherwise the section
+honestly says the models do not agree.
+
+The moderator's bar is a majority of the panel it READ, so on a run
+that lost a slot it is 2 of the 3 scored rather than the unanimity a
+hard-wired "3" demanded. The overlap bar deliberately stays "3 of 4";
+ADR-0075 has the measurement that keeps it there.
 
 This module is pure logic (no I/O, no thread pool, no
 configuration). The classification is a heuristic — the audit
@@ -311,15 +317,33 @@ def compute_consensus_strength(
     # and four opposed answers to one question are worded alike, so overlap
     # alone said "strong" on a panel split down the middle.
     #
-    # The 3-of-4 bar is the SAME bar this function already applied through
-    # ``_has_strong_overlap`` ("≥3 of 4 substantively agree"); only the evidence
-    # it is measured on changes. A single group is strong at any panel size.
+    # The bar is a strict majority of the slots the moderator actually read
+    # (:func:`_required_cluster`). At the shipped four-slot panel that is 3, so
+    # this is exactly the "3 of 4" bar this branch has always applied. At N=3
+    # it is 2 of 3, where the old literal ``3`` demanded UNANIMITY and called an
+    # explicit 2-vs-1 reading "divided".
+    #
+    # Why the same generalisation is NOT applied to ``_has_strong_overlap``:
+    # this branch reads the moderator's own SEMANTIC labels — it assigns each
+    # slot a position — so a majority here is a majority of stated positions.
+    # Overlap is fuzzy text similarity, and ADR-0075 measured that a majority
+    # overlap cluster at N<=3 is a SINGLE EDGE, which two contradicting answers
+    # form out of shared opening boilerplate.
+    #
+    # N here is ``len(stance)`` — the moderator's own population — NOT
+    # ``len(completed)``. The two branches are mutually exclusive (this one
+    # returns), ``sizes`` sums to ``len(stance)`` by construction, and they are
+    # not interchangeable: ``_scored_slot_numbers`` returns a SET of slot
+    # numbers while ``completed`` is a LIST of answers, so they diverge if two
+    # answers ever share a slot_number.
+    #
+    # A single group is strong at any panel size.
     stance = _usable_stance(initial_answers, debate_outputs)
     if stance is not None:
         sizes: dict[str, int] = {}
         for label in stance.values():
             sizes[label] = sizes.get(label, 0) + 1
-        if len(sizes) == 1 or max(sizes.values()) >= 3:
+        if len(sizes) == 1 or max(sizes.values()) >= _required_cluster(len(stance)):
             return "strong"
         return "divided"
 
@@ -406,6 +430,26 @@ def _overlap_partner_counts(completed_texts: list[str]) -> list[int]:
                 partners += 1
         counts.append(partners)
     return counts
+
+
+def _required_cluster(panel_size: int) -> int:
+    """How many answers must agree before a panel of ``panel_size`` has a
+    STRICT MAJORITY: ``panel_size // 2 + 1``.
+
+    At the shipped four-slot panel this returns 3, so a bar built on it is
+    exactly today's "3 of 4". It exists so a bar tracks the panel that was
+    actually READ rather than a hard-wired four.
+
+    **Only the stance bar uses this.** It is deliberately NOT applied to
+    :func:`_has_strong_overlap`, and ADR-0075 records the measurement that
+    stopped it: at ``panel_size`` 2 and 3 this returns 2, so a "majority
+    cluster" is two texts needing one partner each — a SINGLE EDGE. Two
+    answers that openly contradict each other share enough opening
+    boilerplate to form that edge, so an overlap bar built on this helper
+    certifies "strong" on a panel that disagrees. Corroboration — every
+    member needing two partners — only begins at ``panel_size`` 4.
+    """
+    return panel_size // 2 + 1
 
 
 def _has_strong_overlap(completed_texts: list[str]) -> bool:
