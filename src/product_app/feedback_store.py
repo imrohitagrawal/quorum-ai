@@ -160,7 +160,10 @@ COST_ACCEPTED_EVENT = "cost_guardrail_accepted"
 #: refuses to build a judge at all unless some answer's ``provider_path`` is
 #: outside ``NOT_INVOKED_PATHS``, and only the ``_live_execution_enabled`` branch
 #: of ``produce_initial_answer`` ever produces such a path. Flag off ⇒ every
-#: answer is ``LOCAL_SIMULATION`` ⇒ no judge, no dispatch, no bill.
+#: answer lands on ``LOCAL_SIMULATION`` or ``FALLBACK_SEARCH``, and
+#: ``NOT_INVOKED_PATHS`` holds BOTH ⇒ no judge, no dispatch, no bill. Both are
+#: named because the ``FALLBACK_SEARCH`` branch is the one that can still make
+#: the paid Tavily call listed above.
 #:
 #: When the judge DOES fire — on a run with at least one live answer — its cost
 #: is priced into the measured total by ``_actual_cost`` and reaches this ledger

@@ -161,7 +161,14 @@ pins the *absence* of an alert. The ADR cited that same test file as evidence
 The mechanism: `_request_path_judge` refuses to construct a judge unless some
 answer's `provider_path` is outside `NOT_INVOKED_PATHS`, and only
 `produce_initial_answer`'s `_live_execution_enabled` branch produces such a path.
-Flag off ⇒ every answer is `LOCAL_SIMULATION` ⇒ no judge object, no dispatch.
+Flag off ⇒ every answer lands on `LOCAL_SIMULATION` **or** `FALLBACK_SEARCH` ⇒
+no judge object, no dispatch. Both, not just the first: the fallback branch is
+reachable with the flag off (`providers.py`, the `_fallback_sources` /
+`ProviderPath.FALLBACK_SEARCH` return), and `NOT_INVOKED_PATHS` is
+`frozenset({LOCAL_SIMULATION, FALLBACK_SEARCH})` — so the conclusion holds
+either way. Stated precisely because the imprecise version ("every answer is
+`LOCAL_SIMULATION`") hides the very branch that can still make a paid Tavily
+call, which the section below has to name.
 Both review lenses drove it independently and counted **0** dispatches in
 production's posture, against **8** on the same probe with the flag on.
 

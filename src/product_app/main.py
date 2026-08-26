@@ -933,11 +933,27 @@ def status_snapshot() -> dict[str, object]:
     None of the three has ever been in this figure, and #376 changed none of
     them. ``judge_enabled`` below says whether the judge is configured at all.
 
-    ``live_execution: false`` DOES, however, mean no judge call is being made:
-    the judge is refused unless a run produced at least one answer from a live
-    provider path, which live-execution-off makes impossible. A judge that is
-    configured but cannot fire still shows ``judge_enabled: true``, because that
-    field reports configuration, not dispatch.
+    ``live_execution: false`` DOES, however, mean no judge call is being made —
+    but check the reasoning, because this field is DERIVED from the readiness
+    probe (``report.state in ("live",)``) and not from the config flag, so three
+    different postures produce it and only one of them is "the flag is off":
+
+    * ``offline_by_config`` — the flag is off. Every answer lands on
+      ``LOCAL_SIMULATION`` or ``FALLBACK_SEARCH``, both of which are in
+      ``NOT_INVOKED_PATHS``.
+    * ``offline_by_no_key`` — flag on, no key. The run is FAILED outright before
+      any stage runs, so there is no COMPLETED answer.
+    * ``offline_by_bad_key`` — flag on, key present but refused. Live calls ARE
+      attempted and every one is refused, so the slots come back FAILED, not
+      COMPLETED.
+
+    ``_request_path_judge`` needs a COMPLETED answer whose ``provider_path`` is
+    outside ``NOT_INVOKED_PATHS``. All three postures fail that test, so the
+    conclusion holds in each — for three different reasons, which is why they are
+    written out rather than collapsed into "live execution is off".
+
+    A judge that is configured but cannot fire still shows
+    ``judge_enabled: true``: that field reports configuration, not dispatch.
 
     ``error_tracking`` is likewise a generic ``active``/``inactive``
     health value: the concrete vendor (and anything else useful for
