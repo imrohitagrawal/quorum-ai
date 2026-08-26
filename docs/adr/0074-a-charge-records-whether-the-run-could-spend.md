@@ -34,7 +34,7 @@ Three surfaces read that number and all three were wrong in the same direction:
 * `/status.global_daily_spend_usd`
 * the `/ui/ops` spend tile (`static/ops.js:313-322`, which just renders the
   `/status` field)
-* the `GLOBAL_DAILY_CEILING_USD` degrade decision (`costs.py:920`,
+* the `GLOBAL_DAILY_CEILING_USD` degrade decision (`costs.py:917`,
   `feedback_store.try_record_cost_charge`), so **$5.00 of purely simulated
   traffic could degrade every run deployment-wide without a cent being spent.**
 
@@ -94,9 +94,14 @@ deployment-wide figure moved, which is the figure the issue is about.
 **3. The discriminator is the CONFIG FLAG, read once, at charge time.**
 
 `providers.py:670` is `bool(settings.openrouter_live_execution_enabled and
-openrouter_key)`, so the flag being false makes a live call impossible for
-**every** slot. The classification can therefore be wrong only in the
-over-metering direction — flag on, no key, run books as live and spends nothing.
+openrouter_key)`, so the flag being false makes a live MODEL call impossible for
+every slot — initial answers, debate and synthesis alike. The classification can
+therefore be wrong only in the over-metering direction: flag on, no key, run
+books as live and spends nothing.
+
+The flag is **not** sufficient for "this run cost $0" full stop, and the section
+below says which calls it does not cover. It is sufficient for the claim the
+meter makes, which is about the run's own priced model calls.
 `settings` is one module-level instance (`config.py:527`), built from the
 environment at import and never reassigned in `src/`, so there is no window in
 which it can change between the charge and the run it describes. ADR-0016 moved
@@ -112,9 +117,9 @@ A simulated charge is invisible to `global_daily_spend()`. So a **live** run
 mis-recorded as simulated would put real dollars outside the $5.00 ceiling
 entirely — worse than the defect being fixed. Three things bound it:
 
-1. The discriminator is the flag alone, which is *sufficient* for zero spend and
-   narrower than the condition that permits spend. Every wrong answer lands on
-   the over-metering side.
+1. The discriminator is the flag alone, which is *sufficient* for zero paid
+   MODEL calls and narrower than the condition that permits them. Every wrong
+   answer lands on the over-metering side.
 2. "Simulated" here means the **whole run**. `costs.py:163` and
    `query_run_orchestration.py:1135` pin issue #171's invariant: a degrade
    is whole-run, never a per-slot substitution. A partly-live run labelled
@@ -127,25 +132,50 @@ entirely — worse than the defect being fixed. Three things bound it:
 
 ## What this figure still does NOT include
 
-**The Layer-B judge**, and this ADR must not be read as "the meter now reports
-real spend". Measured while designing this change:
+This ADR must not be read as "the meter now reports real spend". Three things
+are outside it, none of them new and none of them changed here:
 
-* `providers.call_with_prompt` gates only on `if not openrouter_key or not
-  model_id: return None` (`providers.py:1441`). It never consults the live flag.
-* `EvalJudgeService` calls it with `openrouter_key=settings.quorum_eval_judge_api_key`
-  (`evaluation.py:1880`) — a separate key.
-* So production's actual posture (`live_execution: false`, `judge_enabled: true`)
-  is one where a run's own priced calls spend nothing **and a judge call is still
-  dispatched and billed**.
+* **A paid Tavily search.** `_tavily_enabled()` gates on
+  `bool(settings.tavily_api_key)` alone, and `_fallback_sources` — the branch
+  that calls it — is reached precisely when a slot did *not* go live. So a run
+  booked as simulated can still send one paid Tavily request.
+* **The nightly audit job's own model call** (`feedback_audit` POSTs to
+  `/chat/completions`), likewise ungated.
+* **Judge dollars on the memo-eviction GET path**, which no reconciliation books
+  (#216 / ADR-0013).
 
-That spend never reached this ledger before this change either. The only path
-that could book it is reconciliation, and `_reconcile_run_billing` returns unless
-`cost_source == "measured"`, which `_actual_cost`'s own docstring says a
-simulated run can never be: *"A demo/simulation run makes no live calls, so there
-is no captured usage to measure from — it stays `estimated`."* ADR-0013 records
-the same fact, and `tests/unit/test_live_posture_check.py` already alerts on it.
-This change neither hides nor fixes it. `/status.judge_enabled` remains the field
-that tells an operator the second, unbooked meter is running.
+### The claim this section got wrong, and what refuted it
+
+An earlier revision of this ADR said production's posture
+(`live_execution: false`, `judge_enabled: true`) is one where "a judge call is
+still dispatched and billed", reasoning from `providers.call_with_prompt`
+(`providers.py:1441`) not consulting the live flag.
+
+**That is false, and the refutation was already in this repository before the
+claim was written.** `scripts/live_posture_check.py` states it outright — *"The
+judge CANNOT spend while live execution is off"* — and
+`tests/unit/test_live_posture_check.py::test_the_judge_on_while_live_is_off_is_reported_and_not_alerted`
+pins the *absence* of an alert. The ADR cited that same test file as evidence
+*for* the claim.
+
+The mechanism: `_request_path_judge` refuses to construct a judge unless some
+answer's `provider_path` is outside `NOT_INVOKED_PATHS`, and only
+`produce_initial_answer`'s `_live_execution_enabled` branch produces such a path.
+Flag off ⇒ every answer is `LOCAL_SIMULATION` ⇒ no judge object, no dispatch.
+Both review lenses drove it independently and counted **0** dispatches in
+production's posture, against **8** on the same probe with the flag on.
+
+The error is worth recording because of its shape: the reasoning stopped one
+level below the gate and never checked the caller, and a citation was offered
+where a command was needed. That is the failure mode the rulebook names, made
+inside the diff that quotes it.
+
+**And when the judge does fire**, on a run with at least one live answer, its
+cost is priced into the measured total by `_actual_cost` (`judge_line` →
+`build_measured_breakdown`) and reaches this ledger through `cost_reconciled`.
+So "judge spend has never reached this ledger" — the other half of the old
+claim — was also wrong. Only the memo-eviction dispatch escapes, which is what
+#216/ADR-0013 is about.
 
 ## Rejected alternatives
 
@@ -231,10 +261,23 @@ is about.
 
 ## Tests
 
-`tests/integration/test_ledger_live_versus_simulated.py` — 17 tests in six
+`tests/integration/test_ledger_live_versus_simulated.py` — 23 tests in six
 groups: the headline (a simulated run leaves the global meter at exactly
 `Decimal("0")`, with a live-dollar partner that does degrade the deployment), the
 mirror image, the unchanged per-account rails, `last_live_charge_at`, the
 surrounding machinery (`_METERED_WRITES`, reconciliation, the audit census), and
-`/status`. Ten mutations were run against them (`cp` aside, mutate, run, restore,
-`diff -q`) and every one turned the suite red.
+`/status`. Fifteen mutations were run against them (`cp` aside, mutate, run,
+restore from the copy, `diff -q` — never `git checkout`) and every one turned
+the suite red: the discriminator forced to live and to simulated, each meter
+swapped for the other's event-type set, the ring reverted to the single literal,
+the `_METERED_WRITES` entry removed, the wire from `costs.py` hardcoded, the
+`/status` key dropped, `ORDER BY id` reverted to `ORDER BY recorded_at`, the
+malformed-row scan stopped at the first row, the two timestamp-parsing branches
+deleted, and the empty-meter guard removed.
+
+**One mutation survived the first round and is recorded rather than tidied
+away.** A reviewer widened `try_record_cost_reconciliation`'s
+`COST_ACCEPTED_EVENT not in seen` guard to accept the simulated type; all tests
+stayed green, because the `seen` SELECT one line above never puts that type in
+`seen`, so the guard change alone is a no-op. The test's stated bite line named
+one edit where the real defect needs two. Fixed by naming both.

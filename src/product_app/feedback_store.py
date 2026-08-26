@@ -136,15 +136,37 @@ COST_ACCEPTED_EVENT = "cost_guardrail_accepted"
 #: (``costs.record_guardrail_event``), which exists precisely so the global
 #: meter cannot count a run that was degraded to simulation.
 #:
-#: WHAT THIS TYPE DOES **NOT** CLAIM. It says the RUN's own priced calls spent
-#: nothing. It does NOT say the deployment spent nothing: the Layer-B judge is a
-#: separately keyed subsystem (``evaluation.py:1879-1880`` passes
-#: ``settings.quorum_eval_judge_api_key``) and ``providers.call_with_prompt``
-#: gates only on ``if not openrouter_key or not model_id`` (``providers.py:1441``),
-#: never on the live flag — so a judge call is dispatched and billed while live
-#: execution is off. That spend has never reached THIS ledger (ADR-0013, and
-#: ``tests/unit/test_live_posture_check.py`` pins the alert for it), so nothing
-#: here hides it; it was never counted before this change either.
+#: WHAT THIS TYPE DOES **NOT** CLAIM. It says the run's own MODEL calls — initial
+#: answers, debate, synthesis — cannot reach a paid provider. It does NOT say the
+#: process spent nothing, and two paths are outside the flag entirely:
+#:
+#:   * ``ProviderExecutionService._tavily_search`` gates on
+#:     ``bool(settings.tavily_api_key)`` alone, and the ``_fallback_sources``
+#:     branch that calls it is reached precisely when a slot did NOT go live. So
+#:     a run booked under THIS event type can still send one paid Tavily request.
+#:   * ``feedback_audit`` POSTs to ``/chat/completions`` from the nightly audit
+#:     job, which never consults the flag either.
+#:
+#: Neither has ever been in this ledger, and neither is changed here.
+#:
+#: THE JUDGE IS **NOT** ON THAT LIST, and an earlier revision of this comment
+#: wrongly put it there — claiming a judge call "is dispatched and billed while
+#: live execution is off". That is false, and the refutation was already written
+#: down in this repository before the claim was made
+#: (``scripts/live_posture_check.py``: "The judge CANNOT spend while live
+#: execution is off"). The reasoning stopped one level too low: yes,
+#: ``providers.call_with_prompt`` gates only on ``if not openrouter_key or not
+#: model_id``, but its CALLER ``query_run_orchestration._request_path_judge``
+#: refuses to build a judge at all unless some answer's ``provider_path`` is
+#: outside ``NOT_INVOKED_PATHS``, and only the ``_live_execution_enabled`` branch
+#: of ``produce_initial_answer`` ever produces such a path. Flag off ⇒ every
+#: answer is ``LOCAL_SIMULATION`` ⇒ no judge, no dispatch, no bill.
+#:
+#: When the judge DOES fire — on a run with at least one live answer — its cost
+#: is priced into the measured total by ``_actual_cost`` and reaches this ledger
+#: through ``cost_reconciled``. What still escapes is the memo-eviction GET path
+#: (#216/ADR-0013), which pays for a second dispatch that no reconciliation
+#: books. That was true before this change and is unaffected by it.
 COST_ACCEPTED_SIMULATED_EVENT = "cost_guardrail_accepted_simulated"
 
 #: The event types that OPEN a charge, in the order a reader should think about
@@ -161,6 +183,17 @@ _ACCOUNT_CHARGE_EVENTS: tuple[str, ...] = (
     COST_ACCEPTED_EVENT,
     COST_ACCEPTED_SIMULATED_EVENT,
 )
+
+#: How far back :meth:`FeedbackStore.last_live_charge_at` walks looking for a
+#: parseable timestamp (issue #376 review). ``recorded_at`` is TEXT and nothing
+#: constrains it, so the newest charge row can be unreadable; stopping at the
+#: first row would then report "never spent live" while dated live charges sit
+#: on disk. Sized small on purpose — this runs on the unauthenticated
+#: ``/status`` path and holds the store's single lock (ADR-0002) — and 16 is
+#: already far past the point where "every one of the last N is corrupt" stops
+#: being a timestamp problem and starts being a broken volume, which
+#: ``feedback_db``/``feedback_writes`` are the fields for.
+_LAST_CHARGE_SCAN_LIMIT = 16
 
 #: What the DEPLOYMENT-WIDE rail counts: live charges only. This is the whole
 #: point of issue #376 — ``global_daily_spend()`` feeds
@@ -368,7 +401,9 @@ class FeedbackStore:
     #: ``/data/feedback_events.sqlite3`` on the persistent volume precisely so
     #: it survives a deploy). ``daily_spend_for`` does not look at
     #: ``query_run_id`` at all — it filters on ``recorder = 'cost' AND
-    #: event_type = 'cost_guardrail_accepted'`` plus the account and the 24 h
+    #: event_type IN (...)`` over ``_ACCOUNT_CHARGE_EVENTS`` (both opening-charge
+    #: types since #376; this said ``= 'cost_guardrail_accepted'`` until then)
+    #: plus the account and the 24 h
     #: window (read its SQL; an earlier revision of this comment said
     #: "``event_type`` alone", which contradicted ``_METERED_WRITE`` above, and
     #: the recorder half is exactly what stops a cost-shaped event written by
@@ -998,11 +1033,26 @@ class FeedbackStore:
 
         # Opening charges. Keyed rows are correctable, NULL-keyed rows are not.
         # The event-type list is BOUND, not interpolated: it is the one predicate
-        # here whose values now come from a caller argument rather than a
-        # module constant, and an f-string would put caller-supplied text into
-        # SQL. The placeholders are generated from the tuple's length, so an
-        # empty tuple would produce ``IN ()`` — a syntax error, not a silent
-        # sum over nothing, which is the safe way for that mistake to fail.
+        # here whose values now come from a caller argument rather than a module
+        # constant, and an f-string would put caller-supplied text into SQL.
+        #
+        # THE EMPTY TUPLE IS REFUSED, and this guard is not defensive padding.
+        # An earlier revision of this comment claimed an empty tuple "would
+        # produce ``IN ()`` — a syntax error, not a silent sum over nothing".
+        # That is wrong, and wrong in the fail-open direction. SQLite is one of
+        # the few engines that ACCEPTS an empty ``IN ()``; measured on the
+        # version this repo runs:
+        #     >>> sqlite3.sqlite_version
+        #     '3.50.4'
+        #     >>> conn.execute("select count(*) from t where a IN ()").fetchone()
+        #     (0,)
+        # So without this line a caller who passed an empty tuple would get
+        # ``Decimal("0")`` from a ledger full of charges — every rail reading
+        # "nothing spent" while money moved. Unreachable today (both call sites
+        # pass non-empty module constants), which is exactly why it needs to be
+        # a raise rather than a comment: nothing else would ever notice.
+        if not charge_event_types:
+            raise ValueError("charge_event_types must not be empty: an empty meter is not a meter")
         charge_placeholders = ", ".join("?" for _ in charge_event_types)
         charged: dict[str, Decimal] = {}
         total = Decimal("0")
@@ -1138,10 +1188,13 @@ class FeedbackStore:
         every run deployment-wide without a cent being spent.
 
         WHAT THIS FIGURE STILL DOES NOT INCLUDE, stated because #376 must not be
-        read as "this number is now real spend": the Layer-B judge's calls. They
-        go out on a separate key and have never reached this ledger (ADR-0013) —
-        see ``COST_ACCEPTED_SIMULATED_EVENT``. This change did not remove them
-        from the figure; they were never in it.
+        read as "this number is now real spend": a paid Tavily search (gated on
+        its own key, not the live flag), the nightly audit job's own model call,
+        and the judge dollars spent on the memo-eviction GET path that no
+        reconciliation books (#216/ADR-0013). None of the three has ever been in
+        this figure and none is changed here. See
+        ``COST_ACCEPTED_SIMULATED_EVENT`` for why the judge as a whole is NOT on
+        that list.
 
         A run that gets degraded to simulation by the ceiling this method
         enforces must NOT be counted here — see
@@ -1215,47 +1268,56 @@ class FeedbackStore:
         a row that somehow lacks one is read as UTC rather than returned naive,
         because a naive value compared against an aware ``now`` raises.
 
-        ``ORDER BY recorded_at DESC`` IS A LEXICOGRAPHIC SORT — ``recorded_at``
-        is TEXT, not a date type — and it agrees with chronological order only
-        because every offset stored is the same one. Both halves measured:
+        ORDERED BY ``id``, NOT BY ``recorded_at``, and that is the whole
+        correctness argument. ``recorded_at`` is TEXT, so ``ORDER BY
+        recorded_at`` is a LEXICOGRAPHIC sort over wall-clock strings, and
+        adversarial review broke it two ways on this very method:
 
-        * Every ``recorded_at`` a writer in ``src/`` supplies is
-          ``datetime.now(UTC)``. Named rather than line-numbered, because a line
-          number in this same docstring invalidates itself the moment the
-          docstring grows — which it did while this was being written. The
-          writers are :meth:`try_record_cost_charge`,
-          :meth:`try_record_cost_reconciliation`, :meth:`void_cost_charge`,
-          :meth:`try_record_session_mint` and the module-level
-          :func:`record_event` — five, and no others. Re-derive with
-          ``grep -n "recorded_at=" src/product_app/feedback_store.py``: it
-          returns seven lines, being those five writes, one READ in
-          :meth:`iter_events` parsing a row back, and this sentence. The ``now``
-          override on each writer is for test determinism.
-        * Within a fixed ``+00:00`` offset the two orders agree even in the form
-          that should worry a reader — a whole-second stamp against a
-          microsecond one in the SAME second. ``'+'`` is 0x2B and ``'.'`` is
-          0x2E, so ``'2026-08-24T17:30:00+00:00' <
-          '2026-08-24T17:30:00.500000+00:00'`` is True, which is also the
-          chronological answer.
+        * A BACKWARD clock step — NTP correction, VM resync, snapshot restore —
+          makes the newest charge stamp EARLIER than an older one, so the
+          lexicographic maximum is a charge that is not the latest. Measured:
+          after writing a live charge stamped 3 h earlier than the previous one,
+          the method kept reporting the previous one. This is not a hypothetical
+          for this file: :meth:`_spend_total_locked`'s own docstring, a few
+          hundred lines up, records a backward step as a demonstrated hazard.
+        * A row with a different UTC OFFSET sorts by its text, not its instant.
+          Measured: a ``+04:00`` row returned as newer than a later ``+00:00``
+          one.
 
-        A row written with a DIFFERENT offset would break the sort. Nothing in
-        ``src/`` can produce one, and this note says so out loud rather than
-        leaving it an unstated assumption underneath a money-adjacent figure.
+        ``id`` is ``INTEGER PRIMARY KEY``, i.e. insertion order, i.e. the CAUSAL
+        order — which is exactly the argument :meth:`_spend_total_locked`
+        already makes for its own ``ORDER BY id`` ("``id`` is the insertion
+        order and therefore the causal order"). It costs nothing to be
+        consistent with it, and it removes both failures rather than documenting
+        an assumption underneath them. An earlier revision of this docstring
+        argued at length that every stored offset is identical so the text sort
+        is safe; that argument was true and beside the point, because it said
+        nothing about two identical offsets in the wrong time order.
+
+        A MALFORMED ROW DOES NOT ERASE THE FIELD. ``recorded_at`` is TEXT and
+        nothing at the schema level constrains it, so the newest row can be
+        unreadable. Returning ``None`` there would report "this deployment has
+        never spent live" while dated live charges sit on disk — the most
+        dangerous possible answer for a watchdog, and a false one. So this walks
+        back through the most recent ``_LAST_CHARGE_SCAN_LIMIT`` charges and
+        returns the first it can parse. ``None`` still means "no live charge
+        found", which after that scan is overwhelmingly "never".
         """
         with self._lock:
             cursor = self._conn.execute(
                 "SELECT recorded_at FROM events "
                 f"WHERE recorder = 'cost' AND event_type = '{COST_ACCEPTED_EVENT}' "
-                "ORDER BY recorded_at DESC LIMIT 1"
+                "ORDER BY id DESC LIMIT ?",
+                (_LAST_CHARGE_SCAN_LIMIT,),
             )
-            row = cursor.fetchone()
-        if row is None:
-            return None
-        try:
-            stamped = datetime.fromisoformat(str(row["recorded_at"]))
-        except ValueError:
-            return None
-        return stamped if stamped.tzinfo is not None else stamped.replace(tzinfo=UTC)
+            rows = cursor.fetchall()
+        for row in rows:
+            try:
+                stamped = datetime.fromisoformat(str(row["recorded_at"]))
+            except ValueError:
+                continue
+            return stamped if stamped.tzinfo is not None else stamped.replace(tzinfo=UTC)
+        return None
 
     def try_record_cost_charge(
         self,

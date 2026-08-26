@@ -849,9 +849,14 @@ def status_snapshot() -> dict[str, object]:
 
     ``feedback_lost_billed_writes`` is the MONEY signal, and the only one of
     these fields that cannot be masked. It counts, for this process only, the
-    ``cost``/``cost_guardrail_accepted`` writes that were attempted and lost —
-    exactly the rows ``daily_spend_for`` sums. It only ever increases; no later
-    success clears it and nothing resets it short of a restart.
+    billed ``cost`` writes that were attempted and lost — exactly the rows
+    ``daily_spend_for`` sums, which since #376 means BOTH opening-charge types
+    (``cost_guardrail_accepted`` and ``cost_guardrail_accepted_simulated``) plus
+    ``cost_reconciled``. On a deployment running with live execution off, a lost
+    charge will almost always be the simulated one; it is counted here because
+    the per-account cap still meters it, so losing it under-meters that cap. It
+    only ever increases; no later success clears it and nothing resets it short
+    of a restart.
 
     * ``> 0`` — the ledger the 24 h ``DAILY_CAP_USD`` cap reads is missing at
       least that many charges, so that much spend went unmetered and the cap was
@@ -917,10 +922,22 @@ def status_snapshot() -> dict[str, object]:
     null the others.
 
     WHAT THESE FIGURES STILL EXCLUDE, stated so nobody reads
-    ``global_daily_spend_usd: "0"`` as "this deployment spent nothing": the
-    Layer-B judge. It calls the provider on its own key and its spend has never
-    reached this ledger (ADR-0013). ``judge_enabled`` below is the field that
-    tells you whether that second, unbooked meter is running.
+    ``global_daily_spend_usd: "0"`` as "this deployment spent nothing":
+
+    * a paid Tavily web search, which is gated on ``TAVILY_API_KEY`` alone and
+      not on live execution;
+    * the nightly feedback-audit job's own model call, likewise ungated;
+    * Layer-B judge dollars spent on the memo-eviction GET path, which no
+      reconciliation books (#216 / ADR-0013).
+
+    None of the three has ever been in this figure, and #376 changed none of
+    them. ``judge_enabled`` below says whether the judge is configured at all.
+
+    ``live_execution: false`` DOES, however, mean no judge call is being made:
+    the judge is refused unless a run produced at least one answer from a live
+    provider path, which live-execution-off makes impossible. A judge that is
+    configured but cannot fire still shows ``judge_enabled: true``, because that
+    field reports configuration, not dispatch.
 
     ``error_tracking`` is likewise a generic ``active``/``inactive``
     health value: the concrete vendor (and anything else useful for

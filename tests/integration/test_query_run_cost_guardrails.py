@@ -71,7 +71,9 @@ DEFAULT_MODEL_IDS = [
 #: this ONE comment is the whole remedy. MEASURED 2026-08-26:
 #:   $ grep -rln "0\.1043" --exclude-dir=node_modules --exclude-dir=.git . | wc -l
 #:   21
-#:   # of those 21, how many name this module?  1 -- this file itself.
+#:   # of those 21, how many name this module?  1 -- and it is
+#:   #   docs/18-requirement-traceability-matrix.md, NOT this file (a file does
+#:   #   not contain its own name). The count was right, the attribution was not.
 #:   # how many of the 0.1043 lines outside this file are assertions?  0.
 #: So `0.1043` lives in 21 files as PROSE, repeated independently rather than
 #: cited, and asserted nowhere. A number no gate compares to the tree goes stale
@@ -85,7 +87,10 @@ DEFAULT_MODEL_IDS = [
 #:     may not [land in ALLOW]" -- quoting the pair only to orient a reader.
 #:     Rewriting sixteen comments to carry a second pair buys sixteen chances to
 #:     get one wrong and fixes nothing mechanical.
-#:     ($ ... | xargs grep -l "fixture mix may not" | wc -l  ->  16)
+#:     ($ ... | xargs grep -l "fixture mix may not" | wc -l  ->  17,
+#:      being those 16 plus THIS file, which now contains the phrase because
+#:      this note quotes it. Caught in review: writing a command down moved its
+#:      own answer.)
 #:   * 4 are HISTORICAL records that must not be edited at all: `CHANGELOG.md`,
 #:     `docs/adr/0028-*.md`, `docs/18-requirement-traceability-matrix.md`, and
 #:     `tests/unit/test_cost_guardrails.py`. An ADR states what was measured

@@ -1076,9 +1076,10 @@ class CostEstimationService:
         #
         # F-01: ``preview=True`` marks a call from ``POST /estimate``, which
         # only shows the user what a run *would* cost — nothing has been spent.
-        # It must NOT record ``cost_guardrail_accepted``, because both spend
-        # guards (``_cumulative_spend_for`` here and
-        # ``FeedbackStore.daily_spend_for``) count exactly that type, so a
+        # It must NOT record an OPENING-CHARGE type (``cost_guardrail_accepted``
+        # or, since #376, ``cost_guardrail_accepted_simulated``), because both
+        # per-account spend guards (``_cumulative_spend_for`` here and
+        # ``FeedbackStore.daily_spend_for``) count both of them, so a
         # preview would bill the account for a run that never happened — and
         # bill it again when the user actually starts the run. The preview is
         # still recorded, under a name that says what happened, so the audit

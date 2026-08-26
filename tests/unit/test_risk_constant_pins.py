@@ -211,6 +211,17 @@ BUCKET_A_LITERAL_PIN = (
 #: pin would teach people to edit the test alongside the code.
 BUCKET_B_PIN_BEHAVIOUR = {
     # --- Added 2026-08-26 with the live-vs-simulated ledger (#376, ADR-0074) ---
+    "feedback_store._LAST_CHARGE_SCAN_LIMIT": (
+        "how far last_live_charge_at walks back looking for a parseable "
+        "recorded_at. The VALUE legitimately moves with the cost of holding the "
+        "store lock on the unauthenticated /status path; what must not move is "
+        "that ONE malformed row does not make the field report None, which a "
+        "watchdog reads as 'this deployment has never spent live' while dated "
+        "live charges sit on disk. Asserted with 2 rows, not 16, so the test is "
+        "independent of this constant (rule 7a): tests/integration/"
+        "test_ledger_live_versus_simulated.py::TestLastLiveChargeAt::"
+        "test_one_unreadable_row_does_not_erase_every_live_charge"
+    ),
     "feedback_store._ACCOUNT_CHARGE_EVENTS": (
         "which opening-charge types the PER-ACCOUNT rail counts. Its membership "
         "legitimately grows as charge types are added -- what must not move is "

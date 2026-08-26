@@ -32,7 +32,7 @@ NO TEST HERE MAKES A PAID CALL. The live-path tests enable the flag and stub
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 from decimal import Decimal
 from uuid import UUID, uuid4
 
@@ -515,20 +515,22 @@ class TestLastLiveChargeAt:
             assert len(_charge_rows(store)) == 5
             assert store.last_live_charge_at() is None
 
-    def test_it_reports_the_NEWEST_live_charge_and_ignores_older_ones(self) -> None:
-        """Cardinality of a different kind: WHICH of N rows, not how many.
+    def test_it_reports_the_most_recently_recorded_live_charge(self) -> None:
+        """The ordinary case, monotonic clock: three charges, the last one wins.
 
-        RED IF: the ``ORDER BY recorded_at DESC LIMIT 1`` is dropped or
-        reversed — SQLite returns insertion order and the answer becomes the
-        OLDEST charge, understating how recently the deployment spent.
+        Cardinality of a different kind — WHICH of N rows, not how many.
+
+        RED IF: the ``ORDER BY ... DESC LIMIT`` is dropped or reversed. SQLite
+        then returns the FIRST row it finds, and the answer becomes the oldest
+        charge, understating how recently the deployment spent.
         """
         with configure_for_tests() as store:
-            oldest = datetime(2026, 8, 20, 9, 0, tzinfo=UTC)
-            newest = datetime(2026, 8, 24, 17, 30, tzinfo=UTC)
-            middle = datetime(2026, 8, 22, 12, 0, tzinfo=UTC)
-            # Written out of order on purpose, so insertion order and time
-            # order disagree.
-            for stamped in (middle, newest, oldest):
+            stamps = [
+                datetime(2026, 8, 20, 9, 0, tzinfo=UTC),
+                datetime(2026, 8, 22, 12, 0, tzinfo=UTC),
+                datetime(2026, 8, 24, 17, 30, tzinfo=UTC),
+            ]
+            for stamped in stamps:
                 _seed_charges(
                     store,
                     event_type=COST_ACCEPTED_EVENT,
@@ -537,28 +539,123 @@ class TestLastLiveChargeAt:
                     when=stamped,
                 )
             assert len(_charge_rows(store)) == 3
-            assert store.last_live_charge_at() == newest
+            assert store.last_live_charge_at() == stamps[-1]
 
-    def test_an_unparseable_timestamp_reports_no_live_charge_instead_of_raising(
-        self,
-    ) -> None:
-        """``/status`` must not 500 on one malformed row.
+    def test_a_backward_clock_step_does_not_resurrect_an_older_charge(self) -> None:
+        """Ordered by ``id`` (insertion order), NOT by the ``recorded_at`` text.
 
-        ``recorded_at`` is TEXT, so nothing at the schema level stops a
-        hand-edited or migrated row holding something ``fromisoformat`` cannot
-        read. ``None`` is the honest answer for "there is a row and I cannot
-        date it" — the operator sees no claim rather than a wrong one.
+        A backward clock step — NTP correction, VM resync, snapshot restore —
+        makes the newest charge stamp EARLIER than the one before it. Under a
+        lexicographic ``ORDER BY recorded_at`` the answer is then a charge that
+        is not the latest, and it stays wrong for as long as the older stamp is
+        the maximum. ``_spend_total_locked`` already records a backward step as
+        a demonstrated hazard on this same table, and already orders its own
+        corrections by ``id`` for the same reason.
 
-        RED IF: the ``except ValueError`` guard is dropped — this raises, and
-        ``/status``'s own guard turns the whole field null while a valid row
-        exists.
+        RED IF: the ordering goes back to ``ORDER BY recorded_at DESC`` — this
+        returns 12:00 (the earlier-inserted, later-stamped row) instead of the
+        09:00 charge that was actually recorded last.
         """
         with configure_for_tests() as store:
-            _seed_charges(store, event_type=COST_ACCEPTED_EVENT, count=1, each_usd=Decimal("0.01"))
-            # POSITIVE PARTNER, before corrupting anything: a readable row IS
-            # reported, so the None below is caused by the corruption.
-            assert store.last_live_charge_at() is not None
+            before_step = datetime(2026, 8, 24, 12, 0, tzinfo=UTC)
+            after_step = datetime(2026, 8, 24, 9, 0, tzinfo=UTC)  # clock went back
+            for stamped in (before_step, after_step):
+                _seed_charges(
+                    store,
+                    event_type=COST_ACCEPTED_EVENT,
+                    count=1,
+                    each_usd=Decimal("0.01"),
+                    when=stamped,
+                )
+            # POSITIVE PARTNER: both rows are on the ledger, so this is a
+            # question about ORDER and not about one of them being dropped.
+            assert len(_charge_rows(store)) == 2
+            assert store.last_live_charge_at() == after_step
 
+    def test_a_row_stamped_in_another_offset_does_not_win_on_its_text(self) -> None:
+        """The second way a text sort disagrees with time.
+
+        ``2026-08-24T09:00:00+04:00`` is 05:00 UTC — EARLIER than
+        ``2026-08-24T08:00:00+00:00`` — but sorts after it as text. Nothing in
+        ``src/`` writes a non-UTC offset today; ``recorded_at`` is TEXT and
+        nothing stops one, and ordering by ``id`` makes the question moot.
+
+        RED IF: the ordering goes back to ``ORDER BY recorded_at DESC`` — the
+        ``+04:00`` row wins on its text and the method reports 05:00 UTC, an
+        hour BEFORE the charge that was really last.
+        """
+        with configure_for_tests() as store:
+            _seed_charges(
+                store,
+                event_type=COST_ACCEPTED_EVENT,
+                count=1,
+                each_usd=Decimal("0.01"),
+                when=datetime(2026, 8, 24, 9, 0, tzinfo=timezone(timedelta(hours=4))),
+            )
+            latest = datetime(2026, 8, 24, 8, 0, tzinfo=UTC)
+            _seed_charges(
+                store,
+                event_type=COST_ACCEPTED_EVENT,
+                count=1,
+                each_usd=Decimal("0.01"),
+                when=latest,
+            )
+            assert len(_charge_rows(store)) == 2
+            assert store.last_live_charge_at() == latest
+
+    def test_one_unreadable_row_does_not_erase_every_live_charge(self) -> None:
+        """``None`` must not mean "never spent" while dated live charges exist.
+
+        ``recorded_at`` is TEXT and nothing at the schema level constrains it,
+        so the most recent charge row can be unparseable. Reporting ``None``
+        there tells a watchdog this deployment has never spent live — the most
+        dangerous possible answer, and a false one.
+
+        RED IF: the scan stops at the first row (``LIMIT 1``, or ``return None``
+        instead of ``continue`` on ``ValueError``) — this returns ``None`` while
+        two live charges sit on disk.
+        """
+        with configure_for_tests() as store:
+            good = datetime(2026, 8, 24, 8, 0, tzinfo=UTC)
+            _seed_charges(
+                store, event_type=COST_ACCEPTED_EVENT, count=1, each_usd=Decimal("0.01"), when=good
+            )
+            bad_run = _seed_charges(
+                store, event_type=COST_ACCEPTED_EVENT, count=1, each_usd=Decimal("0.01")
+            )[0]
+            # POSITIVE PARTNER, taken BEFORE the corruption: two live charges
+            # are on the ledger, so the answer below is about the SCAN skipping
+            # one, not about a row having gone missing.
+            assert len(_charge_rows(store)) == 2
+
+            store._conn.execute(
+                "UPDATE events SET recorded_at = ? WHERE query_run_id = ?",
+                ("not-a-timestamp", str(bad_run)),
+            )
+            # Counted with raw SQL, not ``_charge_rows``: ``iter_events`` parses
+            # ``recorded_at`` eagerly and raises on the row we just corrupted.
+            # That is pre-existing behaviour of a different method and is not
+            # what this test is about.
+            surviving = store._conn.execute(
+                "SELECT COUNT(*) AS n FROM events WHERE recorder = 'cost' AND event_type = ?",
+                (COST_ACCEPTED_EVENT,),
+            ).fetchone()["n"]
+            assert surviving == 2
+
+            assert store.last_live_charge_at() == good
+
+    def test_every_row_unreadable_reports_no_live_charge_rather_than_raising(
+        self,
+    ) -> None:
+        """The floor of the scan: ``/status`` must not 500 on malformed data.
+
+        RED IF: the ``except ValueError`` guard is dropped — this raises, and
+        ``/status``'s own guard nulls the field for a reason it cannot report.
+        """
+        with configure_for_tests() as store:
+            _seed_charges(store, event_type=COST_ACCEPTED_EVENT, count=2, each_usd=Decimal("0.01"))
+            # POSITIVE PARTNER, before corrupting: readable rows ARE reported.
+            assert store.last_live_charge_at() is not None
             store._conn.execute(
                 "UPDATE events SET recorded_at = ? WHERE event_type = ?",
                 ("not-a-timestamp", COST_ACCEPTED_EVENT),
@@ -614,6 +711,32 @@ class TestLastLiveChargeAt:
             assert stamped.tzinfo is not None
             assert abs((stamped - long_ago).total_seconds()) < 1
 
+    def test_the_empty_meter_is_refused_rather_than_silently_summing_to_zero(
+        self,
+    ) -> None:
+        """SQLite ACCEPTS ``IN ()`` and returns 0 — the fail-open direction.
+
+        Measured on this repo's sqlite (3.50.4): ``select count(*) from t where
+        a IN ()`` returns ``(0,)``, it does not raise. So an empty meter would
+        report "nothing spent" over a ledger full of charges. The guard makes
+        that a loud programming error instead.
+
+        RED IF: the ``if not charge_event_types: raise`` guard is removed — this
+        returns ``Decimal("0")`` instead of raising, over a ledger holding a
+        real charge.
+        """
+        with configure_for_tests() as store:
+            _seed_charges(store, event_type=COST_ACCEPTED_EVENT, count=1, each_usd=Decimal("1.00"))
+            # POSITIVE PARTNER: the ledger is NOT empty, so a zero would be a
+            # lie rather than a correct answer.
+            assert store.global_daily_spend() == Decimal("1.00")
+            with pytest.raises(ValueError, match="empty meter"):
+                store._spend_total_locked(
+                    cutoff=datetime.now(UTC) - timedelta(hours=24),
+                    account_id=None,
+                    charge_event_types=(),
+                )
+
 
 # ---------------------------------------------------------------------------
 # E. The surfaces that surrounding machinery must NOT notice.
@@ -668,9 +791,14 @@ class TestSurroundingMachineryIsUnchanged:
         some future path did reach it, the refusal leaves the estimate standing
         — the over-metering direction, which is the safe one.
 
-        RED IF: ``try_record_cost_reconciliation``'s
-        ``COST_ACCEPTED_EVENT not in seen`` guard is widened to accept the
-        simulated type — it returns True and writes a correction.
+        RED IF: ``try_record_cost_reconciliation`` is changed to accept a
+        simulated charge — it returns True and writes a correction. That takes
+        TWO edits, and naming only one was a false bite line caught in review:
+        widening the ``COST_ACCEPTED_EVENT not in seen`` guard ALONE leaves this
+        green, because the ``seen`` SELECT one line above filters
+        ``event_type IN (accepted, reconciled, voided)`` and never puts the
+        simulated type in ``seen``. Verified: guard-only mutation → 23 passed;
+        SELECT and guard both widened → this test fails.
         """
         with configure_for_tests() as store:
             account_id = uuid4()
@@ -732,9 +860,17 @@ class TestSurroundingMachineryIsUnchanged:
         silently shifted ``avg_estimated_cost_usd`` feeding the audit prompt's
         ``cost_threshold`` finding — would be invisible.
 
-        RED IF: the simulated charge is given a different ``recorder``, or a
-        second row is written alongside the live one instead of replacing it —
-        ``total`` and ``avg_estimated_cost_usd`` diverge.
+        RED IF: ``_aggregate_cost`` starts filtering on ``event_type`` — the two
+        aggregates stop being equal.
+
+        A previous version of this line claimed it also went red if the
+        simulated charge were given a different ``recorder``. It does not, and a
+        reviewer demonstrated it: this test builds its rows inline and calls
+        ``_aggregate_cost`` directly, so nothing on the charge path can reach
+        it. Two OTHER tests in this file catch that mutation
+        (``2 failed`` file-wide, ``1 passed`` for this test alone), so the
+        coverage was real and only the sentence was wrong — which is precisely
+        the kind of claim that ships unchallenged.
         """
         from product_app.feedback_audit import _aggregate_cost
 
