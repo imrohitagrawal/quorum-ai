@@ -14,7 +14,7 @@ from __future__ import annotations
 import math
 import os
 from enum import StrEnum
-from typing import ClassVar
+from typing import Any, ClassVar
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -83,6 +83,31 @@ class Settings(BaseSettings):
     openrouter_app_url: str = "http://localhost:18084"
     openrouter_app_title: str = "Quorum AI"
     openrouter_timeout_seconds: float = 8.0
+    #: TOTAL wall-clock budget for one provider call, enforced as a deadline
+    #: across the whole body read. This is a DIFFERENT bound from the line
+    #: above, and the difference is the reason it exists: a socket timeout is
+    #: per-``recv``, never cumulative, so a body that arrives steadily but
+    #: slowly is unbounded no matter how small ``openrouter_timeout_seconds``
+    #: gets.
+    #:
+    #: Measured 2026-08-26, 6 paid reps of ``openai/gpt-5-mini`` at
+    #: ``max_tokens=3000`` (the cap synthesis actually uses):
+    #:
+    #:     wall     25.072  28.260  29.027  30.778  30.947  40.170  s
+    #:     max gap   0.572   0.601   0.621   0.624   0.631   0.643  s
+    #:
+    #: That model dribbles its answer in ~78 chunks, so **0 of 6 exceeded the
+    #: 8.0s per-``recv`` timeout while 6 of 6 exceeded it on wall clock**. The
+    #: 8s cap could not have fired on any of them. Whether it fires at all is
+    #: a property of the MODEL, not of OpenRouter: the four default answer
+    #: models buffer instead, and were measured at 5.7-25.1s inter-chunk gaps.
+    #:
+    #: 60 is 1.5x the longest call actually observed (40.170s). 40 was
+    #: considered and rejected -- it is BELOW an observed value. 45 was
+    #: considered and rejected -- 12% above the maximum of a 6-sample draw is
+    #: not a margin. See ADR-0078; n=6 gives a maximum, never a p95.
+    #: Env var: ``OPENROUTER_CALL_BUDGET_SECONDS``.
+    openrouter_call_budget_seconds: float = 60.0
     #: How often the background credential probe re-checks the configured
     #: key after the initial startup probe (#112). The check is
     #: auth-required and costs zero tokens, so the interval is bounded by
@@ -149,12 +174,63 @@ class Settings(BaseSettings):
     #: completed result or a partial-result explanation within 180 seconds".
     #: On breach the executor degrades the run to an HONEST partial result
     #: (status ``timed_out``) carrying every slot completed so far — never a
-    #: bare 500, never a blank. Deliberately generous: the pipeline's own
-    #: per-call HTTP timeouts keep a healthy run far below this, so it is a
-    #: safety net, not a scheduler, and a normal-latency run is never cut.
+    #: bare 500, never a blank. Deliberately generous: it is a safety net, not
+    #: a scheduler, and a normal-latency run is never cut.
     #: Env var: ``QUORUM_RUN_DEADLINE_SECONDS``. Values <= 0 are rejected —
     #: 0 must never mean "unlimited".
-    quorum_run_deadline_seconds: float = 180.0
+    #:
+    #: 180 -> 300 on 2026-08-26. The old value's justification was that "the
+    #: pipeline's own per-call HTTP timeouts keep a healthy run far below
+    #: this", and that sentence was false in a way nobody had checked: the
+    #: per-call timeout is per-``recv``, so it bounded no call's total time at
+    #: all (see ``openrouter_call_budget_seconds``). The deadline was the only
+    #: real bound in the system.
+    #:
+    #: The measured critical path, five sequential legs — 4 parallel initial
+    #: answers, debate round 1, debate round 2, 5 parallel synthesis sections,
+    #: judge:
+    #:
+    #:     26.5 + 26.5 + 26.5 + 40.2 + ~5  =  ~124.7s
+    #:
+    #: The first three are measured (2026-08-26 spike, 2 reps x 4 models at
+    #: ``max_tokens=2000``); the synthesis leg is measured here for the first
+    #: time (6 reps, ``max_tokens=3000``, worst 40.170s); the judge leg is
+    #: still ASSUMED at ~5s and has never been probed.
+    #:
+    #: **180 was not demonstrated to be too small** — 124.7 < 180 — so this is
+    #: a margin decision, not a fix, and ADR-0078 says so. It buys 2.4x over
+    #: the measured path where 180 bought 1.45x, on legs that are each a
+    #: max-of-N draw with small N. It also keeps the deadline above
+    #: ``5 x openrouter_call_budget_seconds``, so the net cannot fire on a run
+    #: every per-call bound considered healthy.
+    quorum_run_deadline_seconds: float = 300.0
+
+    @field_validator("openrouter_call_budget_seconds", mode="after")
+    @classmethod
+    def _call_budget_exceeds_the_per_recv_timeout(cls, value: float, info: Any) -> float:
+        # ``isfinite`` first, for the same reason the run-deadline validator
+        # checks it first: NaN compares False to every bound, so a pure range
+        # check ACCEPTS it, and a NaN deadline cuts every call at t=0.
+        if not math.isfinite(value) or value <= 0:
+            raise ValueError(
+                "OPENROUTER_CALL_BUDGET_SECONDS must be a finite number > 0; "
+                "0/negative/NaN would cut every provider call immediately, "
+                "never mean 'unlimited'"
+            )
+        per_recv = (info.data or {}).get("openrouter_timeout_seconds")
+        # ``info.data`` holds only the fields validated BEFORE this one, which
+        # works because ``openrouter_timeout_seconds`` is declared above it.
+        # Guarded anyway: if that field itself failed validation it is absent,
+        # and raising a confusing second error here would bury the first.
+        if per_recv is not None and value <= per_recv:
+            raise ValueError(
+                "OPENROUTER_CALL_BUDGET_SECONDS must be strictly greater than "
+                f"OPENROUTER_TIMEOUT_SECONDS ({per_recv:g}); a total budget at "
+                "or below the per-recv timeout is not a budget -- the first "
+                "slow chunk consumes all of it, so every call to a "
+                "healthy-but-slow upstream is cut before a second chunk lands"
+            )
+        return value
 
     #: Inclusive upper bound on the run deadline (1 hour). A larger value is
     #: a config mistake, not a policy: the documented budget is 180s, and an
@@ -178,11 +254,12 @@ class Settings(BaseSettings):
         if value > cls.RUN_DEADLINE_MAX_SECONDS:
             raise ValueError(
                 "QUORUM_RUN_DEADLINE_SECONDS must be <= "
-                f"{cls.RUN_DEADLINE_MAX_SECONDS:g}; the documented budget is 180. "
-                "Keep it comfortably ABOVE the worst-case healthy run implied by "
-                "the per-call timeouts (openrouter_timeout_seconds / "
-                "tavily_timeout_seconds and their retry chains) — raising those "
-                "without revisiting this deadline shrinks the do-no-harm margin."
+                f"{cls.RUN_DEADLINE_MAX_SECONDS:g}; the documented budget is 300. "
+                "Keep it comfortably ABOVE the worst-case healthy run, which is "
+                "five sequential legs each bounded by "
+                "openrouter_call_budget_seconds (plus tavily_timeout_seconds on "
+                "the search leg) — raising those without revisiting this "
+                "deadline shrinks the do-no-harm margin."
             )
         return value
 
