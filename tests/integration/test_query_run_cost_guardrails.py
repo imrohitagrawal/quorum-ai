@@ -60,15 +60,43 @@ DEFAULT_MODEL_IDS = [
 #:     from pre-ADR-0028, just a higher number: point +73%, bound +35%).
 #:
 #: THOSE TWO FIGURES ARE THE JUDGE-OFF ONES, AND PRODUCTION RUNS JUDGE-ON.
-#: This is the canonical statement of the N=4 money envelope and sixteen other
-#: files cite it, so it has to say which environment each number belongs to.
-#: `tests/conftest.py:138` sets `QUORUM_EVAL_JUDGE_MODEL_ID = ""`, so
-#: `evaluation.judge_configured()` is False for the whole suite and the
-#: estimator does not price the judge. Production does: I curled
-#: `https://quorum-ai.fly.dev/status` on 2026-08-26 and it returned
-#: `"judge_enabled": true`. ADR-0064 made the judge move the POINT estimate as
-#: well as the bound, and nothing went red when it shipped because every
-#: occurrence of `0.1043` outside this file is in a COMMENT, never an assertion.
+#: This is the canonical statement of the N=4 money envelope, so it has to say
+#: which environment each number belongs to. `tests/conftest.py` sets
+#: `QUORUM_EVAL_JUDGE_MODEL_ID = ""`, so `evaluation.judge_configured()` is
+#: False for the whole suite and the estimator does not price the judge.
+#: Production does: I curled `https://quorum-ai.fly.dev/status` on 2026-08-26
+#: and it returned `"judge_enabled": true`.
+#:
+#: WHY NOTHING WENT RED when ADR-0064 priced the judge in, and why correcting
+#: this ONE comment is the whole remedy. MEASURED 2026-08-26:
+#:   $ grep -rln "0\.1043" --exclude-dir=node_modules --exclude-dir=.git . | wc -l
+#:   21
+#:   # of those 21, how many name this module?  1 -- this file itself.
+#:   # how many of the 0.1043 lines outside this file are assertions?  0.
+#: So `0.1043` lives in 21 files as PROSE, repeated independently rather than
+#: cited, and asserted nowhere. A number no gate compares to the tree goes stale
+#: in silence. Positive control that the grep-for-assertions actually works:
+#: the POINT figure IS asserted -- `PINNED_DEFAULT_MIX_UNIT_USD =
+#: Decimal("0.0547")` below, and once more in
+#: `tests/integration/test_ledger_live_versus_simulated.py`.
+#:
+#: The other 20 files are deliberately NOT edited, and they split 16 / 4:
+#:   * 16 carry the same boilerplate landmark -- "this file's own fixture mix
+#:     may not [land in ALLOW]" -- quoting the pair only to orient a reader.
+#:     Rewriting sixteen comments to carry a second pair buys sixteen chances to
+#:     get one wrong and fixes nothing mechanical.
+#:     ($ ... | xargs grep -l "fixture mix may not" | wc -l  ->  16)
+#:   * 4 are HISTORICAL records that must not be edited at all: `CHANGELOG.md`,
+#:     `docs/adr/0028-*.md`, `docs/18-requirement-traceability-matrix.md`, and
+#:     `tests/unit/test_cost_guardrails.py`. An ADR states what was measured
+#:     WHEN it was written; back-dating a number into it is rewriting the record.
+#: (16 is almost certainly where the "sixteen files" figure this work was handed
+#: came from -- it counts the boilerplate, not the files repeating the baseline,
+#: which is 21.)
+#:
+#: What would actually hold is a GATE comparing the sentence to the tree
+#: (AGENTS.md rule 1a, `tests/test_doc_gate_consistency.py` Part D is the worked
+#: example). Out of scope here, and named as the gap rather than pretended away.
 #:
 #: MEASURED by me, 2026-08-26, varying `QUORUM_EVAL_JUDGE_MODEL_ID` AND
 #: `QUORUM_EVAL_JUDGE_API_KEY` (`judge_configured()` needs BOTH -- a model id
