@@ -1,7 +1,7 @@
 # Session Handoff
 
 ## Date/time
-2026-08-28T00:58:16+05:30
+2026-08-28T02:15:48+05:30
 
 ## Open work
 `docs/65-open-work.md` — the source of truth for what is open, what blocks what,
@@ -28,7 +28,7 @@ generation time, per #134.
 - **`origin/main` tip:** `e115d92ac070`
 - **Last commit touching `src/`:** `8b2ffdac8e6b`
 - **Production vs. last `src/` commit:** unavailable: could not reach https://quorum-ai.fly.dev/status (last src/ commit is 8b2ffda)
-- **pytest collected (no execution):** 3816
+- **pytest collected (no execution):** 3829
 - **e2e lane spec counts:** invariants: 18, ops: 2, degraded: 1
 - **Open issues:** 7
 - **Changed-lines coverage:** not computed here -- `make diff-cover` shares
@@ -36,7 +36,7 @@ generation time, per #134.
   concurrently (AGENTS.md rule 15), so this file does not run it. Run
   `make quality && make diff-cover DIFF_BASE=origin/main` for a current number.
 - **Remote branches not merged into `origin/main`:**
-- None (every remote branch merges into `main`)
+- `docs/w0-open-work-board`
 
 ## Current phase
 Operate, learn, and improve
@@ -93,28 +93,12 @@ Operate, learn, and improve
 
 ## Git status
 ```text
-M Makefile
- M docs/00-factory-console.md
- M docs/analysis/R2-plan-review-findings.md
- M docs/session-handoff.md
- M scripts/factory_next.py
- M scripts/session_handoff.py
- M tests/unit/test_gates_carry_a_charter.py
-?? docs/65-open-work.md
-?? scripts/check_open_work.py
-?? tests/unit/test_open_work_matches_reality.py
+clean
 ```
 
 ## Diff stat
 ```text
-Makefile                                 | 13 ++++-
- docs/00-factory-console.md               | 97 +++-----------------------------
- docs/analysis/R2-plan-review-findings.md |  9 ++-
- docs/session-handoff.md                  | 39 +++++++++----
- scripts/factory_next.py                  |  7 +++
- scripts/session_handoff.py               | 22 +++++---
- tests/unit/test_gates_carry_a_charter.py |  1 +
- 7 files changed, 79 insertions(+), 109 deletions(-)
+no unstaged diff
 ```
 
 ## Completed in this session
