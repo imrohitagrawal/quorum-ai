@@ -54,6 +54,18 @@ IMPLICIT = {"src", "tests", "pyproject.toml"}
 # must never reach a mutation run.
 EXEMPT = {
     ".claude": "gitignored local settings; its specs skip when absent",
+    # MUST NOT be copied. Its ABSENCE from ./mutants/ is the mechanism
+    # `tests/repo_root.find_repo_root` relies on: the helper walks up to the
+    # first ancestor holding a `.git`, so from inside the copy it reaches the
+    # REAL repository -- which is the whole point (#158). Copying `.git` here
+    # would make the copy look like a repository root and reinstate the bug the
+    # helper exists to remove. Read by
+    # tests/unit/test_open_work_matches_reality.py, which asserts the module
+    # resolved a real root rather than a generated copy.
+    ".git": (
+        "deliberately absent: find_repo_root resolves past the copy BECAUSE the "
+        "copy has no .git; copying it would defeat the helper"
+    ),
     ".env": "secrets — deliberately never copied (hermetic, $0)",
     "build": "gate artifacts; the specs that read them skip when absent",
     "mutants": "the copy target itself",
