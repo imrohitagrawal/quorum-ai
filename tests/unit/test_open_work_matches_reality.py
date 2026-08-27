@@ -62,9 +62,18 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from tests.repo_root import find_repo_root
 from tests.subprocess_env import env_without_coverage
 
-ROOT = Path(__file__).resolve().parents[2]
+#: The REAL repository, never a generated copy of it. ``parents[2]`` was
+#: wrong here and cost a whole mutation run: mutmut copies the tree into
+#: ``./mutants/`` and re-runs the suite from inside it, where ``parents[2]``
+#: points at the COPY -- which has no ``.git``, so ``has_git_history(ROOT)``
+#: is False, the positive partner in
+#: ``test_freshness_is_skipped_out_loud_where_the_root_is_not_a_working_tree``
+#: fails, ``-x`` kills collection, and the gate exits non-zero having scored
+#: NOTHING. See ``tests/repo_root`` for why this helper exists (#158).
+ROOT = find_repo_root(Path(__file__))
 SCRIPT = ROOT / "scripts" / "check_open_work.py"
 MAKEFILE = ROOT / "Makefile"
 #: Assembled from segments so no ADDED LINE here is a repo-path-shaped literal
@@ -829,3 +838,33 @@ def test_the_board_is_reachable_from_the_docs_a_session_must_read(doc: str) -> N
     assert _BOARD_NAME in (ROOT / doc).read_text(encoding="utf-8"), (
         f"{doc} does not link to the open-work board"
     )
+
+
+def test_this_module_resolves_the_real_repository_not_a_generated_copy() -> None:
+    """Turns red if: ``ROOT`` goes back to ``Path(__file__).resolve().parents[2]``.
+
+    THE FAILURE THIS CLOSES, measured. On PR #391 the advisory mutation gate
+    went red having produced no score at all::
+
+        FAILED tests/unit/test_open_work_matches_reality.py::
+          test_freshness_is_skipped_out_loud_where_the_root_is_not_a_working_tree
+          - AssertionError: assert False
+          + where False = has_git_history(PosixPath('.../quorum-ai/mutants'))
+        !!!! stopping after 1 failures !!!!
+        failed to collect stats. runner returned 1
+
+    Nothing was wrong with the diff under test. ``parents[2]`` resolved to
+    mutmut's ``./mutants/`` copy, which has no ``.git``, so this module's own
+    positive partner failed and ``-x`` aborted the whole gate. A red job that
+    measured nothing looks exactly like a red job that found something -- the
+    failure mode ``AGENTS.md`` names in its own words.
+
+    Both directions, on the layout that actually broke: under ``parents[2]`` a
+    path inside the copy resolves to the COPY; under ``find_repo_root`` it
+    resolves to the repository.
+    """
+    assert (ROOT / ".git").exists(), f"{ROOT} is not a repository root"
+
+    inside_copy = ROOT / "mutants" / "tests" / "unit" / "probe.py"
+    assert inside_copy.parents[2] == ROOT / "mutants", "the old idiom, on the old layout"
+    assert find_repo_root(inside_copy) == ROOT, "the fix, on the same layout"
