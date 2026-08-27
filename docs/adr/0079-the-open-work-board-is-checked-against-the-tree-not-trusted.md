@@ -53,20 +53,24 @@ Each row's evidence cell is one of:
 * `PRESENT <path> :: <needle>` — it is.
 * `—` — unpinned; the gate checks nothing about this row.
 
-**The evidence cell states the OPEN form of the fact, and the State cell
-decides which way the gate reads it.** `PENDING` asserts the claim as written;
-`DONE` asserts its opposite. Completing W1 puts `"stream": True` into
-`providers.py`, the `ABSENT` claim stops holding, and
-`scripts/check_open_work.py --check` refuses until one word changes —
-`PENDING` → `DONE` — after which the gate demands the inverse. The evidence cell
-is never rewritten by hand, which is what makes "done over nothing" unreachable
-rather than merely discouraged.
+**Nobody writes the State column. It is derived from the tree.**
 
-This inversion is the whole point. The obvious design — a board that goes red
-when work is *abandoned* — stays green through every delivery, which is exactly
-how the console reached 64 commits of drift with four gates reading it.
+The board carries the evidence expression only. `scripts/check_open_work.py`
+reads each needle off disk and generates the state — `PENDING` while the claim
+holds as written, `DONE` when its opposite holds, `UNPINNED` when there is no
+needle — and `--check` refuses when the checked-in column disagrees. A row
+cannot be marked done by editing its status; it moves when the tree moves. This
+is `scripts/generate_adr_index.py`'s shape, cited in the first draft of this ADR
+and not actually followed until the third.
 
-Three further pieces:
+Needles match **code text only**: a `#` starting a line or following whitespace
+ends that line before the search. The whitespace guard is the load-bearing part
+— a naive cut at the first `//` truncates W16's needle line to `URL = "https:`.
+Only `#` is listed because every file the board pins is Python, TOML or
+Markdown. Verified against all 13 live needles — every one still matches after
+stripping.
+
+Three further pieces:Three further pieces:
 
 * **Two count pins.** The board states its own row count and its own
   unpinned-row count as digits, both compared against the parsed table. Copied
@@ -100,29 +104,63 @@ unpinned rows. A tight threshold would turn re-stamping into a ritual performed
 without re-reading, which manufactures false confidence and is worse than no
 gate at all.
 
-### What review changed, and what the first draft got wrong
+### Three designs, two of them defeated before merge
 
-The state/polarity coupling above is **not** what shipped in the first draft of
-this change. There, polarity came only from the word an author typed in the
-Evidence cell, and `check_evidence` never read the State cell at all. A
-four-lens adversarial review demonstrated the consequence in one command:
-replacing every `| PENDING |` on the board with `| DONE |` — changing zero bytes
-under `src/` — left the gate green and printing `0 PENDING`, with all 22
-bite-proofs passing. The board, this ADR and the gate's own docstring each
-asserted, in plain words, that this could not happen.
+This is the part worth reading. Each design was green on every gate when review
+broke it.
 
-Four other things the same review established by command, all now fixed:
+**Draft 1 — polarity typed by the author.** Each row said `ABSENT` or `PRESENT`
+and the gate checked it. A four-lens review demonstrated the hole in one
+command: replacing every `| PENDING |` with `| DONE |` left the gate exiting 0
+and printing `0 PENDING`, with **zero bytes changed under `src/`** and all 22
+bite-proofs passing. The board, this ADR and the gate's docstring each said in
+plain words that this could not happen.
+
+**Draft 2 — state coupled to polarity.** `PENDING` asserted the claim as
+written, `DONE` its opposite, so flipping only the state word went red. A second
+review round broke it three ways, all reproduced independently before being
+acted on:
+
+| Route | Result |
+|---|---|
+| flip the state word **and** the polarity word together | gate exits 0, `17 rows (0 PENDING)`, 32 tests pass, no source change |
+| unpin a row (evidence `—`), mark it `DONE`, bump the count | gate exits 0 — and it worked on a **STOP** row |
+| append `# TODO: we still need to send "stream": True here` to `providers.py` | flips W1's evidence: a comment saying the work was *not* done changed the row |
+
+The root cause both drafts share: **the state and the claim were typed by the
+same hand, in the same file.** Coupling two author-controlled fields to each
+other raises the number of tokens an author edits; it does not create an
+independent check. Draft 2 moved the cost from one token to two and claimed
+total protection.
+
+**Draft 3 — derive the state.** Above. Routes 2 and 3 are closed outright: an
+unpinned row can only render `UNPINNED`, and needles ignore comments.
+
+**Route 1 is NOT closed, and that is a decision, not an oversight.** The polarity
+word is part of the claim and the author writes the claim, so rewriting the
+polarity and the state together still passes — the derivation reads the flipped
+polarity and derives the flipped state. Closing it needs the evidence text to be
+immutable between anchor stamps (comparing each row against
+`git show <anchor>:docs/65-open-work.md`). That guards against a **deliberate**
+author. The failure this board exists to prevent is a status document rotting
+through **carelessness**, and derivation closes that completely; rewriting a
+claim and a status together is a visible change to the claim in the diff, which
+is what review reads. Adding a third mechanism for a threat outside the model
+would be the disproportion this repository has been burned by before.
+
+That residual is pinned by
+`test_rewriting_the_evidence_claim_is_accepted_and_that_is_the_known_limit`,
+which asserts the limit and goes red if anyone closes it — so the stronger
+promise cannot be quietly written down a third time.
+
+Four further findings from the same rounds, each reproduced by command:
 
 | What was claimed | What was measured |
 |---|---|
-| the evidence family is covered by tests | every bite-proof drove `check_evidence` directly; the wiring inside `check_all` — the function `make validate` reaches — could be deleted whole with all tests green |
-| `make validate` runs the checker | the test asserted `"check_open_work.py" in makefile`, a whole-file substring; the recipe could be gutted to `@true` with the name left in a comment |
-| the gate refuses an empty input | the only floor was on the *table* being empty; a board whose every row was unpinned exited 0 having read **zero** claims off disk |
-| a needle is evidence | W7's needle was the bare word `google`, satisfied by appending the comment *"google sign-in is still TODO"* to `auth.py` — the row would have gone green on prose saying the work was not done |
-
-W7 is now unpinned, and a needle must be at least 12 characters. Both are
-recorded here because the second is a threshold, and a threshold nobody can
-re-derive is the thing this repository keeps finding on the wrong side of a gate.
+| the evidence family is covered by tests | every bite-proof called the checking functions directly; `check_all`'s wiring to both the evidence and the freshness family could be deleted whole with every test green |
+| `make validate` runs the checker | the test asserted a **whole-file** substring, so the recipe could be gutted to `@true` with the name left in a comment. The recipe-body version was then defeated by a leading `-`, make's ignore-errors prefix |
+| the gate refuses an empty input | the only floor was on the **table**; a board of entirely unpinned rows exited 0 having read **zero** needles |
+| the archive-copy skip works | `has_git_history` used `git rev-parse --git-dir`, which walks **up** through parents, so an unpacked copy under a repository answered yes and the freshness family ran against the wrong history — the exact phantom failure it was added to prevent. It now compares `--show-toplevel` against the root |
 
 ## Rejected alternatives
 

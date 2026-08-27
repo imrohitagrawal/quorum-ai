@@ -14,45 +14,79 @@ refuses if a claim is false. It runs inside `make validate`, and
 
 ## How a row proves itself
 
+**Nobody writes the State column. It is generated from the tree.**
+
 Each row's **Evidence** cell states what the tree looks like **while the work is
 still open**:
 
 - `ABSENT <path> :: <needle>` — the needle is not in that file.
 - `PRESENT <path> :: <needle>` — it is.
-- `—` — unpinned. The gate checks nothing about this row. The number of these is
-  itself pinned above, so a fifth cannot be added quietly.
+- `—` — unpinned.
 
-**The State cell decides which way the gate reads that claim.** `PENDING`
-asserts the claim as written; `DONE` asserts its **opposite**. So finishing W1
-puts `"stream": True` into `providers.py`, the `ABSENT` claim stops holding, and
-the gate goes red until someone changes one word — `PENDING` → `DONE` — after
-which the gate demands the inverse and is satisfied. **The evidence cell is
-never rewritten. Only the State word moves.**
+`scripts/check_open_work.py` reads each needle off disk and derives the state:
 
-That coupling is the whole mechanism, and it was **not in this file's first
-draft**. Adversarial review demonstrated the hole in one command: with polarity
-taken only from the word an author typed, replacing every `| PENDING |` with
-`| DONE |` left the gate green — printing "0 PENDING" — with zero bytes changed
-under `src/`. The board asserted, in three places, that this could not happen.
-It could. It cannot now, and the bite-proof for it is
-`test_flipping_only_the_state_word_turns_the_gate_red`.
+| Derived | When |
+|---|---|
+| `PENDING` | the claim holds as written — the work is still open |
+| `DONE` | its opposite holds — the work landed |
+| `UNPINNED` | no needle. **An unpinned row can never read `DONE`.** |
 
-The other half matters as much: a board that only went red when work was
-*abandoned* would stay green through every delivery — which is how
-`docs/00-factory-console.md` came to be 64 commits behind its own last touch
-while four gates read it, none of them asking whether the work it announced was
-the work in flight.
+Run `make open-work-write` (or `python3 scripts/check_open_work.py`) to
+regenerate it; `--check`, inside `make validate`, refuses when the checked-in
+column disagrees with the tree. **No hand writes that column**, so a row cannot
+be marked done by editing its status — it moves when the tree moves. This is the
+same shape as `scripts/generate_adr_index.py`: a derived fact is generated and
+verified, not trusted. What it does *not* stop is an author who rewrites the
+**claim** as well; see the limits below, which are asserted by a test rather
+than only promised here.
+
+Needles are matched against **code text only**: a `#` that starts a line or
+follows whitespace ends that line before the search. Without that, appending
+`# TODO: we still need to send "stream": True here` to `providers.py` derives
+`DONE` for W1 — a comment saying the work is *not* done would have completed the
+row. Verified against all 13 live needles: every one still matches after
+stripping. The **whitespace guard** is the load-bearing part — a naive cut at
+the first `//` would truncate W16's needle line to `URL = "https:`.
+
+### Two designs this replaced, and why
+
+Both were defeated by adversarial review before merge, and both are recorded
+because the failure is instructive rather than embarrassing:
+
+1. **Polarity typed by the author.** Replacing every `| PENDING |` with
+   `| DONE |` left the gate green, printing "0 PENDING", with **zero bytes
+   changed under `src/`**.
+2. **State coupled to polarity** — `PENDING` asserts the claim, `DONE` its
+   opposite. A *two*-token edit did the same thing, and a second route also
+   worked: unpin a row, then mark it `DONE`.
+
+The root cause both share: the state and the claim were **both typed by the same
+hand, in the same file**. Coupling two author-controlled fields to each other
+raises the number of tokens an author edits; it does not make an independent
+check. ADR-0079 has the full account.
 
 ### What this cannot see
 
-- **Work that lands under a different name than the needle.** If streaming ships
-  without that exact literal, W1 stays satisfiable while being stale. The needle
-  is a named contract, not a proof.
+Stated narrowly, because both earlier drafts overclaimed here and were wrong:
+
+- **An author who rewrites the Evidence cell.** The polarity word is part of
+  the claim, and the author writes the claim — so changing `ABSENT` to `PRESENT`
+  *and* the state together is accepted, because the derivation reads the flipped
+  polarity and derives the flipped state. What derivation closes is a hand
+  writing the **State column alone**, which is what carelessness looks like.
+  Rewriting a claim is a visible change in the diff, and review is what reads
+  it. `test_rewriting_the_evidence_claim_is_accepted_and_that_is_the_known_limit`
+  asserts this limit, so nobody can quietly write down a stronger promise.
+  Closing it would need the evidence text to be immutable between anchor stamps
+  (`git show <anchor>:docs/65-open-work.md`); that guards against a deliberate
+  author, which is not the failure this board exists to prevent.
+- **Work that lands under a different name** than the needle — if streaming
+  ships without that exact literal, W1 stays `PENDING` while being stale.
 - **Work that lands by a different route under the same name.** W15 is pinned on
-  `_bound_sniff_time` being present-and-undefined. Deleting the dangling
-  references flips it; *defining* the function would not.
+  `_bound_sniff_time` being present-and-undefined; deleting the dangling
+  references flips it, but *defining* the function would not.
 - **The four unpinned rows.** Nothing is checked about them.
-- **A row that should exist and does not.** A missing item is invisible.
+- **A row that should exist and does not.**
 
 Review remains the primary defence — measured here, 0 of 16 `src/` defects were
 caught by any automated check and 10 of 16 by adversarial review
@@ -66,16 +100,16 @@ caught by any automated check and 10 of 16 by adversarial review
 | W2 | Peer critique: the answer models critique each other, two rounds | PENDING | `PRESENT src/product_app/debate.py :: model_id=settings.debate_model_id,` | #290 | W1 |
 | W3 | Re-set the money constants against a measured bound — **STOP** | PENDING | `PRESENT src/product_app/costs.py :: DAILY_CAP_USD = Decimal("0.20")` | — | W2 |
 | W4 | Variable panel size N ∈ {2,3,4} | PENDING | `PRESENT src/product_app/model_slots.py :: if len(model_ids) != EXPECTED_SLOT_COUNT:` | — | W10 |
-| W5 | Quick-answer N=1 mode | PENDING | `—` | — | W4 |
+| W5 | Quick-answer N=1 mode | UNPINNED | `—` | — | W4 |
 | W6 | A panel of one reports strong consensus | PENDING | `PRESENT src/product_app/synthesis_consensus.py :: if len(sizes) == 1 or max(sizes.values()) >= _required_cluster(len(stance)):` | #383 | — |
-| W7 | Google sign-in and logout | PENDING | `—` | — | — |
+| W7 | Google sign-in and logout | UNPINNED | `—` | — | — |
 | W8 | `min_machines_running` / demo-live posture — **STOP** | PENDING | `PRESENT fly.toml :: min_machines_running = 0` | — | — |
 | W9 | Guard the moderator model overlapping a panel slot | PENDING | `ABSENT src/product_app/model_slots.py :: debate_model_id` | — | — |
 | W10 | Consensus certifies a mutual cluster it never checked | PENDING | `PRESENT src/product_app/synthesis_consensus.py :: return sum(1 for partners in counts if partners >= 2) >= 3` | #382 | — |
 | W11 | Completeness divides by answers recorded, not slots requested | PENDING | `PRESENT src/product_app/evaluation.py :: slot_count = len(initial_answers)` | #380 | — |
 | W12 | `last_live_charge_at` reports a pre-#376 row as a live charge | PENDING | `PRESENT src/product_app/feedback_store.py :: WHERE recorder = 'cost' AND event_type = '{COST_ACCEPTED_EVENT}'` | #379 | — |
-| W13 | Nothing bounds a call's INPUT — **STOP** | PENDING | `—` | #268 | — |
-| W14 | Close the 5xx possibly-billed premise with data | PENDING | `—` | #105 | production logs |
+| W13 | Nothing bounds a call's INPUT — **STOP** | UNPINNED | `—` | #268 | — |
+| W14 | Close the 5xx possibly-billed premise with data | UNPINNED | `—` | #105 | production logs |
 | W15 | `_bound_sniff_time` is referenced and does not exist | PENDING | `PRESENT src/product_app/providers.py :: _bound_sniff_time` | — | — |
 | W16 | The catalog fetcher hardcodes the models URL | PENDING | `PRESENT src/product_app/catalog_fetcher.py :: OPENROUTER_CATALOG_URL = "https://openrouter.ai/api/v1/models"` | — | — |
 | W17 | FR-004 names a model we do not ship | PENDING | `PRESENT docs/10-functional-requirements.md :: deepseek/deepseek-chat-v3.1` | — | — |
@@ -214,12 +248,12 @@ see the other. A worktree isolates files; it does not isolate shared namespaces.
 ## Updating this board
 
 **In the same pull request that changes an item's state.** The gate forces it:
-a `PENDING` row whose claim has stopped holding goes red, and so does a `DONE`
-row whose claim's opposite does not hold.
+when the tree moves, the derived column moves with it, and `--check` refuses
+until the file is regenerated.
 
-To mark a row done, change **only the State word**. Leave the evidence cell
-alone — the gate inverts it for you, and rewriting it by hand is how the first
-draft of this mechanism was defeated.
+**Do not edit the State column.** Run `make open-work-write`. There is no way to
+mark a row done by hand, which is the entire point — two earlier designs let a
+one- and then a two-token edit declare the whole board finished.
 
 When you re-verify the rows, stamp the current commit on the `Verified at:`
 line. Do not stamp it without re-reading — the drift limit is deliberately loose
