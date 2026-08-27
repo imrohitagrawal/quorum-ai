@@ -82,6 +82,7 @@ ways, so the record shows what was believed on a date and what replaced it.
 | [ADR-0076](adr/0076-a-reader-gets-its-own-tree-and-an-unread-citation-does-not-set-a-cap.md) | A reader gets its own tree, an unread citation does not set a cap, and a gate's exit status is never read through a pipe | Architecture | Accepted — 2026-08-26 |
 | [ADR-0077](adr/0077-the-response-body-decides-the-outcome-and-a-dispatched-call-that-answered-nothing-leaves-evidence.md) | The response body decides the outcome, and a dispatched call that answered nothing leaves evidence | Architecture | Accepted — 2026-08-26 |
 | [ADR-0078](adr/0078-a-provider-call-gets-a-total-time-budget-because-a-per-recv-timeout-is-not-one.md) | A provider call gets a total time budget, because a per-`recv` timeout is not one | Architecture | Accepted — 2026-08-26 |
+| [ADR-0079](adr/0079-the-open-work-board-is-checked-against-the-tree-not-trusted.md) | The open-work board is checked against the tree, not trusted | Architecture | Accepted — 2026-08-28 |
 
 **This index was itself stale** until 2026-07-30: ADR-0002 had existed since
 2026-07-19 and was never listed here. A hand-maintained index is a derived fact

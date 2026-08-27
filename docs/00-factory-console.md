@@ -7,96 +7,17 @@ This file is the human-friendly dashboard for the product factory. It is generat
 
 Operate, learn, and improve
 
+This is the FACTORY ROUTER's view of the lifecycle, and nothing more. It is not
+a work status: this whole file is regenerated wholesale by `make next`, so any
+status hand-written here is deleted the next time that command runs. What is
+open, what blocks what, and what proves each item's state live in
+`docs/65-open-work.md`, which is checked against the tree by
+`scripts/check_open_work.py`.
+
 ## Next best action
 
-**Ops hardening + observability deferred-item closeout is COMPLETE
-(2026-07-23).** PR #91 `9555701` (closes #86) merged with all checks green;
-Deploy JOB `30022024397` success; prod verified by content. Shipped in one PR:
-CSP `base-uri 'none'; form-action 'none'` app-wide (cross-engine verified);
-`/ready` reasons drawn from a closed vocabulary (raw exception text can no
-longer reach the public payload); `/status` `sentry` → vendor-neutral
-`error_tracking` + new `build_sha` (deploy verification is now
-`curl -s https://quorum.stackclimb.com/status | jq -r .build_sha` == merged
-SHA); `gate-min-executed` fails loudly on missing/malformed/multi-suite JUnit
-XML (was a proven exit-0 false-green); alert rule 2 (5xx-rate over the 1% SLO)
-MECHANISED at $0 via `error-rate-check.yml` + unit-tested
-`scripts/error_rate_probe.py` (proof dispatch `30022211861` green — honest
-low-traffic skip on real prod data). Two adversarial review cycles, 13
-confirmed findings, all fixed in-diff. Full ledger:
-`OPS-HARDENING-CLOSEOUT-RESULT.md`.
-
-**Observability & demo-evidence backbone OD-1 → OD-7 is COMPLETE (2026-07-23).**
-All seven stages merged serially, each with green blocking checks + Deploy JOB
-success + prod verification: OD-1 `/metrics` (#77 `0b014d3`), OD-2 `/ui/ops`
-dashboard (#78 `5845409`), OD-3 request-ID correlation (#79 `c728f45`), OD-4
-`make evals` (#80 `3fec293`), OD-5 scheduled availability alert (#81 `7fbc1f9`,
-dispatch proof run `29964680225`), OD-6 incident runbook (#82 `7002f8a`), OD-7
-evidence page + demo script (#83 `77d82cc`, Deploy JOB run `29968918666`
-success). Full ledger, review findings, and
-deferred items: `OBSERVABILITY-DEMO-RESULT.md`; demo evidence:
-`docs/124-demo-evidence.md`.
-
-**Demo-readiness P1–P3 is COMPLETE and deploy-verified (2026-07-22).** P1 #72
-`b2848e5` (real Layer-B judge, OFF by default), P3 #73 `c663ad5` (NFR-004
-run-level deadline ENFORCED), P2 #74 `96eb281` (measured-accuracy pilot).
-Evidence: `DEMO-READINESS-P1-P3-RESULT.md`.
-
-**D5 operator-label queue is COMPLETE (2026-07-23).** The operator authored the
-3 remaining specialist-domain labels (clinical, tax-financial, self-harm-safety;
-specialist-reviewer requirements waived by operator decision, recorded per
-label). Pilot extended to n = 10, computed agreement 10/10 — see
-`docs/metrics/accuracy-pilot.md` and `docs/metrics/operator-label-queue.md`;
-quality-ledger Part 2 stays em-dash.
-
-**Ops-page self-explanation is COMPLETE (2026-07-23).** PR #85 ("Metrics,
-explained" + shared `tokens.css`) merged and deploy-verified (Deploy JOB
-`29986199802` success, prod content-verified). Follow-up PR (branch
-`feat/ops-tile-relevance`): every SLO tile on `/ui/ops` now carries a static
-"Why this matters" line and — where a red/non-live state exists — a
-"When it's red" first-action hint; values stay live-computed, `/metrics`
-bytes untouched. Two-reviewer adversarial pass iterated to a fixpoint over
-two rounds (ready-state naming corrected to the real `ReadinessState`
-literals; static-explanation guard hardened against same-element and
-ancestor sink placement). CSP `base-uri`/`form-action` hardening is
-deliberately unbundled and tracked as issue #86.
-
-**Ops-page navigation + glossary + site favicon is COMPLETE (2026-07-23).**
-PR #89 `4976f95` merged with all 12 checks green; Deploy JOB `29994616462`
-success (the parallel cancelled run was concurrency dedupe); prod verified by
-content AND by a live browser drive (TOC scroll-spy correct, 2 "feeds" / 18
-"informational" badges, 0px overflow at 375px, favicon 200 on both assets).
-Shipped in one PR: (a) sticky jump-bar TOC with IntersectionObserver
-scroll-spy (`aria-current="location"`, current-line derived live from
-`scroll-padding-top`, dense thresholds + `scrollend` + rAF click-poll — no
-per-frame scroll handler); (b) "Used by" honesty column keyed off the family
-names `ops.js` actually parses, unknown families default to informational;
-(c) glossary panel (8 entries) with dotted jargon links in page-authored copy
-only, machine `# HELP` text verbatim, null-prototype parser maps; (d) same-
-origin favicon (`favicon.svg` + `favicon-32.png` Safari fallback) on both
-`ops.html` and `workspace.html`. Two adversarial review cycles (correctness /
-breaker / ux-a11y, findings adversarially verified) — notable catches: an
-XML-invalid `--` in the SVG comment found only by LIVE render (200 + right
-content-type still failed to decode), a scroll-offset double-count
-(scroll-margin + scroll-padding), rem-drift of a hardcoded spy threshold under
-enlarged fonts, and a stale-highlight zone on manual scroll — all fixed with
-RED-proven regression tests; scroll specs flake-scanned 96/96 across 4
-browser projects.
-
-**The next action is the deferred, OPERATOR-GATED funding step:** fund the
-OpenRouter key and set `QUORUM_EVAL_JUDGE_API_KEY` + `QUORUM_EVAL_JUDGE_MODEL_ID`
-as Fly secrets, then perform ONE deliberate measured run to verify live
-four-model execution and the real judge in prod (also closes the #24
-measured-cost item). Do not perform without the operator. Until then, use
-driver skill `production-feedback-loop` for evidence-driven iteration.
-Reviewer skills must review, not overwrite, the driver output.
-
-### Validation status (2026-07-23)
-
-All local gates green through the OD backbone (full pytest 1342 passed at
-OD-6; `make evals` 114/114). CI + Tests + E2E + Deploy JOB success for every
-OD squash SHA; prod `/ready` state=live; `/metrics`, `/ui/ops`, and
-`X-Request-ID` echo verified live on prod. Scheduled availability alert
-active (`gh run list --workflow=availability-check.yml`).
+Use driver skill `production-feedback-loop` to complete the missing/placeholder evidence
+listed below. Reviewer skills must review, not overwrite, the driver output.
 
 ## Recommended driver skill
 

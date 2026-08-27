@@ -32,8 +32,13 @@ sends a reader back to chat text; the test is what stops it.
 **Phase-0 sweep (2026-07-19, branch `feat/r2-s1-run-history-persistence`):**
 statuses below were reconciled against the repo after the Phase-0 gates landed.
 
-**PHASE STATUS (durable — this line, not the auto-overwritten factory console, is
-authoritative):**
+**SUPERSEDED 2026-08-28.** This block claimed to be the authoritative phase.
+It is a record of the R2 planning round (2026-07-19) in R2 vocabulary that is no
+longer used, and it was one of three files each claiming that authority. The
+source of truth for what is open is `docs/65-open-work.md`, which is checked
+against the tree. Read the block below as history.
+
+**PHASE STATUS (2026-07-19, historical — superseded by `docs/65-open-work.md`):**
 - **Planning phase: CLOSED** (2026-07-19) — the R2 plan + DAY-ONE prompt were
   adversarially reviewed to a fixpoint; all DOC-FIX items landed-robust; all
   findings are tracked here.

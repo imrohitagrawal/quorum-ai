@@ -48,6 +48,7 @@ _CHARTERED_GATES = (
     "tests/unit/test_cited_paths_resolve.py",
     "tests/unit/test_gates_carry_a_charter.py",
     "tests/unit/test_no_mutation_pragma_silences_a_survivor.py",
+    "tests/unit/test_open_work_matches_reality.py",
 )
 
 _REQUIRED_SECTIONS = (

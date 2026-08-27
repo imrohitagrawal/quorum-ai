@@ -36,6 +36,13 @@ This file is the human-friendly dashboard for the product factory. It is generat
 
 {route.get("label")}
 
+This is the FACTORY ROUTER's view of the lifecycle, and nothing more. It is not
+a work status: this whole file is regenerated wholesale by `make next`, so any
+status hand-written here is deleted the next time that command runs. What is
+open, what blocks what, and what proves each item's state live in
+`docs/65-open-work.md`, which is checked against the tree by
+`scripts/check_open_work.py`.
+
 ## Next best action
 
 Use driver skill `{route.get("driver")}` to complete the missing/placeholder evidence
