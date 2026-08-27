@@ -17,9 +17,9 @@ Measured 2026-08-28, not asserted:
 | Claim | Command | Result |
 |---|---|---|
 | The factory console is stale | `git rev-list --count --first-parent $(git log --first-parent origin/main --format=%H -1 -- docs/00-factory-console.md)..origin/main` | **64** first-parent commits behind its own last touch |
-| …and staler by content | `git rev-list --count --since=2026-07-23 origin/main` | its content is dated 2026-07-23, **241** commits back |
+| …and staler by content | `git rev-list --count --since=2026-07-23 origin/main` | its content is dated 2026-07-23, **241** commits back — that is every commit; the first-parent count over the same span is **188** (`--first-parent`) |
 | Four open issues appear in no plan | `gh issue list` against `grep -rn` over `docs/` and the root prompts | #383, #382, #380, #379 exist only in `gh` |
-| Three files each claim the authoritative phase | `grep -rn "authoritative" docs/` | the console's `## Current phase`, `docs/session-handoff.md` (disavowed by its own later section), and `docs/analysis/R2-plan-review-findings.md` |
+| The phase is claimed in more than one place | `git grep -n "authoritative" origin/main -- docs/` | **one** file uses the word to claim it — `docs/analysis/R2-plan-review-findings.md`. `docs/session-handoff.md` names R2 as authoritative *over* its own line, and `docs/00-factory-console.md` asserts a `## Current phase` without using the word at all. Three files carry a phase; one claims authority; a reader cannot tell which to believe |
 
 The console still announced work from PR #91 and quoted `pytest 1342 passed`
 against a suite that collects **3819** (`uv run pytest --collect-only -q`,
@@ -53,11 +53,14 @@ Each row's evidence cell is one of:
 * `PRESENT <path> :: <needle>` — it is.
 * `—` — unpinned; the gate checks nothing about this row.
 
-**A `PENDING` row's needle is chosen so that it flips when the work lands.**
-Completing W1 puts `"stream": True` into `providers.py`, the `ABSENT` claim
-becomes false, and `scripts/check_open_work.py --check` refuses until the row is
-flipped to `DONE` with its evidence inverted. A `DONE` row's inverted claim is
-read off disk too, so a row cannot be marked done over nothing.
+**The evidence cell states the OPEN form of the fact, and the State cell
+decides which way the gate reads it.** `PENDING` asserts the claim as written;
+`DONE` asserts its opposite. Completing W1 puts `"stream": True` into
+`providers.py`, the `ABSENT` claim stops holding, and
+`scripts/check_open_work.py --check` refuses until one word changes —
+`PENDING` → `DONE` — after which the gate demands the inverse. The evidence cell
+is never rewritten by hand, which is what makes "done over nothing" unreachable
+rather than merely discouraged.
 
 This inversion is the whole point. The obvious design — a board that goes red
 when work is *abandoned* — stays green through every delivery, which is exactly
@@ -67,8 +70,11 @@ Three further pieces:
 
 * **Two count pins.** The board states its own row count and its own
   unpinned-row count as digits, both compared against the parsed table. Copied
-  from `tests/test_doc_gate_consistency.py` Part D, plus its anti-vacuity floor
-  and its bite-proof.
+  from `tests/test_doc_gate_consistency.py` Part D, plus its bite-proof.
+* **Two anti-vacuity floors, not one.** The table must parse at least one row,
+  *and* at least 8 evidence claims must actually be read off disk. The second
+  does not follow from the first, and review proved it: a board of entirely
+  unpinned rows parses fine and measures nothing.
 * **A freshness anchor.** The board records the commit its rows were verified
   at. It must exist, be an ancestor of `HEAD`, and be no more than
   `MAX_DRIFT_COMMITS` first-parent commits behind it.
@@ -93,6 +99,30 @@ signal and they run on every commit; the anchor only guards the prose and the
 unpinned rows. A tight threshold would turn re-stamping into a ritual performed
 without re-reading, which manufactures false confidence and is worse than no
 gate at all.
+
+### What review changed, and what the first draft got wrong
+
+The state/polarity coupling above is **not** what shipped in the first draft of
+this change. There, polarity came only from the word an author typed in the
+Evidence cell, and `check_evidence` never read the State cell at all. A
+four-lens adversarial review demonstrated the consequence in one command:
+replacing every `| PENDING |` on the board with `| DONE |` — changing zero bytes
+under `src/` — left the gate green and printing `0 PENDING`, with all 22
+bite-proofs passing. The board, this ADR and the gate's own docstring each
+asserted, in plain words, that this could not happen.
+
+Four other things the same review established by command, all now fixed:
+
+| What was claimed | What was measured |
+|---|---|
+| the evidence family is covered by tests | every bite-proof drove `check_evidence` directly; the wiring inside `check_all` — the function `make validate` reaches — could be deleted whole with all tests green |
+| `make validate` runs the checker | the test asserted `"check_open_work.py" in makefile`, a whole-file substring; the recipe could be gutted to `@true` with the name left in a comment |
+| the gate refuses an empty input | the only floor was on the *table* being empty; a board whose every row was unpinned exited 0 having read **zero** claims off disk |
+| a needle is evidence | W7's needle was the bare word `google`, satisfied by appending the comment *"google sign-in is still TODO"* to `auth.py` — the row would have gone green on prose saying the work was not done |
+
+W7 is now unpinned, and a needle must be at least 12 characters. Both are
+recorded here because the second is a threshold, and a threshold nobody can
+re-derive is the thing this repository keeps finding on the wrong side of a gate.
 
 ## Rejected alternatives
 
@@ -131,12 +161,16 @@ false-positive cost, and a looser needle would check nothing.
 **What it cannot see, stated plainly:**
 
 * **Work that lands under a different name than the needle.** If streaming ships
-  without that exact literal, W1 stays green while being stale. The needle is a
-  named contract, not a proof of absence.
-* **Three rows carry no needle at all** (W5, W13, W14 — their shapes are not yet
-  chosen, and #105 closes on production evidence rather than a diff). The gate
-  checks nothing about them. The *number* of such rows is pinned, so a fourth
-  cannot be added quietly, but that is a cap on the blindness, not a cure.
+  without that exact literal, W1 stays satisfiable while being stale. The needle
+  is a named contract, not a proof of absence.
+* **Work that lands by a different route under the same name.** W15 is pinned on
+  `_bound_sniff_time` being present-and-undefined; deleting the dangling
+  references flips it, but *defining* the function would not.
+* **Four rows carry no needle at all** (W5, W7, W13, W14 — their shapes are not
+  yet chosen, #105 closes on production evidence rather than a diff, and W7 lost
+  its needle to the review finding above). The gate checks nothing about them.
+  The *number* of such rows is pinned, so a fifth cannot be added quietly, but
+  that is a cap on the blindness, not a cure.
 * **A row that should exist and does not.** A missing item is invisible to every
   check here.
 
@@ -145,9 +179,10 @@ Adversarial review remains the primary defence. Measured in this repository:
 by adversarial review (`docs/metrics/defect-discovery-audit.md`). This gate
 prevents a regression in the board; it does not find work nobody wrote down.
 
-**The console loses 97 lines of stale hand-written status**, because the
-demotion line had to go into `scripts/factory_next.py`'s template and
-regenerating the file is what applies it. That content announced PR #91 and a
+**The console loses 88 lines of stale hand-written status and gains 9**
+(`git diff --numstat origin/main...HEAD -- docs/00-factory-console.md` → `9 88`),
+because the demotion line had to go into `scripts/factory_next.py`'s template
+and regenerating the file is what applies it. That content announced PR #91 and a
 1342-test suite; it was 241 commits out of date and factually wrong about the
 present. It is tracked, so it is recoverable in full:
 

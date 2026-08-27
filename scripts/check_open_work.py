@@ -3,38 +3,59 @@
 
 WHY THIS EXISTS. Work here was planned in five places that did not know about
 each other, and the one file ``AGENTS.md`` tells a session to maintain --
-``docs/00-factory-console.md`` -- was 64 commits behind its last touch and 241
-behind its content date when that was measured (2026-08-28). Four test files
-read that file and none asks whether the work it announces is the work in
-flight. Hand-written status rots
-because nothing compares the sentence to the tree; this is the thing that
-compares.
+``docs/00-factory-console.md`` -- was 64 first-parent commits behind its last
+touch, and 241 commits behind its content date (2026-07-23; 188 counting only
+first-parent). Four test files read that file and none asks whether the work it
+announces is the work in flight. Hand-written status rots because nothing
+compares the sentence to the tree; this is the thing that compares.
 
 WHAT IT CHECKS. Three families, each with a bite-proof in
 ``tests/unit/test_open_work_matches_reality.py``:
 
-1. **Evidence polarity.** Every row carries a claim about today's tree --
-   ``ABSENT <path> :: <needle>`` or ``PRESENT <path> :: <needle>`` -- and the
-   claim is checked by reading the file. A ``PENDING`` row's evidence is chosen
-   so that it FLIPS when the work lands, so completing the work turns this gate
-   red and forces the row to be updated. That is deliberate: a board that only
-   goes red when work is abandoned would stay green through every delivery.
+1. **Evidence, coupled to state.** Every row carries a claim about the tree
+   written in its OPEN form -- ``ABSENT <path> :: <needle>`` or
+   ``PRESENT <path> :: <needle>`` -- meaning "this is what the tree looks like
+   while the work is still open". The STATE cell then decides which way the gate
+   reads it: a ``PENDING`` row must satisfy the claim as written; a ``DONE`` row
+   must satisfy its OPPOSITE.
+
+   That coupling is the whole mechanism, and it was not here in the first draft.
+   Adversarial review demonstrated the hole: with polarity taken only from the
+   word the author typed, replacing every ``| PENDING |`` with ``| DONE |``
+   left the gate green, printing "0 PENDING", with zero bytes changed under
+   ``src/``. The author now flips ONE word and the gate inverts the claim
+   itself, so a row cannot be marked done over nothing.
+
 2. **Count pins.** The board states its own row count and its own unpinned-row
    count as DIGITS, and both are compared against the parsed table. Copied
    wholesale from ``tests/test_doc_gate_consistency.py`` Part D, which exists
    because ``AGENTS.md`` said "twelve" about a directory holding 15 and nothing
    ever compared the two.
+
 3. **Freshness.** The board records the commit its rows were verified at. That
    SHA must exist, must be an ancestor of ``HEAD``, and must not be more than
    ``MAX_DRIFT_COMMITS`` first-parent commits behind it.
 
-WHAT IT CANNOT SEE. It cannot tell that work landed under a DIFFERENT name than
-the row's needle. If W1 ships streaming without the literal ``"stream": True``
-in ``providers.py``, the row stays green while being stale. The needle is a
-named contract, not a proof of absence -- three rows carry no needle at all
-(see the unpinned count, which is itself pinned so a fourth cannot be added
-quietly). Adversarial review remains the primary defence; this repo measured
-0 of 16 ``src/`` defects caught by any gate against 10 of 16 by review
+ANTI-VACUITY. Two floors, because every check here is a negative one and all of
+them pass over nothing: the table must parse at least one row, and at least
+``MIN_EVIDENCE_CLAIMS`` evidence claims must actually be READ OFF DISK. The
+second exists because the first does not imply it -- a board of entirely
+unpinned rows parsed fine and exited 0 having read nothing.
+
+WHAT IT CANNOT SEE:
+
+* **Work that lands under a different name than the needle.** If streaming ships
+  without the literal ``"stream": True`` in ``providers.py``, W1's row stays
+  satisfiable while being stale.
+* **Work that lands by a different route under the SAME name.** W15's row is
+  pinned on ``_bound_sniff_time`` being present-and-undefined; deleting the
+  dangling references flips it, but *defining* the function would not.
+* **Unpinned rows** -- the gate checks nothing about them. Their number is
+  pinned, which caps the blindness rather than curing it.
+* **A row that should exist and does not.** A missing item is invisible here.
+
+Adversarial review remains the primary defence; this repo measured 0 of 16
+``src/`` defects caught by any gate against 10 of 16 by review
 (``docs/metrics/defect-discovery-audit.md``).
 
 ``--check`` exits 1 with every failure listed. There is no rewrite mode: unlike
@@ -61,11 +82,23 @@ BOARD = ROOT / "docs" / "65-open-work.md"
 #: repository is the factory console at 64 commits stale, so this fires just
 #: below the point staleness has actually been observed at.
 #:
-#: It is deliberately loose. The per-row polarity checks above are the real
-#: freshness signal and they run on every commit; this one only guards the
-#: prose and the three unpinned rows. A tight threshold would turn re-stamping
-#: into a ritual performed without re-reading, which is worse than no gate.
+#: It is deliberately loose. The per-row evidence checks are the real freshness
+#: signal and they run on every commit; this one only guards the prose and the
+#: unpinned rows. A tight threshold would turn re-stamping into a ritual
+#: performed without re-reading, which is worse than no gate.
 MAX_DRIFT_COMMITS = 60
+
+#: The floor on evidence claims actually read off disk. Set below today's 13 so
+#: routine edits do not trip it, and above zero so a board that pins nothing
+#: cannot pass. Review demonstrated the need: with only the empty-table floor,
+#: a board whose every row was unpinned exited 0 reporting "0 evidence claims".
+MIN_EVIDENCE_CLAIMS = 8
+
+#: The shortest needle this gate will accept. A short needle matches prose, not
+#: code: review demonstrated that W7's original one-word needle ``google`` was
+#: satisfied by appending the COMMENT "google sign-in is still TODO" to
+#: ``auth.py``. Every needle the board actually uses is 14 characters or more.
+MIN_NEEDLE_CHARS = 12
 
 _SHA_LINE = re.compile(r"^Verified at: `([0-9a-f]{40})`$", re.MULTILINE)
 #: DIGITS, not spelled-out words -- the whole point is that a machine re-reads
@@ -76,7 +109,9 @@ _ROW_COUNT = re.compile(
 _ROW = re.compile(r"^\| *(W\d+) *\|(.+)$")
 _EVIDENCE = re.compile(r"^(ABSENT|PRESENT) (\S+) :: (.+)$")
 
-_STATES = ("PENDING", "DONE")
+#: The state a row is in, and what it means for the evidence claim. ``True``
+#: means "the claim holds as written"; ``False`` means "its opposite holds".
+_STATES = {"PENDING": True, "DONE": False}
 _UNPINNED = "—"  # em dash
 
 
@@ -105,8 +140,20 @@ class Board:
 
 
 def _cell(raw: str) -> str:
-    """Strip a markdown table cell down to its text, backticks removed."""
-    return raw.strip().strip("`").strip()
+    """Strip a markdown table cell down to its text, backticks removed.
+
+    Exactly ONE backtick comes off each end, not a run of them. ``str.strip``
+    removes every character in its argument, so ``.strip("`")`` on a needle
+    ending in a backtick silently deleted it, and the refusal in
+    :func:`check_evidence` then never saw the character it exists to refuse --
+    leaving the gate verifying a shorter string than the row displays.
+    """
+    text = raw.strip()
+    if text.startswith("`"):
+        text = text[1:]
+    if text.endswith("`"):
+        text = text[:-1]
+    return text.strip()
 
 
 def parse_board(text: str) -> Board:
@@ -145,10 +192,10 @@ def parse_board(text: str) -> Board:
 def check_structure(board: Board) -> list[str]:
     """Ids unique, states known, and the table is not empty."""
     failures: list[str] = []
-    # ANTI-VACUITY FLOOR. Every check below is a loop over ``board.rows``, and
-    # all of them are trivially satisfied over nothing -- a renamed heading or
-    # a broken regex would otherwise leave this gate reporting success while
-    # measuring zero rows.
+    # ANTI-VACUITY FLOOR ONE. Every check below is a loop over ``board.rows``,
+    # and all of them are trivially satisfied over nothing -- a renamed heading
+    # or a broken row pattern would otherwise leave this gate reporting success
+    # while measuring zero rows.
     if not board.rows:
         failures.append(
             f"{BOARD.name}: no rows parsed. The table moved or the row pattern "
@@ -162,7 +209,7 @@ def check_structure(board: Board) -> list[str]:
             failures.append(f"{row.row_id}: duplicate row id")
         seen.add(row.row_id)
         if row.state not in _STATES:
-            failures.append(f"{row.row_id}: state {row.state!r} is not one of {_STATES}")
+            failures.append(f"{row.row_id}: state {row.state!r} is not one of {sorted(_STATES)}")
     return failures
 
 
@@ -191,16 +238,20 @@ def check_counts(board: Board) -> list[str]:
 
 
 def check_evidence(board: Board, root: Path) -> tuple[list[str], int]:
-    """Read each row's named file and confirm the polarity it claims.
+    """Read each row's named file and confirm what its STATE implies.
 
-    Returns the failures and how many rows were actually read, so the caller
-    can report what it counted rather than only what it found.
+    The evidence cell is written in its OPEN form. ``PENDING`` asserts it holds;
+    ``DONE`` asserts the opposite holds. Returns the failures and how many rows
+    were actually read, so the caller can report what it counted and refuse over
+    an empty measurement.
     """
     failures: list[str] = []
     checked = 0
     for row in board.rows:
         if not row.pinned:
             continue
+        if row.state not in _STATES:
+            continue  # already reported by check_structure
         match = _EVIDENCE.match(row.evidence)
         if not match:
             failures.append(
@@ -210,10 +261,8 @@ def check_evidence(board: Board, root: Path) -> tuple[list[str], int]:
             continue
         polarity, rel_path, needle = match.group(1), match.group(2), match.group(3)
         # A needle cannot contain a pipe -- the row was split on pipes to get
-        # here, so one would have truncated this cell already. A BACKTICK can:
-        # ``_cell`` strips only the outer pair, so an interior one survives
-        # parsing while breaking the markdown code span a human reads. Refuse
-        # it, so what the gate checks and what the board displays cannot differ.
+        # here, so one would have truncated this cell already. A BACKTICK can
+        # reach this point, and breaks the markdown code span a human reads.
         if "`" in needle:
             failures.append(
                 f"{row.row_id}: needle contains a backtick, which breaks the "
@@ -221,29 +270,58 @@ def check_evidence(board: Board, root: Path) -> tuple[list[str], int]:
                 "this gate checks"
             )
             continue
+        if len(needle) < MIN_NEEDLE_CHARS:
+            failures.append(
+                f"{row.row_id}: needle {needle!r} is shorter than "
+                f"{MIN_NEEDLE_CHARS} characters. A short needle matches PROSE: "
+                "a one-word needle here was satisfied by adding a comment "
+                "saying the work was still TODO. Pin a code line, or leave the "
+                f"row unpinned with {_UNPINNED!r}."
+            )
+            continue
         target = root / rel_path
         if not target.is_file():
             failures.append(f"{row.row_id}: evidence path {rel_path} does not exist")
             continue
-        found = needle in target.read_text(encoding="utf-8")
+        present = needle in target.read_text(encoding="utf-8")
         checked += 1
-        if found and polarity == "ABSENT":
-            failures.append(
-                f"{row.row_id}: board says {needle!r} is ABSENT from {rel_path}; "
-                "it is there. If the work landed, flip this row to DONE and "
-                "invert its evidence in the same change."
-            )
-        elif not found and polarity == "PRESENT":
-            failures.append(
-                f"{row.row_id}: board says {needle!r} is PRESENT in {rel_path}; "
-                "it is gone. If the work landed, flip this row to DONE and "
-                "invert its evidence in the same change."
-            )
+        # What the OPEN form claims, and which way this row's state reads it.
+        open_form_says_present = polarity == "PRESENT"
+        holds_as_written = present == open_form_says_present
+        wanted = _STATES[row.state]
+        if holds_as_written != wanted:
+            if wanted:
+                failures.append(
+                    f"{row.row_id} is PENDING and claims {polarity} {needle!r} in "
+                    f"{rel_path}, which is no longer true. If the work landed, "
+                    "change the STATE cell to DONE -- leave the evidence cell "
+                    "exactly as it is, the gate inverts it."
+                )
+            else:
+                failures.append(
+                    f"{row.row_id} is DONE, so the gate requires the OPPOSITE of "
+                    f"{polarity} {needle!r} in {rel_path} -- and that is not the "
+                    "case. The work this row claims is finished has not landed."
+                )
     return failures, checked
 
 
 def _git(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(["git", *args], cwd=root, capture_output=True, text=True, check=False)
+
+
+def has_git_history(root: Path) -> bool:
+    """Whether ``root`` sits in a git repository this gate can question.
+
+    ``AGENTS.md`` rule 12b tells a reviewer to work from
+    ``git archive HEAD | tar -x -C <dir>``, and that copy has NO ``.git`` at
+    all. Failing there would name the board as stale when the truth is that
+    there is no history to compare against -- a phantom failure of exactly the
+    kind rule 9a warns costs a session an investigation. So the freshness family
+    is skipped there, and :func:`check_all` says so IN ITS REPORT LINE rather
+    than silently.
+    """
+    return _git(root, "rev-parse", "--git-dir").returncode == 0
 
 
 def check_freshness(board: Board, root: Path, max_drift: int = MAX_DRIFT_COMMITS) -> list[str]:
@@ -262,8 +340,7 @@ def check_freshness(board: Board, root: Path, max_drift: int = MAX_DRIFT_COMMITS
         ]
     # No error branch here on purpose: both revisions were just proved to exist
     # and to be related, so ``rev-list`` cannot fail. A defensive branch that
-    # cannot be reached is a branch no test can prove, and an untestable branch
-    # is exactly what this repository keeps finding on the wrong side of a gate.
+    # cannot be reached is a branch no test can prove.
     counted = _git(root, "rev-list", "--count", "--first-parent", f"{board.sha}..HEAD")
     drift = int(counted.stdout.strip())
     if drift > max_drift:
@@ -278,17 +355,34 @@ def check_freshness(board: Board, root: Path, max_drift: int = MAX_DRIFT_COMMITS
 def check_all(root: Path = ROOT, max_drift: int = MAX_DRIFT_COMMITS) -> tuple[list[str], str]:
     """Run every family. Returns (failures, one-line report of what was counted)."""
     board = parse_board((root / "docs" / "65-open-work.md").read_text(encoding="utf-8"))
+    parsed = len(board.rows)
     failures = check_structure(board)
     if failures:
-        return failures, "0 rows parsed"
+        # Report what was really parsed. Saying "0 rows" over a board with 17
+        # well-formed rows and one bad cell is a gate stating a false count of
+        # its own measurement.
+        return failures, f"{parsed} rows parsed, structure REFUSED"
     failures += check_counts(board)
     evidence_failures, checked = check_evidence(board, root)
     failures += evidence_failures
-    failures += check_freshness(board, root, max_drift)
+    # ANTI-VACUITY FLOOR TWO. The empty-table floor does not imply this one: a
+    # board of entirely unpinned rows parses fine and reads nothing off disk.
+    if checked < MIN_EVIDENCE_CLAIMS:
+        failures.append(
+            f"{BOARD.name}: only {checked} evidence claims were read off disk "
+            f"(floor {MIN_EVIDENCE_CLAIMS}). This gate refuses to pass having "
+            "measured almost nothing."
+        )
+    git_note = ""
+    if has_git_history(root):
+        failures += check_freshness(board, root, max_drift)
+    else:
+        git_note = ", freshness SKIPPED (no git history at this root)"
     pending = sum(1 for row in board.rows if row.state == "PENDING")
+    unpinned = sum(1 for row in board.rows if not row.pinned)
     report = (
-        f"{len(board.rows)} rows ({pending} PENDING), {checked} evidence claims "
-        f"read from disk, {sum(1 for r in board.rows if not r.pinned)} unpinned"
+        f"{parsed} rows ({pending} PENDING), {checked} evidence claims read from "
+        f"disk, {unpinned} unpinned{git_note}"
     )
     return failures, report
 
