@@ -357,9 +357,6 @@ BUCKET_B_PIN_BEHAVIOUR = {
     "catalog_fetcher._VENDOR_RE": "assert accept/reject on samples",
     "main._KNOWN_HTTP_METHODS": "assert non-empty and contains GET/POST",
     "main._PYDANTIC_TYPE_TO_CODE": "assert the mappings the API contract depends on",
-    "catalog_fetcher.OPENROUTER_CATALOG_URL": (
-        "assert https scheme and openrouter.ai host (SSRF-adjacent)"
-    ),
     "auth._SESSION_COOKIE_NAME_UNPREFIXED": (
         "assert where the unprefixed fallback is accepted (F-02)"
     ),

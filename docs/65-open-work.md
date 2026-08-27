@@ -111,7 +111,7 @@ caught by any automated check and 10 of 16 by adversarial review
 | W13 | Nothing bounds a call's INPUT — **STOP** | UNPINNED | `—` | #268 | — |
 | W14 | Close the 5xx possibly-billed premise with data | UNPINNED | `—` | #105 | production logs |
 | W15 | `_bound_sniff_time` is referenced and does not exist | PENDING | `PRESENT src/product_app/providers.py :: _bound_sniff_time` | — | — |
-| W16 | The catalog fetcher hardcodes the models URL | PENDING | `PRESENT src/product_app/catalog_fetcher.py :: OPENROUTER_CATALOG_URL = "https://openrouter.ai/api/v1/models"` | — | — |
+| W16 | The catalog fetcher hardcodes the models URL | DONE | `PRESENT src/product_app/catalog_fetcher.py :: OPENROUTER_CATALOG_URL = "https://openrouter.ai/api/v1/models"` | — | — |
 | W17 | FR-004 names a model we do not ship | PENDING | `PRESENT docs/10-functional-requirements.md :: deepseek/deepseek-chat-v3.1` | — | — |
 
 **STOP** marks a row that cannot be finished without a human decision — a money,
@@ -210,9 +210,13 @@ refusal, so this is a guardrail move, not a bug fix.
 **W15 — a dangling reference.** Two docstrings in `providers.py` point at
 `_bound_sniff_time`, which has no definition anywhere. Doc-only.
 
-**W16 — the catalog URL.** `catalog_fetcher.py` hardcodes the models endpoint
-instead of honouring `settings.openrouter_api_base_url`, so the two can diverge
-and the fetcher cannot be pointed at a local server.
+**W16 — the catalog URL. DONE** (ADR-0080). `catalog_fetcher.py` hardcoded the
+models endpoint while `providers.py` and `readiness.py` both built theirs from
+`settings.openrouter_api_base_url`, so an operator pointing the app at a proxy
+redirected every paid call and the key probe while the catalog went on talking
+to the real upstream. `catalog_url()` now derives it at call time. The row's
+Evidence cell still states the OPEN form — that is what `DONE` means: the
+opposite of that claim now holds.
 
 **W17 — FR-004.** `docs/10-functional-requirements.md` and
 `docs/12-acceptance-criteria.md` both name `deepseek/deepseek-chat-v3.1` as slot
@@ -230,15 +234,15 @@ decision rather than an oversight.
 
 ## Order and what may run in parallel
 
-**W16 → W1 (+W15) → W2 → W3**, with W6, W9 and W17 as cheap independent
+**W16 (done) → W1 (+W15) → W2 → W3**, with W6, W9 and W17 as cheap independent
 fillers when a lane is blocked. W8 is a filler only in the sense that it is
 small; it still needs the human decision above.
 
 Cleanly disjoint: **W1 + W6**. W1 + W4 is nearly parallel — the single overlap
 is `Field(ge=1, le=4)` in `providers.py` — but W4 now waits on W10. **W4 and W7
-both hold `main.py`, `app.js` and `workspace.html`: sequence them.** W16
-collides with W4 only through `tests/unit/test_risk_constant_pins.py`, so
-shipping W16 first removes the collision.
+both hold `main.py`, `app.js` and `workspace.html`: sequence them.** W16 collided
+with W4 only through `tests/unit/test_risk_constant_pins.py`; it shipped first,
+so that collision is gone.
 
 Before any parallel dispatch, assign centrally: **ADR numbers, `openapi.yaml`
 ownership, the money constants, and the `Field(ge=1, le=4)` bound.** Two
