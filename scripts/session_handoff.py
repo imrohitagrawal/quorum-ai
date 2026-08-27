@@ -316,6 +316,13 @@ def main() -> int:
 ## Date/time
 {now}
 
+## Open work
+`docs/65-open-work.md` — the source of truth for what is open, what blocks what,
+and the evidence for each row. Checked against the tree by
+`scripts/check_open_work.py --check` inside `make validate`. The "Current phase"
+line further down this file is the factory router's view of the lifecycle, not a
+work status.
+
 ## Latest narrative handoff
 {narrative_pointer}
 
@@ -378,10 +385,12 @@ Everything below the "Current phase" line is derived from `make skill-route`,
 and this whole file is overwritten by `scripts/session_handoff.py`. Anything a
 session needs to survive into the next one lives in a tracked doc instead:
 - The narrative handoff linked above — what happened, what's next, the traps.
-- `docs/analysis/R2-plan-review-findings.md` — **PHASE STATUS** is the
-  authoritative phase, not the "Current phase" line above (which reports the
-  factory router's view, overridden for R2 under AGENTS.md precedence #2).
-- The current slice's handback, linked from that PHASE STATUS block.
+- `docs/65-open-work.md` — the open-work board: what is open, what blocks
+  what, and the evidence for each row, checked against the tree by
+  `scripts/check_open_work.py`. The "Current phase" line above is the factory
+  router's view of the lifecycle, not a work status.
+- `docs/analysis/R2-plan-review-findings.md` — the R2 planning round, historical.
+  Its PHASE STATUS block claimed authority until 2026-08-28 and no longer does.
 - `docs/63-technical-debt-register.md` — accepted debt and what blocks what.
 
 ## Risks/blockers
@@ -405,9 +414,8 @@ make validate
 Continue from AGENTS.md, docs/00-factory-console.md, and docs/session-handoff.md.
 Read the narrative handoff linked at the top of this file first -- it has the
 real "what happened, what's next" context this mechanical file cannot hold.
-Read the PHASE STATUS block in docs/analysis/R2-plan-review-findings.md and the
-slice handback it links: the phase line in this file is the router's view, not
-the authoritative one.
+Read docs/65-open-work.md for what is open and what blocks what: the phase
+line in this file is the router's view of the lifecycle, not a work status.
 Do not redo completed work.
 Use the recommended driver skill and reviewer skills from make skill-route.
 Before editing, list the files you intend to modify.
