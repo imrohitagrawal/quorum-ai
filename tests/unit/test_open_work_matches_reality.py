@@ -28,9 +28,11 @@ GATE CHARTER
 ------------
 WHY THIS EXISTS: hand-written status rots because nothing compares the sentence
 to the tree. Measured 2026-08-28: the factory console still announced work from
-PR #91 and quoted ``pytest 1342 passed`` against a suite collecting 3829, and
-four open issues (#383, #382, #380, #379) appeared in no planning document at
-all. Work was planned across five documents that did not reference each other.
+PR #91 and quoted ``pytest 1342 passed`` against a suite that had grown past
+3,800, and four open issues (#383, #382, #380, #379) appeared in no planning
+document at all. (Not pinned to a digit: that count moves with every test
+added, including the ones in this file.) Work was planned across five
+documents that did not reference each other.
 
 WHAT IT CANNOT SEE: an author who rewrites the EVIDENCE cell to point at a file
 or needle where the claim already holds the other way -- that is a visible change

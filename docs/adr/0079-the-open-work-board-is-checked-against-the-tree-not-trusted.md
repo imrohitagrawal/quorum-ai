@@ -17,13 +17,15 @@ Measured 2026-08-28, not asserted:
 | Claim | Command | Result |
 |---|---|---|
 | The factory console is stale | `git rev-list --count --first-parent $(git log --first-parent origin/main --format=%H -1 -- docs/00-factory-console.md)..origin/main` | **64** first-parent commits behind its own last touch |
-| …and staler by content | `git rev-list --count --since=2026-07-23 origin/main` | its content is dated 2026-07-23, **241** commits back — that is every commit; the first-parent count over the same span is **188** (`--first-parent`) |
+| …and staler by content | `git rev-list --count --since=2026-07-23 origin/main` | its content is dated 2026-07-23, and roughly **240** commits (about **190** first-parent) had landed since. Both figures grow with every commit, so they are given as magnitudes rather than pinned — the count above, against the console's own last touch, is the stable one |
 | Four open issues appear in no plan | `gh issue list` against `grep -rn` over `docs/` and the root prompts | #383, #382, #380, #379 exist only in `gh` |
 | The phase is claimed in more than one place | `git grep -n "authoritative" origin/main -- docs/` | **one** file uses the word to claim it — `docs/analysis/R2-plan-review-findings.md`. `docs/session-handoff.md` names R2 as authoritative *over* its own line, and `docs/00-factory-console.md` asserts a `## Current phase` without using the word at all. Three files carry a phase; one claims authority; a reader cannot tell which to believe |
 
 The console still announced work from PR #91 and quoted `pytest 1342 passed`
-against a suite that collects **3819** (`uv run pytest --collect-only -q`,
-measured 2026-08-28).
+against a suite that had grown past **3,800** (`uv run pytest --collect-only -q`
+— deliberately not pinned to a digit here: it moves with every test added, and a
+figure that changes under its own repository is the kind this ADR exists to stop
+being written down).
 
 **What the existing console gates do and do not do.** Four test files under
 `tests/` reference the console (`git grep -l "00-factory-console" origin/main --
