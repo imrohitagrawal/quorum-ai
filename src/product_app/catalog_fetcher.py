@@ -38,6 +38,7 @@ from decimal import Decimal
 from threading import Event, RLock
 from time import monotonic
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
 from product_app.config import settings
@@ -62,9 +63,35 @@ def catalog_url() -> str:
     configured base is cleartext, because that call carries a bearer token.
     Sending an unauthenticated GET over a base the operator chose is the
     operator's decision; putting their API key on that wire is not.
-    """
-    return f"{settings.openrouter_api_base_url.rstrip('/')}/models"
 
+    The scheme IS constrained, to http or https. That is not about cleartext --
+    it is because ``urlopen`` also speaks ``file:``, and a ``file://`` base
+    would turn this into an arbitrary local-file read whose contents are then
+    served as the live price catalog.
+    """
+    url = f"{settings.openrouter_api_base_url.rstrip('/')}/models"
+    scheme = urlsplit(url).scheme
+    if scheme not in _FETCHABLE_SCHEMES:
+        # urlopen speaks more than http. A `file://` base would make this read
+        # an arbitrary local path and serve it as the live PRICE catalog, and
+        # `ftp://`/`data:` are no better. The old hardcoded literal made that
+        # unreachable by construction; making the endpoint configurable is
+        # exactly the moment to keep it unreachable on purpose. This is the
+        # SSRF-adjacent obligation the risk register recorded against the old
+        # constant, now enforced at runtime instead of only asserted on the
+        # shipped default.
+        raise ValueError(
+            f"OPENROUTER_API_BASE_URL must be http or https, not {scheme!r}: "
+            f"{settings.openrouter_api_base_url!r}"
+        )
+    return url
+
+
+#: Schemes ``catalog_url`` will hand to ``urlopen``. ``urlopen`` also speaks
+#: ``file:``, ``ftp:`` and ``data:``; none of those is a model catalog, and
+#: ``file:`` would make an operator's typo into a local-file read served as
+#: live prices.
+_FETCHABLE_SCHEMES = frozenset({"http", "https"})
 
 #: Vendors the UI defaults to a slot from. The order is preserved in
 #: ``cheapest_per_vendor`` so slot 1/2/3/4 map to a stable family.

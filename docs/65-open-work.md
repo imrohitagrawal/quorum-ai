@@ -6,7 +6,7 @@ original, because a gate and an offline agent can read it and cannot read `gh`.
 
 Verified at: `e115d92ac0703ca3ce6faa6174a13de0edfae1bd`
 
-The board holds **17** rows, **4** of them unpinned.
+The board holds **19** rows, **4** of them unpinned.
 
 `scripts/check_open_work.py --check` reads every row's evidence off disk and
 refuses if a claim is false. It runs inside `make validate`, and
@@ -113,6 +113,8 @@ caught by any automated check and 10 of 16 by adversarial review
 | W15 | `_bound_sniff_time` is referenced and does not exist | PENDING | `PRESENT src/product_app/providers.py :: _bound_sniff_time` | — | — |
 | W16 | The catalog fetcher hardcodes the models URL | DONE | `PRESENT src/product_app/catalog_fetcher.py :: OPENROUTER_CATALOG_URL = "https://openrouter.ai/api/v1/models"` | — | — |
 | W17 | FR-004 names a model we do not ship | PENDING | `PRESENT docs/10-functional-requirements.md :: deepseek/deepseek-chat-v3.1` | — | — |
+| W18 | The paid call sends the API key to a configured base with no scheme guard | PENDING | `PRESENT src/product_app/providers.py :: url=f"{settings.openrouter_api_base_url}/chat/completions"` | — | — |
+| W19 | A provider-timeout bound fails locally and passes in CI | PENDING | `PRESENT tests/unit/test_provider_call_time_budget.py :: assert wall < 4.0,` | — | — |
 
 **STOP** marks a row that cannot be finished without a human decision — a money,
 cost or safety guardrail value that only real measurement could justify. Do not
@@ -217,6 +219,25 @@ redirected every paid call and the key probe while the catalog went on talking
 to the real upstream. `catalog_url()` now derives it at call time. The row's
 Evidence cell still states the OPEN form — that is what `DONE` means: the
 opposite of that claim now holds.
+
+**W18 — the paid call's base URL is unguarded.** Found by review while shipping
+W16. `readiness.probe_key_auth` refuses to dial when the configured base is
+cleartext, because it sends a bearer token — but `providers.py` sends the *same*
+credential to `f"{settings.openrouter_api_base_url}/chat/completions"` with no
+such check. One of the two credential-bearing calls is guarded and the other is
+not. Pre-existing, not introduced by W16, and deliberately not fixed there:
+W16's concern is the catalog, and the paid path deserves its own reviewer.
+
+**W19 — a timing bound that is machine-dependent.**
+`test_the_budget_covers_the_header_phase_not_only_the_body` asserts
+`wall < 4.0` against a loopback server that dribbles headers. Measured
+2026-08-28 on this machine: **5 of 5 runs failed at 4.13–4.18s**, and it fails
+identically on a clean `git archive` of `origin/main`, so it is **not** caused
+by any current branch. CI passes it. A bound that close to its own input is a
+coin toss on a slower machine, and the next session will lose time deciding
+whether it broke something. Either widen it with a re-derived margin or make it
+CI-only — but measure first, because the bound is load-bearing: its partner
+lower bound is what proves the dribble really happened.
 
 **W17 — FR-004.** `docs/10-functional-requirements.md` and
 `docs/12-acceptance-criteria.md` both name `deepseek/deepseek-chat-v3.1` as slot

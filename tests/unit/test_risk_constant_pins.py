@@ -155,6 +155,10 @@ RISK_TIER_MODULES = (
 #: A wrong value here is silently harmful and nothing else constrains it.
 #: Every name must have a literal `== VALUE` assertion in tests/.
 BUCKET_A_LITERAL_PIN = (
+    # A wrong value is silently harmful in both directions: dropping "https"
+    # breaks every production catalog fetch, and adding "file" turns an
+    # operator's typo into an arbitrary local-file read served as live prices.
+    "catalog_fetcher._FETCHABLE_SCHEMES",
     "costs.SOFT_THRESHOLD_USD",
     "costs.DAILY_CAP_USD",
     "costs.HARD_LIMIT_USD",
@@ -1718,3 +1722,20 @@ def test_class_constants_still_hidden_for_a_real_enum_alias(
     )
     found = _class_constants_in(synthetic, "fake_module_alias")
     assert set(found) == {"fake_module_alias.Settings.TIMEOUT_SECONDS"}
+
+
+def test_the_catalog_fetchable_schemes_are_pinned() -> None:
+    """Turns red if: `_FETCHABLE_SCHEMES` gains or loses a scheme.
+
+    A LITERAL pin, which is what bucket A means. Both members matter and they
+    fail in opposite directions: without `https` every production catalog fetch
+    raises, and with `file` an operator's typo becomes an arbitrary local-file
+    read whose contents are served as the live price catalog (ADR-0080).
+
+    `tests/unit/test_catalog_fetcher.py` asserts the BEHAVIOUR either side of
+    this set; this asserts the set itself, so a widening cannot slip in behind
+    a behaviour test that only ever tries the schemes it already knows about.
+    """
+    from product_app import catalog_fetcher
+
+    assert frozenset({"http", "https"}) == catalog_fetcher._FETCHABLE_SCHEMES
