@@ -6,7 +6,7 @@ original, because a gate and an offline agent can read it and cannot read `gh`.
 
 Verified at: `e115d92ac0703ca3ce6faa6174a13de0edfae1bd`
 
-The board holds **19** rows, **4** of them unpinned.
+The board holds **18** rows, **4** of them unpinned.
 
 `scripts/check_open_work.py --check` reads every row's evidence off disk and
 refuses if a claim is false. It runs inside `make validate`, and
@@ -103,7 +103,6 @@ caught by any automated check and 10 of 16 by adversarial review
 | W5 | Quick-answer N=1 mode | UNPINNED | `—` | — | W4 |
 | W6 | A panel of one reports strong consensus | PENDING | `PRESENT src/product_app/synthesis_consensus.py :: if len(sizes) == 1 or max(sizes.values()) >= _required_cluster(len(stance)):` | #383 | — |
 | W7 | Google sign-in and logout | UNPINNED | `—` | — | — |
-| W8 | `min_machines_running` / demo-live posture — **STOP** | PENDING | `PRESENT fly.toml :: min_machines_running = 0` | — | — |
 | W9 | Guard the moderator model overlapping a panel slot | PENDING | `ABSENT src/product_app/model_slots.py :: debate_model_id` | — | — |
 | W10 | Consensus certifies a mutual cluster it never checked | PENDING | `PRESENT src/product_app/synthesis_consensus.py :: return sum(1 for partners in counts if partners >= 2) >= 3` | #382 | — |
 | W11 | Completeness divides by answers recorded, not slots requested | PENDING | `PRESENT src/product_app/evaluation.py :: slot_count = len(initial_answers)` | #380 | — |
@@ -151,10 +150,18 @@ collapsed the gap to 0.478 / 0.208 s on a paired sample. Building critique first
 ships a feature that pays for discarded tokens and demotes every receipt to
 `estimated`.
 
-**W3 — the money constants. STOP.** Blocked on W2 because the approved constant
-shape prices a #290 that cannot yet be built. `SOFT_THRESHOLD_USD < DAILY_CAP_USD
-< HARD_LIMIT_USD` is mandatory or the confirmation band is dead code. No value
-moves without a measurement, and a measurement here costs money.
+**W3 — the money constants. STOP, and DEFERRED by decision (ADR-0081).**
+The product owner decided 2026-08-28: **the three constants do not move until
+#290 is built and its cost is measured.** `SOFT_THRESHOLD_USD = 0.15`,
+`HARD_LIMIT_USD = 0.25`, `DAILY_CAP_USD = 0.20` stay as they are. The earlier
+approved shape (`SOFT ≈ 0.20 / DAILY_CAP ≈ 0.60 / HARD ≈ 0.75`) prices a feature
+that does not exist, on a projection that is not measured.
+
+Measured headroom today, judge-ON: a default question's bound is **0.1134**
+against a `0.15` line — about **3.7 cents**. That margin is the number to watch;
+W13 (#268) is a change that would eat into it. `SOFT_THRESHOLD_USD <
+DAILY_CAP_USD < HARD_LIMIT_USD` is mandatory or the confirmation band is dead
+code. When W2 lands, re-measure and bring a number back with its measurement.
 
 **W4 — variable panel size.** `Field(ge=1, le=4)` appears at three sites
 (`debate.py` twice, `providers.py` once) and they move together. **Blocked on
@@ -180,9 +187,12 @@ first needle was the bare word `google`, which review satisfied by adding a
 *comment* to `auth.py` saying the work was still to do. A needle that a comment
 can satisfy is not evidence.
 
-**W8 — the demo-live posture. STOP.** `min_machines_running = 0` with
-`auto_stop_machines = "stop"` means a cold start in front of a demo. It trades
-money for latency and the human owns that call. It needs an ADR either way.
+**W8 — DECIDED 2026-08-28, and removed from the table.**
+`min_machines_running` stays `0`: the app keeps scaling to zero. It was never a
+code change, it was a question, and the answer is recorded in **ADR-0082**. A
+board that carries settled questions stops being a list of open work. Reopen it
+when there is a scheduled demo with an audience — and price the always-on option
+first, because nobody has.
 
 **W9 — moderator/slot overlap.** `debate_model_id` defaults to
 `anthropic/claude-haiku-4.5`, which is also slot 2's default. Nothing forbids
@@ -255,9 +265,36 @@ decision rather than an oversight.
 
 ## Order and what may run in parallel
 
-**W16 (done) → W1 (+W15) → W2 → W3**, with W6, W9 and W17 as cheap independent
-fillers when a lane is blocked. W8 is a filler only in the sense that it is
-small; it still needs the human decision above.
+**Clear the independent, issue-backed rows first, then W1 (+W15).**
+
+The earlier order read `W1 → W2 → W3`. That lane is the largest item, then one
+that cannot be validated without spend, then a row now formally deferred
+(ADR-0081) — so nothing ships for a long time. Meanwhile W12 (#379), W11 (#380),
+W6 (#383) and W10 (#382) have no dependencies at all and close four open issues
+at $0.
+
+**Club W6 and W10 into ONE package** (rule 17g): both live in
+`synthesis_consensus.py` and both are the consensus verdict disagreeing with
+itself. One reviewer, one deploy. W10 also unblocks W4.
+
+**Size W17 before selecting it — the string is everywhere, the defect is not.**
+`git grep -l "deepseek/deepseek-chat-v3.1" | wc -l` returns **113 files**
+(measured 2026-08-28), which reads alarming and mostly is not:
+
+| Where | Files | Is it a defect? |
+|---|---|---|
+| `tests/` | 91 | **No** — fixture and catalog data. `deepseek/deepseek-chat-v3.1` is a real OpenRouter model; it is simply not a default slot. |
+| live `docs/*.md` | 16 | **Check each** — this is the real work |
+| `docs/archive/`, `docs/validation/` | 6 | **No** — records of runs that really happened; changing them would falsify history |
+| `src/` | 1 | **No** — `_FALLBACK_CATALOG` legitimately lists it as an available model |
+
+The defect is narrow: **FR-004 and its acceptance criterion name it as a
+DEFAULT SLOT**, which `model_slots.py` contradicts. The work is reading the 16
+live docs and correcting only the ones making that claim — not a global replace,
+which would break fixtures and rewrite history.
+
+**Do not attempt W2 or W3 while `OPENROUTER_LIVE_EXECUTION_ENABLED` is false.**
+W2's shape depends on W1's measured streaming behaviour, and W3 is deferred.
 
 Cleanly disjoint: **W1 + W6**. W1 + W4 is nearly parallel — the single overlap
 is `Field(ge=1, le=4)` in `providers.py` — but W4 now waits on W10. **W4 and W7
