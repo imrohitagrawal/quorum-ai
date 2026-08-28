@@ -256,6 +256,29 @@ def test_row2_overlap_n1_no_stance_is_weak_control() -> None:
     assert sc.compute_consensus_strength(answers, debate_outputs=[]) == "weak"
 
 
+def test_row1b_duplicate_slot_collapses_to_one_scored_slot_is_weak() -> None:
+    """THE RESIDUAL GUARD. ``len(completed) == 1`` does not fire here — TWO
+    answers are completed — but both share ``slot_number=1``, so
+    ``_scored_slot_numbers`` (a SET) collapses them to one scored slot, and a
+    moderator reading that covers only slot 1 gives ``len(stance) == 1``
+    while ``len(completed) == 2``. This is the shape the top-level guard
+    CANNOT catch and the stance-branch's own ``if len(stance) == 1:`` guard
+    exists for. Mirrors the duplicate-slot construction in
+    ``test_row11_the_stance_bar_counts_scored_slots_not_completed_answers``
+    (test_consensus_is_n_relative.py)."""
+    answers = [
+        _answer(1, ONE_ANSWER_TEXT),
+        _answer(1, "A second answer text, filed under the SAME slot number."),
+    ]
+    debates = _stance({1: "agree"})
+
+    assert len(answers) == 2
+    stance = sc._usable_stance(answers, debates)
+    assert stance == {1: "agree"}, "both answers must collapse to one scored slot"
+
+    assert sc.compute_consensus_strength(answers, debates) == "weak"
+
+
 def test_row3_stance_n2_single_group_still_strong_unchanged() -> None:
     """CONTROL: N=2 unanimous is untouched by a guard scoped to
     ``len(stance) == 1``. Mirrors
