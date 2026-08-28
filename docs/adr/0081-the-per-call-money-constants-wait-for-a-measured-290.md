@@ -8,9 +8,17 @@ Accepted — 2026-08-28. Decided by the product owner.
 
 An earlier approved plan (now archived at
 `docs/archive/2026-08/CONTINUE-DEMO-READINESS-ULTRACODE-PROMPT.md`, package E)
-scheduled a move of the three per-call bands to approximately
+contemplated moving the three per-call band edges to approximately
 `SOFT ≈ $0.20`, `DAILY_CAP ≈ $0.60`, `HARD ≈ $0.75`, leaving the global daily
 ceiling at `$5.00`.
+
+**That plan was CONDITIONAL, and this decision agrees with its own fallback.**
+Verbatim, from the same package: *"If the measured bound is materially different
+from what the plan assumed, do NOT improvise a new shape — stop, record the
+number, and leave the constants alone."* No bound for #290 has been measured at
+all, so the plan's own escape clause applies. This ADR is not overruling the
+plan; it is recording that the plan's condition was never met, and saying so in
+one place instead of leaving a future session to re-derive it.
 
 **What ships today**, read from `src/product_app/costs.py`:
 
@@ -46,16 +54,34 @@ each question cost more — every answer model reads and critiques the others.
 
 ## Decision
 
-**The three constants do not move until #290 is built and its cost is measured.**
+**No spend limit moves until #290 is built and its cost is measured.**
 
-`SOFT_THRESHOLD_USD = 0.15`, `HARD_LIMIT_USD = 0.25`, `DAILY_CAP_USD = 0.20` and
-`GLOBAL_DAILY_CEILING_USD = 5.00` stay exactly as they are.
+That is four constants, not the "three" the archived plan names — it counted the
+three per-call band edges and left the global ceiling out.
+`SOFT_THRESHOLD_USD = 0.15`, `HARD_LIMIT_USD = 0.25` and `DAILY_CAP_USD = 0.20`
+stay, and so does `GLOBAL_DAILY_CEILING_USD = 5.00`. Note the four are not one
+kind of thing: the first two are **per-call band edges**, `DAILY_CAP_USD` is a
+**rolling 24-hour** cap and `GLOBAL_DAILY_CEILING_USD` is **deployment-wide
+daily**. Only the band edges are what a single question is tested against.
 
-The reasoning is short: **the plan prices a feature that does not exist.** #290
-is board row W2, itself blocked on W1 (streaming), and the figure the plan rests
-on — a roughly 57% rise — is not measured; what *is* measured is +25–41%.
-Raising a spending limit on an unmeasured projection for unbuilt work is the
-thing this repository has been most expensive about getting wrong.
+The reasoning is short: **the plan prices a feature that does not exist**, and
+**no figure for what it would cost has ever been measured.** #290 is board row
+W2, itself blocked on W1 (streaming). Two numbers circulate, and neither is a
+measurement:
+
+| Figure | What it is | What it measures | Source |
+|---|---|---|---|
+| ~57% | *"Derived arithmetic, not measured"* | a rise in the **point estimate** ($0.0547 → ~$0.086) | `docs/archive/2026-08/CONTINUE-TWO-LANES-ULTRACODE-PROMPT.md:300`, `…BACKLOG…:373` |
+| ×1.25 – ×1.41 | *"Projected … (arithmetic only)"* | a rise in the **fail-safe bound** (0.1134 → 0.1419–0.1599) | `docs/analysis/2026-08-26-session-handoff.md:82-85` |
+
+They are not rival estimates of one quantity — one is the point, the other the
+bound. **Correcting a claim this ADR made in its first draft:** it said ~57% "is
+not measured" while +25–41% "*is* measured". That was wrong, and it was wrong by
+inheriting one half of a document that contradicts itself — the same handoff
+says "arithmetic only" at line 82 and "measured" at line 135. Neither figure is
+measured, which is precisely why nothing moves. Raising a spending limit on
+arithmetic over unbuilt work is the thing this repository has been most
+expensive about getting wrong.
 
 Board row **W3** stays open and stays marked **STOP**, with `Depends on: W2`.
 When #290 lands, re-measure, then bring a number back with the measurement
@@ -65,8 +91,11 @@ attached.
 
 **Move them now to the approved shape.** Rejected: nothing would be measuring
 whether the new values are right, and the ordering constraint
-`SOFT < DAILY_CAP < HARD` (enforced at `costs.py`) would then be satisfied by
-three numbers all chosen from a projection.
+`SOFT < DAILY_CAP < HARD` would then be satisfied by three numbers all chosen
+from arithmetic. That ordering is **not enforced at runtime** — `costs.py`
+carries it as a comment, and the only executable check is in the test suite
+(`tests/unit/test_risk_constant_pins.py::test_the_spend_rails_keep_their_ordering`).
+A first draft of this ADR said "enforced at `costs.py`", which overstated it.
 
 **Raise only `SOFT_THRESHOLD_USD`, to buy headroom cheaply.** Rejected for the
 same reason, and worse: it widens the band in which a run submits *without* a
@@ -90,5 +119,7 @@ correction alone.
 **What this ADR does not do.** It does not claim the current values are
 *correct* — only that they are the ones that have been lived with, and that
 moving them needs a measurement nobody has yet. `0.1043` and `0.1134` are pinned
-in prose across many files (that test's own comment counts 21 files carrying
-`0.1043`), so a future correction has to move prose as well as code.
+in prose across many files, and that population grows: the test's own comment
+counts 21 files carrying `0.1043` (measured 2026-08-26); `git grep -l "0.1043"
+| wc -l` returns **24** at this commit, one of which is this ADR. A future
+correction has to move prose as well as code.

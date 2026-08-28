@@ -51,8 +51,10 @@ before starting anything.
 
 The board's `Depends on` column is binding. Beyond that, **prefer independent,
 issue-backed defects over the long W1→W2→W3 lane.** As of 2026-08-28 that lane
-ends in a STOP row and cannot be validated without spend, while four open issues
-sit on rows with no dependencies at all.
+ends in a row formally deferred by ADR-0081 and cannot be validated without
+spend, while **W12 (#379), W11 (#380), W6 (#383) and W10 (#382)** carry open
+issues with no dependencies at all. (A fifth issue row, W13/#268, also has no
+dependency — but it is marked **STOP**, because it moves a cost guardrail.)
 
 **Club before you select** (rule 17g). Two rows in the same narrow area, one a
 direct follow-on of the other, are ONE package with one reviewer and one deploy —
@@ -89,10 +91,15 @@ change a number and explain afterwards.
 - Anything needing **spend**.
 - **A briefed premise turns out false** and the package's shape depends on it.
   Say so loudly; never repair it silently and carry on.
-- **The mechanism is wrong, not just the implementation.** Two fixes in a row
-  that fail to close the same hole means the approach is wrong. Stop, do the
-  root-cause analysis, and put the change of approach to the human — do not
-  patch a third time. This happened on the board itself and the third design is
+- **Review hits its cap with findings open.** `AGENTS.md` rule 12, verbatim:
+  *"Cap review at TWO rounds, then STOP and escalate with open findings listed.
+  If two fixes in a row add defects, change the approach. Expect your own fix to
+  introduce a defect — budget a round for it."* Quoted rather than paraphrased,
+  because a first draft of this file narrowed it and dropped the two-round cap.
+- **The mechanism is wrong, not just the implementation.** Two fixes that fail
+  to close the *same* hole means the approach is wrong, not the code. Stop, do
+  the root-cause analysis, and put the change of approach to the human — do not
+  patch a third time. This happened on the board itself; the third design is
   what shipped.
 - **The item is bigger than it looked.** Say so and stop; do not file and continue.
 
@@ -142,10 +149,14 @@ Rules that earn the fan its cost, all paid for:
 
 1. **Severity-sort before applying the cap**, and `log()` what was dropped.
 2. **A finding dies only if BOTH refuters refute it.**
-3. **Verify every surviving finding yourself** before acting. Refuters correctly
-   killed 3 of 8 findings in the last session; they also upheld ones that were real.
-4. **Budget a fix round. Your first draft will have a defect** — measured, three
-   packages out of three in the last session.
+3. **Verify every surviving finding yourself** before acting. Refuters kill real
+   noise *and* uphold real defects; neither outcome substitutes for running the
+   command yourself (`AGENTS.md` rule 11).
+4. **Budget a fix round** — `AGENTS.md` rule 12 says to expect your own fix to
+   introduce a defect. In the 2026-08-28 session every package needed one,
+   including the docs-only ones. That is a session observation, not a repo
+   measurement; the graded evidence for review yield is
+   `docs/evidence/2026-07-30-engineering-practice.md` row 2.1.
 5. Tell every agent **IN CAPITALS**: read-only; no `git checkout` / `git stash` /
    `sed -i`; its own clone for anything it executes; no pytest in the shared tree;
    `PYTHONDONTWRITEBYTECODE=1`; a unique scratch dir.
@@ -172,10 +183,14 @@ Rules that earn the fan its cost, all paid for:
 5. **`make diff-cover` runs pytest first**, so it exits non-zero when ANY test
    fails, coverage notwithstanding. Read which failed before blaming coverage.
 6. **A local failure your diff cannot explain is a phantom until you re-run it on
-   a clean tree**: `git archive origin/main | tar -x -C <dir>`. As of 2026-08-28
-   `test_the_budget_covers_the_header_phase_not_only_the_body` fails **5 of 5
-   locally** at ~4.15s against a 4.0s bound, on clean `main`, and passes in CI.
-   That is board row **W19**, not your diff.
+   a clean tree**: `git archive origin/main | tar -x -C <dir>`. The known example
+   is `test_the_budget_covers_the_header_phase_not_only_the_body` (board row
+   **W19**), which asserts `wall < 4.0` with about 2% of margin and flips with
+   machine load — measured 2026-08-28 on one box: **5 of 5 failing at 4.13–4.18s
+   under concurrent load, 6 of 6 passing at 3.92–3.96s idle**, and 11 of 11
+   passing for an independent reviewer. **Do not dismiss a red result there as
+   W19 without re-running it isolated on an idle machine** — a real regression
+   would look identical.
 7. **A merge fires 3–5 deploy runs; most are `cancelled` by concurrency.**
    Enumerate every run for the SHA and read each Deploy **JOB**, never the rollup.
    `gh run list --commit <SHA>` can return `[]` before runs exist, so assert one exists.

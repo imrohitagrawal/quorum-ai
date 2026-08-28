@@ -238,16 +238,22 @@ such check. One of the two credential-bearing calls is guarded and the other is
 not. Pre-existing, not introduced by W16, and deliberately not fixed there:
 W16's concern is the catalog, and the paid path deserves its own reviewer.
 
-**W19 — a timing bound that is machine-dependent.**
+**W19 — a timing bound that flips with machine load.**
 `test_the_budget_covers_the_header_phase_not_only_the_body` asserts
-`wall < 4.0` against a loopback server that dribbles headers. Measured
-2026-08-28 on this machine: **5 of 5 runs failed at 4.13–4.18s**, and it fails
-identically on a clean `git archive` of `origin/main`, so it is **not** caused
-by any current branch. CI passes it. A bound that close to its own input is a
-coin toss on a slower machine, and the next session will lose time deciding
-whether it broke something. Either widen it with a re-derived margin or make it
-CI-only — but measure first, because the bound is load-bearing: its partner
-lower bound is what proves the dribble really happened.
+`wall < 4.0` against a loopback server that dribbles headers. Measured both ways
+on the same box on 2026-08-28:
+
+| Condition | Result |
+|---|---|
+| under concurrent load (full suites + review agents running) | **5 of 5 failed**, 4.13–4.18s |
+| idle | **6 of 6 passed**, 3.92–3.96s — and an independent reviewer got 11 of 11 |
+
+It also failed on a clean `git archive` of `origin/main` while loaded, so no
+branch causes it. CI passes it. **A red result here is therefore NOT
+automatically W19** — re-run it isolated on an idle machine before dismissing
+it, because the margin is about 2% and a real regression would look the same.
+Either widen the bound with a re-derived margin or make it CI-only — but measure
+first: its partner lower bound is what proves the dribble really happened.
 
 **W17 — FR-004.** `docs/10-functional-requirements.md` and
 `docs/12-acceptance-criteria.md` both name `deepseek/deepseek-chat-v3.1` as slot
@@ -271,27 +277,35 @@ The earlier order read `W1 → W2 → W3`. That lane is the largest item, then o
 that cannot be validated without spend, then a row now formally deferred
 (ADR-0081) — so nothing ships for a long time. Meanwhile W12 (#379), W11 (#380),
 W6 (#383) and W10 (#382) have no dependencies at all and close four open issues
-at $0.
+at $0. (W13/#268 also has no dependency, but it is **STOP** — it moves a cost
+guardrail.)
 
 **Club W6 and W10 into ONE package** (rule 17g): both live in
 `synthesis_consensus.py` and both are the consensus verdict disagreeing with
 itself. One reviewer, one deploy. W10 also unblocks W4.
 
 **Size W17 before selecting it — the string is everywhere, the defect is not.**
-`git grep -l "deepseek/deepseek-chat-v3.1" | wc -l` returns **113 files**
-(measured 2026-08-28), which reads alarming and mostly is not:
+`git grep -l "deepseek/deepseek-chat-v3.1" | wc -l` returns **113** files
+(measured 2026-08-28), which reads alarming and mostly is not. The breakdown
+sums to 113 exactly, and a first draft of this table did not — it said "16 live
+docs" and double-counted `docs/validation/`:
 
 | Where | Files | Is it a defect? |
 |---|---|---|
-| `tests/` | 91 | **No** — fixture and catalog data. `deepseek/deepseek-chat-v3.1` is a real OpenRouter model; it is simply not a default slot. |
-| live `docs/*.md` | 16 | **Check each** — this is the real work |
-| `docs/archive/`, `docs/validation/` | 6 | **No** — records of runs that really happened; changing them would falsify history |
-| `src/` | 1 | **No** — `_FALLBACK_CATALOG` legitimately lists it as an available model |
+| `tests/` | 91 | **No** — fixture and catalog data. It is a real OpenRouter model, just not a default slot. |
+| live `docs/` (excluding `archive/` and `validation/`) | 13 | **Check each** — this is the real work. Two are under `docs/design-handoff/`, one of them `.dc.html`. |
+| `docs/archive/` + `docs/validation/` | 6 | **No** — records of runs that really happened; editing them would falsify history |
+| `src/` | 1 | **No** — `_FALLBACK_CATALOG` legitimately lists it |
+| `PRODUCT_IDEA.md` | 1 | **Check** |
+| `scripts/` | 1 | **Check** |
 
-The defect is narrow: **FR-004 and its acceptance criterion name it as a
-DEFAULT SLOT**, which `model_slots.py` contradicts. The work is reading the 16
-live docs and correcting only the ones making that claim — not a global replace,
-which would break fixtures and rewrite history.
+Reproduce the live-docs row with:
+`git grep -l "deepseek/deepseek-chat-v3.1" -- 'docs/*' | grep -v '^docs/archive/\|^docs/validation/' | wc -l`
+
+The defect is narrow: **FR-004 and its acceptance criterion name it as a DEFAULT
+SLOT**, which `model_slots.py` contradicts. The work is reading those 15
+check-each files and correcting only the ones making that claim — not a global
+replace, which would break fixtures and rewrite history.
 
 **Do not attempt W2 or W3 while `OPENROUTER_LIVE_EXECUTION_ENABLED` is false.**
 W2's shape depends on W1's measured streaming behaviour, and W3 is deferred.

@@ -52,7 +52,9 @@ It remains the cheaper half-measure if the question returns.
 ## Consequences
 
 The first request after an idle period pays a cold start. `/health`, `/ready`,
-`/status`, `/metrics`, `/ui/ops` and `/estimate` are all free to probe, so a
+`/status`, `/metrics`, `/ui/ops` and `POST /v1/query-runs/estimate` are all
+free to probe (there is no bare `/estimate` route — `AGENTS.md` names it loosely
+and a first draft of this ADR copied that), so a
 session verifying a deploy will itself warm the app — which means **a
 deploy-verification probe is not evidence about cold-start latency**, and
 nothing here measures that latency today.
