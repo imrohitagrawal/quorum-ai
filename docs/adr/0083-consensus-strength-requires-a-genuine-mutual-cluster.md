@@ -49,9 +49,11 @@ independent of the first: `_required_cluster(1) == 1` (`panel_size // 2 + 1`),
 and the sole answer's group size is always 1, so `1 >= 1`. Both clauses call a
 single answer "unanimous". A panel of one has nothing to corroborate it; that
 is not what "strong" is supposed to mean. The overlap branch (no live
-moderator) already answered `"weak"` for the identical N=1 shape, via
+moderator) answers `"weak"` for the identical N=1 shape via
 `_classify_divided_or_weak` — a single text cannot form a polar split, which
-needs ≥2 texts.
+needs ≥2 texts — **but that is not the overlap branch's ONLY path to
+"strong"; see the Decision section's 2026-08-29 correction for the path this
+sentence originally missed.**
 
 ### Why now, together
 
@@ -178,11 +180,30 @@ counterexample.
 ### Rejected: a fourth `ConsensusStrength` literal for N=1
 
 `ConsensusStrength = Literal["strong", "weak", "divided"]` is unchanged.
-Nothing else in the module treats N=1 as a distinct category, "weak" already
-serves as the catch-all for thin signal (0-1 completed answers with no polar
-split), and the overlap branch already answers `"weak"` for this exact shape.
-A new state would touch the type, every consumer's `match`/comparison, and
-templated prose selection, for a distinction the module does not otherwise
+Nothing in `compute_consensus_strength` special-cases N=1 as a distinct
+category, and "weak" already serves as the catch-all for thin signal (0-1
+completed answers with no polar split) — this is now enforced by the
+centralised `len(completed) == 1` guard (Decision section) rather than
+relying on the overlap branch's incidental behaviour, which review found
+was NOT already safe for every N=1 shape on its own.
+
+**Caveat found by a later review round, 2026-08-29: `panel_agreement()`
+(a sibling function, untouched by this ADR) has the identical structural
+pattern** — `len(set(stance.values())) == 1` is trivially true whenever the
+stance dict has one entry, so it still reports `"agreed"` for a genuine N=1
+panel. Verified to have NO live user-facing effect: `isConsensusResult`
+(`app.js`) requires `panelAgreement === "agreed"` AND
+`false_consensus_preserved === false` as separate conjuncts, and the second
+is now correctly `False`'s negation (blocking the green banner) regardless
+of what `panel_agreement()` reports. Left unfixed here — it is a different
+function serving a different field (`agreement.panel_agreement`), and
+fixing it is a separate concern from #382/#383 by this repo's own one-
+concern-per-PR rule. Filed as a follow-up rather than expanded into this
+PR.
+
+A new `ConsensusStrength` state would touch the type, every consumer's
+`match`/comparison, and templated prose selection, for a distinction the
+module does not otherwise
 draw. Deferred without a measured need for it.
 
 ### Considered and confirmed out of scope: generalising `_has_strong_overlap`'s threshold by panel size

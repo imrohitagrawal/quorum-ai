@@ -6,7 +6,7 @@ original, because a gate and an offline agent can read it and cannot read `gh`.
 
 Verified at: `e115d92ac0703ca3ce6faa6174a13de0edfae1bd`
 
-The board holds **18** rows, **4** of them unpinned.
+The board holds **19** rows, **4** of them unpinned.
 
 `scripts/check_open_work.py --check` reads every row's evidence off disk and
 refuses if a claim is false. It runs inside `make validate`, and
@@ -114,6 +114,7 @@ caught by any automated check and 10 of 16 by adversarial review
 | W17 | FR-004 names a model we do not ship | PENDING | `PRESENT docs/10-functional-requirements.md :: deepseek/deepseek-chat-v3.1` | — | — |
 | W18 | The paid call sends the API key to a configured base with no scheme guard | PENDING | `PRESENT src/product_app/providers.py :: url=f"{settings.openrouter_api_base_url}/chat/completions"` | — | — |
 | W19 | A provider-timeout bound fails locally and passes in CI | PENDING | `PRESENT tests/unit/test_provider_call_time_budget.py :: assert wall < 4.0,` | — | — |
+| W20 | `panel_agreement()` reports "agreed" for a genuine N=1 panel | PENDING | `PRESENT src/product_app/synthesis_consensus.py :: return "agreed" if len(set(stance.values())) == 1 else "split"` | #394 | — |
 
 **STOP** marks a row that cannot be finished without a human decision — a money,
 cost or safety guardrail value that only real measurement could justify. Do not
@@ -281,6 +282,16 @@ first: its partner lower bound is what proves the dribble really happened.
 `docs/12-acceptance-criteria.md` both name `deepseek/deepseek-chat-v3.1` as slot
 4's default; `model_slots.py` ships `nvidia/nemotron-3-nano-30b-a3b` and its own
 comment says "replaces deepseek". No gate catches it.
+
+**W20 — #394.** `panel_agreement()` shares the exact structural pattern
+`compute_consensus_strength` had at N=1 before ADR-0083: `len(set(stance.values()))
+== 1` is trivially true whenever the stance dict has one entry, so a genuine
+one-answer panel still reads `"agreed"`. Found by review while shipping W6/W10,
+deliberately not fixed there — a different function, a different concern
+(rule 17). **Confirmed zero live impact**: `isConsensusResult` (`app.js`)
+requires `panelAgreement === "agreed"` AND `false_consensus_preserved ===
+false`; the second is now correctly `True` at N=1 (blocking the green banner)
+regardless of what this function reports.
 
 ## What is deliberately NOT on this board
 
