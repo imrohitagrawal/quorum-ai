@@ -30,6 +30,7 @@ out to be a "weak" case rather than a "divided" case.
 
 from __future__ import annotations
 
+import itertools
 import re
 from collections import Counter
 from typing import Literal
@@ -340,6 +341,19 @@ def compute_consensus_strength(
     # A single group is strong at any panel size.
     stance = _usable_stance(initial_answers, debate_outputs)
     if stance is not None:
+        # #383: a panel of ONE has no second position to agree or disagree
+        # with. Without this guard, ``len(sizes) == 1`` below is trivially
+        # true at N=1 (there is only one label to group) — and so, on its
+        # own, is ``max(sizes.values()) >= _required_cluster(len(stance))``,
+        # since ``_required_cluster(1) == 1`` and the sole answer's group
+        # size is always 1. Both clauses call a single answer "unanimous",
+        # which is the defect: unanimity claims corroboration a panel of one
+        # cannot offer. The OVERLAP branch below already answers "weak" for
+        # the identical N=1 shape (no polar split is detectable below 2
+        # texts), so this makes the module agree with itself rather than
+        # inventing a fourth ``ConsensusStrength`` state. See ADR-0083.
+        if len(stance) == 1:
+            return "weak"
         sizes: dict[str, int] = {}
         for label in stance.values():
             sizes[label] = sizes.get(label, 0) + 1
@@ -406,30 +420,48 @@ def counts_as_evidence(answer: InitialModelAnswer) -> bool:
     )
 
 
-def _overlap_partner_counts(completed_texts: list[str]) -> list[int]:
-    """Shared 4-gram clustering primitive.
+def _overlap_adjacency(completed_texts: list[str]) -> list[list[bool]]:
+    """Full pairwise 4-gram-overlap adjacency matrix (symmetric, no self-edges).
 
-    Returns, per text, the number of OTHER completed answers it shares
-    4-gram Jaccard overlap ``>= _OVERLAP_JACCARD_THRESHOLD`` with (on the
-    opening excerpt). This one primitive answers both clustering questions
-    in this module — "is this text in a majority cluster?" (partners >= 1)
-    and "does the panel broadly overlap?" (>= 3 texts with partners >= 2) —
-    so the threshold and the tokenisation can never drift between them.
+    ``adjacency[i][j]`` is ``True`` when texts ``i`` and ``j`` share 4-gram
+    Jaccard overlap ``>= _OVERLAP_JACCARD_THRESHOLD`` on their opening
+    excerpts. This is the primitive both clustering questions in this module
+    are built from: :func:`_overlap_partner_counts` (per-text DEGREE, used
+    where "how many others does this text overlap?" is the question) and
+    :func:`_has_strong_overlap` (existence of a mutually-overlapping trio,
+    where degree alone is not enough — see #382). Keeping one primitive for
+    both means the threshold and tokenisation can never drift between them.
     """
     ngrams_per_text = [_four_grams(_excerpt(text)) for text in completed_texts]
-    counts: list[int] = []
-    for i, current in enumerate(ngrams_per_text):
-        partners = 0
-        for j, other in enumerate(ngrams_per_text):
-            if i == j or not current or not other:
+    n = len(ngrams_per_text)
+    matrix = [[False] * n for _ in range(n)]
+    for i in range(n):
+        current = ngrams_per_text[i]
+        if not current:
+            continue
+        for j in range(i + 1, n):
+            other = ngrams_per_text[j]
+            if not other:
                 continue
             union = len(current | other)
             if union == 0:
                 continue
             if len(current & other) / union >= _OVERLAP_JACCARD_THRESHOLD:
-                partners += 1
-        counts.append(partners)
-    return counts
+                matrix[i][j] = matrix[j][i] = True
+    return matrix
+
+
+def _overlap_partner_counts(completed_texts: list[str]) -> list[int]:
+    """Per text, the number of OTHER completed answers it overlaps with.
+
+    Derived from :func:`_overlap_adjacency` (row sums) so this can never
+    drift from the adjacency the clique check in :func:`_has_strong_overlap`
+    reads. Consumed by :func:`_opening_majority_flags`, where "does this
+    text have at least one partner?" is the right question — degree, not
+    mutuality, since a single shared partner is enough to call an opening
+    "not alone".
+    """
+    return [sum(row) for row in _overlap_adjacency(completed_texts)]
 
 
 def _required_cluster(panel_size: int) -> int:
@@ -453,20 +485,43 @@ def _required_cluster(panel_size: int) -> int:
 
 
 def _has_strong_overlap(completed_texts: list[str]) -> bool:
-    """Return ``True`` when ≥3 of 4 completed answers share substantive
-    overlap on the opening 200 chars.
+    """Return ``True`` when at least 3 completed answers MUTUALLY share
+    substantive overlap on the opening 200 chars — a genuine trio where
+    every pair overlaps, not merely three texts that each happen to overlap
+    *someone*.
 
-    The function works for any ``len(completed_texts)`` from 1 to
-    4. For fewer than 3 completed answers, the function returns
-    ``False`` — the count requirement is "3 of 4", which presumes
-    at least 3 completed answers exist.
+    #382: the shipped rule asked for "≥3 texts with ≥2 partners each" —
+    DEGREE, not mutuality. Overlap is symmetric but not transitive (A~B and
+    B~C does not give A~C), so degree ≥2 admits a 4-cycle: A~C, A~D, B~C,
+    B~D, with A never overlapping B and C never overlapping D. Every text
+    has degree 2, so the old rule said "strong", though the largest set of
+    MUTUALLY overlapping answers is only 2 — two disjoint pairs, which is
+    exactly the 2-vs-2 split #354 exists to catch. See
+    ``test_consensus_requires_mutual_cluster.py`` for the worked example and
+    why a connected-component check does not fix it either (the 4-cycle is
+    one connected component of size 4).
+
+    The threshold stays the literal ``3`` — a triangle, not a bigger clique
+    — and is deliberately NOT generalised via :func:`_required_cluster` to
+    the panel size; see that function's docstring and ADR-0075 for why (a
+    small-panel bar built on it would certify "strong" on a single
+    contradicting edge). At N=3 this is behaviourally UNCHANGED: with only 3
+    nodes, "all 3 have degree ≥2" already forced every node to touch both
+    others — i.e. a full triangle — so the fix is visible only at N=4, where
+    degree ≥2 no longer implies mutual overlap. ADR-0083.
+
+    The function works for any ``len(completed_texts)``. For fewer than 3
+    completed answers, it returns ``False`` immediately — no triangle can
+    exist with fewer than 3 nodes.
     """
-    if len(completed_texts) < 3:
+    n = len(completed_texts)
+    if n < 3:
         return False
-    # A text is "strongly clustered" when it overlaps with at least two
-    # others; the panel is "strong" when ≥3 texts clear that bar.
-    counts = _overlap_partner_counts(completed_texts)
-    return sum(1 for partners in counts if partners >= 2) >= 3
+    adjacency = _overlap_adjacency(completed_texts)
+    return any(
+        adjacency[i][j] and adjacency[j][k] and adjacency[i][k]
+        for i, j, k in itertools.combinations(range(n), 3)
+    )
 
 
 def _four_grams(text: str) -> frozenset[str]:

@@ -99,12 +99,12 @@ caught by any automated check and 10 of 16 by adversarial review
 | W1 | Stream the provider call (was "B2") | PENDING | `ABSENT src/product_app/providers.py :: "stream": True` | — | — |
 | W2 | Peer critique: the answer models critique each other, two rounds | PENDING | `PRESENT src/product_app/debate.py :: model_id=settings.debate_model_id,` | #290 | W1 |
 | W3 | Re-set the money constants against a measured bound — **STOP** | PENDING | `PRESENT src/product_app/costs.py :: DAILY_CAP_USD = Decimal("0.20")` | — | W2 |
-| W4 | Variable panel size N ∈ {2,3,4} | PENDING | `PRESENT src/product_app/model_slots.py :: if len(model_ids) != EXPECTED_SLOT_COUNT:` | — | W10 |
+| W4 | Variable panel size N ∈ {2,3,4} | PENDING | `PRESENT src/product_app/model_slots.py :: if len(model_ids) != EXPECTED_SLOT_COUNT:` | — | — (W10 done) |
 | W5 | Quick-answer N=1 mode | UNPINNED | `—` | — | W4 |
-| W6 | A panel of one reports strong consensus | PENDING | `PRESENT src/product_app/synthesis_consensus.py :: if len(sizes) == 1 or max(sizes.values()) >= _required_cluster(len(stance)):` | #383 | — |
+| W6 | A panel of one reports strong consensus | DONE | `ABSENT src/product_app/synthesis_consensus.py :: if len(stance) == 1:` | #383 | — |
 | W7 | Google sign-in and logout | UNPINNED | `—` | — | — |
 | W9 | Guard the moderator model overlapping a panel slot | PENDING | `ABSENT src/product_app/model_slots.py :: debate_model_id` | — | — |
-| W10 | Consensus certifies a mutual cluster it never checked | PENDING | `PRESENT src/product_app/synthesis_consensus.py :: return sum(1 for partners in counts if partners >= 2) >= 3` | #382 | — |
+| W10 | Consensus certifies a mutual cluster it never checked | DONE | `PRESENT src/product_app/synthesis_consensus.py :: return sum(1 for partners in counts if partners >= 2) >= 3` | #382 | — |
 | W11 | Completeness divides by answers recorded, not slots requested | PENDING | `PRESENT src/product_app/evaluation.py :: slot_count = len(initial_answers)` | #380 | — |
 | W12 | `last_live_charge_at` reports a pre-#376 row as a live charge | PENDING | `PRESENT src/product_app/feedback_store.py :: WHERE recorder = 'cost' AND event_type = '{COST_ACCEPTED_EVENT}'` | #379 | — |
 | W13 | Nothing bounds a call's INPUT — **STOP** | UNPINNED | `—` | #268 | — |
@@ -164,9 +164,9 @@ DAILY_CAP_USD < HARD_LIMIT_USD` is mandatory or the confirmation band is dead
 code. When W2 lands, re-measure and bring a number back with its measurement.
 
 **W4 — variable panel size.** `Field(ge=1, le=4)` appears at three sites
-(`debate.py` twice, `providers.py` once) and they move together. **Blocked on
-W10**: #382 ends *"whoever lifts those caps must fix this primitive first"*, and
-W4 is the row that lifts them. The CSS is cheaper than feared:
+(`debate.py` twice, `providers.py` once) and they move together. **No longer
+blocked**: #382 ended *"whoever lifts those caps must fix this primitive
+first,"* and W10 fixed it (ADR-0083). The CSS is cheaper than feared:
 `.model-slot-grid` is `grid-template-columns: 1fr 1fr` with an existing
 single-column media query, not a 2×2 `grid-template-areas`, so N=2 and N=3
 already reflow (verified 2026-08-28).
@@ -174,8 +174,19 @@ already reflow (verified 2026-08-28).
 **W5 — N=1.** Unreachable while `_validate_model_id_list` rejects any count but
 four. Unpinned: no honest needle exists before the shape is chosen.
 
-**W6 — #383.** Reachable today on a degraded four-slot run where three slots
-failed. **Not blocked by W4.**
+**W6 — #383. DONE** (ADR-0083). The stance branch of `compute_consensus_strength`
+called a panel of exactly ONE scored answer "strong" — `len(sizes) == 1` is
+trivially true at N=1, and independently so is the majority clause, since
+`_required_cluster(1) == 1`. Both called a lone answer "unanimous", with
+nothing to corroborate it. Fixed with a guard returning `"weak"` at
+`len(stance) == 1`, matching what the overlap branch (no live moderator) was
+already returning for the identical N=1 shape — the module no longer
+disagrees with itself. This also flips `false_consensus_preserved` to `True`
+at N=1, which is what actually suppresses the green "unanimous panel" banner
+(AC-019) — traced end to end, not just asserted on the literal. The row's
+original Evidence needle (the pre-existing majority-bar line) never changed
+by this fix and was re-pinned to the new guard; the old needle would have
+left this row `PENDING` forever, fixed or not.
 
 **W7 — Google sign-in.** In `auth.py` and `session_store.py`. The demo plan named
 `readiness.py`; that module is the OpenRouter live-execution key probe and holds
@@ -199,10 +210,21 @@ first, because nobody has.
 the moderator being a panel member grading its own answer. `model_slots.py`
 mentions `debate_model_id` nowhere, which is the absence the needle pins.
 
-**W10 — #382.** `_has_strong_overlap` asks for three answers each with two
-partners. Necessary but not sufficient: that admits a shape with no mutually
-overlapping trio. Latent at N=4 today, live the moment W4 lifts the bound —
-which is why W4 waits on this.
+**W10 — #382. DONE** (ADR-0083). `_has_strong_overlap` asked for three answers
+each with two partners — a DEGREE check. Necessary but not sufficient: overlap
+is symmetric but not transitive, so a 4-cycle (A~C, A~D, B~C, B~D, A never~B,
+C never~D) gives every text degree 2 with no mutually overlapping trio at
+all — the exact 2-vs-2 split #354 exists to catch. Fixed by adding
+`_overlap_adjacency` (the full pairwise matrix) and rewriting
+`_has_strong_overlap` to require a genuine clique of 3 (a real triangle), not
+degree alone; `_overlap_partner_counts` is now derived from the adjacency
+matrix (row sums) so the two can never drift apart again. A connected-component
+check was considered and rejected: the 4-cycle IS one connected component of
+size 4, so it would not have fixed the reproduction — pinned directly in
+`test_consensus_requires_mutual_cluster.py`. N=3 behaviour is unchanged (with
+only 3 nodes, degree ≥2 already forced a full triangle). **This unblocks W4**
+— #382 ends *"whoever lifts those caps must fix this primitive first,"* and
+that primitive is now fixed.
 
 **W11 — #380.** The denominator is answers recorded, so a slot that produced
 nothing is absent from both sides and a run that requested four and recorded
@@ -275,14 +297,15 @@ decision rather than an oversight.
 
 The earlier order read `W1 → W2 → W3`. That lane is the largest item, then one
 that cannot be validated without spend, then a row now formally deferred
-(ADR-0081) — so nothing ships for a long time. Meanwhile W12 (#379), W11 (#380),
-W6 (#383) and W10 (#382) have no dependencies at all and close four open issues
-at $0. (W13/#268 also has no dependency, but it is **STOP** — it moves a cost
+(ADR-0081) — so nothing ships for a long time. Meanwhile W12 (#379) and
+W11 (#380) still have no dependencies and close two open issues at $0.
+(W13/#268 also has no dependency, but it is **STOP** — it moves a cost
 guardrail.)
 
-**Club W6 and W10 into ONE package** (rule 17g): both live in
-`synthesis_consensus.py` and both are the consensus verdict disagreeing with
-itself. One reviewer, one deploy. W10 also unblocks W4.
+**W6 and W10 shipped as ONE clubbed package** (rule 17g, ADR-0083): both lived
+in `synthesis_consensus.py` and both were the consensus verdict disagreeing
+with itself. One reviewer, one deploy. W10 unblocked W4, which no longer waits
+on anything from this cluster.
 
 **Size W17 before selecting it — the string is everywhere, the defect is not.**
 `git grep -l "deepseek/deepseek-chat-v3.1" | wc -l` returns **113** files
@@ -310,8 +333,8 @@ replace, which would break fixtures and rewrite history.
 **Do not attempt W2 or W3 while `OPENROUTER_LIVE_EXECUTION_ENABLED` is false.**
 W2's shape depends on W1's measured streaming behaviour, and W3 is deferred.
 
-Cleanly disjoint: **W1 + W6**. W1 + W4 is nearly parallel — the single overlap
-is `Field(ge=1, le=4)` in `providers.py` — but W4 now waits on W10. **W4 and W7
+W1 + W4 is nearly parallel — the single overlap is `Field(ge=1, le=4)` in
+`providers.py`, and W4 no longer waits on anything (W10 is done). **W4 and W7
 both hold `main.py`, `app.js` and `workspace.html`: sequence them.** W16 collided
 with W4 only through `tests/unit/test_risk_constant_pins.py`; it shipped first,
 so that collision is gone.
