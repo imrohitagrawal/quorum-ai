@@ -101,7 +101,9 @@ from product_app.synthesis import SynthesisOrchestrationService
 ONE_ANSWER_TEXT = "The dominant risk is supply chain concentration in a single Taiwanese fab."
 
 
-def _answer(slot: int, text: str, *, status: InitialAnswerStatus = InitialAnswerStatus.COMPLETED) -> InitialModelAnswer:
+def _answer(
+    slot: int, text: str, *, status: InitialAnswerStatus = InitialAnswerStatus.COMPLETED
+) -> InitialModelAnswer:
     return InitialModelAnswer(
         slot_number=slot,
         model_id=f"prov/model-{slot}",

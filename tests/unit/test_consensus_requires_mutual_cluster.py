@@ -289,3 +289,17 @@ def test_partner_counts_is_still_the_adjacency_row_sums() -> None:
     for texts in (FOUR_CYCLE, K4_ALIGNED, TRIANGLE, SINGLE_EDGE_TRIO):
         adjacency = sc._overlap_adjacency(texts)
         assert sc._overlap_partner_counts(texts) == [sum(row) for row in adjacency]
+
+
+def test_an_empty_text_has_no_adjacency_edges() -> None:
+    """A text with no 4-grams (e.g. empty) can never overlap anyone, on
+    either side of the pairwise comparison. Exercises both early-continue
+    branches in ``_overlap_adjacency``: the empty text's own row (it is
+    ``current``) and every other text's comparison against it (it is
+    ``other``)."""
+    texts = [*K4_ALIGNED[:3], ""]
+    adjacency = sc._overlap_adjacency(texts)
+    assert adjacency[3] == [False, False, False, False]
+    assert [row[3] for row in adjacency] == [False, False, False, False]
+    assert sc._overlap_partner_counts(texts) == [2, 2, 2, 0]
+    assert sc._has_strong_overlap(texts) is True  # the real triangle among 0,1,2 survives
