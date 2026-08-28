@@ -311,6 +311,25 @@ def compute_consensus_strength(
     if not completed:
         return _classify_divided_or_weak(completed_texts=[])
 
+    # #383, closed centrally rather than per-branch. A panel of exactly ONE
+    # completed answer has nothing to corroborate it, and that is true
+    # regardless of which downstream signal might otherwise call it
+    # "strong". Checked HERE, before the stance branch is even reached,
+    # because ``_debate_signals_convergence`` (in the overlap branch below)
+    # does not gate on population size at all — it scans debate critique
+    # text for a keyword unconditionally. Review found that a live debate
+    # round whose STANCE failed to parse (moderator replied in prose, not
+    # JSON — a real, reachable shape per ``debate.parse_moderator_output``)
+    # but whose CRITIQUE TEXT happens to contain a convergence keyword
+    # reached exactly the #383 defect through this second, unguarded path:
+    # a genuine one-answer panel read as "strong". An earlier version of
+    # this fix guarded only the stance branch (below) on the false belief
+    # that the overlap branch already answered "weak" for every N=1 shape —
+    # true only when there is no live debate round at all
+    # (``debate_outputs=[]``), not for this one. See ADR-0083.
+    if len(completed) == 1:
+        return "weak"
+
     # #354. A moderator's reading of the panel, when we have one, is the
     # authority — it beats every path below it because those paths all read
     # VOCABULARY. This is the branch that stops the 2-vs-2 pricing panel from
@@ -341,17 +360,21 @@ def compute_consensus_strength(
     # A single group is strong at any panel size.
     stance = _usable_stance(initial_answers, debate_outputs)
     if stance is not None:
-        # #383: a panel of ONE has no second position to agree or disagree
-        # with. Without this guard, ``len(sizes) == 1`` below is trivially
-        # true at N=1 (there is only one label to group) — and so, on its
-        # own, is ``max(sizes.values()) >= _required_cluster(len(stance))``,
-        # since ``_required_cluster(1) == 1`` and the sole answer's group
-        # size is always 1. Both clauses call a single answer "unanimous",
-        # which is the defect: unanimity claims corroboration a panel of one
-        # cannot offer. The OVERLAP branch below already answers "weak" for
-        # the identical N=1 shape (no polar split is detectable below 2
-        # texts), so this makes the module agree with itself rather than
-        # inventing a fourth ``ConsensusStrength`` state. See ADR-0083.
+        # #383, the DUPLICATE-SLOT residual. The guard above already returns
+        # "weak" whenever ``len(completed) == 1``, which is the ordinary
+        # shape of a one-answer panel. But ``len(completed)`` counts ANSWERS
+        # while ``len(stance)`` counts distinct SCORED SLOTS
+        # (:func:`_scored_slot_numbers` returns a set), and the two diverge
+        # when two completed answers share a ``slot_number`` — a shape
+        # ``test_row11_the_stance_bar_counts_scored_slots_not_completed_
+        # answers`` (test_consensus_is_n_relative.py) exists specifically to
+        # pin. Without this guard, ``len(sizes) == 1`` below is trivially
+        # true whenever the stance population collapses to one slot — and
+        # so, on its own, is ``max(sizes.values()) >=
+        # _required_cluster(len(stance))``, since ``_required_cluster(1) ==
+        # 1``. Both call a single scored slot "unanimous", which a panel of
+        # one — however many raw answers produced it — cannot offer
+        # corroboration for. See ADR-0083.
         if len(stance) == 1:
             return "weak"
         sizes: dict[str, int] = {}
@@ -431,18 +454,26 @@ def _overlap_adjacency(completed_texts: list[str]) -> list[list[bool]]:
     :func:`_has_strong_overlap` (existence of a mutually-overlapping trio,
     where degree alone is not enough — see #382). Keeping one primitive for
     both means the threshold and tokenisation can never drift between them.
+
+    A text with no 4-grams (empty, or under 4 tokens after tokenising) needs
+    no special case: its intersection with anything is empty, so
+    ``union == len(current | other)`` is either 0 (both sides empty — the
+    guard below fires) or equal to the non-empty side's size, giving ratio
+    ``0 / union == 0.0``, below the threshold either way. An earlier version
+    of this function short-circuited on ``not current`` / ``not other``
+    before computing the union at all; review demonstrated both were
+    EQUIVALENT MUTANTS of the ``union == 0`` guard alone — deleting either
+    one left every test green — so they were removed rather than kept as
+    untested defensive code (ADR-0069's precedent for this repo: record an
+    equivalent mutant, do not contort a test around it).
     """
     ngrams_per_text = [_four_grams(_excerpt(text)) for text in completed_texts]
     n = len(ngrams_per_text)
     matrix = [[False] * n for _ in range(n)]
     for i in range(n):
         current = ngrams_per_text[i]
-        if not current:
-            continue
         for j in range(i + 1, n):
             other = ngrams_per_text[j]
-            if not other:
-                continue
             union = len(current | other)
             if union == 0:
                 continue

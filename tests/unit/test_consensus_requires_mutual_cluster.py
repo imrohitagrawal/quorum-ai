@@ -52,16 +52,39 @@ py`` still pins it.
 
 ## Structural change this required
 
-A degree VECTOR alone cannot distinguish a genuine K4 (every pair overlaps)
-from the 4-cycle (opposite pairs don't) — both produce ``[2, 2, 2, 2]``.
+**Correction, 2026-08-29.** A first draft of this paragraph claimed a
+genuine K4 and the 4-cycle both produce the degree vector ``[2, 2, 2, 2]``.
+That is FALSE and was caught by review: K4 (every pair overlaps) gives every
+node degree 3 — ``[3, 3, 3, 3]`` — never degree 2, exactly as
+``test_row2_a_genuine_k4_is_strong_control`` below already asserted. The two
+graphs are trivially distinguishable BY DEGREE ALONE. Exhaustive check
+(review, 2026-08-29): at N=4, grouping all 64 possible graphs by sorted
+degree sequence, every group is unanimous on triangle-presence — zero
+ambiguous sequences. A cleverer degree-sequence-aware rule could in
+principle have worked at N=4 without reading full adjacency at all.
+
+The real justification is narrower and does not need that false claim: the
+SPECIFIC formula the shipped code used — ``count(node has degree >= 2) >=
+3`` — is simply the wrong rule for detecting a triangle, as the 4-cycle
+counterexample alone demonstrates (row 1). A degree-sequence-based rule that
+correctly detects a triangle from the sequence alone is NOT the same rule as
+"count of nodes above a degree floor", and deriving the correct one would be
+N=4-specific: the same exhaustive method applied at N=5 finds degree
+sequences shared by both a triangle-containing and a triangle-free graph, so
+whatever degree-sequence rule happened to work at N=4 would need
+re-deriving, and would still eventually fail. Reading the full pairwise
+adjacency and checking for an actual triangle is correct at every N by
+construction, not only at the one size that was checked exhaustively.
+
 ``_has_strong_overlap`` can no longer be a pure function of
-``_overlap_partner_counts``'s output; it needs the full pairwise adjacency.
-``_overlap_adjacency`` is the new primitive (an N x N boolean matrix);
-``_overlap_partner_counts`` is now DEFINED in terms of it (row sums), so the
-two can never drift apart, and every existing consumer of
-``_overlap_partner_counts`` (``_opening_majority_flags``, and the row 7-9
-controls in ``test_consensus_is_n_relative.py``) is unaffected — verified
-below in ``test_partner_counts_is_still_the_adjacency_row_sums``.
+``_overlap_partner_counts``'s DEGREE output — it needs the full pairwise
+adjacency to test mutuality directly. ``_overlap_adjacency`` is the new
+primitive (an N x N boolean matrix); ``_overlap_partner_counts`` is now
+DEFINED in terms of it (row sums), so the two can never drift apart, and
+every existing consumer of ``_overlap_partner_counts``
+(``_opening_majority_flags``, and the row 7-9 controls in
+``test_consensus_is_n_relative.py``) is unaffected — verified below in
+``test_partner_counts_is_still_the_adjacency_row_sums``.
 
 INPUT-CLASS TABLE.
 
@@ -292,14 +315,33 @@ def test_partner_counts_is_still_the_adjacency_row_sums() -> None:
 
 
 def test_an_empty_text_has_no_adjacency_edges() -> None:
-    """A text with no 4-grams (e.g. empty) can never overlap anyone, on
-    either side of the pairwise comparison. Exercises both early-continue
-    branches in ``_overlap_adjacency``: the empty text's own row (it is
-    ``current``) and every other text's comparison against it (it is
-    ``other``)."""
+    """A text with no 4-grams (e.g. empty) can never overlap anyone.
+    Exercises the ONE MIXED case (empty vs. non-empty, on both sides of the
+    pairwise comparison) — the ratio resolves to 0.0 without needing a
+    special case, since ``current & other`` is empty whenever either side
+    is."""
     texts = [*K4_ALIGNED[:3], ""]
     adjacency = sc._overlap_adjacency(texts)
     assert adjacency[3] == [False, False, False, False]
     assert [row[3] for row in adjacency] == [False, False, False, False]
     assert sc._overlap_partner_counts(texts) == [2, 2, 2, 0]
     assert sc._has_strong_overlap(texts) is True  # the real triangle among 0,1,2 survives
+
+
+def test_two_empty_texts_do_not_divide_by_zero() -> None:
+    """THE MUTATION-PROVEN CASE. When BOTH sides of a pair are empty,
+    ``current | other`` is also empty, so ``union == 0`` and the ratio
+    ``len(current & other) / union`` would raise ``ZeroDivisionError``
+    without the guard. A single empty text (the test above) never exercises
+    this: any pairing with a non-empty text has a non-empty union. Only two
+    empty texts create a union of zero. Mutation-proven: deleting
+    ``if union == 0: continue`` makes this test ERROR (ZeroDivisionError),
+    not merely fail — restored via ``cp``, never ``git checkout``."""
+    texts = [K4_ALIGNED[0], "", ""]
+    adjacency = sc._overlap_adjacency(texts)
+    assert adjacency == [
+        [False, False, False],
+        [False, False, False],
+        [False, False, False],
+    ]
+    assert sc._overlap_partner_counts(texts) == [0, 0, 0]

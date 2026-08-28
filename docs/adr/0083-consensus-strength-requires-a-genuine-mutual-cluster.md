@@ -100,20 +100,57 @@ have degree ≥2" already forced every node to touch both others — i.e. a full
 triangle. The fix is visible only at N=4, where degree ≥2 no longer implies
 mutual overlap.
 
-**2. A panel of exactly one scored answer reads `"weak"`, not `"strong"`.**
+**2. A panel of exactly one completed answer reads `"weak"`, not `"strong"`,
+checked CENTRALLY before any branch is reached.**
 
 ```python
+completed = [answer for answer in initial_answers if counts_as_evidence(answer)]
+if not completed:
+    return _classify_divided_or_weak(completed_texts=[])
+if len(completed) == 1:
+    return "weak"
+
 stance = _usable_stance(initial_answers, debate_outputs)
 if stance is not None:
-    if len(stance) == 1:
+    if len(stance) == 1:      # the duplicate-slot residual, below
         return "weak"
     sizes: dict[str, int] = {}
     ...  # unchanged
 ```
 
-This matches the overlap branch's existing answer for the identical shape,
-rather than inventing a fourth `ConsensusStrength` literal. Traced end to
-end, not merely asserted on the returned string:
+**Correction, 2026-08-29.** The first version of this fix guarded only the
+STANCE branch (`if len(stance) == 1: return "weak"`, inside `if stance is
+not None:`), on the stated belief that the OVERLAP branch (no usable stance)
+already answered `"weak"` for the identical N=1 shape via
+`_classify_divided_or_weak`. Review found that claim false for a reachable
+shape: `_debate_signals_convergence` — one of the overlap branch's two
+"strong" paths — is called unconditionally on `debate_outputs`, with **no
+population-size gate at all**. A live debate round whose STANCE failed to
+parse (the moderator replied in prose rather than JSON — a real, independent
+failure mode; `debate.parse_moderator_output`'s own docstring documents
+prose and stance parsing failing separately) but whose *critique text*
+happens to contain a convergence keyword reached `"strong"` for a genuine
+one-answer panel through this second path — the exact defect #383 exists to
+close, surviving through a route the fix's own justification claimed was
+already safe. Reproduced end to end (two independent verifiers, both
+unrefuted): a 1-completed/3-failed panel, one `DebateOutput` with
+`panel_stance=None` and `critique_text` containing "converged", returns
+`"strong"` under the stance-only guard and `false_consensus_preserved=False`
+downstream — the flag that gates the green banner.
+
+The fix is now checked centrally, on `len(completed)`, before either branch
+runs — closing the gap for every downstream signal at once rather than
+patching `_debate_signals_convergence` individually. The stance branch keeps
+a narrower residual guard on `len(stance) == 1` for the DUPLICATE-SLOT case
+`test_row11_the_stance_bar_counts_scored_slots_not_completed_answers`
+(`test_consensus_is_n_relative.py`) pins: `len(completed)` counts answers
+while `len(stance)` counts distinct scored slots, and the two diverge only
+when two completed answers share a `slot_number` — a shape where
+`len(completed) > 1` but the stance population still collapses to one slot.
+
+This matches the overlap branch's existing answer for the ordinary N=1
+shape, rather than inventing a fourth `ConsensusStrength` literal. Traced
+end to end, not merely asserted on the returned string:
 `Synthesizer._is_false_consensus_preserved` is
 `consensus_strength in {"weak", "divided"}`, and `false_consensus_preserved
 === false` is one of the required conjuncts of `isConsensusResult` (`app.js`,
@@ -177,8 +214,17 @@ for N=4 and N=5 — do not assume the stance bar's formula transfers.
 - `test_consensus_is_n_relative.py`'s `test_row12_the_overlap_bar_is_
   exhaustively_unchanged` was retired: its premise (`_has_strong_overlap` is
   a pure function of the DEGREE vector `_overlap_partner_counts` returns) is
-  now false by design — a degree vector alone cannot distinguish a genuine
-  K4 from a 4-cycle, both of which produce `[2, 2, 2, 2]`. The equivalent
+  now false by design — the shipped formula's DECISION depended only on
+  degree, and the new one needs full adjacency to test mutuality. (**A
+  first draft of this bullet additionally claimed a genuine K4 and the
+  4-cycle both produce `[2, 2, 2, 2]` — that is false and was caught by
+  review; K4 gives every node degree 3. See the correction in
+  `test_consensus_requires_mutual_cluster.py`'s "Structural change this
+  required" section for the accurate reasoning and the exhaustive check
+  that at N=4 a degree sequence alone is, in fact, always sufficient to
+  determine triangle-presence — the real justification for reading full
+  adjacency is that it is correct at every N by construction, not that
+  degree information is fundamentally insufficient at N=4.**) The equivalent
   guard is rebuilt in `test_consensus_requires_mutual_cluster.py` over the
   ADJACENCY-matrix space instead, at panel sizes 0-5, against an
   independently-written triangle oracle.
@@ -191,3 +237,10 @@ for N=4 and N=5 — do not assume the stance bar's formula transfers.
   change and present after.
 - Board row W10 is unblocked; row W4 no longer waits on anything from this
   package (`docs/65-open-work.md`).
+- `_overlap_adjacency`'s two early-`continue` guards on an empty text
+  (`if not current: continue` / `if not other: continue`) were REMOVED.
+  Review demonstrated both were equivalent mutants of the `union == 0`
+  guard alone (a coverage-driven test had been written to justify keeping
+  them, but deleting either one left that test green) — simpler to delete
+  the dead branches than to keep untested-in-substance defensive code,
+  per this repo's own ADR-0069 precedent.

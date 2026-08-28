@@ -31,14 +31,35 @@ lone answer has NOTHING to corroborate it, and the arithmetic calls that
 
 ## The fix
 
-A panel of exactly one scored answer returns ``"weak"`` directly, before the
-majority-bar arithmetic runs — matching what the OVERLAP branch (no usable
-stance) already returns for the identical N=1 shape via
-``_classify_divided_or_weak`` (``_has_polar_disagreement`` needs >= 2 texts,
-so a single text falls through to "weak"). This makes the module internally
-consistent about the one shape it disagreed with itself on, without inventing
-a fourth ``ConsensusStrength`` state — nothing else in the module treats N=1
-as a distinct category, and "weak" is already the catch-all for thin signal.
+A panel of exactly one COMPLETED answer returns ``"weak"`` directly,
+centrally — checked right after ``completed`` is built, before either the
+stance or the overlap branch is even reached — rather than inventing a
+fourth ``ConsensusStrength`` state. This makes the module internally
+consistent about the one shape it disagreed with itself on: nothing else in
+the module treats N=1 as a distinct category, and "weak" is already the
+catch-all for thin signal.
+
+**Correction, 2026-08-29 (row 0 below).** The first version of this fix
+guarded only the stance branch (``if len(stance) == 1: return "weak"``,
+inside ``if stance is not None:``), reasoning that the OVERLAP branch (no
+usable stance) already answered ``"weak"`` for the identical N=1 shape via
+``_classify_divided_or_weak``. Review found that reasoning false for a
+reachable shape it did not consider: ``_debate_signals_convergence`` — one
+of the overlap branch's two "strong" paths, checked BEFORE the
+``_classify_divided_or_weak`` fallback — is called unconditionally on
+``debate_outputs`` with no population-size gate. A LIVE debate round whose
+STANCE failed to parse (the moderator replied in prose, not JSON — a real,
+independent failure mode; ``debate.parse_moderator_output``'s own docstring
+documents prose and stance parsing failing separately) but whose CRITIQUE
+TEXT contains a convergence keyword reaches "strong" for a genuine
+one-answer panel through this second path. Row 0 reproduces it; the
+guard now lives on ``len(completed) == 1``, checked before ``stance`` is
+even computed, closing the gap for every downstream signal at once rather
+than patching ``_debate_signals_convergence`` individually. The stance
+branch keeps a narrower residual guard on ``len(stance) == 1`` for the
+duplicate-slot case (see ``synthesis_consensus.py`` and
+``test_row11_the_stance_bar_counts_scored_slots_not_completed_answers`` in
+``test_consensus_is_n_relative.py``).
 
 ## Downstream effect — the point of the fix
 
@@ -55,8 +76,9 @@ literal, because the literal alone does not prove the banner is affected.
 INPUT-CLASS TABLE.
 
   #  population                                          expected
+  0  overlap N=1, unusable stance, convergent critique    weak     <-- THE 2ND FIX
   1  stance N=1, one live moderator label                weak     <-- THE FIX
-  2  overlap N=1, no usable stance (control)              weak     (unchanged)
+  2  overlap N=1, no usable stance at all (control)       weak     (unchanged)
   3  stance N=2, moderator reads one group (control)      strong   (unchanged; row6 in
                                                                      test_consensus_is_n_relative.py)
   4  N=1 "weak" flips false_consensus_preserved to True   True     <-- the downstream effect
@@ -65,17 +87,27 @@ WHAT TURNS EACH ROW RED, each measured with a ``cp``-restored copy of
 ``synthesis_consensus.py`` and bytecode caching disabled
 (``PYTHONDONTWRITEBYTECODE=1``), never ``git checkout``:
 
-  A  delete the ``len(stance) == 1`` guard entirely (revert to shipped)
-     -> row 1 fails: ``strong`` != ``weak``. Row 4 fails as a consequence
-     (``_is_false_consensus_preserved`` receives "strong").
-  B  guard reads ``len(stance) <= 1`` mutated to ``len(stance) < 1``
-     (i.e. the guard never fires, since stance is never empty when not None)
-     -> row 1 fails identically to A.
+  A  delete the ``len(completed) == 1`` centralised guard entirely (revert
+     to a stance-only guard) -> row 0 fails: ``strong`` != ``weak``. Row 1
+     and row 4 stay green (the stance branch's own residual guard still
+     catches them), which is what makes row 0 the guard specifically
+     attributable to the centralised check and not a duplicate of row 1.
+  B  guard reads ``len(completed) <= 1`` mutated to ``len(completed) < 1``
+     (i.e. never fires, since completed is checked non-empty just above)
+     -> row 0 AND row 1 fail (the stance-only residual guard on
+     ``len(stance) == 1`` still exists, so this needs checking: if only the
+     TOP guard is broken this way, row 1 still passes via the residual
+     stance guard — so this mutation alone reddens only row 0).
   C  guard's return value changed from ``"weak"`` to ``"divided"``
-     -> row 1 fails: ``divided`` != ``weak``.
-  D  guard placed AFTER the ``sizes`` computation but before the return
-     (behaviourally identical placement) -> no row fails; recorded as
-     EQUIVALENT, not chased.
+     -> row 0 fails: ``divided`` != ``weak``.
+  D  guard placed AFTER ``stance = _usable_stance(...)`` is computed but
+     before it is used (behaviourally identical placement, since
+     ``_usable_stance`` is pure) -> no row fails; recorded as EQUIVALENT,
+     not chased.
+  E  (the original fix's mutations, still valid against the residual
+     stance-branch guard) delete ``if len(stance) == 1: return "weak"``
+     entirely -> row 1 fails: ``strong`` != ``weak``. Row 4 fails as a
+     consequence.
 """
 
 from __future__ import annotations
@@ -144,6 +176,57 @@ def _stance(groups: dict[int, str]) -> list[DebateOutput]:
 
 
 # ---------------------------------------------------------------- the fix
+
+
+def _unusable_stance_convergent_round() -> list[DebateOutput]:
+    """A LIVE debate round whose STANCE failed to parse (the moderator
+    replied in prose, not JSON — a real, independent failure mode per
+    ``debate.parse_moderator_output``'s own docstring: prose and stance
+    parsing fail SEPARATELY) but whose CRITIQUE TEXT happens to contain a
+    convergence keyword. ``_usable_stance`` returns ``None`` for this round
+    (``panel_stance is None``), so it is invisible to the stance branch —
+    but ``_debate_signals_convergence``, in the overlap branch, scans
+    ``critique_text`` unconditionally, with no population-size gate."""
+    return [
+        DebateOutput(
+            round_number=1,
+            focus_areas=["disagreement"],
+            critique_text=(
+                "Reviewing the single available answer, the models converged "
+                "on this being the dominant risk."
+            ),
+            status=DebateRoundStatus.COMPLETED,
+            debate_mode=DEBATE_MODE_LIVE,
+            panel_stance=None,
+        )
+    ]
+
+
+def test_row0_n1_with_unusable_stance_and_a_convergent_critique_is_weak() -> None:
+    """THE SECOND FIX (found by review, 2026-08-29). A panel of one answer,
+    a live debate round whose stance did not parse, but whose critique text
+    contains a convergence keyword. Before the centralised ``len(completed)
+    == 1`` guard, this reached "strong" through ``_debate_signals_
+    convergence`` in the overlap branch — a path the stance-only guard
+    (this file's original fix) did not cover, and which the original
+    ADR-0083 incorrectly claimed was already safe. See ADR-0083's
+    2026-08-29 correction."""
+    answers = [
+        _answer(1, ONE_ANSWER_TEXT),
+        _answer(2, "", status=InitialAnswerStatus.FAILED),
+        _answer(3, "", status=InitialAnswerStatus.FAILED),
+        _answer(4, "", status=InitialAnswerStatus.FAILED),
+    ]
+    debates = _unusable_stance_convergent_round()
+
+    assert sc._usable_stance(answers, debates) is None, (
+        "the reproduction requires a LIVE round with an UNUSABLE stance"
+    )
+    assert sc._debate_signals_convergence(debates) is True, (
+        "the reproduction requires the convergence keyword to actually fire"
+    )
+
+    assert sc.compute_consensus_strength(answers, debates) == "weak"
 
 
 def test_row1_stance_n1_single_moderator_label_is_weak_not_strong() -> None:
