@@ -415,6 +415,22 @@ class FeedbackStore:
         "AND query_run_id IS NULL"
     )
 
+    #: Name of the live-charge posture-cutover migration in
+    #: ``schema_migrations``. See :meth:`_backfill_live_charge_posture_cutover`
+    #: (issue #379).
+    _LIVE_CHARGE_CUTOVER_MIGRATION = "live_charge_posture_cutover"
+
+    #: Guarded like ``_MIGRATIONS_DDL`` above, for the identical reason: a
+    #: brand-new ``CREATE TABLE`` on an existing DB is a WRITE, so it cannot
+    #: sit in ``_SCHEMA``, which runs unguarded on every open including a
+    #: read-only one. Single-row by construction (``CHECK (id = 1)``): this
+    #: store freezes exactly one cutover, once, on the first boot after this
+    #: migration ships.
+    _LIVE_CHARGE_CUTOVER_DDL = (
+        "CREATE TABLE IF NOT EXISTS live_charge_posture_cutover ("
+        "id INTEGER PRIMARY KEY CHECK (id = 1), max_event_id INTEGER NOT NULL)"
+    )
+
     def __init__(
         self,
         db_path: str,
@@ -463,6 +479,9 @@ class FeedbackStore:
             with suppress(sqlite3.Error):
                 self._conn.execute(self._SPEND_RAIL_INDEX)
         self._backfill_f01_preview_rows()
+        #: The id boundary below which a charge's live/simulated posture is
+        #: unknown. See :meth:`_backfill_live_charge_posture_cutover`.
+        self._live_charge_cutover_id: int = self._backfill_live_charge_posture_cutover()
         _open_stores.add(self)
 
     def _backfill_f01_preview_rows(self) -> None:
@@ -627,6 +646,76 @@ class FeedbackStore:
             (name,),
         )
         return cursor.fetchone() is not None
+
+    def _backfill_live_charge_posture_cutover(self) -> int:
+        """Freeze the id boundary below which a charge's posture is unknown.
+
+        Issue #379. ``charge_event_type`` only started choosing between
+        ``COST_ACCEPTED_EVENT`` and ``COST_ACCEPTED_SIMULATED_EVENT`` when
+        #376 shipped; every row written before that carries
+        ``COST_ACCEPTED_EVENT`` because it was the only opening-charge type
+        there was, live or not. On the first boot after THIS fix ships, every
+        row already on disk is therefore of unknown posture, and
+        :meth:`last_live_charge_at` must not read any of them as a live
+        charge. Freezing ``MAX(id)`` at that moment, once, and never moving it
+        again is exactly that: rows written before this boot are excluded
+        forever; every row written from here on has known posture (the
+        discriminating code is already live) and is read normally.
+
+        Best-effort and idempotent like :meth:`_backfill_f01_preview_rows`,
+        for the identical read-only-volume reason. Unlike that method, a
+        failure here costs no money: :meth:`last_live_charge_at` degrades to
+        its PRE-#379 behaviour (cutover ``0``, i.e. no filter) rather than
+        raising — the exact false-positive this issue exists to fix, not a
+        new fault, and a restart on a writable volume repairs it.
+
+        Runs once, in ``__init__``, before the store serves a request, and the
+        result is cached on the instance — see the constructor. That keeps
+        :meth:`last_live_charge_at`, which runs on the unauthenticated
+        ``/status`` path, to the query it already ran plus one bound
+        parameter, rather than a second table read on every call.
+        """
+        try:
+            with self._lock:
+                self._conn.execute(self._MIGRATIONS_DDL)
+                self._conn.execute(self._LIVE_CHARGE_CUTOVER_DDL)
+                if self._migration_applied(self._LIVE_CHARGE_CUTOVER_MIGRATION):
+                    row = self._conn.execute(
+                        "SELECT max_event_id FROM live_charge_posture_cutover WHERE id = 1"
+                    ).fetchone()
+                    return int(row["max_event_id"]) if row is not None else 0
+                self._conn.execute("BEGIN IMMEDIATE")
+                try:
+                    cutover = self._conn.execute(
+                        "SELECT COALESCE(MAX(id), 0) FROM events"
+                    ).fetchone()[0]
+                    self._conn.execute(
+                        "INSERT INTO live_charge_posture_cutover (id, max_event_id) VALUES (1, ?)",
+                        (cutover,),
+                    )
+                    self._conn.execute(
+                        "INSERT INTO schema_migrations (name, applied_at) VALUES (?, ?)",
+                        (
+                            self._LIVE_CHARGE_CUTOVER_MIGRATION,
+                            datetime.now(UTC).isoformat(),
+                        ),
+                    )
+                    self._conn.execute("COMMIT")
+                except BaseException:
+                    self._conn.execute("ROLLBACK")
+                    raise
+                # A landed write is a landed write, whoever made it — see the
+                # identical comment in ``_backfill_f01_preview_rows``.
+                self._last_write_success_at = self._monotonic()
+                return int(cutover)
+        except Exception as exc:  # noqa: BLE001 — best-effort, see docstring
+            with self._lock:
+                self._last_write_failure_at = self._monotonic()
+            _log.warning(
+                "feedback_store: live-charge posture cutover backfill did not run: %s",
+                exc,
+            )
+            return 0
 
     @classmethod
     def from_env(cls) -> FeedbackStore:
@@ -1289,13 +1378,25 @@ class FeedbackStore:
         back through the most recent ``_LAST_CHARGE_SCAN_LIMIT`` charges and
         returns the first it can parse. ``None`` still means "no live charge
         found", which after that scan is overwhelmingly "never".
+
+        ALSO EXCLUDES ``id <= self._live_charge_cutover_id`` (issue #379). A
+        row from before the deployment that first told a live charge from a
+        simulated one carries ``COST_ACCEPTED_EVENT`` whether or not it was
+        ever live — that event type was the only one there was. Reading one as
+        a live charge tells a watchdog real money moved on a deployment that
+        may never have spent a cent. The cutover is computed once, ever, by
+        :meth:`_backfill_live_charge_posture_cutover` and frozen in
+        ``live_charge_posture_cutover`` — a row with a higher id than that
+        cutover was written after the discriminating code was already live,
+        so its posture is known and it is read normally.
         """
         with self._lock:
             cursor = self._conn.execute(
                 "SELECT recorded_at FROM events "
                 f"WHERE recorder = 'cost' AND event_type = '{COST_ACCEPTED_EVENT}' "
+                "AND id > ? "
                 "ORDER BY id DESC LIMIT ?",
-                (_LAST_CHARGE_SCAN_LIMIT,),
+                (self._live_charge_cutover_id, _LAST_CHARGE_SCAN_LIMIT),
             )
             rows = cursor.fetchall()
         for row in rows:
