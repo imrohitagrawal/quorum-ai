@@ -6,7 +6,7 @@ original, because a gate and an offline agent can read it and cannot read `gh`.
 
 Verified at: `e115d92ac0703ca3ce6faa6174a13de0edfae1bd`
 
-The board holds **17** rows, **4** of them unpinned.
+The board holds **19** rows, **4** of them unpinned.
 
 `scripts/check_open_work.py --check` reads every row's evidence off disk and
 refuses if a claim is false. It runs inside `make validate`, and
@@ -111,8 +111,10 @@ caught by any automated check and 10 of 16 by adversarial review
 | W13 | Nothing bounds a call's INPUT — **STOP** | UNPINNED | `—` | #268 | — |
 | W14 | Close the 5xx possibly-billed premise with data | UNPINNED | `—` | #105 | production logs |
 | W15 | `_bound_sniff_time` is referenced and does not exist | PENDING | `PRESENT src/product_app/providers.py :: _bound_sniff_time` | — | — |
-| W16 | The catalog fetcher hardcodes the models URL | PENDING | `PRESENT src/product_app/catalog_fetcher.py :: OPENROUTER_CATALOG_URL = "https://openrouter.ai/api/v1/models"` | — | — |
+| W16 | The catalog fetcher hardcodes the models URL | DONE | `PRESENT src/product_app/catalog_fetcher.py :: OPENROUTER_CATALOG_URL = "https://openrouter.ai/api/v1/models"` | — | — |
 | W17 | FR-004 names a model we do not ship | PENDING | `PRESENT docs/10-functional-requirements.md :: deepseek/deepseek-chat-v3.1` | — | — |
+| W18 | The paid call sends the API key to a configured base with no scheme guard | PENDING | `PRESENT src/product_app/providers.py :: url=f"{settings.openrouter_api_base_url}/chat/completions"` | — | — |
+| W19 | A provider-timeout bound fails locally and passes in CI | PENDING | `PRESENT tests/unit/test_provider_call_time_budget.py :: assert wall < 4.0,` | — | — |
 
 **STOP** marks a row that cannot be finished without a human decision — a money,
 cost or safety guardrail value that only real measurement could justify. Do not
@@ -210,9 +212,32 @@ refusal, so this is a guardrail move, not a bug fix.
 **W15 — a dangling reference.** Two docstrings in `providers.py` point at
 `_bound_sniff_time`, which has no definition anywhere. Doc-only.
 
-**W16 — the catalog URL.** `catalog_fetcher.py` hardcodes the models endpoint
-instead of honouring `settings.openrouter_api_base_url`, so the two can diverge
-and the fetcher cannot be pointed at a local server.
+**W16 — the catalog URL. DONE** (ADR-0080). `catalog_fetcher.py` hardcoded the
+models endpoint while `providers.py` and `readiness.py` both built theirs from
+`settings.openrouter_api_base_url`, so an operator pointing the app at a proxy
+redirected every paid call and the key probe while the catalog went on talking
+to the real upstream. `catalog_url()` now derives it at call time. The row's
+Evidence cell still states the OPEN form — that is what `DONE` means: the
+opposite of that claim now holds.
+
+**W18 — the paid call's base URL is unguarded.** Found by review while shipping
+W16. `readiness.probe_key_auth` refuses to dial when the configured base is
+cleartext, because it sends a bearer token — but `providers.py` sends the *same*
+credential to `f"{settings.openrouter_api_base_url}/chat/completions"` with no
+such check. One of the two credential-bearing calls is guarded and the other is
+not. Pre-existing, not introduced by W16, and deliberately not fixed there:
+W16's concern is the catalog, and the paid path deserves its own reviewer.
+
+**W19 — a timing bound that is machine-dependent.**
+`test_the_budget_covers_the_header_phase_not_only_the_body` asserts
+`wall < 4.0` against a loopback server that dribbles headers. Measured
+2026-08-28 on this machine: **5 of 5 runs failed at 4.13–4.18s**, and it fails
+identically on a clean `git archive` of `origin/main`, so it is **not** caused
+by any current branch. CI passes it. A bound that close to its own input is a
+coin toss on a slower machine, and the next session will lose time deciding
+whether it broke something. Either widen it with a re-derived margin or make it
+CI-only — but measure first, because the bound is load-bearing: its partner
+lower bound is what proves the dribble really happened.
 
 **W17 — FR-004.** `docs/10-functional-requirements.md` and
 `docs/12-acceptance-criteria.md` both name `deepseek/deepseek-chat-v3.1` as slot
@@ -230,15 +255,15 @@ decision rather than an oversight.
 
 ## Order and what may run in parallel
 
-**W16 → W1 (+W15) → W2 → W3**, with W6, W9 and W17 as cheap independent
+**W16 (done) → W1 (+W15) → W2 → W3**, with W6, W9 and W17 as cheap independent
 fillers when a lane is blocked. W8 is a filler only in the sense that it is
 small; it still needs the human decision above.
 
 Cleanly disjoint: **W1 + W6**. W1 + W4 is nearly parallel — the single overlap
 is `Field(ge=1, le=4)` in `providers.py` — but W4 now waits on W10. **W4 and W7
-both hold `main.py`, `app.js` and `workspace.html`: sequence them.** W16
-collides with W4 only through `tests/unit/test_risk_constant_pins.py`, so
-shipping W16 first removes the collision.
+both hold `main.py`, `app.js` and `workspace.html`: sequence them.** W16 collided
+with W4 only through `tests/unit/test_risk_constant_pins.py`; it shipped first,
+so that collision is gone.
 
 Before any parallel dispatch, assign centrally: **ADR numbers, `openapi.yaml`
 ownership, the money constants, and the `Field(ge=1, le=4)` bound.** Two

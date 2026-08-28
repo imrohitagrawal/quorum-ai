@@ -20,13 +20,16 @@ from decimal import Decimal
 
 import pytest
 
+from product_app import catalog_fetcher as catalog_fetcher_module
 from product_app.catalog_fetcher import (
     DEFAULT_VENDORS,
     OpenRouterCatalogFetcher,
     _parse_catalog_response,
     _short_name_for,
     _vendor_for,
+    catalog_url,
 )
+from product_app.config import settings
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -397,3 +400,205 @@ def test_cost_band_fixtures_are_built_from_price_exact_models() -> None:
         f"CONFIRM_MODEL_IDS draws on known price-drifting models {offenders}; "
         "the band it asserts would not exist once those prices are corrected"
     )
+
+
+# ---------------------------------------------------------------------------
+# The catalog endpoint follows OPENROUTER_API_BASE_URL (W16).
+#
+# It used to be a hardcoded literal while `providers.py` built
+# `{base}/chat/completions` and `readiness.py` built `{base}/key` from the
+# setting -- so an operator pointing the app at a proxy or a local double
+# redirected every paid call and the key probe, and the catalog went on talking
+# to the real upstream. One process, two providers, nothing saying so.
+# ---------------------------------------------------------------------------
+
+
+def test_the_shipped_default_still_resolves_to_the_public_catalog() -> None:
+    """Turns red if: the default base URL stops naming OpenRouter over https.
+
+    This is the SSRF-adjacent property the risk register asked for and no test
+    ever asserted -- the constant carried a note saying "assert https scheme and
+    openrouter.ai host" and nothing did. Making the URL configurable is exactly
+    the moment to write it, so the DEFAULT cannot drift to another host or to
+    cleartext unnoticed.
+    """
+    from urllib.parse import urlsplit
+
+    parts = urlsplit(catalog_url())
+    assert parts.scheme == "https", catalog_url()
+    assert parts.netloc == "openrouter.ai", catalog_url()
+    assert parts.path == "/api/v1/models", catalog_url()
+
+
+def test_the_configured_base_url_is_honoured(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Turns red if: the endpoint goes back to a hardcoded literal.
+
+    Both directions in one test: the default resolves to the public catalog, and
+    a changed setting changes the URL. A function that ignored its input would
+    pass the first half alone.
+    """
+    assert catalog_url() == "https://openrouter.ai/api/v1/models"
+    monkeypatch.setattr(settings, "openrouter_api_base_url", "https://gateway.internal/v1")
+    assert catalog_url() == "https://gateway.internal/v1/models"
+
+
+def test_a_trailing_slash_on_the_base_does_not_double_the_separator(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Turns red if: the `rstrip('/')` is dropped.
+
+    `https://host/v1//models` is a different path to most routers, so a stray
+    slash in an operator's env var would 404 the catalog and silently degrade
+    every run to the fallback prices.
+    """
+    monkeypatch.setattr(settings, "openrouter_api_base_url", "https://gateway.internal/v1/")
+    assert catalog_url() == "https://gateway.internal/v1/models"
+
+
+def test_the_fetcher_dials_the_configured_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Turns red if: `_fetch_remote` resolves the URL anywhere but at call time.
+
+    Asserts the URL actually HANDED TO THE TRANSPORT, not the return value of
+    the helper -- a module-level constant computed at import would pass every
+    test above and still dial the wrong host here, which is precisely the defect
+    being fixed.
+    """
+    dialled: list[str] = []
+
+    def _transport(url: str, timeout: float) -> str:
+        dialled.append(url)
+        return json.dumps({"data": []})
+
+    monkeypatch.setattr(settings, "openrouter_api_base_url", "https://gateway.internal/v1")
+    fetcher = OpenRouterCatalogFetcher(cache_ttl_seconds=60.0, transport=_transport)
+    with pytest.raises(RuntimeError, match="0 models"):
+        # An empty catalog raises; the DIAL is what this test is about.
+        fetcher.list_models()
+    assert dialled == ["https://gateway.internal/v1/models"], dialled
+
+
+def test_the_catalog_request_carries_exactly_two_headers_and_no_credential(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Turns red if: any header is added to the catalog request, credential or not.
+
+    THIS ASSERTS THE ARTEFACT, NOT THE SOURCE TEXT, and that distinction is the
+    whole finding. The first version of this test read
+    ``inspect.getsource(_urlopen_catalog)`` and grepped for ``authorization`` /
+    ``bearer`` / ``api_key``. Review defeated it in one small edit: a
+    module-level helper returning ``{"Authorization": f"Bearer {key}"}``,
+    splatted into the existing header dict, contains none of those tokens INSIDE
+    the scanned function -- so the pin stayed green while a loopback server
+    received the operator's key in the clear.
+
+    An EXACT SET is the assertion, not three absences. A denylist of token names
+    can always be spelled around; a set of exactly the two headers this request
+    is allowed to carry cannot. ``urllib`` normalises header names, hence
+    ``User-agent``.
+
+    This matters beyond tidiness: ADR-0080 argues the missing https guard is
+    safe BECAUSE no credential is sent. This test is what makes that argument
+    checkable rather than merely asserted.
+    """
+    seen: list[object] = []
+
+    class _Response:
+        def __enter__(self) -> _Response:
+            return self
+
+        def __exit__(self, *exc: object) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return json.dumps({"data": []}).encode("utf-8")
+
+    def _spy(request: object, timeout: float = 0.0) -> _Response:
+        seen.append(request)
+        return _Response()
+
+    monkeypatch.setattr(catalog_fetcher_module, "urlopen", _spy)
+    fetcher = OpenRouterCatalogFetcher(cache_ttl_seconds=60.0)
+    with pytest.raises(RuntimeError, match="0 models"):
+        fetcher.list_models()
+
+    assert len(seen) == 1, seen
+    request = seen[0]
+    assert set(request.headers) == {"Accept", "User-agent"}, request.headers  # type: ignore[attr-defined]
+    # POSITIVE PARTNER: the two allowed headers carry their real values, so the
+    # exact-set check above is reading a populated header block, not an empty one.
+    assert request.get_header("Accept") == "application/json"  # type: ignore[attr-defined]
+    assert "quorum-ai" in request.get_header("User-agent")  # type: ignore[attr-defined]
+    # And nothing smuggled the key into the URL instead of a header.
+    assert "sk-" not in request.full_url  # type: ignore[attr-defined]
+
+
+def test_the_production_dial_path_uses_the_configured_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Turns red if: the real ``urlopen`` branch goes back to a fixed literal.
+
+    THE GAP THIS CLOSES, found by review and reproduced before fixing.
+    ``test_the_fetcher_dials_the_configured_url`` above drives the injected
+    ``transport=`` seam -- the TEST path. Production leaves ``transport`` None
+    and goes through ``_urlopen_catalog``, and that call site was covered by
+    nothing: reverting its ``url=catalog_url()`` to the hardcoded literal left
+    all 27 tests in this file green.
+
+    So this patches the module's ``urlopen`` and asserts the URL on the
+    ``Request`` that actually reaches it -- the wire, not the decision.
+    """
+    seen: list[str] = []
+
+    class _Response:
+        def __enter__(self) -> _Response:
+            return self
+
+        def __exit__(self, *exc: object) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return json.dumps({"data": []}).encode("utf-8")
+
+    def _spy(request: object, timeout: float = 0.0) -> _Response:
+        seen.append(request.full_url)  # type: ignore[attr-defined]
+        return _Response()
+
+    monkeypatch.setattr(settings, "openrouter_api_base_url", "https://gateway.internal/v1")
+    monkeypatch.setattr(catalog_fetcher_module, "urlopen", _spy)
+    # transport=None on purpose: this is the branch production takes.
+    fetcher = OpenRouterCatalogFetcher(cache_ttl_seconds=60.0)
+    with pytest.raises(RuntimeError, match="0 models"):
+        fetcher.list_models()
+
+    assert seen == ["https://gateway.internal/v1/models"], seen
+
+
+@pytest.mark.parametrize("scheme", ["file", "ftp", "data", "gopher"])
+def test_a_non_http_base_is_refused(monkeypatch: pytest.MonkeyPatch, scheme: str) -> None:
+    """Turns red if: ``catalog_url`` hands ``urlopen`` a scheme it should not.
+
+    ``urlopen`` speaks more than http. A ``file://`` base would make the fetcher
+    read an arbitrary local path and serve its contents as the live PRICE
+    catalog. The old hardcoded literal made that unreachable by construction;
+    this keeps it unreachable now that the endpoint is configurable, which is
+    the SSRF-adjacent obligation the risk register recorded against the old
+    constant and which nothing enforced at runtime.
+    """
+    monkeypatch.setattr(settings, "openrouter_api_base_url", f"{scheme}://etc/passwd")
+    with pytest.raises(ValueError, match="must be http or https"):
+        catalog_url()
+
+
+def test_http_is_allowed_so_a_local_double_still_works(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Turns red if: the scheme guard hardens into https-only.
+
+    POSITIVE PARTNER for the refusal above -- without it, a guard that rejected
+    EVERY scheme would pass that test. Plain http must keep working: pointing
+    the fetcher at ``http://127.0.0.1`` is one of the reasons this setting is
+    configurable, and no credential is sent on this request, so cleartext here
+    is not the hazard it is for the key probe.
+    """
+    monkeypatch.setattr(settings, "openrouter_api_base_url", "http://127.0.0.1:9999/v1")
+    assert catalog_url() == "http://127.0.0.1:9999/v1/models"

@@ -38,13 +38,60 @@ from decimal import Decimal
 from threading import Event, RLock
 from time import monotonic
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
 from product_app.config import settings
 
-#: Public catalog endpoint. The endpoint is unauthenticated and free;
-#: we hit it once per TTL window, not per request.
-OPENROUTER_CATALOG_URL = "https://openrouter.ai/api/v1/models"
+
+def catalog_url() -> str:
+    """The models endpoint, derived from the configured OpenRouter base URL.
+
+    This was a hardcoded literal, which made ``OPENROUTER_API_BASE_URL`` a
+    HALF-honoured setting: ``providers.py`` builds ``{base}/chat/completions``
+    from it and ``readiness.py`` builds ``{base}/key``, so an operator pointing
+    the app at a proxy, a self-hosted gateway or a local double redirected every
+    paid call and the key probe while the catalog went on talking to the real
+    upstream. One process, two different providers, and nothing said so.
+
+    Resolved at CALL time rather than import time, so changing the setting is
+    honoured by a running process and by a test that monkeypatches it.
+
+    NO CREDENTIAL IS SENT ON THIS REQUEST -- the catalog is public, free, and
+    fetched once per TTL window -- which is why there is no https guard here.
+    Compare ``readiness.probe_key_auth``, which refuses to dial at all when the
+    configured base is cleartext, because that call carries a bearer token.
+    Sending an unauthenticated GET over a base the operator chose is the
+    operator's decision; putting their API key on that wire is not.
+
+    The scheme IS constrained, to http or https. That is not about cleartext --
+    it is because ``urlopen`` also speaks ``file:``, and a ``file://`` base
+    would turn this into an arbitrary local-file read whose contents are then
+    served as the live price catalog.
+    """
+    url = f"{settings.openrouter_api_base_url.rstrip('/')}/models"
+    scheme = urlsplit(url).scheme
+    if scheme not in _FETCHABLE_SCHEMES:
+        # urlopen speaks more than http. A `file://` base would make this read
+        # an arbitrary local path and serve it as the live PRICE catalog, and
+        # `ftp://`/`data:` are no better. The old hardcoded literal made that
+        # unreachable by construction; making the endpoint configurable is
+        # exactly the moment to keep it unreachable on purpose. This is the
+        # SSRF-adjacent obligation the risk register recorded against the old
+        # constant, now enforced at runtime instead of only asserted on the
+        # shipped default.
+        raise ValueError(
+            f"OPENROUTER_API_BASE_URL must be http or https, not {scheme!r}: "
+            f"{settings.openrouter_api_base_url!r}"
+        )
+    return url
+
+
+#: Schemes ``catalog_url`` will hand to ``urlopen``. ``urlopen`` also speaks
+#: ``file:``, ``ftp:`` and ``data:``; none of those is a model catalog, and
+#: ``file:`` would make an operator's typo into a local-file read served as
+#: live prices.
+_FETCHABLE_SCHEMES = frozenset({"http", "https"})
 
 #: Vendors the UI defaults to a slot from. The order is preserved in
 #: ``cheapest_per_vendor`` so slot 1/2/3/4 map to a stable family.
@@ -496,10 +543,10 @@ class OpenRouterCatalogFetcher:
 
     def _fetch_remote(self) -> list[ModelCatalogEntry]:
         if self._transport is not None:
-            raw = self._transport(OPENROUTER_CATALOG_URL, self._fetch_timeout_seconds)
+            raw = self._transport(catalog_url(), self._fetch_timeout_seconds)
         else:
             raw = self._urlopen_catalog(
-                url=OPENROUTER_CATALOG_URL,
+                url=catalog_url(),
                 timeout=self._fetch_timeout_seconds,
             )
         try:
