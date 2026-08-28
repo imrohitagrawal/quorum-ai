@@ -52,7 +52,17 @@ INPUT-CLASS TABLE. Every row is a test.
   9   OVERLAP, N=4 three aligned + one outlier       strong     (unchanged)
  10   _required_cluster at every representable size  literals
  11   stance N is len(stance), not len(completed)    distinguished
- 12   OVERLAP decision, every vector at sizes 0-5    identical to shipped <-- THE GUARD
+
+Row 12 — "OVERLAP decision, every DEGREE vector at sizes 0-5, identical to
+shipped" — lived here and was REMOVED 2026-08-28 (#382, ADR-0083). Its
+premise (``_has_strong_overlap`` is a pure function of the DEGREE vector
+``_overlap_partner_counts`` returns) became false by design: degree alone
+cannot distinguish a genuine mutual trio from a 4-cycle (two disjoint
+overlapping pairs), which is exactly the bug #382 fixed. The guard now lives
+in ``test_consensus_requires_mutual_cluster.py`` as an exhaustive test over
+the ADJACENCY-matrix space (not degree sequences) at panel sizes 0-5, against
+an independently-written triangle oracle — the same shape of guard, rebuilt
+on the input the fixed function actually depends on.
 
 WHAT TURNS EACH ROW RED. Every mutation below was RUN, in this order, with
 bytecode caching DISABLED (``PYTHONDONTWRITEBYTECODE=1`` and ``python -B``,
@@ -78,8 +88,11 @@ copy and verified with ``diff -q`` after each; never ``git checkout``.
      docstring wrongly said it was.** It pins one SHAPE, the single edge
      ``[1, 1, 0]``. Adversarial review found a non-equivalent loosening at the
      DEGREE position that left all 13 tests green while flipping 7 of the 27
-     partner-count vectors at panel size 3. Row 12 is the general guard; row 7
-     remains as the readable, named example of the defect.
+     partner-count vectors at panel size 3. The general guard over the
+     overlap bar's whole decision surface now lives in
+     ``test_consensus_requires_mutual_cluster.py`` (see the note where row 12
+     used to be, above); row 7 remains here as the readable, named example
+     of the single-edge defect.
   E  stance bar uses ``len(completed)``        -> 1 failed, 12 passed
      red: row 11, alone. This mutant SURVIVED an earlier version of this file;
      row 11 exists because a reviewer demonstrated it was non-equivalent.
@@ -91,7 +104,6 @@ copy and verified with ``diff -q`` after each; never ``git checkout``.
 
 from __future__ import annotations
 
-import itertools
 from decimal import Decimal
 
 import pytest
@@ -218,8 +230,10 @@ def test_row5_stance_n2_one_versus_one_is_divided_unchanged() -> None:
 
 def test_row6_stance_n2_single_group_is_strong_unchanged() -> None:
     """``len(sizes) == 1`` short-circuits before the majority bar, so this is
-    untouched by the change. (A panel of ONE also reads strong this way; that is
-    pre-existing, filed as #383, and deliberately not fixed here.)"""
+    untouched by the change. (A panel of ONE, N=1, is a DIFFERENT shape and no
+    longer reads strong this way — fixed by #383; see
+    test_consensus_panel_of_one_is_weak.py. This test starts at N=2, which
+    #383's guard does not touch.)"""
     assert _strength_from_stance({1: "adopt", 2: "adopt"}) == "strong"
 
 
@@ -320,71 +334,9 @@ def test_a_majority_cluster_below_four_is_a_single_edge(panel_size: int) -> None
     assert sc._required_cluster(4) - 1 == 2
 
 
-def _overlap_rule_as_shipped(partner_counts: list[int]) -> bool:
-    """``_has_strong_overlap`` exactly as ``origin/main`` writes it, in LITERALS.
-
-    Deliberately does not call ``_required_cluster``: this is the oracle proving
-    the overlap bar did not move, so it must not share code with the thing under
-    test (rule 7a). If it did, loosening the helper would loosen the oracle too
-    and the test would pass for any implementation.
-    """
-    if len(partner_counts) < 3:
-        return False
-    return sum(1 for partners in partner_counts if partners >= 2) >= 3
-
-
-@pytest.mark.parametrize("panel_size", [0, 1, 2, 3, 4, 5])
-def test_row12_the_overlap_bar_is_exhaustively_unchanged(
-    panel_size: int, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Row 7 was NOT the guard it claimed to be, and this is.
-
-    Row 7 pins one SHAPE — the single edge ``[1, 1, 0]``. Adversarial review
-    demonstrated a non-equivalent loosening it does not catch: mutating the
-    DEGREE position from ``partners >= 2`` to
-    ``partners >= _required_cluster(len(counts)) - 1`` left all 13 tests green
-    (measured: ``13 passed``) while changing the verdict on **7 of the 27**
-    partner-count vectors at panel size 3 — all in the False -> True direction,
-    e.g. the star ``[2, 1, 1]``, where two answers sharing nothing at all
-    (Jaccard 0.0) read as consensus and ``false_consensus_preserved`` flips to
-    its unsafe value.
-
-    So this pins the whole decision surface instead of one shape: every
-    reachable partner-count vector at panel sizes 0-5, against the shipped rule
-    written out in literals. A partner count cannot exceed ``panel_size - 1``,
-    so this is the complete space, not a sample.
-
-    What turns it red, each MEASURED against this file:
-
-    * degree bar ``partners >= 2`` -> ``partners >= _required_cluster(...) - 1``
-      (the survivor above): ``1 failed`` — this row at panel size 3.
-    * degree bar -> ``partners >= 1``: ``3 failed`` — sizes 3, 4, 5.
-    * count bar ``>= 3`` -> ``>= 2``: ``3 failed`` — sizes 3, 4, 5.
-
-    What it does NOT catch, and should not: changing the ``< 3`` floor to
-    ``< 2`` leaves ``19 passed``. That mutant is EQUIVALENT — a sum over two
-    partner counts can never reach 3, so panel size 2 returns False either way.
-    Recorded here rather than "fixed" by contorting a test around it, per
-    ADR-0069.
-    """
-    vectors: list[tuple[int, ...]]
-    if panel_size == 0:
-        vectors = [()]
-    else:
-        vectors = list(itertools.product(range(panel_size), repeat=panel_size))
-
-    texts = ["placeholder"] * panel_size
-    differing = []
-    for vector in vectors:
-        monkeypatch.setattr(sc, "_overlap_partner_counts", lambda _t, v=vector: list(v))
-        if sc._has_strong_overlap(texts) is not _overlap_rule_as_shipped(list(vector)):
-            differing.append(vector)
-
-    assert differing == []
-
-    # Positive partner: at the sizes where the rule can say either thing, the
-    # oracle must actually produce BOTH answers across the space. Without this,
-    # a rule that returned False for everything would pass the assertion above.
-    if panel_size >= 3:
-        verdicts = {_overlap_rule_as_shipped(list(v)) for v in vectors}
-        assert verdicts == {True, False}
+# Row 12 (the exhaustive overlap-bar guard) and its literal oracle,
+# ``_overlap_rule_as_shipped``, were REMOVED 2026-08-28 (#382, ADR-0083) — see
+# the note in this file's header docstring where the row-12 table entry used
+# to be. The guard now lives in test_consensus_requires_mutual_cluster.py,
+# rebuilt over the adjacency-matrix space the fixed ``_has_strong_overlap``
+# actually depends on.
