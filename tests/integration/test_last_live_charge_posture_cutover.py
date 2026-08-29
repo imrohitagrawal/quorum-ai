@@ -29,13 +29,32 @@ boundary):
    store where every charge has genuinely been live so far would need a
    different signal to avoid treating an untouched legacy database as safe.
 
-Taking the smaller of the two closes both gaps: signal 2 tightens signal 1
-whenever it has real proof, and signal 1 is always a safe fallback for
-whatever signal 2 cannot yet prove.
-``test_a_live_charge_in_the_376_to_379_deploy_gap_is_still_reported`` is the
-regression test for the gap adversarial review found in the signal-1-only
-design; ``test_no_simulated_row_ever_means_no_row_is_ambiguous`` is the
-regression test for the gap a signal-2-only design would have.
+Taking the smaller of the two NARROWS signal 1's gap — it does not close it.
+Signal 2 can only tighten the boundary using a simulated row that already
+existed when signal 1 froze, because ``id`` only grows: a simulated row
+written after the freeze sits above the frozen cutover and ``MIN()`` keeps
+the frozen value. So on a database where no simulated charge was recorded
+before this fix's first boot, the boundary collapses to signal 1 alone and
+excludes every live charge below it permanently, with no self-healing. An
+earlier revision of this docstring claimed the design "closes both gaps";
+adversarial review reproduced 5 live charges excluded forever, and that
+claim was false.
+
+That residual case is unreachable on THIS deployment — ``fly.toml:60`` has
+``OPENROUTER_LIVE_EXECUTION_ENABLED = "false"`` and ``git log -S`` over that
+file returns exactly one commit, so every post-#376 charge is simulated and
+signal 2 is set long before this fix boots. It is reachable only on a
+deployment running live continuously across the #376→#379 window. Closing it
+would need a posture column written at charge time; this field is reported on
+``/status`` and read by no spend rail (verified: ``grep -rn
+last_live_charge_at src/`` finds one caller, ``main.py``'s status handler,
+and zero references in ``costs.py``), so that schema change is not justified.
+
+``test_a_live_charge_in_the_376_to_379_deploy_gap_is_still_reported`` pins the
+sub-case signal 2 DOES rescue; ``test_no_simulated_row_ever_means_no_row_is_ambiguous``
+pins the gap a signal-2-only design would have; and
+``test_the_boundary_is_stable_across_restarts`` pins signal 1's freeze on a
+ledger with no simulated row at all, so it measures signal 1 alone.
 """
 
 from __future__ import annotations
@@ -253,42 +272,72 @@ def test_a_live_charge_in_the_376_to_379_deploy_gap_is_still_reported(tmp_path: 
 
 
 def test_the_boundary_is_stable_across_restarts(tmp_path: Path) -> None:
-    """The boundary must not drift as more rows are written or the process
-    restarts — it is a fact about the FIRST simulated row, which never moves.
+    """Signal 1's frozen value must PERSIST, not be recomputed on each open.
 
-    RED IF a future change makes the boundary depend on ``MAX(id)`` at some
-    later moment (e.g. "the newest row when the store opened") instead of the
-    first simulated row: a live charge visible before a restart would go
-    missing after one, silently resurrecting the production defect on every
-    deploy.
+    DELIBERATELY NO SIMULATED ROW ANYWHERE. An earlier version of this test
+    seeded one before the live charge, which made signal 2 supply the
+    boundary and masked signal 1 entirely: adversarial review mutated
+    ``_backfill_live_charge_posture_cutover`` to recompute ``MAX(id)`` on
+    every open instead of reading the persisted ``max_event_id``, and all 53
+    tests in this file and its neighbours still passed. With no simulated row
+    the subquery is NULL, ``COALESCE`` falls through to signal 1, and signal 1
+    is the only thing under test.
+
+    The store opens on an EMPTY ledger, so the cutover freezes at ``0``; the
+    live charge then lands at id 1 and must stay visible forever.
+
+    RED IF the migration recomputes ``COALESCE(MAX(id), 0)`` on a database
+    where it is already marked applied, instead of reading back the frozen
+    ``max_event_id``: the reopened cutover becomes 1, ``id > 1`` excludes the
+    only live charge, and this reports ``None`` — the production defect
+    resurrecting on every restart.
     """
     db = tmp_path / "feedback_events.sqlite3"
-    _write_pre_379_db(db, [(COST_ACCEPTED_EVENT, None)])
 
     first = FeedbackStore(str(db))
-    first.record(
-        recorder="cost",
-        event_type=COST_ACCEPTED_SIMULATED_EVENT,
-        account_id=uuid4(),
-        query_run_id=uuid4(),
-        recorded_at=datetime.now(UTC),
-        payload={"estimated_cost_usd": str(Decimal("0.01"))},
-    )
-    stamp = datetime.now(UTC)
-    first.record(
-        recorder="cost",
-        event_type=COST_ACCEPTED_EVENT,
-        account_id=uuid4(),
-        query_run_id=uuid4(),
-        recorded_at=stamp,
-        payload={"estimated_cost_usd": str(Decimal("0.02"))},
-    )
-    assert first.last_live_charge_at() is not None
-    first.close()
+    try:
+        # PREMISE: an empty ledger freezes the cutover at 0. If this is not 0
+        # the test is not exercising the freeze it claims to.
+        assert first._live_charge_cutover_id == 0
+        stamp = datetime.now(UTC)
+        first.record(
+            recorder="cost",
+            event_type=COST_ACCEPTED_EVENT,
+            account_id=uuid4(),
+            query_run_id=uuid4(),
+            recorded_at=stamp,
+            payload={"estimated_cost_usd": str(Decimal("0.02"))},
+        )
+        assert first.last_live_charge_at() is not None
+    finally:
+        first.close()
+
+    # POSITIVE PARTNER: exactly one charge row exists and NO simulated row, so
+    # signal 2 is NULL on every call below and cannot rescue a broken signal 1.
+    conn = sqlite3.connect(str(db))
+    try:
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM events WHERE event_type = ?", (COST_ACCEPTED_EVENT,)
+            ).fetchone()[0]
+            == 1
+        )
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM events WHERE event_type = ?",
+                (COST_ACCEPTED_SIMULATED_EVENT,),
+            ).fetchone()[0]
+            == 0
+        )
+    finally:
+        conn.close()
 
     for _ in range(3):
         reopened = FeedbackStore(str(db))
         try:
+            assert reopened._live_charge_cutover_id == 0, (
+                "the frozen cutover moved on reopen — it was recomputed, not read back"
+            )
             reported = reopened.last_live_charge_at()
             assert reported is not None, "the live charge vanished across a restart"
             assert abs((reported - stamp).total_seconds()) < 1

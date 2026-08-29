@@ -425,10 +425,9 @@ BUCKET_B_PIN_BEHAVIOUR = {
         "assert the posture-cutover freeze runs at most once across repeated "
         "opens of the same database, not the marker string -- "
         "tests/integration/test_last_live_charge_posture_cutover.py::"
-        "test_the_backfill_is_idempotent_and_a_no_op_on_a_post_379_store and "
-        "test_the_cutover_freezes_once_and_survives_a_restart (a wrong/renamed "
-        "marker would re-freeze the cutover forward on every restart, "
-        "silently excluding every live charge written since the last boot)"
+        "test_the_boundary_is_stable_across_restarts (a wrong/renamed marker "
+        "would re-freeze the cutover forward on every restart, silently "
+        "excluding every live charge written since the last boot)"
     ),
 }
 

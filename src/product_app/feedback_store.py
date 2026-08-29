@@ -1426,13 +1426,33 @@ class FeedbackStore:
         Taking the SMALLER of the two is what makes them safe together:
         signal 2 only ever TIGHTENS signal 1 (never widens it, since it can
         only lower the boundary when it has real proof to do so), and signal 1
-        is always a safe ceiling for whatever signal 2 cannot yet prove. The
-        one residual edge case — the very FIRST charge event ever written
-        after #376 shipped happens itself to be live, strictly before both any
-        simulated row exists AND before this fix's own first boot — is real
-        but narrow: one specific charge, not an entire deploy window, and it
-        self-heals the moment either signal catches up. No boundary derived
-        without an oracle for exactly when #376 deployed closes it further.
+        is always a safe ceiling for whatever signal 2 cannot yet prove.
+
+        THE RESIDUAL GAP, STATED HONESTLY — this does NOT close signal 1's gap
+        in general. Signal 2 can only tighten the boundary using a simulated
+        row that ALREADY EXISTED when signal 1 froze: ``id`` only grows, so a
+        simulated row written after the freeze necessarily sits above the
+        frozen cutover and ``MIN()`` keeps the frozen value. Therefore, on a
+        database where NO simulated charge was recorded before this fix's
+        first boot, the combined boundary collapses to signal 1 alone and
+        every live charge below it is excluded PERMANENTLY — an unbounded run
+        of them, not one charge, and it never self-heals. An earlier revision
+        of this docstring claimed the opposite ("one specific charge... it
+        self-heals the moment either signal catches up"); adversarial review
+        reproduced 5 live charges excluded forever, and that claim was false.
+
+        Why this is still the right trade for THIS deployment, measured
+        2026-08-29: ``fly.toml:60`` sets ``OPENROUTER_LIVE_EXECUTION_ENABLED
+        = "false"``, and ``git log -S`` over that file returns exactly ONE
+        commit — the flag has never been true in the deployed config. So
+        every charge written since #376 shipped is simulated, signal 2 is set
+        correctly and well before this fix's first boot, and the residual gap
+        is unreachable here. It becomes reachable only on a deployment that
+        runs live continuously across the #376→#379 window with no simulated
+        charge in between. Closing it for that case needs a posture column
+        written at charge time, which is a schema change this reporting-only
+        field does not justify — no spend rail reads it (see the "reported,
+        never enforced" note on :meth:`global_daily_simulated_spend`).
         """
         with self._lock:
             cursor = self._conn.execute(
