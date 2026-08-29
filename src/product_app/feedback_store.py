@@ -425,7 +425,8 @@ class FeedbackStore:
     #: sit in ``_SCHEMA``, which runs unguarded on every open including a
     #: read-only one. Single-row by construction (``CHECK (id = 1)``): this
     #: store freezes exactly one cutover, once, on the first boot after this
-    #: migration ships.
+    #: migration ships. See :meth:`last_live_charge_at` for why this frozen
+    #: value is a FALLBACK, not the only signal.
     _LIVE_CHARGE_CUTOVER_DDL = (
         "CREATE TABLE IF NOT EXISTS live_charge_posture_cutover ("
         "id INTEGER PRIMARY KEY CHECK (id = 1), max_event_id INTEGER NOT NULL)"
@@ -480,7 +481,8 @@ class FeedbackStore:
                 self._conn.execute(self._SPEND_RAIL_INDEX)
         self._backfill_f01_preview_rows()
         #: The id boundary below which a charge's live/simulated posture is
-        #: unknown. See :meth:`_backfill_live_charge_posture_cutover`.
+        #: unknown, ABSENT any tighter proof — see :meth:`last_live_charge_at`.
+        #: Frozen once, at this boot, by :meth:`_backfill_live_charge_posture_cutover`.
         self._live_charge_cutover_id: int = self._backfill_live_charge_posture_cutover()
         _open_stores.add(self)
 
@@ -648,19 +650,19 @@ class FeedbackStore:
         return cursor.fetchone() is not None
 
     def _backfill_live_charge_posture_cutover(self) -> int:
-        """Freeze the id boundary below which a charge's posture is unknown.
+        """Freeze a SAFE FALLBACK id boundary for :meth:`last_live_charge_at`.
 
         Issue #379. ``charge_event_type`` only started choosing between
         ``COST_ACCEPTED_EVENT`` and ``COST_ACCEPTED_SIMULATED_EVENT`` when
         #376 shipped; every row written before that carries
         ``COST_ACCEPTED_EVENT`` because it was the only opening-charge type
         there was, live or not. On the first boot after THIS fix ships, every
-        row already on disk is therefore of unknown posture, and
-        :meth:`last_live_charge_at` must not read any of them as a live
-        charge. Freezing ``MAX(id)`` at that moment, once, and never moving it
-        again is exactly that: rows written before this boot are excluded
-        forever; every row written from here on has known posture (the
-        discriminating code is already live) and is read normally.
+        row already on disk is of AT-BEST-UNKNOWN posture from this signal's
+        point of view, so freezing ``MAX(id)`` here, once, gives
+        :meth:`last_live_charge_at` a safe value to fall back to when it has
+        no better one: see that method's docstring for why this alone is not
+        the full answer, and why it is combined with a second, data-derived
+        signal there rather than used on its own.
 
         Best-effort and idempotent like :meth:`_backfill_f01_preview_rows`,
         for the identical read-only-volume reason. Unlike that method, a
@@ -1379,24 +1381,73 @@ class FeedbackStore:
         returns the first it can parse. ``None`` still means "no live charge
         found", which after that scan is overwhelmingly "never".
 
-        ALSO EXCLUDES ``id <= self._live_charge_cutover_id`` (issue #379). A
-        row from before the deployment that first told a live charge from a
-        simulated one carries ``COST_ACCEPTED_EVENT`` whether or not it was
-        ever live — that event type was the only one there was. Reading one as
-        a live charge tells a watchdog real money moved on a deployment that
-        may never have spent a cent. The cutover is computed once, ever, by
-        :meth:`_backfill_live_charge_posture_cutover` and frozen in
-        ``live_charge_posture_cutover`` — a row with a higher id than that
-        cutover was written after the discriminating code was already live,
-        so its posture is known and it is read normally.
+        ALSO EXCLUDES any row at or before the POSTURE CUTOVER (issue #379).
+        ``charge_event_type`` only started choosing between
+        ``COST_ACCEPTED_EVENT`` and ``COST_ACCEPTED_SIMULATED_EVENT`` when
+        #376 shipped; every row written before that carries
+        ``COST_ACCEPTED_EVENT`` unconditionally, because it was the only
+        opening-charge type there was, live or not. Reading one of those as a
+        live charge tells a watchdog real money moved on a deployment that may
+        never have spent a cent — the production defect #379 exists to fix.
+
+        TWO SIGNALS, combined by taking whichever is SMALLER (i.e. excludes
+        less):
+
+        1. ``self._live_charge_cutover_id`` — ``MAX(id)`` frozen, once, the
+           first time the fixed code opens this database file (see
+           :meth:`_backfill_live_charge_posture_cutover`). Safe on its own:
+           everything on disk before the fixed code ever ran is excluded.
+        2. ``MIN(id) - 1`` over ``COST_ACCEPTED_SIMULATED_EVENT`` rows,
+           computed fresh on every call. The first row of that type is, by
+           construction, the first charge written once the discriminating
+           code (#376) was already live — proof, independent of when THIS fix
+           deployed, that every row from there on has known posture.
+
+        Signal 1 ALONE has a real gap: a genuinely live charge written after
+        #376 shipped but before this fix's own first boot — known posture,
+        since discrimination was already active — would be frozen out
+        forever, because the migration cannot tell it apart from a true
+        pre-#376 row. Adversarial review found exactly this gap in an earlier
+        revision that used signal 1 alone.
+        ``test_a_live_charge_in_the_376_to_379_deploy_gap_is_still_reported``
+        is the regression test.
+
+        Signal 2 ALONE has a different gap: if NO simulated row has EVER been
+        written, its value is undefined, and a store where every charge has
+        genuinely been live so far (a fresh deployment, or one that never
+        runs simulated) would have nothing to derive a boundary from — the
+        naive fallback of "exclude nothing" would then also read a true
+        pre-#376 legacy row as live, on any existing database that has not
+        yet processed a single charge since this fix deployed.
+        ``test_no_simulated_row_ever_means_no_row_is_ambiguous`` pins the
+        "fresh store" half; signal 1 covers the "existing legacy database,
+        untouched since deploy" half via its frozen fallback.
+
+        Taking the SMALLER of the two is what makes them safe together:
+        signal 2 only ever TIGHTENS signal 1 (never widens it, since it can
+        only lower the boundary when it has real proof to do so), and signal 1
+        is always a safe ceiling for whatever signal 2 cannot yet prove. The
+        one residual edge case — the very FIRST charge event ever written
+        after #376 shipped happens itself to be live, strictly before both any
+        simulated row exists AND before this fix's own first boot — is real
+        but narrow: one specific charge, not an entire deploy window, and it
+        self-heals the moment either signal catches up. No boundary derived
+        without an oracle for exactly when #376 deployed closes it further.
         """
         with self._lock:
             cursor = self._conn.execute(
                 "SELECT recorded_at FROM events "
                 f"WHERE recorder = 'cost' AND event_type = '{COST_ACCEPTED_EVENT}' "
-                "AND id > ? "
+                "AND id > MIN(?, COALESCE("
+                f"(SELECT MIN(id) - 1 FROM events "
+                f"WHERE recorder = 'cost' AND event_type = '{COST_ACCEPTED_SIMULATED_EVENT}'), "
+                "?)) "
                 "ORDER BY id DESC LIMIT ?",
-                (self._live_charge_cutover_id, _LAST_CHARGE_SCAN_LIMIT),
+                (
+                    self._live_charge_cutover_id,
+                    self._live_charge_cutover_id,
+                    _LAST_CHARGE_SCAN_LIMIT,
+                ),
             )
             rows = cursor.fetchall()
         for row in rows:
