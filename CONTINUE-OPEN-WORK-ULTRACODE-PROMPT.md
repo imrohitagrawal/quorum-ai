@@ -50,11 +50,24 @@ before starting anything.
 ## Selecting the next package
 
 The board's `Depends on` column is binding. Beyond that, **prefer independent,
-issue-backed defects over the long W1→W2→W3 lane.** As of 2026-08-28 that lane
-ends in a row formally deferred by ADR-0081 and cannot be validated without
-spend, while **W12 (#379), W11 (#380), W6 (#383) and W10 (#382)** carry open
-issues with no dependencies at all. (A fifth issue row, W13/#268, also has no
-dependency — but it is marked **STOP**, because it moves a cost guardrail.)
+issue-backed defects over the long W1→W2→W3 lane** — that lane ends in a row
+formally deferred by ADR-0081 and cannot be validated without spend.
+
+**Do not trust the names in this paragraph — re-derive them.** An earlier
+revision listed four rows as available; three (W12/#379, W6/#383, W10/#382)
+shipped and the sentence went stale within days, which is the exact failure this
+file exists to avoid. Get the live list instead:
+
+```bash
+python3 scripts/check_open_work.py --check   # per-row state, derived from the tree
+gh issue list --state open
+```
+
+As of `5719712` (2026-08-29) that yields **11 PENDING, 4 DONE**, with
+**W11 (#380)** the remaining issue-backed row that has no dependency, and
+**W20 (#394)** likewise unblocked though its own row records zero live impact
+today. (W13/#268 also has no dependency — but it is **STOP**, it moves a cost
+guardrail.)
 
 **Club before you select** (rule 17g). Two rows in the same narrow area, one a
 direct follow-on of the other, are ONE package with one reviewer and one deploy —
@@ -157,6 +170,14 @@ Rules that earn the fan its cost, all paid for:
    including the docs-only ones. That is a session observation, not a repo
    measurement; the graded evidence for review yield is
    `docs/evidence/2026-07-30-engineering-practice.md` row 2.1.
+   **On 2026-08-29 the two-round cap FIRED for real** (W12/#379): round 1 found
+   a genuine design gap, and round 2 found that the *fix for it* shipped two
+   false docstring claims plus a vacuous test that stayed green under the exact
+   mutation it existed to catch. Both rounds were unanimous on verification.
+   That is the rule working — and the correct response was to STOP and put the
+   choice to the human, who chose to correct the prose and the test rather than
+   re-cut the design a third time. **Escalating is a normal outcome, not a
+   failure.** Do not quietly start a third fix.
 5. Tell every agent **IN CAPITALS**: read-only; no `git checkout` / `git stash` /
    `sed -i`; its own clone for anything it executes; no pytest in the shared tree;
    `PYTHONDONTWRITEBYTECODE=1`; a unique scratch dir.
@@ -200,6 +221,25 @@ Rules that earn the fan its cost, all paid for:
    `make handoff` overwrites `docs/session-handoff.md`. Edit the GENERATORS.
 10. **`pytest-timeout` is NOT installed.** `--timeout` makes pytest error out and
     every mutant then looks killed while nothing is tested.
+11. **The advisory "Mutation score on changed functions" job fails on any diff
+    that touches `src/`, and passes on rerun.** Measured 2026-08-29 on three
+    consecutive commits. It is NOT your diff and NOT a required check. Cause,
+    reproduced locally: with a non-empty scope mutmut first runs a CLEAN
+    baseline of the whole suite inside `./mutants/`, and
+    `test_redacting_many_colliding_keys_does_not_take_quadratic_time` is
+    load-sensitive — it asserts `elapsed < 0.5` and measured **2.824s** under
+    load, so the run aborts with `failed to collect stats` before scoring a
+    single mutant. A docs-only diff has an empty scope and passes trivially.
+    `gh run rerun <id> --failed` clears it. Read the log for the number before
+    attributing it to anything.
+12. **A board row can be `PENDING` while its work is merged, closed and in
+    production.** Measured 2026-08-29 on W12/#379: the Evidence needle pinned a
+    line the fix KEPT (it appended a clause on the next line), so the needle
+    never flipped and `make validate` stayed green over a false board. **Pin a
+    needle the fix must ADD or must DELETE, never one it will edit around**, and
+    check it in genuine code — not a comment or docstring, which is the W7 trap.
+    Verify both directions before committing: `grep -c <needle>` on your tree
+    AND on the pre-fix commit.
 
 ## Done means shipped
 
