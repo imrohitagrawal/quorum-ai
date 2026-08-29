@@ -164,7 +164,10 @@ def test_pre_fix_preview_rows_stop_metering_once_the_fixed_code_opens_the_store(
             ("cost_guardrail_accepted", "cost_guardrail_accepted", str(real_run)),
         ]
         # ...and the repair is recorded, so it never runs again.
-        assert _migration_names(db) == ["f01_preview_billing_relabel"]
+        assert _migration_names(db) == [
+            "f01_preview_billing_relabel",
+            "live_charge_posture_cutover",
+        ]
     finally:
         post_fix.close()
 
@@ -244,7 +247,10 @@ def test_backfill_is_idempotent_and_a_no_op_on_a_post_fix_store(tmp_path: Path) 
         finally:
             store.close()
     # The marker is written exactly once, whatever the restart count.
-    assert _migration_names(db) == ["f01_preview_billing_relabel"]
+    assert _migration_names(db) == [
+        "f01_preview_billing_relabel",
+        "live_charge_posture_cutover",
+    ]
 
 
 def test_backfill_never_relabels_a_row_written_after_it_ran(tmp_path: Path) -> None:
@@ -342,8 +348,11 @@ def test_a_corrupt_row_rolls_the_whole_migration_back_instead_of_half_applying_i
             "cost_guardrail_accepted",
             "cost_guardrail_accepted",
         ]
-        # ...and the migration is still pending, so it will retry.
-        assert _migration_names(db) == []
+        # ...and the F-01 migration is still pending, so it will retry. The
+        # posture-cutover migration is unrelated data (it never reads
+        # ``payload``) and lands independently, in its own transaction, even
+        # though F-01 failed in the same boot.
+        assert _migration_names(db) == ["live_charge_posture_cutover"]
     finally:
         store.close()
 
@@ -359,7 +368,10 @@ def test_a_corrupt_row_rolls_the_whole_migration_back_instead_of_half_applying_i
             "cost_estimate_previewed",
             "cost_estimate_previewed",
         ]
-        assert _migration_names(db) == ["f01_preview_billing_relabel"]
+        assert _migration_names(db) == [
+            "f01_preview_billing_relabel",
+            "live_charge_posture_cutover",
+        ]
         assert recovered.daily_spend_for(account) == Decimal("0")
     finally:
         recovered.close()
@@ -446,15 +458,21 @@ def test_read_only_database_degrades_to_pre_backfill_behaviour_instead_of_failin
         try:
             # 2. The operator is told, by the module that failed, with the
             #    underlying SQLite reason attached — not a silent swallow.
+            #    TWO warnings now: this DB predates BOTH one-shot migrations
+            #    (the pre-fix schema has no ``schema_migrations`` row at
+            #    all), and each backfill is independently best-effort, so
+            #    each reports its own failure.
             warnings = [
                 record
                 for record in caplog.records
                 if record.levelno == logging.WARNING and record.name == "product_app.feedback_store"
             ]
-            assert len(warnings) == 1, [r.getMessage() for r in caplog.records]
-            message = warnings[0].getMessage()
-            assert "F-01 preview backfill did not run" in message
-            assert "readonly database" in message
+            assert len(warnings) == 2, [r.getMessage() for r in caplog.records]
+            messages = [record.getMessage() for record in warnings]
+            assert "F-01 preview backfill did not run" in messages[0]
+            assert "readonly database" in messages[0]
+            assert "live-charge posture cutover backfill did not run" in messages[1]
+            assert "readonly database" in messages[1]
 
             # 3. The rows are exactly as they were — nothing half-written,
             #    nothing lost. This is the documented degradation: the
@@ -484,6 +502,9 @@ def test_read_only_database_degrades_to_pre_backfill_behaviour_instead_of_failin
             "cost_guardrail_accepted",
         ]
         assert recovered.daily_spend_for(account) == UNIT
-        assert _migration_names(db) == ["f01_preview_billing_relabel"]
+        assert _migration_names(db) == [
+            "f01_preview_billing_relabel",
+            "live_charge_posture_cutover",
+        ]
     finally:
         recovered.close()

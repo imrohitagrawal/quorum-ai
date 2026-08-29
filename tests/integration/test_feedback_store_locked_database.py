@@ -292,7 +292,10 @@ def test_exclusive_lock_still_blocks_when_the_schema_is_already_present(
     """
     db = tmp_path / "feedback_events.sqlite3"
     _seed_store(db)
-    assert _migration_names(db) == ["f01_preview_billing_relabel"]
+    assert _migration_names(db) == [
+        "f01_preview_billing_relabel",
+        "live_charge_posture_cutover",
+    ]
 
     with (
         caplog.at_level(logging.WARNING, logger=_STORE_LOGGER),
@@ -376,9 +379,13 @@ def test_reserved_lock_with_the_migration_unapplied_opens_but_skips_the_migratio
 ) -> None:
     """Schema present, marker absent: the open survives, the repair does not.
 
-    ``BEGIN IMMEDIATE`` inside the backfill is the one statement that needs a
-    write lock; its best-effort ``except`` turns the failure into exactly one
-    warning and leaves ``schema_migrations`` empty.
+    ``BEGIN IMMEDIATE`` inside a backfill is the one statement that needs a
+    write lock; its best-effort ``except`` turns the failure into a warning
+    and leaves ``schema_migrations`` empty. TWO independent one-shot
+    migrations run at boot (F-01, and #379's posture cutover), both unapplied
+    here (``_clear_migration_marker`` deletes every row), so both attempt
+    their own ``BEGIN IMMEDIATE`` and both are blocked — two honest warnings,
+    not one.
     """
     db = tmp_path / "feedback_events.sqlite3"
     _seed_store(db)
@@ -389,9 +396,11 @@ def test_reserved_lock_with_the_migration_unapplied_opens_but_skips_the_migratio
         store = FeedbackStore(str(db))
         try:
             warnings = _records(caplog, _STORE_LOGGER, logging.WARNING)
-            assert len(warnings) == 1, warnings
+            assert len(warnings) == 2, warnings
             assert "F-01 preview backfill did not run" in warnings[0]
             assert "database is locked" in warnings[0]
+            assert "live-charge posture cutover backfill did not run" in warnings[1]
+            assert "database is locked" in warnings[1]
             assert store.event_count() == 0
         finally:
             store.close()

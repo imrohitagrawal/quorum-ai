@@ -421,6 +421,14 @@ BUCKET_B_PIN_BEHAVIOUR = {
         "test_backfill_leaves_every_other_cost_row_alone and "
         "test_backfill_never_relabels_a_row_written_after_it_ran"
     ),
+    "feedback_store.FeedbackStore._LIVE_CHARGE_CUTOVER_MIGRATION": (
+        "assert the posture-cutover freeze runs at most once across repeated "
+        "opens of the same database, not the marker string -- "
+        "tests/integration/test_last_live_charge_posture_cutover.py::"
+        "test_the_boundary_is_stable_across_restarts (a wrong/renamed marker "
+        "would re-freeze the cutover forward on every restart, silently "
+        "excluding every live charge written since the last boot)"
+    ),
 }
 
 #: No pin. A literal here restates the implementation and catches nothing.
@@ -495,6 +503,10 @@ BUCKET_C_NO_PIN = {
     "feedback_store.FeedbackStore._MIGRATIONS_DDL": (
         "SQL DDL, not a value; malformed SQL fails loudly at open, exercised "
         "by every migration test"
+    ),
+    "feedback_store.FeedbackStore._LIVE_CHARGE_CUTOVER_DDL": (
+        "SQL DDL, not a value; malformed SQL fails loudly at open, exercised "
+        "by every test in test_last_live_charge_posture_cutover.py"
     ),
     # --- Added 2026-08-26 with session_store.py (ADR-0073) ---
     "auth.SESSION_GC_INTERVAL_S": (
