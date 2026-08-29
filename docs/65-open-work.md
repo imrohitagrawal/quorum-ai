@@ -106,7 +106,7 @@ caught by any automated check and 10 of 16 by adversarial review
 | W9 | Guard the moderator model overlapping a panel slot | PENDING | `ABSENT src/product_app/model_slots.py :: debate_model_id` | — | — |
 | W10 | Consensus certifies a mutual cluster it never checked | DONE | `PRESENT src/product_app/synthesis_consensus.py :: return sum(1 for partners in counts if partners >= 2) >= 3` | #382 | — |
 | W11 | Completeness divides by answers recorded, not slots requested | PENDING | `PRESENT src/product_app/evaluation.py :: slot_count = len(initial_answers)` | #380 | — |
-| W12 | `last_live_charge_at` reports a pre-#376 row as a live charge | PENDING | `PRESENT src/product_app/feedback_store.py :: WHERE recorder = 'cost' AND event_type = '{COST_ACCEPTED_EVENT}'` | #379 | — |
+| W12 | `last_live_charge_at` reports a pre-#376 row as a live charge | DONE | `ABSENT src/product_app/feedback_store.py :: _live_charge_cutover_id` | #379 | — |
 | W13 | Nothing bounds a call's INPUT — **STOP** | UNPINNED | `—` | #268 | — |
 | W14 | Close the 5xx possibly-billed premise with data | UNPINNED | `—` | #105 | production logs |
 | W15 | `_bound_sniff_time` is referenced and does not exist | PENDING | `PRESENT src/product_app/providers.py :: _bound_sniff_time` | — | — |
@@ -231,7 +231,32 @@ that primitive is now fixed.
 nothing is absent from both sides and a run that requested four and recorded
 three scores 1.0. The product's own copy states the opposite contract.
 
-**W12 — #379.** Unlike the 24h totals it never self-heals.
+**W12 — #379. DONE** (merged `991669b`, deployed and verified: `/status`
+`last_live_charge_at` went from `"2026-08-25T17:00:10..."` to `null` on a
+`live_execution: false` deployment). `last_live_charge_at` read the
+`cost_guardrail_accepted` column alone; every row written before #376 carries
+that type whether or not the run could spend, and unlike the 24h totals the
+field is deliberately unwindowed, so it never self-healed. Now bounded by two
+signals, taking whichever excludes less: a one-shot migration freezing
+`MAX(id)` at the fixed code's first boot, and a query-time boundary at the
+first-ever simulated charge. **Known limitation, recorded in the method's own
+docstring:** this narrows the gap rather than closing it — signal 2 can only
+tighten using a simulated row predating signal 1's freeze, so a ledger with no
+simulated charge before first boot collapses to signal 1. Unreachable here
+(`fly.toml` has never enabled live execution) and not worth a posture column
+for a field no spend rail reads.
+
+**This row's Evidence needle had to be REPLACED, and that is the lesson.** It
+was pinned on `WHERE recorder = 'cost' AND event_type = '{COST_ACCEPTED_EVENT}'`
+— a line the fix KEPT, appending `AND id > ...` on the next line instead of
+rewriting it. So the needle never flipped, `make validate` stayed green, and
+the board went on reporting `PENDING` for work that was merged, closed and in
+production. That is exactly the "work that lands under a different name than
+the needle" case listed under *What this cannot see* — observed for real, not
+hypothetically. The needle is now `_live_charge_cutover_id`, which exists in
+genuine code (the constructor assignment and the two SQL binds), not only in a
+comment or docstring — the W7 trap. **When you pin a row, pick a needle the
+fix must DELETE or must ADD, never a line the fix will merely edit around.**
 
 **W13 — #268. STOP.** Unpinned: the fix's shape is not yet chosen. Marked STOP
 because the issue's own subject is a cost guardrail — it identifies
@@ -308,10 +333,12 @@ decision rather than an oversight.
 
 The earlier order read `W1 → W2 → W3`. That lane is the largest item, then one
 that cannot be validated without spend, then a row now formally deferred
-(ADR-0081) — so nothing ships for a long time. Meanwhile W12 (#379) and
-W11 (#380) still have no dependencies and close two open issues at $0.
+(ADR-0081) — so nothing ships for a long time. W12 (#379) took that advice and
+is now **DONE**; **W11 (#380) is the remaining issue-backed row with no
+dependencies** and closes an open issue at $0, so it is the obvious next pick.
 (W13/#268 also has no dependency, but it is **STOP** — it moves a cost
-guardrail.)
+guardrail.) W20 (#394) is likewise unblocked and cheap, though its own row
+records zero live impact today.
 
 **W6 and W10 shipped as ONE clubbed package** (rule 17g, ADR-0083): both lived
 in `synthesis_consensus.py` and both were the consensus verdict disagreeing
