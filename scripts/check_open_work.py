@@ -367,7 +367,10 @@ def check_freshness(board: Board, root: Path, max_drift: int = MAX_DRIFT_COMMITS
     if _git(root, "merge-base", "--is-ancestor", board.sha, "HEAD").returncode != 0:
         return [
             f"{BOARD.name}: anchor commit {board.sha[:12]} is not an ancestor of "
-            "HEAD. Re-verify the rows and stamp a commit on this history."
+            "HEAD. Stamp a commit that is on main -- the one your branch was cut "
+            "from, or re-stamp after the merge. This repository squash-merges, so "
+            "a commit made on your branch is discarded and stops being an ancestor "
+            "the moment the branch lands."
         ]
     # No error branch: both revisions were just proved to exist and to be
     # related, so ``rev-list`` cannot fail. An unreachable branch is one no test
@@ -378,7 +381,8 @@ def check_freshness(board: Board, root: Path, max_drift: int = MAX_DRIFT_COMMITS
         return [
             f"{BOARD.name}: anchor commit {board.sha[:12]} is {drift} first-parent "
             f"commits behind HEAD (limit {max_drift}). Re-verify every row against "
-            "the tree and stamp the current commit."
+            "the tree and stamp a NEWER commit that is on main -- not one from your "
+            "branch, which a squash merge discards."
         ]
     return []
 

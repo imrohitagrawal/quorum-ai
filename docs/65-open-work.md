@@ -465,14 +465,22 @@ that re-stamping stays a real act.
 repository SQUASH-merges, so every commit you make on a branch is discarded and
 the anchor check (`is not an ancestor of HEAD`) fails the moment the branch
 lands. Measured 2026-08-30: W1 stamped its own branch commit `2350e59`, the
-squash produced `59f402a`, and `main` went RED across `Tests`, `CI` and all
-three `Deploy` runs — the deploy gate correctly reporting a *stranded merge*
-rather than deploying. Nothing reached production, but `main` was broken until
-a follow-up re-stamped it.
+squash produced `59f402a`, and `main` went RED across `Tests`, `CI` and every
+`Deploy` run for that SHA — the deploy gate correctly reporting a *stranded
+merge* rather than deploying. Nothing reached production, but `main` was broken
+until a follow-up re-stamped it.
 
 So either stamp the commit your branch was cut FROM, or re-stamp after the
-merge. "Stamp the current commit" is the natural reading of the sentence above
-and it is the wrong one on a squash-merge repository.
+merge. "Stamp the current commit" is the natural reading and it is the wrong
+one here.
+
+**Being on `main` is necessary, not sufficient**: the anchor must ALSO be within
+`MAX_DRIFT_COMMITS` (60) first-parent commits of HEAD, which at the time of
+writing reaches back about 17 days. An anchor that is on `main` but older than
+that fails with a different message. Both messages in
+`scripts/check_open_work.py` now say which commit to pick, because a failing
+author reads the error, not this paragraph — that omission is what let W1 stamp
+a branch commit while the gate's own text said "stamp the current commit".
 
 Adding or removing a row means editing the count sentence above in the same
 change; the gate compares both numbers against the table.
