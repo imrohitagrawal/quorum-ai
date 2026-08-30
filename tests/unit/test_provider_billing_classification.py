@@ -548,7 +548,21 @@ def _produce_initial() -> Any:
     ("label", "outcome", "expected_posts"),
     [
         ("empty-content", _Body(_completion("")), 1),
-        ("null-content", _Body(_completion(None)), 1),
+        # A REAL ``"content": null`` delta, built with ``sse_stream`` rather
+        # than ``sse_from_completion``: the renderer normalises a non-str
+        # content to "", so routing this through it made the row byte-identical
+        # to ``empty-content`` above and the shape went untested.
+        (
+            "null-content",
+            _Body(
+                sse_stream(
+                    {"choices": [{"index": 0, "delta": {"role": "assistant", "content": None}}]},
+                    {"choices": [{"index": 0, "delta": {}, "finish_reason": "length"}]},
+                    {"choices": [], "usage": _BILLED},
+                )
+            ),
+            1,
+        ),
         # 404 on the ``:online`` variant is the search-unsupported signal, so
         # the bare model id is retried once — TWO POSTs. Pinned here because
         # that retry must survive the new sentinel: ``_DISPATCH_UNMEASURED`` is

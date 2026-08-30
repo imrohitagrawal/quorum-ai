@@ -33,9 +33,45 @@ from tests.provider_wire import sse_comment, sse_stream
 from product_app import config
 from product_app import providers as providers_module
 from product_app.providers import provider_execution_service
+from product_app.telemetry_sink import TOKEN_TELEMETRY_LOGGER
 
 _MODEL_ID = "openai/gpt-4o-mini"
 _USAGE = {"prompt_tokens": 100, "completion_tokens": 900, "total_tokens": 1000}
+
+
+class _TokenCollector(logging.Handler):
+    """Captures records off the file-only token telemetry logger.
+
+    ``product_app.telemetry`` sets ``propagate=False``, so ``caplog`` -- whose
+    handler lives on the root logger -- cannot see these records at all. That
+    is deliberate, and it is why this needs its own handler. A test that used
+    ``caplog`` here would collect nothing and pass vacuously.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(level=logging.DEBUG)
+        self.records: list[logging.LogRecord] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.records.append(record)
+
+
+@pytest.fixture
+def token_records() -> Iterator[_TokenCollector]:
+    logger = logging.getLogger(TOKEN_TELEMETRY_LOGGER)
+    collector = _TokenCollector()
+    previous = logger.level
+    logger.setLevel(logging.DEBUG)
+    logger.addHandler(collector)
+    try:
+        yield collector
+    finally:
+        logger.removeHandler(collector)
+        logger.setLevel(previous)
+
+
+def _delta_frame(text: str) -> dict[str, object]:
+    return {"choices": [{"index": 0, "delta": {"content": text}}]}
 
 
 def _answer_frames() -> tuple[object, ...]:
@@ -275,3 +311,140 @@ def test_the_same_keep_alives_complete_under_a_generous_budget(
     assert isinstance(result, providers_module.LiveProviderResult)
     assert result.answer_text == "the answer"
     assert result.usage is not None
+
+
+@pytest.mark.parametrize(
+    ("frames", "done", "expected"),
+    [
+        (_answer_frames(), True, "done"),
+        (_answer_frames(), False, "finish_reason"),
+        (
+            (
+                {"choices": [{"index": 0, "delta": {"content": "x"}}]},
+                {"error": {"code": 502, "message": "provider exploded"}},
+            ),
+            False,
+            "error",
+        ),
+    ],
+    ids=["done", "finish-reason", "error"],
+)
+def test_the_token_record_states_how_the_stream_actually_ended(
+    monkeypatch: pytest.MonkeyPatch,
+    token_records: _TokenCollector,
+    frames: tuple[object, ...],
+    done: bool,
+    expected: str,
+) -> None:
+    """RED when: ``stream_terminator`` is hardcoded, or stops being emitted.
+
+    Measured before this test existed: replacing
+    ``stream_terminator=streamed.terminator`` with the literal ``"done"``
+    passed the ENTIRE repository. That is the worst shape a telemetry field can
+    have, because this one exists precisely to answer a question nobody has
+    measured -- whether this upstream sends ``[DONE]`` at all, and whether
+    ``usage`` arrives without an opt-in. A constant field would have produced a
+    constant dataset and settled nothing, while looking healthy.
+
+    Three rows, because one would be satisfied by a constant.
+    """
+    with _serve(body=sse_stream(*frames, done=done)) as (base, _payloads):
+        _point_at(monkeypatch, base)
+        result = _post()
+    assert isinstance(result, providers_module.LiveProviderResult)
+    records = token_records.records
+    assert len(records) == 1, "exactly one token record per call"
+    assert records[0].__dict__["stream_terminator"] == expected
+
+
+def test_a_body_that_is_not_a_stream_still_yields_its_answer(
+    monkeypatch: pytest.MonkeyPatch, token_records: _TokenCollector
+) -> None:
+    """RED when: a non-SSE 200 is refused instead of read as a completion.
+
+    An upstream that ignores ``stream: true``, or any proxy that buffers the
+    stream into one body, returns an ordinary completion. Measured against
+    ``origin/main``, that body produced a real answer carrying its usage;
+    refusing it here would throw away a complete PAID answer and drag the whole
+    run's receipt to ``estimated``.
+
+    This matters more than it looks: nothing in this repository measures that
+    OpenRouter honours ``stream: true`` for three of the four shipped answer
+    models -- the streamed probe covered two models, neither of them a default
+    slot. Refusing would have been a mitigation resting on an unmeasured
+    upstream behaviour, which is the failure AGENTS.md rule 8c exists to stop.
+
+    The record assertion is the narrowing: this path must NOT look like a
+    healthy stream, so the terminator says what actually happened.
+    """
+    body = json.dumps(
+        {
+            "choices": [{"finish_reason": "stop", "message": {"content": "a complete answer"}}],
+            "usage": _USAGE,
+        }
+    ).encode()
+    with _serve(body=body) as (base, _payloads):
+        _point_at(monkeypatch, base)
+        result = _post()
+    assert isinstance(result, providers_module.LiveProviderResult)
+    assert result.answer_text == "a complete answer"
+    assert result.usage is not None
+    assert result.usage.total_tokens == 1000
+    records = token_records.records
+    assert len(records) == 1
+    assert records[0].__dict__["stream_terminator"] == "not_a_stream"
+
+
+def test_an_incomplete_stream_records_whether_a_charge_was_stated(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """RED when: ``usage_absent`` is dropped from the incomplete-stream record.
+
+    The usage IS discarded on this path, deliberately: the response was not
+    complete, and serving a fragment to keep its usage would price part of an
+    answer as the whole of one. But the RECORD must still say a charge was
+    stated, or the #105 dataset cannot tell a billed dead end from an unbilled
+    one -- which is the only question that event exists to answer.
+
+    The two rows are each other's partner: without the usage-bearing one,
+    ``usage_absent`` could be hardcoded ``True``, and without the bare one it
+    could be hardcoded ``False``.
+    """
+    seen = {}
+    for label, frames in (
+        ("with-usage", (_delta_frame("half"), {"choices": [], "usage": _USAGE})),
+        ("without-usage", (_delta_frame("half"),)),
+    ):
+        with _serve(body=sse_stream(*frames, done=False)) as (base, _payloads):
+            _point_at(monkeypatch, base)
+            with caplog.at_level(logging.DEBUG, logger="product_app.providers"):
+                result = _post()
+        assert result is providers_module._DISPATCH_UNMEASURED, label
+        records = [r for r in caplog.records if r.msg == "upstream_provider_stream_incomplete"]
+        seen[label] = records[-1].__dict__["usage_absent"]
+        caplog.clear()
+    assert seen == {"with-usage": False, "without-usage": True}
+
+
+def test_a_frame_we_cannot_read_is_never_served_as_a_whole_answer(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """End to end for the silent-drop regression. RED when: the line is ignored.
+
+    A stray leading space makes a real frame fail the ``data:`` test. Ignoring
+    it -- which the SSE specification permits -- dropped that frame in silence
+    and served the SHORTENED answer as complete, priced, with
+    ``is_truncated=False``. ``origin/main`` failed loudly on the same body.
+    """
+    body = b' data: {"choices":[{"index":0,"delta":{"content":"LOST"}}]}\n\n' + sse_stream(
+        _delta_frame(" kept"), {"choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]}
+    )
+    with _serve(body=body) as (base, payloads):
+        _point_at(monkeypatch, base)
+        with caplog.at_level(logging.DEBUG, logger="product_app.providers"):
+            result = _post()
+    assert result is providers_module._DISPATCH_UNMEASURED
+    assert len(payloads) == 1, "a stream we could not read must never be retried"
+    records = [r for r in caplog.records if r.msg == "upstream_provider_stream_incomplete"]
+    assert len(records) == 1
+    assert records[0].__dict__["unrecognised_lines"] == 1

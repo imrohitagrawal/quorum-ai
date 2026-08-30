@@ -1,17 +1,18 @@
 """Render provider responses onto the wire shape the transport actually reads.
 
-Every paid call streams (ADR-0084), so a test that hands
+Every call the provider service makes streams (ADR-0084), so a test that hands
 ``product_app.providers.urlopen`` a whole JSON completion is no longer
-describing anything the code can meet. Before this module existed, nine test
+describing anything the code can meet. Before this module existed, **12** test
 files hand-rolled that body independently -- near byte-identical
 ``json.dumps(payload).encode()`` calls -- so there was no single place to move
-them.
+them. (Count re-derived from the conversion itself; an earlier draft of this
+sentence said nine, which no command produces.)
 
 :func:`sse_from_completion` takes the NON-STREAMED payload a test already
 wrote and renders the equivalent stream. That is deliberate: the test keeps
 stating its intent in the shape a reader can check against OpenRouter's
 documented non-streaming response, and this module owns the translation. It
-also makes the translation itself reviewable in one place instead of nine.
+also makes the translation itself reviewable in one place instead of 12.
 
 :func:`sse_stream` is the escape hatch for the adversarial cases -- frames out
 of order, a missing terminator, an error mid-stream -- where the point IS the
@@ -98,6 +99,7 @@ def sse_from_completion(
     *,
     content_frames: int = 2,
     done: bool = True,
+    annotation_key: str = "annotations",
 ) -> bytes:
     """Render a non-streamed completion payload as the stream that carries it.
 
@@ -147,7 +149,7 @@ def sse_from_completion(
             # every string in the delta as answer text would splice it in.
             delta["role"] = "assistant"
             if isinstance(annotations, list) and annotations:
-                delta["annotations"] = annotations
+                delta[annotation_key] = annotations
         frames.append({"id": "gen-test", "choices": [{"index": 0, "delta": delta}]})
 
     if "finish_reason" in first:

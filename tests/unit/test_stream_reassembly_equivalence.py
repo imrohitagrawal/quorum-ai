@@ -261,28 +261,152 @@ def test_a_second_choice_never_splices_into_the_first() -> None:
     assert _extract_message_content(streamed.payload) == "ZERO"
 
 
-def test_annotations_survive_and_keep_their_arrival_order() -> None:
-    """RED when: annotations are dropped, re-ordered, or merged as a set.
+def test_annotations_survive_and_match_the_non_streamed_bibliography() -> None:
+    """RED when: annotations are dropped, re-ordered, de-duplicated, or merged.
 
     They are the model's OWN sources (``is_fallback=False``). Dropping them
     fires a Tavily search per slot, moves every answer out of the citation
-    coverage numerator, and lowers the trust score -- which
-    ``evaluation.py`` computes excluding fallback sources, so the substitute
-    does not repair the metric. Their ORDER is the bibliography numbering the
-    UI renders, so re-ordering renumbers a user's citations.
+    coverage numerator, and lowers the trust score -- which ``evaluation.py``
+    computes excluding fallback sources, so the substitute does not repair the
+    metric.
+
+    The DUPLICATE row is the point of this test. ``_extract_citations``
+    de-duplicates nothing, so a non-streamed response carrying the same
+    annotation twice yields two entries. An earlier version of the reassembler
+    de-duplicated, which sounds tidier and silently renumbered a user's
+    bibliography relative to the same answer delivered non-streamed -- every
+    ordinal after the duplicate shifted by one. The assertion is equality with
+    the non-streamed twin, not a hand-written list, so the two paths cannot
+    drift apart again.
     """
+    annotations = [
+        {"url": "https://one.test/a", "title": "One"},
+        {"url": "https://one.test/a", "title": "One"},
+        {"url": "https://two.test/b", "title": "Two"},
+    ]
     streamed = _fold(
         sse_stream(
-            _delta("a", annotations=[{"url": "https://one.test/a", "title": "One"}]),
-            _delta("b", annotations=[{"url": "https://two.test/b", "title": "Two"}]),
-            # A repeat of the first: de-duplicated by identity, not merged.
-            _delta("c", annotations=[{"url": "https://one.test/a", "title": "One"}]),
+            _delta("a", annotations=annotations[:1]),
+            _delta("b", annotations=annotations[1:]),
             _finish("stop"),
         )
     )
-    refs = _extract_citations(streamed.payload)
-    assert [r.title for r in refs] == ["One", "Two"]
-    assert [str(r.url) for r in refs] == ["https://one.test/a", "https://two.test/b"]
+    twin = {"choices": [{"message": {"content": "ab", "annotations": annotations}}]}
+    assert _extract_citations(streamed.payload) == _extract_citations(twin)
+    assert [r.title for r in _extract_citations(streamed.payload)] == ["One", "One", "Two"]
+
+
+def test_citations_are_a_fallback_for_annotations_never_a_merge() -> None:
+    """RED when: the two keys are merged into one list.
+
+    ``_extract_citations`` reads ``annotations or citations`` -- a SHORT
+    CIRCUIT, so a response carrying both yields only the first. Merging them
+    would invent a bibliography the non-streamed path never produces. The
+    ``citations``-only row is the positive partner: without it, "citations are
+    ignored" would pass just as well.
+    """
+    ann = [{"url": "https://ann.test/1", "title": "ANN"}]
+    cit = [{"url": "https://cit.test/1", "title": "CIT"}]
+
+    both = _fold(sse_stream(_delta("x", annotations=ann, citations=cit), _finish("stop")))
+    assert [r.title for r in _extract_citations(both.payload)] == ["ANN"]
+    assert _extract_citations(both.payload) == _extract_citations(
+        {"choices": [{"message": {"content": "x", "annotations": ann, "citations": cit}}]}
+    )
+
+    only_cit = _fold(sse_stream(_delta("x", citations=cit), _finish("stop")))
+    assert [r.title for r in _extract_citations(only_cit.payload)] == ["CIT"]
+
+
+def test_a_frame_with_no_index_contributes_to_choice_zero() -> None:
+    """RED when: an absent ``index`` is treated as anything but 0.
+
+    A single-choice stream may omit the field entirely. Every other fixture in
+    this file sets it explicitly, so without this row the documented default is
+    never exercised -- and getting it wrong turns a complete PAID answer into
+    an empty one.
+    """
+    streamed = _fold(
+        sse_stream(
+            {"choices": [{"delta": {"content": "no index field"}}]},
+            {"choices": [{"delta": {}, "finish_reason": "stop"}]},
+        )
+    )
+    assert _extract_message_content(streamed.payload) == "no index field"
+
+
+def test_a_multi_line_data_field_is_one_event_joined_with_newlines() -> None:
+    """RED when: the reader dispatches one event per line.
+
+    The SSE specification accumulates ``data:`` values and dispatches at a
+    BLANK line, joining with ``\n``. This pins the ACCUMULATION: "one line, one
+    event" splits a frame into two halves that neither parse.
+
+    **It deliberately does not pin the join CHARACTER, because nothing can.**
+    Replacing ``"\n".join`` with ``"".join`` survives this file and the
+    transport file -- verified by running it, not assumed. That is an
+    EQUIVALENT mutant rather than a hole: between two JSON tokens a newline is
+    whitespace, and a raw newline cannot appear inside a JSON string (it must
+    be escaped), so no valid frame can observe which character was used. The
+    ``\n`` is kept because the specification says so and because a future
+    non-JSON data field would notice; claiming a test proves it would be the
+    vacuity this file exists to avoid.
+    """
+    body = b'data: {"choices":[{"index":0,"delta":\ndata: {"content":"split frame"}}]}\n\n'
+    streamed = _fold(body + sse_stream(_finish("stop")))
+    assert _extract_message_content(streamed.payload) == "split frame"
+    assert streamed.body_error is None
+
+
+def test_a_line_we_cannot_read_is_never_silently_dropped() -> None:
+    """The regression this guard exists for. RED when: an unknown line is ignored.
+
+    Measured before the guard: a leading byte-order mark, one stray leading
+    space, or ``Data:`` with a capital D made a real frame fail the ``data:``
+    test. It was dropped in silence and the SHORTENED answer was then served as
+    complete, priced, and reported ``is_truncated=False`` -- while the
+    non-streaming reader this replaced failed loudly on the very same bodies.
+
+    The SSE specification says to ignore an unknown field; on a paid path we
+    refuse to, because we cannot tell a field we do not need from a frame we
+    failed to parse.
+    """
+    for corrupted in (b" data: ", b"Data: "):
+        body = (
+            corrupted
+            + b'{"choices":[{"index":0,"delta":{"content":"LOST"}}]}\n\n'
+            + sse_stream(_delta(" kept"), _finish("stop"))
+        )
+        streamed = _fold(body)
+        assert streamed.unrecognised_lines == 1, corrupted
+        assert "LOST" not in _extract_message_content(streamed.payload)
+
+
+def test_a_byte_order_mark_does_not_cost_the_first_frame() -> None:
+    """RED when: a leading BOM is not stripped.
+
+    The partner for the test above, and the reason a BOM is handled rather than
+    refused: the specification says to strip one, so a BOM'd stream is a VALID
+    stream whose first frame would otherwise vanish. Refusing it would be
+    correct-but-useless; stripping it is correct and keeps the answer.
+    """
+    streamed = _fold(b"\xef\xbb\xbf" + sse_stream(_delta("first frame"), _finish("stop")))
+    assert _extract_message_content(streamed.payload) == "first frame"
+    assert streamed.unrecognised_lines == 0
+
+
+def test_known_sse_fields_are_ignored_without_being_called_unreadable() -> None:
+    """The other partner. RED when: the ignore-list is emptied.
+
+    ``event:``, ``id:`` and ``retry:`` are real SSE fields that carry no
+    completion data. Counting them as unreadable would refuse every stream from
+    a server that sends them -- the mirror of the failure rule 8c warns about,
+    where a mitigation gated on unmeasured upstream behaviour collects nothing.
+    """
+    body = b"event: message\nid: 42\nretry: 3000\n" + sse_stream(_delta("kept"), _finish("stop"))
+    streamed = _fold(body)
+    assert streamed.unrecognised_lines == 0
+    assert _extract_message_content(streamed.payload) == "kept"
 
 
 def test_keep_alive_comments_are_not_answer_text() -> None:

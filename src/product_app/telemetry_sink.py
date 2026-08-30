@@ -157,6 +157,9 @@ TELEMETRY_FIELD_NAMES: frozenset[str] = frozenset(
         # ADR-0084 -- how many frames arrived before a stream stopped without a
         # terminator. 0 distinguishes "not a stream at all" from "cut off".
         "stream_frames",
+        # ADR-0084 -- lines that were neither a comment nor a field we know.
+        # Any at all means content was on the wire that we could not read.
+        "unrecognised_lines",
     }
 )
 

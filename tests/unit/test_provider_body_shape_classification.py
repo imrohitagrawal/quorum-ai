@@ -372,6 +372,9 @@ def test_every_possibly_billed_event_reaches_the_durable_billing_file() -> None:
         "upstream_provider_transport_error",
         "upstream_provider_body_unreadable",
         "upstream_provider_empty_answer",
+        # The event streaming INTRODUCES. Left out, the allowlist re-opens for
+        # the new failure mode exactly the hole this test exists to keep shut.
+        "upstream_provider_stream_incomplete",
     ):
         assert name in telemetry_sink.BILLING_EVENTS, name
     # The positive partner, and the first version of it was worthless: it named

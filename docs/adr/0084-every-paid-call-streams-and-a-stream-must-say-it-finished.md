@@ -18,17 +18,29 @@ socket timeout is per-`recv`, never cumulative, so the shape of the failure is
 not "slow" but "invisible". Measured against the live API on 2026-08-26 and
 recorded in `docs/analysis/2026-08-26-b3-timeout-probe.md`:
 
-| `openai/gpt-4o-mini` @ `max_tokens=3000` | worst inter-chunk gap |
+| `openai/gpt-4o-mini`, same model and endpoint | worst inter-chunk gap |
 |---|---|
-| non-streamed | **22.440 / 25.055 s** |
-| streamed | **0.478 / 0.208 s** |
+| non-streamed, `max_tokens=2000` (the 2026-08-26 "spike" run) | **22.440 / 25.055 s** |
+| streamed, `max_tokens=3000` (the B3 probe) | **0.478 / 0.208 s** |
 
-That is a PAIRED sample — same model, same endpoint, same client — and it is
-the strongest evidence available here. Against `openrouter_timeout_seconds =
-8.0`, the non-streamed gaps trip the stall detector on a healthy call. The
-consequence is not a slow answer: the call is billed, `_DISPATCH_UNMEASURED` is
-returned, the user is shown a failed slot, and the run's receipt degrades to
-`estimated` — money spent, nothing shown, nothing measured.
+Its own source calls this the paired comparison — same model, same endpoint,
+same client — and it is the strongest evidence available here. **The token caps
+differ**, which an earlier draft of this table hid by labelling both rows
+`max_tokens=3000`; read it as its source states it, not as a controlled
+experiment.
+
+Against `openrouter_timeout_seconds = 8.0`, the non-streamed gaps trip the
+stall detector on a healthy call. The consequence is not a slow answer: the
+call is billed, `_DISPATCH_UNMEASURED` is returned, the user is shown a failed
+slot, and the run's receipt degrades to `estimated` — money spent, nothing
+shown, nothing measured.
+
+**Scope, because the sweeping version of this sentence is false.** The probe
+measured that bite on ONE of the four shipped answer models, and it explicitly
+calls the per-`recv` bite a property of the MODEL rather than of the endpoint:
+`nvidia/nemotron-3-nano-30b-a3b`, a default slot, measured 5.722 / 7.589 s —
+under the cap. Streaming is chosen because it removes the failure mode wherever
+a model has it, not because every shipped model has it.
 
 ### What streaming ADDS, and why it needs a new check
 
@@ -47,9 +59,18 @@ nobody had a test for".
 
 ## Decision
 
-**One transport. Every paid call streams; the reassembled payload is fed to the
-four existing extractors unchanged; and a stream that never says it finished is
-classified dispatched-but-unmeasured.**
+**One transport in `ProviderExecutionService`. Every call it makes streams; the
+reassembled payload is fed to the four existing extractors unchanged; and a
+stream that never says it finished is classified dispatched-but-unmeasured.**
+
+**It is not the only paid caller in the repository, and saying otherwise would
+be false.** `feedback_audit.py:671` posts to the same `/chat/completions`
+endpoint with the same bearer credential, non-streaming, with a blocking
+`response.read()`. It is untouched here: it is operator-invoked (no workflow
+runs it — `grep -rln feedback_audit .github/workflows/` is empty), it is not on
+the query-run path, and it is a separate concern under rule 17. Recorded rather
+than glossed, because this ADR's own rationale for having one reader is that a
+second unexercised one on a paid seam loses money quietly — and one exists.
 
 | Choice | Decision | Why |
 |---|---|---|
@@ -78,12 +99,20 @@ script was not retained.** Per rule 11 it is therefore **ASSUMED, not
 measured**, and both documents are corrected in this change to say so.
 
 Sending the field would itself be a bet on unmeasured upstream behaviour — the
-symmetric violation of rule 8c — and its failure mode is far worse. An
-unrecognised body field is an HTTP 400; 400 is in `_UNBILLED_HTTP_STATUSES`, so
-for a `:online` model it maps to `_SEARCH_REJECTED`, fires the bare-id retry,
-takes a second 400, and drops every slot to local simulation. That is a total,
-silent product outage that costs $0 and therefore looks healthy to every gate
-in this repository.
+symmetric violation of rule 8c. **That an unrecognised body field yields HTTP
+400 from OpenRouter is itself UNMEASURED**; it is the premise, not a finding.
+
+What IS verified is the chain that follows IF it 400s, and the mechanism is
+worth stating correctly because a first draft of this paragraph got it wrong.
+The `_SEARCH_REJECTED` mapping does **not** come from `_UNBILLED_HTTP_STATUSES`
+membership: it comes from the explicit `if exc.code in (400, 404) and
+model_id.endswith(":online")` branch, which returns *before* that set is
+consulted. That fires the bare-id retry, which takes a second 400, and only
+*there* does membership matter — it makes the second call return `None` rather
+than the unmeasured sentinel, so every slot drops to local simulation.
+Demonstrated end to end: two paid dispatches, then a $0 fallback. A total,
+silent product outage that costs nothing and therefore looks healthy to every
+gate in this repository.
 
 Being wrong the other way costs receipts their `measured` label. That is the
 honest direction — it overstates uncertainty rather than understating a charge
@@ -109,12 +138,22 @@ emergency path would be the untested one.
 ### Buffering the whole SSE body, then parsing — REJECTED on memory
 
 Simplest diff, and it would have reused the existing reader untouched.
-Measured against it: a 2,594-token answer is **1,262,550 bytes** over 4,196
-frames on the wire against roughly 10.6 KB for the same answer non-streamed —
-about **119x**. With up to 16 initial-answer workers plus synthesis on a
-512 MB machine (`fly.toml`), and a transient ~3x at `b"".join()` + `.decode()`,
-that is a large new resident cost on a path with no success-path byte cap at
-all. `_read_body_within_budget` was turned into the generator
+
+**The magnitude here was overstated in a first draft and is corrected rather
+than deleted.** What is MEASURED is the frame count: the B3 probe records a
+2,594-token answer arriving in **4,194 frames**. It kept no byte column and its
+script was not retained, so any wire-byte figure is a MODEL at roughly 300
+bytes per frame — about 1.2 MB, against roughly 10 KB for the same answer
+non-streamed. The earlier text gave "1,262,550 bytes over 4,196 frames … ~119x"
+as though measured; the frame count contradicted the source by two, and the
+ratio divided wire bytes by body bytes while the sentence claimed *resident*
+bytes per call, which is a different quantity and a much smaller multiple.
+
+The decision stands on the direction, which holds under either reading: with up
+to 16 initial-answer workers plus synthesis on a 512 MB machine (`fly.toml`),
+and a transient copy at `b"".join()` + `.decode()`, buffering is a materially
+larger resident cost on a path with **no success-path byte cap at all**.
+`_read_body_within_budget` was turned into the generator
 `_iter_body_within_budget` instead, so exactly one loop still touches the
 socket and every transport guard is shared rather than reimplemented.
 

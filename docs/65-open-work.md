@@ -4,7 +4,7 @@
 proves each row's state.** Issues on GitHub are the mirror; this file is the
 original, because a gate and an offline agent can read it and cannot read `gh`.
 
-Verified at: `e115d92ac0703ca3ce6faa6174a13de0edfae1bd`
+Verified at: `2350e59df9922bfa56338691cd337df0a1974a39`
 
 The board holds **19** rows, **4** of them unpinned.
 
@@ -130,9 +130,14 @@ payload an equivalent non-streamed call would have returned, so
 BYTE-UNCHANGED and the two shapes cannot drift apart.
 `_read_body_within_budget` became the generator `_iter_body_within_budget`, so
 exactly one loop still touches the socket and every transport guard is shared
-rather than reimplemented — measured, buffering the whole SSE body instead
-would have been about **119x** the resident bytes per in-flight call (1,262,550
-against roughly 10,600 for a 2,594-token answer) on a 512 MB machine.
+rather than reimplemented. What is MEASURED behind that choice is the frame
+count — the B3 probe records a 2,594-token answer arriving in **4,194 frames**;
+it kept no byte column, so any wire-byte figure is a model at roughly 300
+bytes/frame, about 1.2 MB against roughly 10 KB non-streamed. An earlier draft
+of this paragraph quoted "1,262,550 bytes over 4,196 frames, ~119x" as measured:
+the frame count contradicted the source by two and the ratio compared wire bytes
+to body bytes while claiming *resident* bytes. Corrected here rather than
+deleted, because the direction is what the decision rests on and it holds.
 
 The check streaming had to ADD: chunked framing carries no length, so the
 `IncompleteRead` guard is inert on the normal path and a stream that stops
@@ -144,8 +149,13 @@ measured nowhere against this upstream, and requiring it could have classified
 every healthy call unmeasured.
 
 The seam survived as promised: `product_app.providers.urlopen` now appears on
-**44 lines across 15 test files** (re-measured 2026-08-30 — 43/14 before, plus
-the new streaming-transport file). The bodies changed, not the seam;
+**44 lines across 15 test files**, against **43 across 14** on `origin/main`
+(both re-measured 2026-08-30). Read that +1 honestly — the per-file counts are
+identical across the 14 shared files, and the 15th file is
+`tests/provider_wire.py`, whose single occurrence is a *sentence about* the
+seam in its module docstring, not a patch site. So the count grew by a
+docstring; what it evidences is that no existing patch site had to move. The
+bodies changed, not the seam;
 `tests/provider_wire.py` renders a non-streamed payload as the stream that
 carries it, so nine hand-rolled builders became one.
 
@@ -414,7 +424,8 @@ replace, which would break fixtures and rewrite history.
 
 **Do not attempt W2 or W3 while `OPENROUTER_LIVE_EXECUTION_ENABLED` is false.**
 W2's shape depends on W1's measured streaming behaviour, and W3 is deferred.
-W1 is now built and merged, but it is **latent-correct, not observed**: with
+W1 is built and, once this lands, merged — but it is **latent-correct, not
+observed**: with
 live execution off nothing exercises the streaming path in production. The
 owner-authorised measurement window is what turns W1 from "tested" into
 "measured", and it is the step between W1 and W2 — not an optional follow-up.
