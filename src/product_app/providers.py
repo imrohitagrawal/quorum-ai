@@ -33,6 +33,7 @@ import json
 import logging
 import re
 import time
+from collections.abc import Iterator
 from dataclasses import asdict, dataclass
 from decimal import Decimal
 from enum import StrEnum
@@ -1214,6 +1215,30 @@ class ProviderExecutionService:
         payload: dict[str, object] = {
             "model": model_id,
             "messages": messages,
+            # Every call THIS SERVICE makes streams (ADR-0084). Not a mode and
+            # not a flag. Probed against the live API on 2026-08-26 --
+            # ``openai/gpt-4o-mini``, same model and endpoint, non-streamed at
+            # ``max_tokens=2000`` (the "spike" run) against streamed at
+            # ``max_tokens=3000``: worst inter-chunk gap 22.440 / 25.055 s
+            # against 0.478 / 0.208 s. The caps differ, so read it as the
+            # comparison its own source calls it and not as a controlled one.
+            # ``openrouter_timeout_seconds`` (8.0) therefore fires on a HEALTHY
+            # non-streamed call, which is billed, answers nothing, and degrades
+            # the run's receipt to ``estimated``.
+            #
+            # Scope, stated because the obvious sentence is false: the probe
+            # measured that bite on ONE of the four shipped answer models, and
+            # the probe itself calls the per-``recv`` bite a property of the
+            # MODEL rather than of the endpoint -- ``nvidia/nemotron`` was
+            # 5.722 / 7.589 s, under the cap. Streaming is chosen because it
+            # removes the failure mode wherever a model has it, not because
+            # every model has it. Keeping a non-streaming path as well would
+            # keep a second, unexercised reader on the paid seam.
+            #
+            # ``stream_options: {"include_usage": true}`` is deliberately NOT
+            # sent; ADR-0084 records why, and the reader takes usage from
+            # whichever frame carries it either way.
+            "stream": True,
         }
         if max_tokens is not None:
             payload["max_tokens"] = max_tokens
@@ -1247,15 +1272,109 @@ class ProviderExecutionService:
             with urlopen(request, timeout=settings.openrouter_timeout_seconds) as response:
                 # NOT ``response.read()``. That is bounded per-``recv`` and
                 # therefore not bounded at all in wall clock; see
-                # ``_read_body_within_budget``. A ``TimeoutError`` from here
+                # ``_iter_body_within_budget``. A ``TimeoutError`` from here
                 # lands in the catch-all below and is classified
                 # ``_DISPATCH_UNMEASURED``, which is correct: the request was
                 # dispatched and may have been billed.
-                raw_body = _read_body_within_budget(
-                    response,
-                    settings.openrouter_call_budget_seconds - (time.monotonic() - call_started),
-                    settings.openrouter_timeout_seconds,
-                ).decode()
+                #
+                # The budget matters MORE now, not less. SSE keep-alive
+                # comments reset the per-``recv`` timer, so
+                # ``openrouter_timeout_seconds`` stops bounding a streamed call
+                # at all -- reproduced on loopback, a comment every 1.0s under
+                # an 8.0s socket timeout read to completion in 12.044s with the
+                # timeout never firing. ``openrouter_call_budget_seconds`` is
+                # now the ONLY wall-clock brake on a paid call.
+                # Retained for every call up to _NON_SSE_BODY_LIMIT_BYTES, so
+                # a response that is not a stream at all can still be read as
+                # the completion it is. The tee cannot see frames, so this is a
+                # bounded cost on the happy path too -- which is why the bound
+                # is small. See that constant for the measurement.
+                head: list[bytes] = []
+                head_bytes = 0
+
+                def _tee(source: Iterator[bytes]) -> Iterator[bytes]:
+                    nonlocal head_bytes
+                    for piece in source:
+                        # Truncate EXACTLY at the limit. Checking the total
+                        # before appending the whole piece let the chunk that
+                        # crossed the bound through in full, so the real
+                        # ceiling was the limit plus one 64 KiB read -- a bound
+                        # that can overshoot by a whole chunk is not a bound,
+                        # and it let an oversized body through intact.
+                        #
+                        # Two mutants of these two lines survive the suite and
+                        # are EQUIVALENT, checked rather than assumed: with
+                        # ``>= 0`` the extra pass appends ``b""`` and adds 0,
+                        # and with ``len(piece)`` in place of ``min(...)`` only
+                        # the counter moves -- and nothing reads that counter.
+                        # Verified byte-identical across exact-fill,
+                        # overshoot-by-one, cross-mid-piece, many-small and
+                        # empty-piece inputs, with the retained bytes never
+                        # exceeding the limit in any of them.
+                        allowance = _NON_SSE_BODY_LIMIT_BYTES - head_bytes
+                        if allowance > 0:
+                            head.append(piece[:allowance])
+                            head_bytes += min(len(piece), allowance)
+                        yield piece
+
+                streamed = _reassemble_streamed_completion(
+                    _iter_sse_data(
+                        _tee(
+                            _iter_body_within_budget(
+                                response,
+                                settings.openrouter_call_budget_seconds
+                                - (time.monotonic() - call_started),
+                                settings.openrouter_timeout_seconds,
+                            )
+                        )
+                    )
+                )
+                if streamed.frame_count == 0 and streamed.body_error is None:
+                    # Nothing parsed as a stream. Before assuming the call
+                    # failed, read the body as the ordinary completion it may
+                    # be: an upstream that ignores ``stream: true``, or a proxy
+                    # that buffers the stream, returns exactly that. Measured
+                    # against ``origin/main``, such a body produced a real
+                    # answer with its usage; refusing it here would have thrown
+                    # away a complete PAID answer and degraded the run to
+                    # ``estimated``.
+                    #
+                    # Deliberately narrow: only when NOT ONE frame parsed, so a
+                    # real stream can never reach it, and gated on the body
+                    # actually being a completion-shaped mapping.
+                    #
+                    # Widening the count to ``<= 1`` survives the suite, and an
+                    # earlier version of this comment called that EQUIVALENT on
+                    # the argument that a body yielding a parsed frame cannot
+                    # also parse whole as a JSON completion. **That argument is
+                    # false and the mutant is not equivalent.** The fallback
+                    # parses the retained HEAD, not the whole body, so a body
+                    # whose first 64 KiB are a complete completion followed by
+                    # newlines -- ``json.loads`` tolerates trailing whitespace
+                    # -- and whose TAIL carries SSE frames satisfies both
+                    # halves at once. Measured: ``frame_count = 1`` with the
+                    # head parsing as a completion mapping, and widening the
+                    # guard turned a refusal into a SERVED, usage-bearing
+                    # answer end to end.
+                    #
+                    # So the count stays at zero because widening it is a
+                    # demonstrated hole, not because the difference is
+                    # unobservable. The surviving mutant is a real gap in the
+                    # tests, recorded rather than papered over: constructing
+                    # that body is four lines (pad a completion to 64 KiB with
+                    # newlines, then append frames), so the cost is low -- it
+                    # is simply not worth a 64 KiB fixture while the guard is
+                    # correct and this comment records the counterexample.
+                    with contextlib.suppress(*_EXPECTED_BODY_ERRORS, UnicodeDecodeError):
+                        whole = json.loads(b"".join(head).decode())
+                        if isinstance(whole, dict) and "choices" in whole:
+                            streamed = _StreamedCompletion(
+                                payload=whole,
+                                terminator=_STREAM_TERMINATOR_NOT_A_STREAM,
+                                frame_count=0,
+                                unrecognised_lines=0,
+                                body_error=None,
+                            )
         except HTTPError as exc:
             # 404 / 400 on the ``:online`` variant is the documented
             # signal that this model does not support the search
@@ -1361,8 +1480,52 @@ class ProviderExecutionService:
             )
             return _DISPATCH_UNMEASURED
 
+        if streamed.body_error is None and (
+            streamed.terminator == _STREAM_TERMINATOR_NONE or streamed.unrecognised_lines
+        ):
+            # The stream stopped without ever saying it had finished: no
+            # ``[DONE]``, no ``finish_reason``, no error frame. Under chunked
+            # framing -- which every streamed response uses -- that is
+            # indistinguishable at the transport layer from a complete one, so
+            # nothing above raised. Serving what arrived would price a cut
+            # answer as a whole one and report ``is_truncated=False``.
+            #
+            # ``_DISPATCH_UNMEASURED`` is the honest reading: the request was
+            # dispatched, tokens were generated, and we cannot say what we got.
+            # ``stream_frames`` separates "the upstream sent nothing that
+            # parsed as a stream" (0) from "it stopped part-way" (>0), which is
+            # the distinction anyone reading the #105 dataset will need.
+            # ``usage_absent`` is carried for the same reason
+            # ``upstream_provider_empty_answer`` carries it: without it the
+            # record cannot tell a billed dead end from an unbilled one, which
+            # is the whole question #105 exists to settle.
+            #
+            # The usage this DISCARDS is deliberate and is a real cost, so it
+            # is stated rather than buried: unlike the empty-answer path, which
+            # keeps the provider's stated charge because the response was
+            # complete, here the response was NOT complete. Serving a cut
+            # answer to keep its usage would price a fragment as a whole
+            # answer, and that is the dishonesty the whole design exists to
+            # prevent. The record preserves the fact that a charge may exist.
+            _LOGGER.warning(
+                "upstream_provider_stream_incomplete",
+                extra={
+                    "model_id": model_id,
+                    "billing_class": "possibly_billed",
+                    "stream_frames": streamed.frame_count,
+                    "unrecognised_lines": streamed.unrecognised_lines,
+                    "usage_absent": _extract_usage(streamed.payload) is None,
+                },
+            )
+            return _DISPATCH_UNMEASURED
+
         try:
-            parsed = json.loads(raw_body)
+            if streamed.body_error is not None:
+                # Raised HERE rather than inside the ``urlopen`` block so a
+                # malformed frame is logged as a BODY failure at WARNING, not
+                # as a transport failure at ERROR. See ``_StreamedCompletion``.
+                raise streamed.body_error
+            parsed = streamed.payload
             content = _extract_message_content(parsed)
             # Pass ``content`` in so ``_extract_citations`` reuses the already
             # extracted message text for its inline-link fallback instead of
@@ -1458,6 +1621,7 @@ class ProviderExecutionService:
                 messages=messages,
                 max_tokens=max_tokens,
                 usage=usage,
+                stream_terminator=streamed.terminator,
             )
         return LiveProviderResult(
             answer_text=content,
@@ -1798,9 +1962,10 @@ def _billing_evidence_shape(exc: HTTPError) -> dict[str, object]:
     for the whole 8.009s, against 0.008-0.013s on ``main``, and then raised
     ``TimeoutError``,
     paying the entire timeout to learn nothing. So
-    :func:`_bound_sniff_time` lowers the socket timeout to
-    ``_ERROR_BODY_SNIFF_TIMEOUT_SECONDS`` first, capping the worst case at
-    about 2s, and ``sniff_time_bounded`` records whether that succeeded — it is
+    :func:`_read_within_budget` enforces ``_ERROR_BODY_SNIFF_TIMEOUT_SECONDS``
+    as a DEADLINE, lowering the socket timeout to whatever remains of it before
+    every chunk, capping the worst case at about 2s; it returns whether it
+    could reach the socket at all, and ``sniff_time_bounded`` records that — it is
     best-effort, and a platform where it fails must say so rather than read as
     "no problem".
 
@@ -1808,7 +1973,7 @@ def _billing_evidence_shape(exc: HTTPError) -> dict[str, object]:
     measured fatal against the real API: OpenRouter is behind Cloudflare and
     answers errors with ``Transfer-Encoding: chunked`` and no
     ``Content-Length``, so such a gate collects nothing in production while
-    every local gate stays green. See :func:`_bound_sniff_time` and AGENTS.md
+    every local gate stays green. See :func:`_read_within_budget` and AGENTS.md
     rule 8c.
 
     NEVER returns body content. The values are two shape names, an integer and
@@ -1877,8 +2042,8 @@ def _billing_evidence_shape(exc: HTTPError) -> dict[str, object]:
 _BODY_READ_CHUNK_BYTES: int = 65536
 
 
-def _read_body_within_budget(response: Any, budget: float, per_recv: float) -> bytes:
-    """Read a SUCCESS response body in at most ``budget`` seconds total.
+def _iter_body_within_budget(response: Any, budget: float, per_recv: float) -> Iterator[bytes]:
+    """Yield a SUCCESS response body in chunks, in at most ``budget`` seconds total.
 
     Raises ``TimeoutError`` when the deadline passes with the body incomplete.
     That is deliberate and is the whole point: ``_post_messages``' catch-all
@@ -1918,9 +2083,45 @@ def _read_body_within_budget(response: Any, budget: float, per_recv: float) -> b
     caller starts the clock before ``urlopen`` so that connect, request,
     headers and body share one allowance. Passing the full budget here would
     leave the header phase unbounded, which is the same defect one layer up.
+
+    **It YIELDS rather than returning one ``bytes``**, so the reader above it
+    parses an SSE body without holding the whole of it -- with two measured
+    exceptions, stated below, that make the unqualified version of that
+    sentence false.
+
+    Why it matters at the sizes streaming produces: the B3 probe recorded a
+    2,594-token answer arriving in **4,194 frames**. That frame count is
+    measured; the WIRE BYTES are not -- the probe kept no byte column and its
+    script was not retained -- so any figure for them is a MODEL, at roughly
+    300 bytes per frame, not a measurement. Order of magnitude: about 1.2 MB
+    on the wire against roughly 10 KB for the same answer non-streamed, on a
+    512 MB machine (``fly.toml``) running up to 16 initial-answer workers.
+    Treat the ratio as "one to two orders of magnitude", not as a figure
+    anybody can re-derive.
+
+    **Two shapes still buffer without bound, and neither is hypothetical.** A
+    ``data:`` line that never ends grows the reader's line buffer, and data
+    lines never dispatched by a blank line grow its pending list. Measured,
+    a 0.5 s budget against a newline-free body took resident memory up by
+    about 1.2 GB -- better than the 3.4 GB the non-generator version took on
+    the same body, but not bounded. Only ``openrouter_call_budget_seconds``
+    caps it. There is no byte cap on the success path; the error path has
+    ``_ERROR_BODY_SNIFF_LIMIT_BYTES`` and this does not.
+
+    Exactly one loop still touches the socket, so the deadline, the
+    ``min(per_recv, remaining)`` per-chunk timeout, the non-bytes guard and the
+    ``IncompleteRead`` restore below are shared by every caller rather than
+    reimplemented per body shape.
+
+    One deliberate loss comes with that: ``IncompleteRead`` is raised carrying
+    an EMPTY ``partial`` instead of the bytes so far, because keeping them
+    would reintroduce the buffer this generator exists to avoid. Nothing reads
+    ``.partial`` — the catch-all in ``_post_messages`` records only
+    ``type(exc).__name__`` — and stuffing a megabyte of provider output into an
+    exception was never a good idea on a path that logs.
     """
     deadline = time.monotonic() + budget
-    chunks: list[bytes] = []
+    received = 0
     reader = getattr(response, "read1", None)
     if not callable(reader):
         reader = None
@@ -1952,7 +2153,7 @@ def _read_body_within_budget(response: Any, budget: float, per_recv: float) -> b
             # implement only ``read``, and refusing those would be this
             # function making a statement about the doubles rather than about
             # the wire.
-            if reader is not None and not chunks:
+            if reader is not None and received == 0:
                 reader = None
                 continue
             raise TypeError(
@@ -1984,14 +2185,462 @@ def _read_body_within_budget(response: Any, budget: float, per_recv: float) -> b
             # the old and the new path).
             remaining_bytes = getattr(response, "length", None)
             if isinstance(remaining_bytes, int) and remaining_bytes > 0:
-                raise IncompleteRead(b"".join(chunks), remaining_bytes)
-            return b"".join(chunks)
-        chunks.append(bytes(chunk))
+                raise IncompleteRead(b"", remaining_bytes)
+            return
+        received += len(chunk)
+        yield bytes(chunk)
         if reader is None:
             # ``read()`` returns the whole body in one go, so there is nothing
             # left to loop for. Looping would call it again on an exhausted
             # stream.
-            return b"".join(chunks)
+            return
+
+
+#: The SSE field carrying a chat-completion frame. Every other field the
+#: specification defines -- ``event:``, ``id:``, ``retry:`` -- and every comment
+#: line (one beginning ``:``) is discarded unread.
+_SSE_DATA_FIELD = "data:"
+
+#: The OpenAI-compatible sentinel that closes a stream.
+_SSE_DONE_SENTINEL = "[DONE]"
+
+#: The SSE fields that carry no completion data and are ignored by name. The
+#: specification says to ignore an UNKNOWN field too -- this code deliberately
+#: does not, because it cannot tell "a field we do not need" from "a data frame
+#: we failed to recognise", and on a paid path the second is content silently
+#: lost. See :data:`_UNRECOGNISED_LINE`.
+_SSE_IGNORED_FIELDS: tuple[str, ...] = ("event:", "id:", "retry:")
+
+#: A UTF-8 byte-order mark at the very start of a stream. The specification
+#: says to strip one, and a BOM'd stream is otherwise a stream whose FIRST
+#: frame silently vanishes -- measured, not theorised.
+_SSE_BOM = b"\xef\xbb\xbf"
+
+#: How much of a body to retain so a response that is not a stream at all can
+#: still be read as the completion it is.
+#:
+#: **It is retained for EVERY call, not only for a non-stream**, and an earlier
+#: version of this comment claimed the opposite -- that it was "dropped the
+#: moment the first frame parses". The tee that fills it cannot see frames, so
+#: that was false. This is a per-call memory cost paid on the happy path, and
+#: the number is a bound on that cost rather than a generous allowance.
+#:
+#: **Every size below is DERIVED, not measured, and an earlier version of this
+#: comment said "measured" for both.** The B3 probe recorded frame COUNTS and
+#: kept no byte column, and its script was not retained, so the byte figures
+#: are a model at ~300 bytes per frame -- the same per-frame figure used
+#: above, deliberately, because two different ones in one file is how a model
+#: starts reading as a measurement. What the model says:
+#:
+#: * at the old 1 MiB cap, a synthesis-leg answer (4,194-4,908 frames, so
+#:   ~1.3-1.5 MB on the wire) would have filled the whole cap. An earlier
+#:   version of this note added that a slot-1 answer "would NOT", on the
+#:   probe's 1,736-1,794 frame rows -- **that was wrong, and wrong by
+#:   generalising from length to call class**. Those two samples produced 845
+#:   and 893 completion tokens against a 3,000 cap: they stopped early. Per
+#:   TOKEN the slot model emits MORE frames than the synthesis model (2.05 and
+#:   2.01 against 1.62 and 1.67), so a full-length slot answer at the shipped
+#:   ``initial_answer_max_tokens = 2000`` extrapolates to ~4,000-4,100 frames,
+#:   about 1.2 MB -- over the old cap, not under it. What the samples show is
+#:   short ANSWERS, not a smaller call class;
+#: * a non-streamed completion at ``initial_answer_max_tokens = 2000`` is
+#:   ~8.3 KB (2000 tokens x ``CHARS_PER_TOKEN`` plus an envelope). The largest
+#:   body anyone has CONSTRUCTED is ~45 KB -- an ``:online`` answer carrying 20
+#:   citations -- so the headroom against 64 KiB is about 7x for the smallest
+#:   call class and about 1.5x for the largest built one. Nobody has weighed a
+#:   real ``:online`` response, so 1.5x is the honest floor, not a ceiling.
+#:
+#: A body above the cap is truncated, so ``json.loads`` fails and the call is
+#: refused exactly as it would have been without the fallback: the safe
+#: direction, and the same outcome as before the fallback existed. What is not
+#: known is the true size of an ``:online`` response with real annotations --
+#: ADR-0084 records that shape as unmeasured, and it is the one that would eat
+#: this margin.
+_NON_SSE_BODY_LIMIT_BYTES: int = 65_536
+
+
+class _UnrecognisedLine:
+    """A non-blank line that is neither a comment nor a field we know.
+
+    Yielded rather than dropped because dropping is what made a BOM, a leading
+    space, or ``Data:`` with a capital D delete a frame in silence -- and the
+    short answer was then served as complete, priced, and reported
+    ``is_truncated=False``. Measured on this tree before the guard existed, and
+    a REGRESSION against the non-streaming reader, which failed loudly on the
+    same bodies with ``JSONDecodeError``.
+    """
+
+
+_UNRECOGNISED_LINE: _UnrecognisedLine = _UnrecognisedLine()
+
+#: How a stream ENDED. Recorded on the token-telemetry record so the question
+#: "does this upstream actually send ``[DONE]``?" is answered from production
+#: data rather than from documentation -- it is not measured anywhere in this
+#: repository today (see :func:`_reassemble_streamed_completion`).
+_STREAM_TERMINATOR_DONE = "done"
+_STREAM_TERMINATOR_FINISH_REASON = "finish_reason"
+_STREAM_TERMINATOR_ERROR = "error"
+_STREAM_TERMINATOR_NONE = "none"
+#: The body was not a stream at all and was read as an ordinary completion.
+_STREAM_TERMINATOR_NOT_A_STREAM = "not_a_stream"
+
+
+def _iter_sse_data(chunks: Iterator[bytes]) -> Iterator[str | _UnrecognisedLine]:
+    """Yield the ``data:`` payload of each SSE event, in arrival order.
+
+    **Splits on BYTES and decodes whole lines.** That is what makes a multi-byte
+    character torn across two ``recv`` calls a non-event, and it is not a
+    stylistic preference: measured on CPython 3.12, a frame containing
+    ``caf\u00e9 \u2014 \U0001f600`` cut at the em-dash raises
+    ``UnicodeDecodeError`` on BOTH halves when each chunk is decoded as it
+    arrives. ``UnicodeDecodeError`` is in :data:`_EXPECTED_TRANSPORT_ERRORS`,
+    so a complete, healthy, fully PAID answer would have been logged at WARNING
+    and thrown away. Every UTF-8 continuation byte is ``>= 0x80``, so ``0x0A``
+    appears only as a real line break and splitting before decoding is safe.
+
+    Framing follows the SSE specification rather than "one line, one event":
+    ``data:`` values accumulate and are dispatched at a BLANK line, joined with
+    ``\n``. A byte-counting reader is what tears frames -- measured, a 68-byte
+    frame cut at byte 40 yields one ``JSONDecodeError`` and zero events -- so
+    the unterminated tail is carried across chunks and only a complete line is
+    ever parsed.
+
+    Anything left pending at end of stream is dispatched, because a server that
+    omits the final blank line has still delivered the frame.
+
+    **Known limit, stated rather than silently absent:** a stream separated by
+    BARE ``\r`` (which the specification permits and no observed
+    OpenAI-compatible endpoint uses) parses as zero events. That fails to the
+    safe side -- no terminator is seen, so
+    :func:`_reassemble_streamed_completion` reports the stream incomplete and
+    the call is classified ``_DISPATCH_UNMEASURED`` rather than serving a
+    fragment as an answer. ``\r\n`` and ``\n`` are both handled.
+    """
+    buffer = b""
+    pending: list[str] = []
+    started = False
+
+    def _data_value(raw_line: bytes) -> str | _UnrecognisedLine | None:
+        """The ``data:`` value on one line, or a marker for anything else.
+
+        Three outcomes, and the third is the one that matters:
+
+        * a ``data:`` value -- the frame;
+        * ``None`` for a line we KNOW carries no completion data: a comment
+          (a line beginning ``:``, which is what OpenRouter sends as a
+          keep-alive -- 1, 16, 16 and 21 of them across four measured streamed
+          calls, with no fixed cadence) or one of
+          :data:`_SSE_IGNORED_FIELDS`. These are discarded at READ time, so a
+          well-formed keep-alive flood does not accumulate;
+        * :data:`_UNRECOGNISED_LINE` for anything else.
+
+        **The specification says to ignore an unknown field. This does not**,
+        and the difference is a measured defect rather than pedantry. A leading
+        byte-order mark, one stray leading space, or ``Data:`` with a capital D
+        all make a real frame fail the ``data:`` test; ignoring it dropped that
+        frame in silence, and the shortened answer was then served as complete,
+        priced, and reported ``is_truncated=False``. The non-streaming reader
+        this replaced failed LOUDLY on the same bodies, so ignoring would have
+        been a regression in failure posture. We cannot tell a field we do not
+        need from a frame we failed to parse, so on a paid path we refuse to
+        guess.
+        """
+        # ``strict`` decoding, matching the whole-body ``.decode()`` this
+        # replaced: a body that is not UTF-8 raises here exactly as it did
+        # before, rather than being silently mangled. ``errors="replace"``
+        # would be worse than the raise -- it corrupts a paid answer's text
+        # while every gate stays green.
+        line = raw_line.rstrip(b"\r").decode()
+        if line.startswith(":") or line.startswith(_SSE_IGNORED_FIELDS):
+            return None
+        if not line.startswith(_SSE_DATA_FIELD):
+            return _UNRECOGNISED_LINE
+        value = line[len(_SSE_DATA_FIELD) :]
+        # The specification strips ONE optional leading space, not all
+        # whitespace -- JSON tolerates the difference, but a sentinel compared
+        # with ``==`` does not.
+        return value[1:] if value.startswith(" ") else value
+
+    for chunk in chunks:
+        buffer += chunk
+        if not started:
+            # Strip ONE byte-order mark, at the very start of the stream only.
+            # Measured: without this, a BOM'd body loses its first frame
+            # entirely -- the mark rides on the first ``data:`` line and makes
+            # it unrecognisable.
+            #
+            # **No line is parsed until this decision is made**, and that is
+            # what makes the result independent of how the wire split the
+            # bytes. Two weaker versions were measured failing that:
+            # deciding on the first chunk alone left a BOM delivered in a
+            # 1- or 2-byte chunk unstripped, and merely waiting for three
+            # bytes still lost when the first chunk was a lone newline --
+            # the loop drained the buffer while this flag was still unset, so
+            # a LATER chunk's BOM was stripped as though it began the stream.
+            # Both made the same bytes classify two different ways, which is
+            # the property ``test_the_result_does_not_depend_on_how_the_bytes_
+            # were_split`` exists to forbid.
+            if len(buffer) < len(_SSE_BOM):
+                # Not enough yet to tell. Wait for more rather than guess; the
+                # end-of-stream path below handles a body shorter than a mark.
+                continue
+            started = True
+            if buffer.startswith(_SSE_BOM):
+                buffer = buffer[len(_SSE_BOM) :]
+        while True:
+            break_at = buffer.find(b"\n")
+            if break_at < 0:
+                break
+            raw_line, buffer = buffer[:break_at], buffer[break_at + 1 :]
+            if not raw_line.rstrip(b"\r"):
+                if pending:
+                    yield "\n".join(pending)
+                    pending = []
+                continue
+            value = _data_value(raw_line)
+            if isinstance(value, _UnrecognisedLine):
+                yield value
+            elif value is not None:
+                pending.append(value)
+    if buffer.strip():
+        # A final line with NO trailing newline at all. ``strip()`` and not
+        # merely truthiness: a trailing bare CR or a single space at end of
+        # stream is not a line we failed to read, and treating it as one
+        # refused a complete, terminated, usage-bearing answer -- measured. A server may close
+        # immediately after writing its last frame, and that frame was still
+        # DELIVERED -- dropping it loses whichever frame came last, which is
+        # most often the usage frame and therefore the run's ``measured``
+        # label. If the residue is instead a TORN line, ``json.loads`` fails on
+        # it and the call is classified dispatched-but-unmeasured, which is the
+        # honest reading either way.
+        value = _data_value(buffer)
+        if isinstance(value, _UnrecognisedLine):
+            yield value
+        elif value is not None:
+            pending.append(value)
+    if pending:
+        yield "\n".join(pending)
+
+
+@dataclass(frozen=True)
+class _StreamedCompletion:
+    """One streamed response, folded into the shape the extractors already read.
+
+    ``payload`` is deliberately a completion-shaped mapping rather than a new
+    type: ``_extract_message_content``, ``_extract_usage``,
+    ``_finish_reason_indicates_truncation`` and ``_extract_citations`` are
+    reused UNCHANGED, so streaming cannot make them disagree with the
+    non-streamed shape they were written against.
+
+    ``body_error`` carries a frame-level parse failure OUT of the transport
+    stage instead of raising it there. That is not tidiness: the transport
+    handler and the body handler differ in LOG LEVEL --
+    ``_log_post_dispatch_failure`` logs an *expected* class at WARNING and
+    anything else at ERROR -- and ``json.JSONDecodeError`` is expected of a
+    BODY (``_EXPECTED_BODY_ERRORS``) and not of a transport. Raising it inside
+    the ``urlopen`` block would page an operator at ERROR for an ordinary
+    upstream hiccup, and would file it in the #105 dataset under the wrong
+    event.
+    """
+
+    payload: dict[str, object]
+    terminator: str
+    frame_count: int
+    #: Lines that were neither a comment nor a field we know. Any at all means
+    #: the stream carried something we could not read, so an answer assembled
+    #: from the rest is missing content we cannot account for.
+    unrecognised_lines: int
+    # ``BaseException`` rather than ``Exception``, matching the declared type of
+    # ``_EXPECTED_BODY_ERRORS`` that fills it and of the
+    # ``_log_post_dispatch_failure`` that consumes it. Narrowing it here would
+    # be a claim about the catch that the catch does not make.
+    body_error: BaseException | None
+
+
+def _reassemble_streamed_completion(
+    frames: Iterator[str | _UnrecognisedLine],
+) -> _StreamedCompletion:
+    """Fold SSE frames into the payload an equivalent non-streamed call returns.
+
+    Each rule below exists because getting it wrong is a defect somebody can
+    name, not because it is the obvious way to write a loop.
+
+    * **Only choice index 0 contributes.** Every frame carries an ``index`` and
+      everything downstream reads ``choices[0]``, so a stream carrying a second
+      choice would otherwise splice its text into the first one undetectably.
+      An absent index is treated as 0, which is what a single-choice stream
+      sends.
+    * **Only ``delta.content`` is text**, whitelisted by name. A reassembler
+      that concatenated whatever string a delta carried would prepend
+      ``delta.reasoning`` -- chain-of-thought -- onto the answer, and the judge
+      asks for ``reasoning`` explicitly while parsing its reply as STRICT JSON
+      with no repair. One leaked token there costs a paid call its verdict.
+      ``refusal`` and ``tool_calls`` are excluded by the same whitelist.
+    * **Usage is taken, never summed and never invented.** The last frame
+      carrying a ``usage`` mapping wins, which is correct whether the upstream
+      sends one final total (the documented shape) or a running total per
+      frame; summing is wrong for both. Fabricating a zero-filled record would
+      be far worse than losing it: ``_extract_usage`` accepts
+      ``{0, 0, 0}`` as REAL usage, so the run would read ``measured`` at
+      $0.00, and a measured receipt is the one thing that overwrites the booked
+      charge on both spend rails. Absent usage costs the run its ``measured``
+      label, which is the honest direction.
+    * **An unclean ``finish_reason`` LATCHES.** A frame reporting ``length``
+      followed by a usage frame repeating ``stop`` must stay truncated, or the
+      user-visible "(shortened)" marker vanishes from an answer they paid for.
+      Otherwise the last non-null value wins, and an absent one stays absent --
+      :func:`_finish_reason_indicates_truncation` must never be handed an
+      invented reason.
+    * **Annotations accumulate in arrival order and are NOT de-duplicated**,
+      and ``citations`` is a fallback for ``annotations`` rather than a merge.
+      Both rules exist to match ``_extract_citations`` exactly: it dedupes
+      nothing, and it reads ``annotations or citations`` -- a short-circuit, so
+      a response carrying both yields only the first. An earlier version of
+      this function deduplicated and merged, which sounds tidier and silently
+      renumbered a user's bibliography relative to the same response delivered
+      non-streamed. Dropping the de-duplication also removes a quadratic scan:
+      it compared each annotation against a growing list, measured at 10.12s of
+      CPU for 20,000 annotations inside a paid call's budget.
+
+    **The terminator is the framing check, and streaming is why it has to
+    exist.** ``_iter_body_within_budget`` restores an ``IncompleteRead`` guard
+    that ``read1`` had silently dropped -- but that guard reads
+    ``HTTPResponse.length``, which is ``None`` under chunked framing, and a
+    streamed response is always chunked. So a stream that delivers three of
+    forty frames and then closes CLEANLY raises nothing at all: measured on
+    loopback, such a response returns its prefix with no exception and
+    ``resp.length is None``. Without an application-level terminator that
+    prefix is valid JSON, is served as a whole answer, is priced, and reports
+    ``is_truncated=False`` -- the exact defect the ``IncompleteRead`` restore
+    was written to prevent, reached by a different route.
+
+    Three terminators are accepted, and accepting more than one is deliberate.
+    ``data: [DONE]`` is the OpenAI-compatible sentinel but is **not measured
+    against this upstream anywhere in this repository** -- requiring it alone
+    would risk classifying every healthy call ``_DISPATCH_UNMEASURED``, which
+    is rule 8c's failure mirrored. A non-null ``finish_reason`` is the
+    upstream's own statement that generation stopped, and a top-level ``error``
+    is its documented mid-stream failure marker. Absent all three the stream is
+    reported incomplete and the caller classifies it dispatched-but-unmeasured:
+    tokens were generated and may well have been billed, and we cannot say what
+    arrived.
+    """
+    text_parts: list[str] = []
+    annotations: list[object] = []
+    citations: list[object] = []
+    finish_reason: object = None
+    latched = False
+    usage: object = None
+    error: object = None
+    frame_count = 0
+    unrecognised = 0
+    terminator = _STREAM_TERMINATOR_NONE
+    body_error: BaseException | None = None
+
+    for data in frames:
+        if isinstance(data, _UnrecognisedLine):
+            unrecognised += 1
+            continue
+        if data == _SSE_DONE_SENTINEL:
+            terminator = _STREAM_TERMINATOR_DONE
+            # DRAIN rather than ``break``, and the difference is a real defect
+            # caught by a pre-existing test. Breaking here leaves
+            # ``_iter_body_within_budget`` suspended mid-generator, so the EOF
+            # arm that re-raises ``IncompleteRead`` on a body short of its
+            # declared ``Content-Length`` never runs -- and a truncated body
+            # whose prefix happened to contain a complete stream was served as
+            # a whole answer and priced. That is the guarantee ``read1`` had
+            # already dropped once; losing it again by exiting a loop early
+            # would be the same defect a third time.
+            #
+            # Draining ends at the END OF BODY, not the end of the socket: the
+            # chunked terminator (or the declared length) is what makes the
+            # read return empty, and a well-formed stream sends it immediately
+            # after the sentinel. The call budget still bounds the wait, so a
+            # server that sends ``[DONE]`` and then falls silent costs the
+            # budget rather than hanging for ever.
+            #
+            # Frames after the sentinel are deliberately consumed WITHOUT being
+            # processed: the stream said it was finished, so nothing after it
+            # may change the answer, the usage or the finish reason.
+            for _ in frames:
+                pass
+            break
+        try:
+            frame = json.loads(data)
+        except _EXPECTED_BODY_ERRORS as exc:
+            body_error = exc
+            break
+        frame_count += 1
+        if not isinstance(frame, dict):
+            # A frame that is not a mapping says nothing; it is not an end
+            # condition either. Skipping it rather than raising keeps one
+            # malformed keep-alive from discarding an otherwise good answer.
+            continue
+        if isinstance(frame.get("error"), dict):
+            error = frame["error"]
+            if terminator == _STREAM_TERMINATOR_NONE:
+                terminator = _STREAM_TERMINATOR_ERROR
+        if isinstance(frame.get("usage"), dict):
+            usage = frame["usage"]
+        choices = frame.get("choices")
+        if not isinstance(choices, list):
+            continue
+        for choice in choices:
+            if not isinstance(choice, dict):
+                continue
+            index = choice.get("index", 0)
+            if index != 0:
+                continue
+            delta = choice.get("delta")
+            if isinstance(delta, dict):
+                piece = delta.get("content")
+                if isinstance(piece, str):
+                    text_parts.append(piece)
+                for key, sink in (("annotations", annotations), ("citations", citations)):
+                    extra = delta.get(key)
+                    if isinstance(extra, list):
+                        sink.extend(extra)
+            reason = choice.get("finish_reason")
+            if isinstance(reason, str) and reason in _UNCLEAN_FINISH_REASONS:
+                finish_reason = reason
+                latched = True
+            elif reason is not None and not latched:
+                finish_reason = reason
+            if reason is not None and terminator in (
+                _STREAM_TERMINATOR_NONE,
+                _STREAM_TERMINATOR_ERROR,
+            ):
+                terminator = _STREAM_TERMINATOR_FINISH_REASON
+
+    message: dict[str, object] = {"content": "".join(text_parts)}
+    # ``annotations or citations``, mirroring ``_extract_citations``' own
+    # short-circuit rather than merging the two.
+    if annotations or citations:
+        message["annotations"] = annotations or citations
+    choice_zero: dict[str, object] = {"message": message}
+    if finish_reason is not None:
+        choice_zero["finish_reason"] = finish_reason
+    elif error is not None:
+        # The documented mid-stream failure frame carries BOTH a top-level
+        # ``error`` and ``finish_reason: "error"``. When only the first
+        # arrives, say so here rather than letting a broken generation report
+        # a clean stop: ``"error"`` is already a member of
+        # ``_UNCLEAN_FINISH_REASONS``, so the answer is marked shortened and
+        # any usage the provider stated still reaches the receipt.
+        choice_zero["finish_reason"] = "error"
+    payload: dict[str, object] = {"choices": [choice_zero]}
+    if isinstance(usage, dict):
+        payload["usage"] = usage
+    if error is not None:
+        payload["error"] = error
+    return _StreamedCompletion(
+        payload=payload,
+        terminator=terminator,
+        frame_count=frame_count,
+        unrecognised_lines=unrecognised,
+        body_error=body_error,
+    )
 
 
 def _read_within_budget(exc: HTTPError, limit: int, budget: float) -> tuple[bytes, bool]:
@@ -2160,6 +2809,7 @@ def _log_call_token_shape(
     messages: list[dict[str, str]],
     max_tokens: int | None,
     usage: TokenUsage | None,
+    stream_terminator: str,
 ) -> None:
     """Record how many INPUT tokens this call carried (issue #268).
 
@@ -2187,6 +2837,26 @@ def _log_call_token_shape(
     ``usage_absent`` is reported rather than a fabricated ``prompt_tokens: 0``.
     A zero would sit in the distribution and drag every percentile taken from
     it, which is the same reason :func:`_extract_usage` refuses to invent one.
+
+    ``stream_terminator`` does two jobs, both needing production data rather
+    than another reading of a vendor page.
+
+    It SEPARATES pre- and post-streaming rows. Every row this stream has
+    written so far came from a non-streamed call, and ``injected_tokens_est``
+    is ``usage.prompt_tokens`` minus what we sent -- meaningful only if a
+    streamed ``prompt_tokens`` counts the same thing. Mixing the two regimes
+    into one percentile would quietly corrupt the dataset #268 exists to
+    build; this field is what lets a reader split them.
+
+    It also ANSWERS the premise this transport rests on that nobody here has
+    measured. ``docs/adr/0078`` and the B3 probe both record "``usage`` arrives
+    in the final chunk with no opt-in" under what they settled, but both
+    attribute it to OpenRouter's DOCUMENTATION rather than to a probe row, and
+    the probe script was not retained -- so it is ASSUMED, not measured.
+    Reading ``usage_absent`` against this field over real traffic settles that,
+    and settles whether ``[DONE]`` is sent at all, at no cost and with no extra
+    instrumentation. Being wrong costs receipts their ``measured`` label, which
+    is the safe direction, never a silent overcharge.
     """
     sent_chars = sum(len(str(message.get("content", ""))) for message in messages)
     system_chars = sum(
@@ -2204,6 +2874,7 @@ def _log_call_token_shape(
         "sent_chars": sent_chars,
         "sent_tokens_est": sent_tokens_est,
         "usage_absent": usage is None,
+        "stream_terminator": stream_terminator,
     }
     if usage is not None:
         fields["prompt_tokens"] = usage.prompt_tokens

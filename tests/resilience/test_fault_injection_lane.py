@@ -48,6 +48,7 @@ from uuid import UUID, uuid4
 import pytest
 from fastapi.testclient import TestClient
 from tests.conftest import OutboundSocketBlocked
+from tests.provider_wire import sse_from_completion
 
 from product_app import config
 from product_app.costs import cost_estimation_service
@@ -106,7 +107,7 @@ def _return_empty_content(request: Any, timeout: float = 0) -> _FakeResponse:
     # A well-formed JSON envelope carrying no assistant text. ``not content``
     # → the call returns None silently (no warning).
     return _FakeResponse(
-        json.dumps({"choices": [{"message": {"content": "", "annotations": []}}]}).encode()
+        sse_from_completion({"choices": [{"message": {"content": "", "annotations": []}}]})
     )
 
 
@@ -261,7 +262,7 @@ def test_one_provider_failure_slot_is_excluded_from_served_live_count(
         # slot never reaches urlopen — _should_force_provider_failure short-
         # circuits it to _failed_answer before live execution is attempted.
         return _FakeResponse(
-            json.dumps(
+            sse_from_completion(
                 {
                     "choices": [
                         {
@@ -272,7 +273,7 @@ def test_one_provider_failure_slot_is_excluded_from_served_live_count(
                         }
                     ]
                 }
-            ).encode()
+            )
         )
 
     _enable_live(monkeypatch, fake_urlopen)
@@ -370,7 +371,7 @@ _MIXED_MODEL_IDS = [
 _FAULTED_MODEL_ID = _MIXED_MODEL_IDS[2]
 _FAULTED_SLOT_NUMBER = 3
 
-_LIVE_BODY = json.dumps(
+_LIVE_BODY = sse_from_completion(
     {
         "choices": [
             {
@@ -384,7 +385,7 @@ _LIVE_BODY = json.dumps(
         ],
         "usage": {"prompt_tokens": 1000, "completion_tokens": 300, "total_tokens": 1300},
     }
-).encode()
+)
 
 
 def _urlopen_faulting_only_the_participant(request: Any, timeout: float = 0) -> _FakeResponse:
@@ -635,12 +636,12 @@ def _whitespace_body(annotations: list[dict[str, str]]) -> bytes:
     receipt, and it is what the money decision in ``providers._failed_answer``
     is about.
     """
-    return json.dumps(
+    return sse_from_completion(
         {
             "choices": [{"message": {"content": "   \n\t  ", "annotations": annotations}}],
             "usage": {"prompt_tokens": 1000, "completion_tokens": 300, "total_tokens": 1300},
         }
-    ).encode()
+    )
 
 
 def test_a_run_in_which_every_slot_returned_whitespace_is_not_a_completed_run(
@@ -965,7 +966,7 @@ def _participants_collide_with_no_moderator() -> None:
 
 
 def _panel_envelope(content: str) -> bytes:
-    return json.dumps(
+    return sse_from_completion(
         {
             "choices": [
                 {
@@ -979,7 +980,7 @@ def _panel_envelope(content: str) -> bytes:
             ],
             "usage": {"prompt_tokens": 1000, "completion_tokens": 300, "total_tokens": 1300},
         }
-    ).encode()
+    )
 
 
 def _panel_urlopen(synthesis_content: str | None) -> Callable[..., _FakeResponse]:

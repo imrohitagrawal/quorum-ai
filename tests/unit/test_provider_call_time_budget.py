@@ -35,7 +35,6 @@ server that sent nothing at all.
 
 from __future__ import annotations
 
-import json
 import socket
 import threading
 import time
@@ -44,6 +43,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any
 
 import pytest
+from tests.provider_wire import sse_from_completion
 
 from product_app import config
 from product_app.providers import provider_execution_service
@@ -59,12 +59,12 @@ _CHUNK_BYTES = 512
 
 def _completion_bytes() -> bytes:
     filler = "y" * (_CHUNKS * _CHUNK_BYTES)
-    return json.dumps(
+    return sse_from_completion(
         {
             "choices": [{"finish_reason": "stop", "message": {"content": filler}}],
             "usage": {"prompt_tokens": 40, "completion_tokens": 7, "total_tokens": 47},
         }
-    ).encode()
+    )
 
 
 def _make_server(tick: float) -> Iterator[str]:
@@ -526,9 +526,20 @@ def _raw_server(
         sock.close()
 
 
-_COMPLETION = (
-    b'{"choices":[{"finish_reason":"stop","message":{"content":"the answer"}}],'
-    b'"usage":{"prompt_tokens":100,"completion_tokens":900,"total_tokens":1000}}'
+#: A COMPLETE streamed answer, used by the ``Content-Length`` tests below.
+#: Those tests are what prove the ``IncompleteRead`` restore still bites, and
+#: they must keep declaring a real length -- which is exactly why they are
+#: written against a buffered stream rather than a chunked one. A real
+#: streamed response is chunked and carries no length at all, so nothing at the
+#: transport layer can see it stop early; that hole is what the terminator
+#: check in ``_reassemble_streamed_completion`` covers, and
+#: ``test_a_stream_that_never_says_it_finished_is_reported_incomplete``
+#: is where it is proved.
+_COMPLETION = sse_from_completion(
+    {
+        "choices": [{"finish_reason": "stop", "message": {"content": "the answer"}}],
+        "usage": {"prompt_tokens": 100, "completion_tokens": 900, "total_tokens": 1000},
+    }
 )
 
 

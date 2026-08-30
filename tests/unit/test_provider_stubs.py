@@ -6,6 +6,7 @@ from uuid import uuid4
 
 import pytest
 from tests.helpers import scoped_events
+from tests.provider_wire import sse_from_completion
 
 from product_app.model_slots import ModelSlot, validate_model_slots
 from product_app.provider_keys import ProviderCredentialSource
@@ -301,7 +302,7 @@ def test_live_response_uses_online_suffix_for_search(
         body = json.loads(request.data.decode())
         captured_model_ids.append(body["model"])
         return _FakeResponse(
-            json.dumps(
+            sse_from_completion(
                 {
                     "choices": [
                         {
@@ -317,7 +318,7 @@ def test_live_response_uses_online_suffix_for_search(
                         }
                     ]
                 }
-            ).encode()
+            )
         )
 
     monkeypatch.setattr("product_app.providers.urlopen", fake_urlopen)
@@ -358,7 +359,7 @@ def test_live_response_retries_without_online_suffix_on_404(
                 fp=None,
             )
         return _FakeResponse(
-            json.dumps(
+            sse_from_completion(
                 {
                     "choices": [
                         {
@@ -369,7 +370,7 @@ def test_live_response_retries_without_online_suffix_on_404(
                         }
                     ]
                 }
-            ).encode()
+            )
         )
 
     monkeypatch.setattr("product_app.providers.urlopen", fake_urlopen)
@@ -510,7 +511,7 @@ def test_per_slot_search_off_skips_online_attempt(
         body = json.loads(request.data.decode())
         captured_model_ids.append(body["model"])
         return _FakeResponse(
-            json.dumps(
+            sse_from_completion(
                 {
                     "choices": [
                         {
@@ -521,7 +522,7 @@ def test_per_slot_search_off_skips_online_attempt(
                         }
                     ]
                 }
-            ).encode()
+            )
         )
 
     monkeypatch.setattr("product_app.providers.urlopen", fake_urlopen)

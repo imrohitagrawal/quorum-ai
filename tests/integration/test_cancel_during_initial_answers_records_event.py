@@ -19,7 +19,6 @@ correct end to end from a real cancel, not just from a direct unit call.
 
 from __future__ import annotations
 
-import json
 import threading
 from dataclasses import dataclass, field
 from typing import Any
@@ -28,6 +27,7 @@ from uuid import UUID
 import pytest
 from fastapi.testclient import TestClient
 from tests.helpers import isolated_run_semaphore, scoped_events, wait_for_free_permits
+from tests.provider_wire import sse_from_completion
 
 from product_app import config, query_run_orchestration
 from product_app.main import app
@@ -62,12 +62,12 @@ class _FakeResponse:
         return None
 
 
-_LIVE_BODY = json.dumps(
+_LIVE_BODY = sse_from_completion(
     {
         "choices": [{"message": {"content": "live provider answer text"}}],
         "usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
     }
-).encode()
+)
 
 
 @dataclass

@@ -52,6 +52,7 @@ from urllib.error import HTTPError, URLError
 
 import pytest
 import sentry_sdk
+from tests.provider_wire import sse_from_completion
 
 from product_app import config, telemetry_sink
 from product_app.logging_config import JsonFormatter
@@ -110,7 +111,7 @@ def _http_error(code: int, body: bytes, **headers: str) -> HTTPError:
 
 
 def _completion_body(*, prompt_tokens: int = 900, completion_tokens: int = 120) -> bytes:
-    return json.dumps(
+    return sse_from_completion(
         {
             "choices": [{"message": {"role": "assistant", "content": "An answer."}}],
             "usage": {
@@ -119,7 +120,7 @@ def _completion_body(*, prompt_tokens: int = 900, completion_tokens: int = 120) 
                 "total_tokens": prompt_tokens + completion_tokens,
             },
         }
-    ).encode()
+    )
 
 
 @pytest.fixture
@@ -310,7 +311,11 @@ def test_every_field_the_two_streams_actually_emit_is_declared(
     assert len(billing_seen) >= 11, (
         f"only {len(billing_seen)} billing field names were collected; the drivers went quiet"
     )
-    assert len(token_seen) >= 9, (
+    # Raised 9 -> 11 on 2026-08-30 (ADR-0084). Measured by instrumenting this
+    # test: 11 token field names are emitted today. At 9 the two newest fields
+    # could both go silent undetected -- which is the failure this floor exists
+    # to catch, so a floor two below the truth was not a floor.
+    assert len(token_seen) >= 11, (
         f"only {len(token_seen)} token field names were collected; the #268 "
         f"driver emitted nothing, so this check is measuring the billing stream twice"
     )
@@ -364,7 +369,7 @@ def _drive_answerless_200(monkeypatch: pytest.MonkeyPatch, *, usage: bool = Fals
     if usage:
         payload["usage"] = {"prompt_tokens": 40, "completion_tokens": 7, "total_tokens": 47}
     response = MagicMock()
-    response.read.return_value = json.dumps(payload).encode()
+    response.read.return_value = sse_from_completion(payload)
     response.__enter__ = MagicMock(return_value=response)
     response.__exit__ = MagicMock(return_value=False)
     monkeypatch.setattr("product_app.providers.urlopen", MagicMock(return_value=response))
