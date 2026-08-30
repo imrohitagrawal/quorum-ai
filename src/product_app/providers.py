@@ -1343,13 +1343,27 @@ class ProviderExecutionService:
                     # real stream can never reach it, and gated on the body
                     # actually being a completion-shaped mapping.
                     #
-                    # Widening the count to ``<= 1`` survives the suite, and it
-                    # is EQUIVALENT rather than uncovered: a body that yields a
-                    # parsed SSE frame cannot also parse whole as a JSON
-                    # completion -- ``json.loads`` fails on the ``data:``
-                    # prefix either way -- so the fallback could not succeed
-                    # even if it were reached. The count stays at zero because
-                    # it says what we mean, not because a test forces it.
+                    # Widening the count to ``<= 1`` survives the suite, and an
+                    # earlier version of this comment called that EQUIVALENT on
+                    # the argument that a body yielding a parsed frame cannot
+                    # also parse whole as a JSON completion. **That argument is
+                    # false and the mutant is not equivalent.** The fallback
+                    # parses the retained HEAD, not the whole body, so a body
+                    # whose first 64 KiB are a complete completion followed by
+                    # newlines -- ``json.loads`` tolerates trailing whitespace
+                    # -- and whose TAIL carries SSE frames satisfies both
+                    # halves at once. Measured: ``frame_count = 1`` with the
+                    # head parsing as a completion mapping, and widening the
+                    # guard turned a refusal into a SERVED, usage-bearing
+                    # answer end to end.
+                    #
+                    # So the count stays at zero because widening it is a
+                    # demonstrated hole, not because the difference is
+                    # unobservable. The surviving mutant is a real gap in the
+                    # tests, recorded rather than papered over: constructing
+                    # that body needs a 64 KiB fixture, which buys less than it
+                    # costs while the guard is correct and this comment says
+                    # why.
                     with contextlib.suppress(*_EXPECTED_BODY_ERRORS, UnicodeDecodeError):
                         whole = json.loads(b"".join(head).decode())
                         if isinstance(whole, dict) and "choices" in whole:
@@ -2211,20 +2225,29 @@ _SSE_BOM = b"\xef\xbb\xbf"
 #: the number is a bound on that cost rather than a generous allowance.
 #:
 #: **Every size below is DERIVED, not measured, and an earlier version of this
-#: comment said "measured" for both.** No byte measurement of a provider body
-#: exists in this repository; the B3 probe recorded frame COUNTS and kept no
-#: byte column. What the derivations say, at ~292 bytes per frame:
+#: comment said "measured" for both.** The B3 probe recorded frame COUNTS and
+#: kept no byte column, and its script was not retained, so the byte figures
+#: are a model at ~300 bytes per frame -- the same per-frame figure used
+#: above, deliberately, because two different ones in one file is how a model
+#: starts reading as a measurement. What the model says:
 #:
 #: * at the old 1 MiB cap, a synthesis-leg answer (4,194-4,908 frames, so
-#:   ~1.2-1.4 MB on the wire) would have filled the whole cap -- but a slot-1
-#:   answer (1,736-1,794 frames, ~0.5 MB) would NOT. The blanket claim that a
-#:   healthy answer held the whole megabyte was true only of the largest call
-#:   class;
+#:   ~1.3-1.5 MB on the wire) would have filled the whole cap. An earlier
+#:   version of this note added that a slot-1 answer "would NOT", on the
+#:   probe's 1,736-1,794 frame rows -- **that was wrong, and wrong by
+#:   generalising from length to call class**. Those two samples produced 845
+#:   and 893 completion tokens against a 3,000 cap: they stopped early. Per
+#:   TOKEN the slot model emits MORE frames than the synthesis model (2.05 and
+#:   2.01 against 1.62 and 1.67), so a full-length slot answer at the shipped
+#:   ``initial_answer_max_tokens = 2000`` extrapolates to ~4,000-4,100 frames,
+#:   about 1.2 MB -- over the old cap, not under it. What the samples show is
+#:   short ANSWERS, not a smaller call class;
 #: * a non-streamed completion at ``initial_answer_max_tokens = 2000`` is
 #:   ~8.3 KB (2000 tokens x ``CHARS_PER_TOKEN`` plus an envelope). The largest
-#:   body anyone has constructed is ~45 KB -- an ``:online`` answer carrying 20
+#:   body anyone has CONSTRUCTED is ~45 KB -- an ``:online`` answer carrying 20
 #:   citations -- so the headroom against 64 KiB is about 7x for the smallest
-#:   call class and about 1.5x for the largest known one.
+#:   call class and about 1.5x for the largest built one. Nobody has weighed a
+#:   real ``:online`` response, so 1.5x is the honest floor, not a ceiling.
 #:
 #: A body above the cap is truncated, so ``json.loads`` fails and the call is
 #: refused exactly as it would have been without the fallback: the safe

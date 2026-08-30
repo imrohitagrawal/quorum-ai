@@ -339,21 +339,31 @@ def test_a_multi_line_data_field_is_one_event_joined_with_newlines() -> None:
     BLANK line, joining with ``\n``. This pins the ACCUMULATION: "one line, one
     event" splits a frame into two halves that neither parse.
 
-    **It deliberately does not pin the join SEPARATOR, because nothing can.**
-    Replacing ``"\n".join`` with ``"".join`` -- or with ``" ".join`` -- survives
-    this file and the transport file; both verified by running them, not
-    assumed. The whole separator class behaves alike, and for the same reason. That is an
+    **It deliberately does not pin the join SEPARATOR.** Replacing
+    ``"\n".join`` with ``"".join`` -- or with ``" ".join`` -- survives this file
+    and the transport file; both verified by running them, not assumed. That is an
     EQUIVALENT mutant rather than a hole: between two JSON tokens a newline is
     whitespace, and a raw newline cannot appear inside a JSON string (it must
     be escaped), so no valid frame can observe which character was used. The
-    ``\n`` is kept because the specification says so and because a future
-    non-JSON data field would notice; claiming a test proves it would be the
-    vacuity this file exists to avoid.
+    They are NOT equivalent mutants, and an earlier version of this docstring
+    said they were. A separator is unobservable only when the joined payload
+    stays VALID: between two JSON tokens a newline is whitespace, and a raw
+    newline cannot appear inside a JSON string. An INVALID frame observes it,
+    and the difference is refuse-versus-serve -- measured, a two-line frame
+    whose halves join into ``{"content":"A\nB"}`` fails ``json.loads`` under
+    ``\n`` (so the call is refused) and parses under ``" "`` (so ``A B`` would
+    be SERVED).
 
-    Sharper still: the separator is only ever APPLIED when one event carries
-    more than one ``data:`` line, and every frame this upstream is known to
-    send carries exactly one. So for real traffic the separator is unreachable,
-    not merely unobservable.
+    What makes them survivable rather than dangerous is narrower: the
+    separator is only applied when one event carries more than one ``data:``
+    line, and no frame observed from this upstream carries more than one.
+    That is a statement about what has been observed, not about what the
+    upstream guarantees -- nobody here has measured it, and it is the shape of
+    claim rule 8c exists to make people hedge.
+
+    ``\n`` is kept because the specification says so. Pinning it would need a
+    fixture whose two data lines join into invalid JSON, which is worth less
+    than the sentence you are reading.
     """
     body = b'data: {"choices":[{"index":0,"delta":\ndata: {"content":"split frame"}}]}\n\n'
     streamed = _fold(body + sse_stream(_finish("stop")))

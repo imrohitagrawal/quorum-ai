@@ -241,16 +241,27 @@ existing code decide, exactly as the non-streamed shape does.
   non-stream, and refuses a non-stream body larger than that rather than
   guessing at a truncated one. Both are stated here because the constant is a
   memory bound on the happy path, which is not what its name suggests.
-  **Every size in that reasoning is DERIVED, not measured** — no byte
-  measurement of a provider body exists in this repository, because the B3
-  probe recorded frame counts and kept no byte column. At ~292 bytes/frame a
-  synthesis-leg answer models to ~1.2–1.4 MB and a slot-1 answer to ~0.5 MB,
-  so the earlier claim that a healthy answer "held the whole 1,048,576 bytes"
-  was true only of the largest call class. Headroom against 64 KiB is ~7x for
-  the smallest call class and ~1.5x for the largest body anyone has built
-  (~45 KB, an `:online` answer with 20 citations). The `:online` shape with
-  real annotations is the one that would eat this margin, and it is exactly
-  the shape this ADR records as unmeasured.
+  **Every size in that reasoning is DERIVED, not measured** — the B3 probe
+  recorded frame counts and kept no byte column, and its script was not
+  retained, so the byte figures are a model at ~300 bytes/frame (the one
+  per-frame figure used everywhere here; two different ones is how a model
+  starts reading as a measurement).
+
+  Two earlier claims in this consequence were wrong and are corrected rather
+  than deleted. "A healthy streamed answer held the whole 1,048,576 bytes" was
+  never measured. And the qualification that a *slot-1* answer "would not" have
+  filled the cap generalised from length to call class: the probe's two
+  `gpt-4o-mini` rows produced 845 and 893 completion tokens against a 3,000
+  cap, so they stopped early, and per TOKEN that model emits MORE frames than
+  the synthesis model (2.05 / 2.01 against 1.62 / 1.67). At the shipped
+  `initial_answer_max_tokens = 2000` a full-length slot answer extrapolates to
+  ~4,000–4,100 frames, about 1.2 MB — over the old cap, not under it.
+
+  Headroom against 64 KiB is ~7x for the smallest call class and ~1.5x for the
+  largest body anyone has BUILT (~45 KB, an `:online` answer with 20
+  citations). Nobody has weighed a real `:online` response, so 1.5x is the
+  honest floor rather than a ceiling — and that shape is exactly the one this
+  ADR already records as unmeasured.
 - **`providers.py` is not in `RISK_TIER_MODULES`**, so this new constant was
   never triaged by `test_risk_constant_pins.py`. It is pinned instead by a
   literal assertion in `test_provider_streaming_transport.py`, which is
