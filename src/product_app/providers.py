@@ -2125,6 +2125,36 @@ def _iter_sse_data(chunks: Iterator[bytes]) -> Iterator[str]:
     """
     buffer = b""
     pending: list[str] = []
+
+    def _data_value(raw_line: bytes) -> str | None:
+        """The ``data:`` value on one line, or ``None`` for anything else.
+
+        Everything that is not a data field -- ``event:``, ``id:``, ``retry:``,
+        any unknown field, and COMMENTS (a line beginning ``:``, which is what
+        OpenRouter sends as a keep-alive: 1, 16, 16 and 21 of them across four
+        measured streamed calls, with no fixed cadence) -- returns ``None`` and
+        is discarded at READ time, so an upstream cannot grow this process's
+        memory by sending them.
+
+        There is deliberately no separate comment branch. A line starting ``:``
+        cannot also start ``data:``, so a dedicated check would be
+        unreachable-by-construction: no test could tell it from this one, which
+        is another way of saying nothing would notice if it were wrong.
+        """
+        # ``strict`` decoding, matching the whole-body ``.decode()`` this
+        # replaced: a body that is not UTF-8 raises here exactly as it did
+        # before, rather than being silently mangled. ``errors="replace"``
+        # would be worse than the raise -- it corrupts a paid answer's text
+        # while every gate stays green.
+        line = raw_line.rstrip(b"\r").decode()
+        if not line.startswith(_SSE_DATA_FIELD):
+            return None
+        value = line[len(_SSE_DATA_FIELD) :]
+        # The specification strips ONE optional leading space, not all
+        # whitespace -- JSON tolerates the difference, but a sentinel compared
+        # with ``==`` does not.
+        return value[1:] if value.startswith(" ") else value
+
     for chunk in chunks:
         buffer += chunk
         while True:
@@ -2132,39 +2162,24 @@ def _iter_sse_data(chunks: Iterator[bytes]) -> Iterator[str]:
             if break_at < 0:
                 break
             raw_line, buffer = buffer[:break_at], buffer[break_at + 1 :]
-            # ``strict`` decoding, matching the whole-body ``.decode()`` this
-            # replaced: a body that is not UTF-8 raises here exactly as it did
-            # before, rather than being silently mangled. ``errors="replace"``
-            # would be worse than the raise -- it corrupts a paid answer's text
-            # while every gate stays green.
-            line = raw_line.rstrip(b"\r").decode()
-            if not line:
+            if not raw_line.rstrip(b"\r"):
                 if pending:
                     yield "\n".join(pending)
                     pending = []
                 continue
-            if not line.startswith(_SSE_DATA_FIELD):
-                # Everything that is not a data field: ``event:``, ``id:``,
-                # ``retry:``, any unknown field, and COMMENTS -- a line
-                # beginning ``:``, which is what OpenRouter sends as a
-                # keep-alive (1, 16, 16 and 21 of them across four measured
-                # streamed calls, with no fixed cadence).
-                #
-                # There is deliberately no separate comment branch. A line
-                # starting ``:`` cannot also start ``data:``, so a dedicated
-                # check would be unreachable-by-construction -- no test could
-                # tell it from this line, which is another way of saying
-                # nothing would notice if it were wrong. Discarding here also
-                # means keep-alives are dropped at READ time and never
-                # buffered, so an upstream cannot grow this process's memory
-                # by sending them.
-                continue
-            value = line[len(_SSE_DATA_FIELD) :]
-            # The specification strips ONE optional leading space, not all
-            # whitespace -- JSON tolerates the difference, but a sentinel
-            # compared with ``==`` does not.
-            if value.startswith(" "):
-                value = value[1:]
+            value = _data_value(raw_line)
+            if value is not None:
+                pending.append(value)
+    if buffer:
+        # A final line with NO trailing newline at all. A server may close
+        # immediately after writing its last frame, and that frame was still
+        # DELIVERED -- dropping it loses whichever frame came last, which is
+        # most often the usage frame and therefore the run's ``measured``
+        # label. If the residue is instead a TORN line, ``json.loads`` fails on
+        # it and the call is classified dispatched-but-unmeasured, which is the
+        # honest reading either way.
+        value = _data_value(buffer)
+        if value is not None:
             pending.append(value)
     if pending:
         yield "\n".join(pending)

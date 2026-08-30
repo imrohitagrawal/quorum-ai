@@ -393,3 +393,62 @@ def test_a_malformed_frame_is_carried_out_as_a_body_error() -> None:
     streamed = _fold(sse_stream("{not json at all", done=False))
     assert streamed.body_error is not None
     assert type(streamed.body_error).__name__ == "JSONDecodeError"
+
+
+def test_a_final_frame_without_a_trailing_blank_line_is_still_delivered() -> None:
+    """RED when: the reader only dispatches on a blank line and forgets the tail.
+
+    The SSE specification separates events with a blank line, but a server that
+    closes immediately after its last frame has still DELIVERED that frame.
+    Dropping it would silently lose whichever frame came last -- most often the
+    usage frame, which is the one that decides whether the run is ``measured``.
+    """
+    body = sse_stream(_delta("all of it"), _finish("stop"), done=False)
+    assert body.endswith(b"\n\n")
+    streamed = _fold(body.rstrip(b"\n"))
+    assert _extract_message_content(streamed.payload) == "all of it"
+    assert streamed.terminator == "finish_reason"
+
+
+def test_nothing_after_the_sentinel_can_change_the_answer() -> None:
+    """RED when: frames after ``[DONE]`` are processed instead of drained.
+
+    The stream said it was finished, so nothing after it may alter the answer,
+    the usage or the finish reason. The frames are still CONSUMED rather than
+    abandoned -- draining is what lets the body generator reach its end and
+    re-raise ``IncompleteRead`` on a body short of its declared length, which is
+    a guarantee an earlier version of this code lost by exiting the loop early.
+    """
+    streamed = _fold(
+        sse_stream(_delta("the real answer"), _finish("stop"))
+        + sse_stream(
+            _delta(" AND SOME MORE"),
+            {
+                "choices": [],
+                "usage": {"prompt_tokens": 9, "completion_tokens": 9, "total_tokens": 9},
+            },
+            done=False,
+        )
+    )
+    assert _extract_message_content(streamed.payload) == "the real answer"
+    assert _extract_usage(streamed.payload) is None
+    assert streamed.terminator == "done"
+
+
+@pytest.mark.parametrize(
+    "frame",
+    [42, '"a bare string"', [1, 2, 3], {"choices": [42]}, {"choices": "not a list"}],
+    ids=["number", "string", "array", "non-mapping-choice", "choices-not-a-list"],
+)
+def test_a_malformed_frame_is_skipped_rather_than_fatal(frame: object) -> None:
+    """RED when: a frame that is not the expected shape aborts the whole call.
+
+    A malformed frame says nothing, and it is not an end condition either.
+    Raising on one would let a single stray keep-alive throw away an otherwise
+    complete and already-billed answer -- the understate direction. Skipping it
+    keeps the good frames, and the terminator check still decides whether what
+    arrived may be served at all.
+    """
+    streamed = _fold(sse_stream(_delta("good "), frame, _delta("text"), _finish("stop")))
+    assert _extract_message_content(streamed.payload) == "good text"
+    assert streamed.body_error is None

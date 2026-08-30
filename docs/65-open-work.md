@@ -322,6 +322,24 @@ It also failed on a clean `git archive` of `origin/main` while loaded, so no
 branch causes it. CI passes it. **A red result here is therefore NOT
 automatically W19** — re-run it isolated on an idle machine before dismissing
 it, because the margin is about 2% and a real regression would look the same.
+
+**Re-measured 2026-08-30, and the "idle passes" half no longer holds on this
+box.** Hit while shipping W1, where it mattered: W1 rewrites this exact code
+path, so the table above would have licensed dismissing a real regression. What
+settled it was a PAIRED, interleaved comparison against a clean
+`git archive origin/main`, 6 reps each, alternating, at load average ~5:
+
+| | wall (s) |
+|---|---|
+| clean `origin/main` | 4.095 4.116 4.117 4.145 4.026 4.091 — mean **4.098** |
+| the W1 branch | 4.070 4.089 4.025 4.085 4.086 4.083 — mean **4.073** |
+
+**9 of 9 idle failures on clean `main`**, and the branch is if anything
+FASTER (lower in 5 of 6 paired reps). So the bound now fails on an idle machine
+too — this box has drifted past the 2% margin — and it is still not any diff's
+fault. Whoever fixes this row should re-derive the margin from a fresh
+distribution rather than nudging `4.0` upward: the number in the assertion has
+never been anything but the machine it was written on.
 Either widen the bound with a re-derived margin or make it CI-only — but measure
 first: its partner lower bound is what proves the dribble really happened.
 
