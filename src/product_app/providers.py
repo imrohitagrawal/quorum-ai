@@ -1361,9 +1361,10 @@ class ProviderExecutionService:
                     # demonstrated hole, not because the difference is
                     # unobservable. The surviving mutant is a real gap in the
                     # tests, recorded rather than papered over: constructing
-                    # that body needs a 64 KiB fixture, which buys less than it
-                    # costs while the guard is correct and this comment says
-                    # why.
+                    # that body is four lines (pad a completion to 64 KiB with
+                    # newlines, then append frames), so the cost is low -- it
+                    # is simply not worth a 64 KiB fixture while the guard is
+                    # correct and this comment records the counterexample.
                     with contextlib.suppress(*_EXPECTED_BODY_ERRORS, UnicodeDecodeError):
                         whole = json.loads(b"".join(head).decode())
                         if isinstance(whole, dict) and "choices" in whole:

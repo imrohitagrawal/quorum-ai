@@ -341,10 +341,8 @@ def test_a_multi_line_data_field_is_one_event_joined_with_newlines() -> None:
 
     **It deliberately does not pin the join SEPARATOR.** Replacing
     ``"\n".join`` with ``"".join`` -- or with ``" ".join`` -- survives this file
-    and the transport file; both verified by running them, not assumed. That is an
-    EQUIVALENT mutant rather than a hole: between two JSON tokens a newline is
-    whitespace, and a raw newline cannot appear inside a JSON string (it must
-    be escaped), so no valid frame can observe which character was used. The
+    and the transport file; both verified by running them, not assumed.
+
     They are NOT equivalent mutants, and an earlier version of this docstring
     said they were. A separator is unobservable only when the joined payload
     stays VALID: between two JSON tokens a newline is whitespace, and a raw
