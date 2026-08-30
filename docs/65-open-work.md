@@ -4,7 +4,7 @@
 proves each row's state.** Issues on GitHub are the mirror; this file is the
 original, because a gate and an offline agent can read it and cannot read `gh`.
 
-Verified at: `2350e59df9922bfa56338691cd337df0a1974a39`
+Verified at: `59f402a7c951b90e2af376558f71ff4701b831a1`
 
 The board holds **19** rows, **4** of them unpinned.
 
@@ -457,9 +457,30 @@ until the file is regenerated.
 mark a row done by hand, which is the entire point — two earlier designs let a
 one- and then a two-token edit declare the whole board finished.
 
-When you re-verify the rows, stamp the current commit on the `Verified at:`
-line. Do not stamp it without re-reading — the drift limit is deliberately loose
-precisely so that re-stamping stays a real act.
+When you re-verify the rows, stamp a commit on the `Verified at:` line. Do not
+stamp it without re-reading — the drift limit is deliberately loose precisely so
+that re-stamping stays a real act.
+
+**Stamp a commit that is already on `main`, never one from your branch.** This
+repository SQUASH-merges, so every commit you make on a branch is discarded and
+the anchor check (`is not an ancestor of HEAD`) fails the moment the branch
+lands. Measured 2026-08-30: W1 stamped its own branch commit `2350e59`, the
+squash produced `59f402a`, and `main` went RED across `Tests`, `CI` and every
+`Deploy` run for that SHA — the deploy gate correctly reporting a *stranded
+merge* rather than deploying. Nothing reached production, but `main` was broken
+until a follow-up re-stamped it.
+
+So either stamp the commit your branch was cut FROM, or re-stamp after the
+merge. "Stamp the current commit" is the natural reading and it is the wrong
+one here.
+
+**Being on `main` is necessary, not sufficient**: the anchor must ALSO be within
+`MAX_DRIFT_COMMITS` (60) first-parent commits of HEAD, which at the time of
+writing reaches back about 17 days. An anchor that is on `main` but older than
+that fails with a different message. Both messages in
+`scripts/check_open_work.py` now say which commit to pick, because a failing
+author reads the error, not this paragraph — that omission is what let W1 stamp
+a branch commit while the gate's own text said "stamp the current commit".
 
 Adding or removing a row means editing the count sentence above in the same
 change; the gate compares both numbers against the table.
