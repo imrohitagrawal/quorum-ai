@@ -241,6 +241,20 @@ existing code decide, exactly as the non-streamed shape does.
   non-stream, and refuses a non-stream body larger than that rather than
   guessing at a truncated one. Both are stated here because the constant is a
   memory bound on the happy path, which is not what its name suggests.
+  **Every size in that reasoning is DERIVED, not measured** — no byte
+  measurement of a provider body exists in this repository, because the B3
+  probe recorded frame counts and kept no byte column. At ~292 bytes/frame a
+  synthesis-leg answer models to ~1.2–1.4 MB and a slot-1 answer to ~0.5 MB,
+  so the earlier claim that a healthy answer "held the whole 1,048,576 bytes"
+  was true only of the largest call class. Headroom against 64 KiB is ~7x for
+  the smallest call class and ~1.5x for the largest body anyone has built
+  (~45 KB, an `:online` answer with 20 citations). The `:online` shape with
+  real annotations is the one that would eat this margin, and it is exactly
+  the shape this ADR records as unmeasured.
+- **`providers.py` is not in `RISK_TIER_MODULES`**, so this new constant was
+  never triaged by `test_risk_constant_pins.py`. It is pinned instead by a
+  literal assertion in `test_provider_streaming_transport.py`, which is
+  weaker than the tiered gate and is recorded here rather than left implicit.
 - **W15 closes with it:** the two dangling `_bound_sniff_time` references now
   name `_read_within_budget`, which is what actually bounds that read —
   verified by reading the call site, not by recalling it.

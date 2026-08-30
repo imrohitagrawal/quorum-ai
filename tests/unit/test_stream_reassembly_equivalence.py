@@ -339,15 +339,21 @@ def test_a_multi_line_data_field_is_one_event_joined_with_newlines() -> None:
     BLANK line, joining with ``\n``. This pins the ACCUMULATION: "one line, one
     event" splits a frame into two halves that neither parse.
 
-    **It deliberately does not pin the join CHARACTER, because nothing can.**
-    Replacing ``"\n".join`` with ``"".join`` survives this file and the
-    transport file -- verified by running it, not assumed. That is an
+    **It deliberately does not pin the join SEPARATOR, because nothing can.**
+    Replacing ``"\n".join`` with ``"".join`` -- or with ``" ".join`` -- survives
+    this file and the transport file; both verified by running them, not
+    assumed. The whole separator class behaves alike, and for the same reason. That is an
     EQUIVALENT mutant rather than a hole: between two JSON tokens a newline is
     whitespace, and a raw newline cannot appear inside a JSON string (it must
     be escaped), so no valid frame can observe which character was used. The
     ``\n`` is kept because the specification says so and because a future
     non-JSON data field would notice; claiming a test proves it would be the
     vacuity this file exists to avoid.
+
+    Sharper still: the separator is only ever APPLIED when one event carries
+    more than one ``data:`` line, and every frame this upstream is known to
+    send carries exactly one. So for real traffic the separator is unreachable,
+    not merely unobservable.
     """
     body = b'data: {"choices":[{"index":0,"delta":\ndata: {"content":"split frame"}}]}\n\n'
     streamed = _fold(body + sse_stream(_finish("stop")))

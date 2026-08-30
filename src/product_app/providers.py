@@ -1306,10 +1306,11 @@ class ProviderExecutionService:
                         # are EQUIVALENT, checked rather than assumed: with
                         # ``>= 0`` the extra pass appends ``b""`` and adds 0,
                         # and with ``len(piece)`` in place of ``min(...)`` only
-                        # the counter moves. Verified byte-identical across
-                        # exact-fill, overshoot-by-one, cross-mid-piece,
-                        # many-small and empty-piece inputs, with the retained
-                        # bytes never exceeding the limit in any of them.
+                        # the counter moves -- and nothing reads that counter.
+                        # Verified byte-identical across exact-fill,
+                        # overshoot-by-one, cross-mid-piece, many-small and
+                        # empty-piece inputs, with the retained bytes never
+                        # exceeding the limit in any of them.
                         allowance = _NON_SSE_BODY_LIMIT_BYTES - head_bytes
                         if allowance > 0:
                             head.append(piece[:allowance])
@@ -2206,18 +2207,31 @@ _SSE_BOM = b"\xef\xbb\xbf"
 #: **It is retained for EVERY call, not only for a non-stream**, and an earlier
 #: version of this comment claimed the opposite -- that it was "dropped the
 #: moment the first frame parses". The tee that fills it cannot see frames, so
-#: that was false, and at the old 1 MiB cap a healthy streamed answer was
-#: measured holding the whole 1,048,576 bytes. This is therefore a per-call
-#: memory cost paid on the happy path, and the number is chosen as a bound on
-#: that cost rather than as a generous allowance.
+#: that was false. This is a per-call memory cost paid on the happy path, and
+#: the number is a bound on that cost rather than a generous allowance.
 #:
-#: 64 KiB against a measured ~8.5 KB for a real non-streamed completion at
-#: ``initial_answer_max_tokens = 2000`` -- roughly 7x headroom, at one
-#: sixteenth the resident cost of the 1 MiB it replaced, on a 512 MB machine
-#: running up to 16 initial-answer workers. A non-stream body larger than this
-#: is truncated, so ``json.loads`` fails and the call is refused exactly as it
-#: would have been without the fallback: the safe direction, and the same
-#: outcome as before the fallback existed.
+#: **Every size below is DERIVED, not measured, and an earlier version of this
+#: comment said "measured" for both.** No byte measurement of a provider body
+#: exists in this repository; the B3 probe recorded frame COUNTS and kept no
+#: byte column. What the derivations say, at ~292 bytes per frame:
+#:
+#: * at the old 1 MiB cap, a synthesis-leg answer (4,194-4,908 frames, so
+#:   ~1.2-1.4 MB on the wire) would have filled the whole cap -- but a slot-1
+#:   answer (1,736-1,794 frames, ~0.5 MB) would NOT. The blanket claim that a
+#:   healthy answer held the whole megabyte was true only of the largest call
+#:   class;
+#: * a non-streamed completion at ``initial_answer_max_tokens = 2000`` is
+#:   ~8.3 KB (2000 tokens x ``CHARS_PER_TOKEN`` plus an envelope). The largest
+#:   body anyone has constructed is ~45 KB -- an ``:online`` answer carrying 20
+#:   citations -- so the headroom against 64 KiB is about 7x for the smallest
+#:   call class and about 1.5x for the largest known one.
+#:
+#: A body above the cap is truncated, so ``json.loads`` fails and the call is
+#: refused exactly as it would have been without the fallback: the safe
+#: direction, and the same outcome as before the fallback existed. What is not
+#: known is the true size of an ``:online`` response with real annotations --
+#: ADR-0084 records that shape as unmeasured, and it is the one that would eat
+#: this margin.
 _NON_SSE_BODY_LIMIT_BYTES: int = 65_536
 
 
