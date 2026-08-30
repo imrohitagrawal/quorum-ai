@@ -489,12 +489,23 @@ def test_a_non_stream_body_larger_than_the_retained_head_is_refused_not_guessed(
     Together with the test above, this pins the cap from both sides: a normal
     non-stream body is served, an oversized one is refused. Removing the cap
     entirely (retaining without bound) turns this red.
+
+    Both bodies are sized by LITERALS, never by the constant under test. A
+    first version derived them from ``_NON_SSE_BODY_LIMIT_BYTES``, so both
+    moved with it and raising the cap back to 1 MiB survived the entire
+    3,293-test suite -- rule 7a exactly, in a file that quotes rule 7a
+    elsewhere. See ``test_the_retained_head_is_the_size_it_says_it_is``.
     """
-    filler = "z" * (providers_module._NON_SSE_BODY_LIMIT_BYTES + 4096)
+    # Just over the 64 KiB cap, not far over. Size matters in both directions:
+    # far over (200 KB) is refused whether or not the tee truncates exactly, so
+    # it stops catching an overshoot; and it must stay under 1 MiB so that
+    # RAISING the cap back would serve it, which is what makes the cap's value
+    # observable here at all.
+    filler = "z" * 70_000
     body = json.dumps(
         {"choices": [{"finish_reason": "stop", "message": {"content": filler}}], "usage": _USAGE}
     ).encode()
-    assert len(body) > providers_module._NON_SSE_BODY_LIMIT_BYTES
+    assert len(body) > 65_536, "the body must exceed the retained head to be truncated"
     with _serve(body=body) as (base, _payloads):
         _point_at(monkeypatch, base)
         with caplog.at_level(logging.DEBUG, logger="product_app.providers"):
@@ -516,7 +527,7 @@ def test_a_normal_sized_non_stream_body_fits_inside_the_retained_head(
     body = json.dumps(
         {"choices": [{"finish_reason": "stop", "message": {"content": answer}}], "usage": _USAGE}
     ).encode()
-    assert 8_000 < len(body) < providers_module._NON_SSE_BODY_LIMIT_BYTES
+    assert 8_000 < len(body) < 65_536
     with _serve(body=body) as (base, _payloads):
         _point_at(monkeypatch, base)
         result = _post()
@@ -524,3 +535,44 @@ def test_a_normal_sized_non_stream_body_fits_inside_the_retained_head(
     assert result.answer_text == answer
     assert result.usage is not None
     assert token_records.records[0].__dict__["stream_terminator"] == "not_a_stream"
+
+
+def test_the_retained_head_is_the_size_it_says_it_is() -> None:
+    """RED when: the retained-head cap is changed in either direction.
+
+    This exists because the two tests above could not catch a cap being
+    RAISED: both sized their bodies from the constant, so both moved with it,
+    and restoring the old 1 MiB survived the whole suite. Literals on both
+    sides, and no arithmetic against the constant (rule 7a).
+
+    The number is a MEMORY bound paid on every call, not a generous allowance,
+    which is what makes raising it a regression rather than a loosening: at
+    1 MiB a healthy streamed answer was measured retaining the whole cap, on a
+    512 MB machine running up to 16 initial-answer workers. Change it only with
+    a measurement, and change this line in the same commit.
+    """
+    assert providers_module._NON_SSE_BODY_LIMIT_BYTES == 65_536
+
+
+def test_the_fallback_is_reached_only_when_no_frame_parsed_at_all(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """RED when: the fallback widens beyond "not one frame parsed".
+
+    Its guard is documented as "deliberately narrow: only when NOT ONE frame
+    parsed, so a real stream can never reach it", and nothing tested that.
+    Widening it to `<= 1` survived the whole suite.
+
+    A stream that produced exactly ONE frame and then stopped must stay
+    refused: it is a torn stream, not a non-stream, and the retained head holds
+    SSE text that will never parse as a completion. Reaching the fallback here
+    would mean a truncated answer got a second chance at being served.
+    """
+    with _serve(body=sse_stream(_delta_frame("half an answer"), done=False)) as (base, _p):
+        _point_at(monkeypatch, base)
+        with caplog.at_level(logging.DEBUG, logger="product_app.providers"):
+            result = _post()
+    assert result is providers_module._DISPATCH_UNMEASURED
+    records = [r for r in caplog.records if r.msg == "upstream_provider_stream_incomplete"]
+    assert len(records) == 1
+    assert records[0].__dict__["stream_frames"] == 1

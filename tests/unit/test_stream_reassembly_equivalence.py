@@ -592,7 +592,7 @@ def test_a_byte_order_mark_is_stripped_however_the_wire_splits_it(chunk: int) ->
     assert streamed.unrecognised_lines == 0
 
 
-@pytest.mark.parametrize("tail", [b"\r", b" ", b"  \r", b"\r\n"], ids=["cr", "sp", "sp-cr", "crlf"])
+@pytest.mark.parametrize("tail", [b"\r", b" ", b"  \r", b"\t"], ids=["cr", "sp", "sp-cr", "tab"])
 def test_trailing_whitespace_at_end_of_stream_is_not_a_line_we_could_not_read(
     tail: bytes,
 ) -> None:
@@ -607,6 +607,10 @@ def test_trailing_whitespace_at_end_of_stream_is_not_a_line_we_could_not_read(
     Its positive partner is ``test_a_line_we_cannot_read_is_never_silently_
     dropped``: real content must still be refused, or this would be satisfied
     by dropping the guard altogether.
+
+    A ``\r\n`` tail was dropped from this list: it leaves NO residue at all, so
+    that row never reached the branch it named and could not fail. A row that
+    cannot fail is not coverage.
 
     ``done=False`` is load-bearing and a first version of this test lacked it.
     With ``[DONE]`` present the reader DRAINS whatever follows, so the residue
@@ -667,3 +671,44 @@ def test_a_byte_order_mark_is_stripped_only_at_the_start_of_the_stream() -> None
     streamed = _reassemble_streamed_completion(_iter_sse_data(iter(chunks)))
     assert streamed.unrecognised_lines == 1
     assert _extract_message_content(streamed.payload) == "first"
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        b"\n" + b"\xef\xbb\xbf" + b'data: {"choices":[{"index":0,"delta":{"content":"x"}}]}\n\n',
+        b"\r\n" + b"\xef\xbb\xbf" + b'data: {"choices":[{"index":0,"delta":{"content":"x"}}]}\n\n',
+        b"\xef\xbb\xbf" + b'data: {"choices":[{"index":0,"delta":{"content":"x"}}]}\n\n',
+        b'data: {"choices":[{"index":0,"delta":{"content":"x"}}]}\n\n',
+        b"ab",
+        b"",
+    ],
+    ids=["lf-then-bom", "crlf-then-bom", "bom-first", "plain", "shorter-than-a-bom", "empty"],
+)
+def test_the_same_bytes_classify_the_same_way_at_every_chunk_size(body: bytes) -> None:
+    """RED when: any parsing decision depends on how the wire split the bytes.
+
+    This is a PROPERTY, and it is here because prose was not enough. Two
+    successive versions of the byte-order-mark handling claimed to be
+    split-independent and were not: deciding on the first chunk alone lost a
+    BOM delivered in a 1- or 2-byte chunk, and waiting for three bytes still
+    lost when the first chunk was a lone newline, because the line loop drained
+    the buffer before the decision was taken. Each time the sentence was
+    corrected and the mechanism was not.
+
+    A property test over the corpus is what closes that: a reader cannot be
+    written that satisfies this and still has a chunk-dependent branch. The
+    ``lf-then-bom`` and ``crlf-then-bom`` rows are the ones that were red.
+    """
+    outcomes = {
+        (lambda s: (s.unrecognised_lines, s.frame_count, _extract_message_content(s.payload)))(
+            _fold(body, chunk=size)
+        )
+        for size in (1, 2, 3, 4, 5, 7, 8, 16, 64, 1024)
+    }
+    outcomes.add(
+        (lambda s: (s.unrecognised_lines, s.frame_count, _extract_message_content(s.payload)))(
+            _fold(body)
+        )
+    )
+    assert len(outcomes) == 1, f"classification depends on chunking: {outcomes}"

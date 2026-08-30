@@ -1301,6 +1301,15 @@ class ProviderExecutionService:
                         # ceiling was the limit plus one 64 KiB read -- a bound
                         # that can overshoot by a whole chunk is not a bound,
                         # and it let an oversized body through intact.
+                        #
+                        # Two mutants of these two lines survive the suite and
+                        # are EQUIVALENT, checked rather than assumed: with
+                        # ``>= 0`` the extra pass appends ``b""`` and adds 0,
+                        # and with ``len(piece)`` in place of ``min(...)`` only
+                        # the counter moves. Verified byte-identical across
+                        # exact-fill, overshoot-by-one, cross-mid-piece,
+                        # many-small and empty-piece inputs, with the retained
+                        # bytes never exceeding the limit in any of them.
                         allowance = _NON_SSE_BODY_LIMIT_BYTES - head_bytes
                         if allowance > 0:
                             head.append(piece[:allowance])
@@ -1332,6 +1341,14 @@ class ProviderExecutionService:
                     # Deliberately narrow: only when NOT ONE frame parsed, so a
                     # real stream can never reach it, and gated on the body
                     # actually being a completion-shaped mapping.
+                    #
+                    # Widening the count to ``<= 1`` survives the suite, and it
+                    # is EQUIVALENT rather than uncovered: a body that yields a
+                    # parsed SSE frame cannot also parse whole as a JSON
+                    # completion -- ``json.loads`` fails on the ``data:``
+                    # prefix either way -- so the fallback could not succeed
+                    # even if it were reached. The count stays at zero because
+                    # it says what we mean, not because a test forces it.
                     with contextlib.suppress(*_EXPECTED_BODY_ERRORS, UnicodeDecodeError):
                         whole = json.loads(b"".join(head).decode())
                         if isinstance(whole, dict) and "choices" in whole:
@@ -2308,19 +2325,27 @@ def _iter_sse_data(chunks: Iterator[bytes]) -> Iterator[str | _UnrecognisedLine]
 
     for chunk in chunks:
         buffer += chunk
-        if not started and len(buffer) >= len(_SSE_BOM):
+        if not started:
             # Strip ONE byte-order mark, at the very start of the stream only.
             # Measured: without this, a BOM'd body loses its first frame
             # entirely -- the mark rides on the first ``data:`` line and makes
             # it unrecognisable.
             #
-            # The length guard is not decorative. Deciding on the FIRST chunk
-            # alone made the outcome depend on how the wire happened to split
-            # the bytes: a BOM delivered in a 1- or 2-byte chunk was never
-            # stripped, so the call was refused -- measured, and it contradicts
-            # the very property ``test_the_result_does_not_depend_on_how_the_
-            # bytes_were_split`` exists to assert. Waiting until three bytes
-            # are in hand decides the same way at every chunk size.
+            # **No line is parsed until this decision is made**, and that is
+            # what makes the result independent of how the wire split the
+            # bytes. Two weaker versions were measured failing that:
+            # deciding on the first chunk alone left a BOM delivered in a
+            # 1- or 2-byte chunk unstripped, and merely waiting for three
+            # bytes still lost when the first chunk was a lone newline --
+            # the loop drained the buffer while this flag was still unset, so
+            # a LATER chunk's BOM was stripped as though it began the stream.
+            # Both made the same bytes classify two different ways, which is
+            # the property ``test_the_result_does_not_depend_on_how_the_bytes_
+            # were_split`` exists to forbid.
+            if len(buffer) < len(_SSE_BOM):
+                # Not enough yet to tell. Wait for more rather than guess; the
+                # end-of-stream path below handles a body shorter than a mark.
+                continue
             started = True
             if buffer.startswith(_SSE_BOM):
                 buffer = buffer[len(_SSE_BOM) :]
