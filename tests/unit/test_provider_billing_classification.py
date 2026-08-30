@@ -27,7 +27,6 @@ original defect survive.
 from __future__ import annotations
 
 import http.client
-import json
 import logging
 import ssl
 from typing import Any
@@ -35,6 +34,7 @@ from urllib.error import HTTPError, URLError
 from uuid import uuid4
 
 import pytest
+from tests.provider_wire import sse_from_completion, sse_stream
 
 from product_app import config
 from product_app.model_slots import ModelSlot
@@ -89,12 +89,12 @@ class _RaisingBody:
 
 
 def _completion(content: object) -> bytes:
-    return json.dumps(
+    return sse_from_completion(
         {
             "choices": [{"finish_reason": "length", "message": {"content": content}}],
             "usage": _BILLED,
         }
-    ).encode()
+    )
 
 
 def _install(monkeypatch: pytest.MonkeyPatch, outcome: Any) -> list[int]:
@@ -266,7 +266,7 @@ def test_extractor_failure_on_a_good_body_is_reported_as_dispatched_unmeasured(
 
     posts = _install(
         monkeypatch,
-        _Body(json.dumps({"choices": [{"message": {"content": "ok"}}]}).encode()),
+        _Body(sse_from_completion({"choices": [{"message": {"content": "ok"}}]})),
     )
     monkeypatch.setattr("product_app.providers._extract_usage", _boom)
     _assert_dispatched_unmeasured(_call())
@@ -406,14 +406,53 @@ def test_a_real_transport_failure_stays_a_warning(
 def test_an_unreadable_body_is_a_warning_not_an_error(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """Malformed JSON is the BODY's fault, not ours."""
-    _install(monkeypatch, _Body(b"<html>502 Bad Gateway</html>"))
+    """Malformed JSON is the BODY's fault, not ours.
+
+    RED when: the frame-level parse failure is raised inside the ``urlopen``
+    block instead of being carried out of it. ``JSONDecodeError`` is expected
+    of a BODY and not of a transport, so raising it there logs
+    ``upstream_provider_transport_error`` at ERROR -- paging an operator for an
+    ordinary upstream hiccup and filing it in the #105 dataset under the wrong
+    event.
+    """
+    _install(monkeypatch, _Body(sse_stream("<html>502 Bad Gateway</html>", done=False)))
     with caplog.at_level(logging.DEBUG, logger="product_app.providers"):
         _assert_dispatched_unmeasured(_call())
     records = [r for r in caplog.records if r.msg == "upstream_provider_body_unreadable"]
     assert len(records) == 1
     assert records[0].levelno == logging.WARNING
     assert getattr(records[0], "error_type", None) == "JSONDecodeError"
+
+
+def test_a_stream_that_stops_without_finishing_is_a_warning_not_an_error(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The partner for the test above, on the branch streaming ADDS.
+
+    RED when: the incomplete-stream branch logs at ERROR, or stops logging, or
+    stops saying the call may have been billed. A stream that is cut off is
+    routine upstream noise -- it must not page anyone -- but it MUST leave a
+    record, because chunked framing gives the transport no way to see it and
+    this record is the only evidence the call ever happened.
+
+    ``stream_frames`` is asserted as an exact count, not merely as present: it
+    is what separates "the upstream sent nothing that parsed as a stream" from
+    "it stopped part-way", and a record that always said 0 would be useless to
+    the reader of the #105 dataset.
+    """
+    body = sse_stream(
+        {"choices": [{"index": 0, "delta": {"content": "half an ans"}}]},
+        {"choices": [{"index": 0, "delta": {"content": "wer"}}]},
+        done=False,
+    )
+    _install(monkeypatch, _Body(body))
+    with caplog.at_level(logging.DEBUG, logger="product_app.providers"):
+        _assert_dispatched_unmeasured(_call())
+    records = [r for r in caplog.records if r.msg == "upstream_provider_stream_incomplete"]
+    assert len(records) == 1
+    assert records[0].levelno == logging.WARNING
+    assert records[0].__dict__["billing_class"] == "possibly_billed"
+    assert records[0].__dict__["stream_frames"] == 2
 
 
 # --- row group 3: a body arrived, so the provider's stated charge is REAL -----
@@ -455,7 +494,7 @@ def test_empty_completion_without_a_usage_object_is_unmeasurable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """No ``usage`` object -> a recorded but unpriceable entry, never a guess."""
-    body = json.dumps({"choices": [{"message": {"content": ""}}]}).encode()
+    body = sse_from_completion({"choices": [{"message": {"content": ""}}]})
     _install(monkeypatch, _Body(body))
     result = _call()
     assert result is not None

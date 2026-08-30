@@ -96,7 +96,7 @@ caught by any automated check and 10 of 16 by adversarial review
 
 | ID | Item | State | Evidence | Issue | Depends on |
 |----|------|-------|----------|-------|------------|
-| W1 | Stream the provider call (was "B2") | PENDING | `ABSENT src/product_app/providers.py :: "stream": True` | — | — |
+| W1 | Stream the provider call (was "B2") | DONE | `ABSENT src/product_app/providers.py :: "stream": True` | — | — |
 | W2 | Peer critique: the answer models critique each other, two rounds | PENDING | `PRESENT src/product_app/debate.py :: model_id=settings.debate_model_id,` | #290 | W1 |
 | W3 | Re-set the money constants against a measured bound — **STOP** | PENDING | `PRESENT src/product_app/costs.py :: DAILY_CAP_USD = Decimal("0.20")` | — | W2 |
 | W4 | Variable panel size N ∈ {2,3,4} | PENDING | `PRESENT src/product_app/model_slots.py :: if len(model_ids) != EXPECTED_SLOT_COUNT:` | — | — (W10 done) |
@@ -109,7 +109,7 @@ caught by any automated check and 10 of 16 by adversarial review
 | W12 | `last_live_charge_at` reports a pre-#376 row as a live charge | DONE | `ABSENT src/product_app/feedback_store.py :: _live_charge_cutover_id` | #379 | — |
 | W13 | Nothing bounds a call's INPUT — **STOP** | UNPINNED | `—` | #268 | — |
 | W14 | Close the 5xx possibly-billed premise with data | UNPINNED | `—` | #105 | production logs |
-| W15 | `_bound_sniff_time` is referenced and does not exist | PENDING | `PRESENT src/product_app/providers.py :: _bound_sniff_time` | — | — |
+| W15 | `_bound_sniff_time` is referenced and does not exist | DONE | `PRESENT src/product_app/providers.py :: _bound_sniff_time` | — | — |
 | W16 | The catalog fetcher hardcodes the models URL | DONE | `PRESENT src/product_app/catalog_fetcher.py :: OPENROUTER_CATALOG_URL = "https://openrouter.ai/api/v1/models"` | — | — |
 | W17 | FR-004 names a model we do not ship | PENDING | `PRESENT docs/10-functional-requirements.md :: deepseek/deepseek-chat-v3.1` | — | — |
 | W18 | The paid call sends the API key to a configured base with no scheme guard | PENDING | `PRESENT src/product_app/providers.py :: url=f"{settings.openrouter_api_base_url}/chat/completions"` | — | — |
@@ -122,22 +122,39 @@ move one of those numbers as a side effect of any other package.
 
 ## What each row is
 
-**W1 — stream the provider call.** `providers.py` posts a non-streaming request
-and reads the whole body. `_read_body_within_budget` is the template for
-deadline discipline, not the implementation. `_extract_message_content`,
-`_extract_usage`, `_finish_reason_indicates_truncation` and
-`_extract_citations` are reused unchanged once deltas are reassembled — streamed
-frames carry `choices[0].delta.content`, not `choices[0].message.content`. Keep
-the `product_app.providers.urlopen` seam: it appears on **43 lines across 14
-test files** (`grep -rn "product_app.providers.urlopen" tests/`; an inherited
-figure of "34 patch sites across 15 test files" matches no reading of the tree
-and is not repeated here). Keep `openrouter_call_budget_seconds`: keep-alives
-defeat a per-`recv` timeout once streaming lands, so the total budget becomes
-the only wall-clock brake on a paid call. **W15 rides inside this package** —
-the same file. Whether to reach for an SDK instead is an open design question;
-the "two failed hand-rolled attempts" bar that an inherited document attributed
-to ADR-0029 is **not in ADR-0029**, which is about the citation grounding score
-and never mentions an SDK.
+**W1 — stream the provider call. DONE** (ADR-0084), clubbed with W15.
+`_post_messages` now sends `"stream": True` and folds SSE frames into the
+payload an equivalent non-streamed call would have returned, so
+`_extract_message_content`, `_extract_usage`,
+`_finish_reason_indicates_truncation` and `_extract_citations` are reused
+BYTE-UNCHANGED and the two shapes cannot drift apart.
+`_read_body_within_budget` became the generator `_iter_body_within_budget`, so
+exactly one loop still touches the socket and every transport guard is shared
+rather than reimplemented — measured, buffering the whole SSE body instead
+would have been about **119x** the resident bytes per in-flight call (1,262,550
+against roughly 10,600 for a 2,594-token answer) on a 512 MB machine.
+
+The check streaming had to ADD: chunked framing carries no length, so the
+`IncompleteRead` guard is inert on the normal path and a stream that stops
+part-way raises nothing. A terminator is now required — `[DONE]`, a non-null
+`finish_reason`, or a top-level `error` — and its absence is
+`_DISPATCH_UNMEASURED` plus `upstream_provider_stream_incomplete`. Accepting
+three terminators rather than `[DONE]` alone is deliberate: `[DONE]` is
+measured nowhere against this upstream, and requiring it could have classified
+every healthy call unmeasured.
+
+The seam survived as promised: `product_app.providers.urlopen` now appears on
+**44 lines across 15 test files** (re-measured 2026-08-30 — 43/14 before, plus
+the new streaming-transport file). The bodies changed, not the seam;
+`tests/provider_wire.py` renders a non-streamed payload as the stream that
+carries it, so nine hand-rolled builders became one.
+
+Two things this did NOT do, both stated in ADR-0084 rather than left to be
+found: `stream_options: {"include_usage": true}` is not sent (the "usage
+arrives with no opt-in" claim is ASSUMED, not measured, and both documents
+asserting it are corrected here), and `_extract_citations`' FLAT annotation
+read is carried across faithfully but not fixed — settling that shape needs a
+live `:online` call, which is spend.
 
 **W2 — peer critique (#290).** Today there is exactly one debate caller and it
 always dispatches `settings.debate_model_id`; `debate.py` says so in a comment
@@ -267,8 +284,13 @@ refusal, so this is a guardrail move, not a bug fix.
 
 **W14 — #105.** No code. It closes on production evidence, not a diff.
 
-**W15 — a dangling reference.** Two docstrings in `providers.py` point at
-`_bound_sniff_time`, which has no definition anywhere. Doc-only.
+**W15 — a dangling reference. DONE**, inside W1 (rule 17g, same file). Two
+docstrings in `providers.py` pointed at `_bound_sniff_time`, which had no
+definition anywhere. They now name `_read_within_budget`, which is what
+actually bounds that read — verified by reading its call site
+(`_read_within_budget(exc, _ERROR_BODY_SNIFF_LIMIT_BYTES,
+_ERROR_BODY_SNIFF_TIMEOUT_SECONDS)`), not by recalling it, because rule 4 asks
+for the REPLACEMENT to be verified and not merely the error.
 
 **W16 — the catalog URL. DONE** (ADR-0080). `catalog_fetcher.py` hardcoded the
 models endpoint while `providers.py` and `readiness.py` both built theirs from
@@ -329,6 +351,10 @@ decision rather than an oversight.
 
 ## Order and what may run in parallel
 
+**W1 (+W15) is DONE.** The order below is what the board said before the
+product owner directed W1 next on 2026-08-30, and it is kept because its
+reasoning still governs what comes after.
+
 **Clear the independent, issue-backed rows first, then W1 (+W15).**
 
 The earlier order read `W1 → W2 → W3`. That lane is the largest item, then one
@@ -370,9 +396,14 @@ replace, which would break fixtures and rewrite history.
 
 **Do not attempt W2 or W3 while `OPENROUTER_LIVE_EXECUTION_ENABLED` is false.**
 W2's shape depends on W1's measured streaming behaviour, and W3 is deferred.
+W1 is now built and merged, but it is **latent-correct, not observed**: with
+live execution off nothing exercises the streaming path in production. The
+owner-authorised measurement window is what turns W1 from "tested" into
+"measured", and it is the step between W1 and W2 — not an optional follow-up.
 
-W1 + W4 is nearly parallel — the single overlap is `Field(ge=1, le=4)` in
-`providers.py`, and W4 no longer waits on anything (W10 is done). **W4 and W7
+W4 no longer waits on anything (W10 is done), and no longer overlaps W1
+either: W1 has landed and left `Field(ge=1, le=4)` in `providers.py`
+untouched. **W4 and W7
 both hold `main.py`, `app.js` and `workspace.html`: sequence them.** W16 collided
 with W4 only through `tests/unit/test_risk_constant_pins.py`; it shipped first,
 so that collision is gone.

@@ -83,9 +83,18 @@ while the budget was open — same model, same endpoint:
 Across all four streamed calls the worst gap was **0.478s**, against 1,736–4,908
 frames per call. Keep-alive comment frames are confirmed present (1, 16, 16 and
 21 per call) — **with no fixed cadence**, so any figure quoting one is
-unsupported. OpenRouter's streaming documentation confirms `usage` arrives in
-the final chunk with **no opt-in** required, which was the open question that
-could have made streaming break the cost ledger. It does not.
+unsupported. OpenRouter's streaming DOCUMENTATION says `usage` arrives in the
+final chunk with **no opt-in** required, which was the open question that could
+have made streaming break the cost ledger.
+
+**Corrected 2026-08-30 by ADR-0084:** this paragraph said the documentation
+"confirms" it and that it "does not" break the ledger. That is one notch
+stronger than the evidence supports — the source is a vendor page, not a probe
+row, and the probe script was not retained. Read it as **ASSUMED**. The
+streaming package designs for the assumption being false (absent usage is
+reported absent, never fabricated, so a receipt degrades to `estimated` rather
+than reporting a wrong number) and instruments the answer instead of arguing
+it.
 
 ## Decision
 

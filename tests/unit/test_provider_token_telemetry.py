@@ -40,6 +40,7 @@ from unittest.mock import MagicMock
 from urllib.error import HTTPError
 
 import pytest
+from tests.provider_wire import sse_from_completion
 
 from product_app import config, costs, providers, telemetry_sink
 from product_app.providers import provider_execution_service
@@ -94,7 +95,7 @@ def _response_body(
             "completion_tokens": completion_tokens,
             "total_tokens": prompt_tokens + completion_tokens,
         }
-    return json.dumps(payload).encode()
+    return sse_from_completion(payload)
 
 
 def _install(monkeypatch: pytest.MonkeyPatch, body: bytes) -> None:

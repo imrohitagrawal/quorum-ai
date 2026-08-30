@@ -22,7 +22,6 @@ many* calls the measurement covered.
 from __future__ import annotations
 
 import http.client
-import json
 from decimal import Decimal
 from types import SimpleNamespace
 from typing import Any
@@ -30,6 +29,7 @@ from urllib.error import HTTPError
 from uuid import uuid4
 
 import pytest
+from tests.provider_wire import sse_from_completion
 
 from product_app import config
 from product_app.costs import CostEstimate, CostThresholdAction
@@ -93,7 +93,7 @@ def _install_provider(
 
     def fake_urlopen(request: Any, timeout: float = 0) -> _FakeResponse:
         posts[0] += 1
-        return _FakeResponse(json.dumps(body).encode())
+        return _FakeResponse(sse_from_completion(body))
 
     monkeypatch.setattr("product_app.providers.urlopen", fake_urlopen)
     return posts

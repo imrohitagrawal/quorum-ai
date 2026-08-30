@@ -44,6 +44,7 @@ import logging
 from typing import Any
 
 import pytest
+from tests.provider_wire import sse_from_completion, sse_stream
 
 from product_app import config, telemetry_sink
 from product_app.providers import provider_execution_service
@@ -110,16 +111,16 @@ def _answerless_body(*, usage: bool) -> bytes:
     payload: dict[str, Any] = {"error": {"code": 502, "message": "provider down"}}
     if usage:
         payload["usage"] = _BILLED
-    return json.dumps(payload).encode()
+    return sse_from_completion(payload)
 
 
 def _completion(*, content: str, finish_reason: str) -> bytes:
-    return json.dumps(
+    return sse_from_completion(
         {
             "choices": [{"finish_reason": finish_reason, "message": {"content": content}}],
             "usage": _BILLED,
         }
-    ).encode()
+    )
 
 
 _EMPTY_ANSWER_EVENT = "upstream_provider_empty_answer"
@@ -264,7 +265,7 @@ def test_the_providers_error_message_is_never_logged(
     The record-count assertion below is the positive partner -- without it the
     walk would be trivially satisfied by emitting no record at all.
     """
-    body = json.dumps({"error": {"code": 502, "message": "MARKER-DO-NOT-LOG-THIS-STRING"}}).encode()
+    body = sse_from_completion({"error": {"code": 502, "message": "MARKER-DO-NOT-LOG-THIS-STRING"}})
     _result, records, _posts = _drive(monkeypatch, caplog, body)
     assert len(_events(records, _EMPTY_ANSWER_EVENT)) == 1
     assert "MARKER-DO-NOT-LOG-THIS-STRING" not in caplog.text
@@ -279,10 +280,26 @@ def test_the_providers_error_message_is_never_logged(
 @pytest.mark.parametrize(
     ("body", "event"),
     [
-        (b"not json at all", "upstream_provider_body_unreadable"),
-        (b'{"choices": [', "upstream_provider_body_unreadable"),
+        # Not a stream at all: no ``data:`` line ever arrives, so no frame is
+        # parsed and no terminator is seen. Before streaming both rows below
+        # were ``upstream_provider_body_unreadable``; a body that never
+        # becomes a stream is now reported as one that stopped without
+        # finishing, which is what it is.
+        (b"not json at all", "upstream_provider_stream_incomplete"),
+        # A real stream whose FRAME is unparseable. This is the row that keeps
+        # ``upstream_provider_body_unreadable`` reachable, and it is why the
+        # frame-level parse error is carried out of the transport stage
+        # instead of being raised there -- raised there it would be logged as
+        # a transport failure at ERROR rather than a body failure at WARNING.
+        (sse_stream('{"choices": [', done=False), "upstream_provider_body_unreadable"),
+        # A well-formed stream that simply stops. Chunked framing cannot see
+        # this, so nothing below the reassembler raises.
+        (
+            sse_stream({"choices": [{"index": 0, "delta": {"content": "half"}}]}, done=False),
+            "upstream_provider_stream_incomplete",
+        ),
     ],
-    ids=["bare-text-body", "torn-json-body"],
+    ids=["not-a-stream", "torn-frame", "stream-cut-short"],
 )
 def test_a_post_dispatch_failure_record_states_its_billing_class(
     monkeypatch: pytest.MonkeyPatch,

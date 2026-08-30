@@ -52,6 +52,7 @@ from urllib.error import HTTPError, URLError
 
 import pytest
 import sentry_sdk
+from tests.provider_wire import sse_from_completion
 
 from product_app import config, telemetry_sink
 from product_app.logging_config import JsonFormatter
@@ -110,7 +111,7 @@ def _http_error(code: int, body: bytes, **headers: str) -> HTTPError:
 
 
 def _completion_body(*, prompt_tokens: int = 900, completion_tokens: int = 120) -> bytes:
-    return json.dumps(
+    return sse_from_completion(
         {
             "choices": [{"message": {"role": "assistant", "content": "An answer."}}],
             "usage": {
@@ -119,7 +120,7 @@ def _completion_body(*, prompt_tokens: int = 900, completion_tokens: int = 120) 
                 "total_tokens": prompt_tokens + completion_tokens,
             },
         }
-    ).encode()
+    )
 
 
 @pytest.fixture
@@ -364,7 +365,7 @@ def _drive_answerless_200(monkeypatch: pytest.MonkeyPatch, *, usage: bool = Fals
     if usage:
         payload["usage"] = {"prompt_tokens": 40, "completion_tokens": 7, "total_tokens": 47}
     response = MagicMock()
-    response.read.return_value = json.dumps(payload).encode()
+    response.read.return_value = sse_from_completion(payload)
     response.__enter__ = MagicMock(return_value=response)
     response.__exit__ = MagicMock(return_value=False)
     monkeypatch.setattr("product_app.providers.urlopen", MagicMock(return_value=response))

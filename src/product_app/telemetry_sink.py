@@ -105,6 +105,14 @@ BILLING_EVENTS: frozenset[str] = frozenset(
         "upstream_provider_transport_error",
         "upstream_provider_body_unreadable",
         "upstream_provider_empty_answer",
+        # Added with streaming (ADR-0084). A stream that stops without ever
+        # saying it finished is possibly-billed exactly as the five above are,
+        # and it is the failure mode streaming INTRODUCES: chunked framing
+        # carries no length, so nothing at the transport layer can see it.
+        # Leaving it out would repeat the omission corrected on 2026-08-26,
+        # where the most expensive live failure mode was missing from the very
+        # dataset issue 105 is to be settled from.
+        "upstream_provider_stream_incomplete",
     }
 )
 
@@ -142,6 +150,13 @@ TELEMETRY_FIELD_NAMES: frozenset[str] = frozenset(
         "completion_tokens",
         "injected_tokens_est",
         "usage_absent",
+        # issue #268 / ADR-0084 -- how a streamed call ended. Separates pre-
+        # and post-streaming rows in the token stream, so the two regimes are
+        # never mixed into one percentile.
+        "stream_terminator",
+        # ADR-0084 -- how many frames arrived before a stream stopped without a
+        # terminator. 0 distinguishes "not a stream at all" from "cut off".
+        "stream_frames",
     }
 )
 

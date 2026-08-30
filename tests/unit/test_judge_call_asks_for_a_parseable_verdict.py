@@ -41,6 +41,7 @@ import json
 from typing import Any
 
 import pytest
+from tests.provider_wire import sse_from_completion
 
 from product_app.config import Settings, settings
 from product_app.evaluation import EvalJudgeService, JudgeEvidence
@@ -78,7 +79,7 @@ def _capture(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
     def fake_urlopen(request: Any, timeout: float = 0) -> _FakeResponse:
         bodies.append(json.loads(request.data.decode()))
         return _FakeResponse(
-            json.dumps(
+            sse_from_completion(
                 {
                     "choices": [{"message": {"content": json.dumps(_VERDICT)}}],
                     "usage": {
@@ -87,7 +88,7 @@ def _capture(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
                         "total_tokens": 1300,
                     },
                 }
-            ).encode()
+            )
         )
 
     monkeypatch.setattr("product_app.providers.urlopen", fake_urlopen)

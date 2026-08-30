@@ -13,13 +13,13 @@ This module verifies:
 
 from __future__ import annotations
 
-import json
 from decimal import Decimal
 from typing import Any
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
 import pytest
+from tests.provider_wire import sse_from_completion
 
 from product_app.config import RuntimeEnvironment, settings
 from product_app.model_slots import validate_model_slots
@@ -78,8 +78,12 @@ def _make_openrouter_response(
 
 
 def _fake_urlopen_response(body: dict[str, Any]) -> MagicMock:
-    """Return a mock urlopen context manager that yields *body* as JSON."""
-    raw = json.dumps(body).encode()
+    """Return a mock urlopen context manager that streams *body*.
+
+    ``body`` is still written as the NON-streamed completion each test means;
+    ``sse_from_completion`` renders the stream that carries it (ADR-0084).
+    """
+    raw = sse_from_completion(body)
     mock_resp = MagicMock()
     mock_resp.read.return_value = raw
     mock_resp.__enter__ = MagicMock(return_value=mock_resp)

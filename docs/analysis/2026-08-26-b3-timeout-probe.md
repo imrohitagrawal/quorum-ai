@@ -57,10 +57,19 @@ unrelated numbers.
 ### What this settles, and what it does not
 
 - **Settled:** streaming collapses the inter-chunk gap; keep-alive comment
-  frames exist and are counted below; `usage` arrives in the final chunk of a
-  stream with **no opt-in** required (OpenRouter streaming documentation, read
-  2026-08-26) — the open question that could have made streaming break the
-  cost ledger.
+  frames exist and are counted below.
+- **CORRECTED 2026-08-30 (ADR-0084), and it was listed under "settled" until
+  then:** that `usage` arrives in the final chunk of a stream with **no opt-in**
+  required is **ASSUMED, not measured**. It came from OpenRouter's streaming
+  documentation, read 2026-08-26; no probe row here records it, and this
+  script was not retained, so the raw frames cannot be re-read to check. The
+  completion-token counts in the streamed table above are consistent with a
+  usage object having been seen, but that is an inference, not a record. The
+  claim is load-bearing — if it is wrong, every streamed run's receipt falls
+  back to `estimated` — so it is marked rather than repaired. ADR-0084 designs
+  for it being wrong (absent usage is reported absent, never fabricated) and
+  adds `stream_terminator` to the token telemetry so production traffic settles
+  it at no cost.
 - **NOT settled: the keep-alive CADENCE.** Counts of 1, 16, 16 and 21 per call,
   with no regular spacing recorded. Any figure quoting a fixed interval is
   unsupported by this probe.
