@@ -370,8 +370,9 @@ def test_a_body_that_is_not_a_stream_still_yields_its_answer(
 
     This matters more than it looks: nothing in this repository measures that
     OpenRouter honours ``stream: true`` for three of the four shipped answer
-    models -- the streamed probe covered two models, neither of them a default
-    slot. Refusing would have been a mitigation resting on an unmeasured
+    models: the streamed probe covered two, and only one of them
+    (`openai/gpt-4o-mini`, slot 1) is a default. Refusing would have been a
+    mitigation resting on an unmeasured
     upstream behaviour, which is the failure AGENTS.md rule 8c exists to stop.
 
     The record assertion is the narrowing: this path must NOT look like a
@@ -448,3 +449,78 @@ def test_a_frame_we_cannot_read_is_never_served_as_a_whole_answer(
     records = [r for r in caplog.records if r.msg == "upstream_provider_stream_incomplete"]
     assert len(records) == 1
     assert records[0].__dict__["unrecognised_lines"] == 1
+
+
+def test_a_non_stream_body_must_look_like_a_completion_to_be_accepted(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """RED when: the fallback accepts any JSON mapping.
+
+    The fallback exists for one shape -- an upstream or proxy that returned an
+    ordinary completion instead of a stream. A 200 carrying an error envelope
+    and no ``choices`` is NOT that, and accepting it would hand the caller a
+    payload with no answer while reporting the call healthy. The guard is
+    ``"choices" in whole``, and without this test dropping it changes nothing.
+
+    Its positive partner is
+    ``test_a_body_that_is_not_a_stream_still_yields_its_answer``: without one,
+    "the fallback refuses" is satisfied by a fallback that never fires.
+    """
+    body = json.dumps({"error": {"code": 502, "message": "no providers"}}).encode()
+    with _serve(body=body) as (base, _payloads):
+        _point_at(monkeypatch, base)
+        with caplog.at_level(logging.DEBUG, logger="product_app.providers"):
+            result = _post()
+    assert result is providers_module._DISPATCH_UNMEASURED
+    assert len([r for r in caplog.records if r.msg == "upstream_provider_stream_incomplete"]) == 1
+
+
+def test_a_non_stream_body_larger_than_the_retained_head_is_refused_not_guessed(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """RED when: the head cap stops bounding what is retained.
+
+    The cap is a MEMORY bound paid on every call, so it has to be small; the
+    price is that a non-stream body above it is truncated, ``json.loads``
+    fails, and the call is refused. That is the same outcome as before the
+    fallback existed -- the safe direction -- and it is asserted here so the
+    trade is visible rather than discovered.
+
+    Together with the test above, this pins the cap from both sides: a normal
+    non-stream body is served, an oversized one is refused. Removing the cap
+    entirely (retaining without bound) turns this red.
+    """
+    filler = "z" * (providers_module._NON_SSE_BODY_LIMIT_BYTES + 4096)
+    body = json.dumps(
+        {"choices": [{"finish_reason": "stop", "message": {"content": filler}}], "usage": _USAGE}
+    ).encode()
+    assert len(body) > providers_module._NON_SSE_BODY_LIMIT_BYTES
+    with _serve(body=body) as (base, _payloads):
+        _point_at(monkeypatch, base)
+        with caplog.at_level(logging.DEBUG, logger="product_app.providers"):
+            result = _post()
+    assert result is providers_module._DISPATCH_UNMEASURED
+
+
+def test_a_normal_sized_non_stream_body_fits_inside_the_retained_head(
+    monkeypatch: pytest.MonkeyPatch, token_records: _TokenCollector
+) -> None:
+    """RED when: the cap is lowered below a real completion.
+
+    A completion at ``initial_answer_max_tokens`` is roughly 8.5 KB; the cap is
+    64 KiB. This is the row that goes red if anyone shrinks it toward the
+    measured size, and it is why the headroom is stated in the constant's own
+    comment rather than left implicit.
+    """
+    answer = "a real sentence. " * 500
+    body = json.dumps(
+        {"choices": [{"finish_reason": "stop", "message": {"content": answer}}], "usage": _USAGE}
+    ).encode()
+    assert 8_000 < len(body) < providers_module._NON_SSE_BODY_LIMIT_BYTES
+    with _serve(body=body) as (base, _payloads):
+        _point_at(monkeypatch, base)
+        result = _post()
+    assert isinstance(result, providers_module.LiveProviderResult)
+    assert result.answer_text == answer
+    assert result.usage is not None
+    assert token_records.records[0].__dict__["stream_terminator"] == "not_a_stream"

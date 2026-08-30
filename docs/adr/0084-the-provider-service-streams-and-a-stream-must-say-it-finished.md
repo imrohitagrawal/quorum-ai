@@ -1,4 +1,4 @@
-# ADR-0084: Every paid call streams, and a stream must say it finished
+# ADR-0084: The provider service streams, and a stream must say it finished
 
 ## Status
 
@@ -35,12 +35,23 @@ call is billed, `_DISPATCH_UNMEASURED` is returned, the user is shown a failed
 slot, and the run's receipt degrades to `estimated` — money spent, nothing
 shown, nothing measured.
 
-**Scope, because the sweeping version of this sentence is false.** The probe
-measured that bite on ONE of the four shipped answer models, and it explicitly
-calls the per-`recv` bite a property of the MODEL rather than of the endpoint:
-`nvidia/nemotron-3-nano-30b-a3b`, a default slot, measured 5.722 / 7.589 s —
-under the cap. Streaming is chosen because it removes the failure mode wherever
-a model has it, not because every shipped model has it.
+**Scope, stated because both the sweeping version and a first attempt to
+qualify it were wrong.** That first attempt said "ONE of the four shipped
+answer models", which *understated this ADR's own case* by threefold. The spike
+table (`docs/analysis/2026-08-26-session-handoff.md`) measured all four
+defaults, and **three of the four exceed the 8.0 s cap** on the per-`recv` gap:
+
+| default slot | worst inter-chunk gap | over 8.0 s? |
+|---|---|---|
+| `openai/gpt-4o-mini` | 22.440 / 25.055 s | yes |
+| `anthropic/claude-haiku-4.5` | 21.129 / 20.901 s | yes |
+| `google/gemini-2.5-flash` | 13.001 / 13.514 s | yes |
+| `nvidia/nemotron-3-nano-30b-a3b` | 5.722 / 7.589 s | **no** |
+
+That source's own summary reads "6 of 8 on the per-`recv` gap" — three models
+across two reps each. The probe still calls the bite a property of the MODEL
+rather than of the endpoint, which is why the fourth row exists and why the
+claim is "three of four", not "all".
 
 ### What streaming ADDS, and why it needs a new check
 
@@ -126,6 +137,19 @@ The same field keeps pre- and post-streaming rows separable, so issue #268's
 dataset is not corrupted by mixing two regimes in one percentile.
 
 ## Rejected alternatives
+
+### Retaining the non-stream head only until the first frame — NOT BUILT
+
+The obvious optimisation for the fallback's buffer, and the first version of
+this change claimed to have done it: "dropped the moment the first frame
+parses". That was false. The tee that fills the buffer sits below the parser in
+a generator pipeline and cannot see frames, so the buffer is retained for
+EVERY call — measured, a healthy streamed answer held the whole 1,048,576-byte
+cap. Rather than couple the tee to the parser, the cap was cut to **64 KiB**
+against a measured ~8.5 KB real completion, making the happy-path cost small
+enough not to need the optimisation. A non-stream body above the cap is
+truncated and refused, which is the same outcome as before the fallback
+existed.
 
 ### A kill-switch flag keeping the non-streaming reader — REJECTED
 
@@ -213,6 +237,10 @@ existing code decide, exactly as the non-streamed shape does.
 - **No money constant moves.** `SOFT_THRESHOLD_USD`, `HARD_LIMIT_USD`,
   `DAILY_CAP_USD` and `GLOBAL_DAILY_CEILING_USD` are untouched (ADR-0081), and
   so are every `max_tokens` cap and every timeout.
+- **The fallback costs 64 KiB of retained body on every call**, not only on a
+  non-stream, and refuses a non-stream body larger than that rather than
+  guessing at a truncated one. Both are stated here because the constant is a
+  memory bound on the happy path, which is not what its name suggests.
 - **W15 closes with it:** the two dangling `_bound_sniff_time` references now
   name `_read_within_budget`, which is what actually bounds that read —
   verified by reading the call site, not by recalling it.

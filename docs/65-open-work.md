@@ -157,7 +157,7 @@ seam in its module docstring, not a patch site. So the count grew by a
 docstring; what it evidences is that no existing patch site had to move. The
 bodies changed, not the seam;
 `tests/provider_wire.py` renders a non-streamed payload as the stream that
-carries it, so nine hand-rolled builders became one.
+carries it, so 12 hand-rolled builders became one.
 
 Two things this did NOT do, both stated in ADR-0084 rather than left to be
 found: `stream_options: {"include_usage": true}` is not sent (the "usage
@@ -344,10 +344,15 @@ settled it was a PAIRED, interleaved comparison against a clean
 | clean `origin/main` | 4.095 4.116 4.117 4.145 4.026 4.091 — mean **4.098** |
 | the W1 branch | 4.070 4.089 4.025 4.085 4.086 4.083 — mean **4.073** |
 
-**9 of 9 idle failures on clean `main`**, and the branch is if anything
-FASTER (lower in 5 of 6 paired reps). So the bound now fails on an idle machine
-too — this box has drifted past the 2% margin — and it is still not any diff's
-fault. Whoever fixes this row should re-derive the margin from a fresh
+**All 6 clean-`main` reps exceed the 4.0 bound**, and the branch is if anything
+FASTER (lower in 5 of 6 paired reps). An earlier draft of this paragraph said
+"9 of 9 idle failures"; the table beside it shows 6 reps per arm at load
+average ~5, which is not idle and is not nine, so the sentence is now the one
+the data supports. (An independent reviewer separately reproduced 9 of 9 on a
+clean `dc25c95` clone at load 2.78, 4.052-4.132 s — consistent, but that run is
+not the table above and is not quoted as if it were.) So the bound now fails on
+a quiet machine too — this box has drifted past the 2% margin — and it is still
+not any diff's fault. Whoever fixes this row should re-derive the margin from a fresh
 distribution rather than nudging `4.0` upward: the number in the assertion has
 never been anything but the machine it was written on.
 Either widen the bound with a re-derived margin or make it CI-only — but measure

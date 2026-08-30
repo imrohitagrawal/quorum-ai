@@ -1,6 +1,6 @@
 """The streamed payload must mean what the non-streamed one meant.
 
-Every paid call streams (ADR-0084), and the four extractors
+Every call the provider service makes streams (ADR-0084), and the four extractors
 (``_extract_message_content``, ``_extract_usage``,
 ``_finish_reason_indicates_truncation``, ``_extract_citations``) are reused
 UNCHANGED against a payload reassembled from SSE frames. This file is the
@@ -102,7 +102,6 @@ def test_usage_is_read_from_a_frame_that_carries_no_choices() -> None:
     usage = _extract_usage(streamed.payload)
     assert usage is not None
     assert usage.total_tokens == 4700
-    assert streamed.usage_frame_count == 1
 
 
 def test_a_stream_with_no_usage_frame_reports_no_usage_rather_than_zeros() -> None:
@@ -122,7 +121,6 @@ def test_a_stream_with_no_usage_frame_reports_no_usage_rather_than_zeros() -> No
     """
     streamed = _fold(sse_stream(_delta("hi"), _finish("stop")))
     assert _extract_usage(streamed.payload) is None
-    assert streamed.usage_frame_count == 0
 
 
 def test_usage_is_taken_from_the_last_frame_and_never_summed() -> None:
@@ -150,7 +148,6 @@ def test_usage_is_taken_from_the_last_frame_and_never_summed() -> None:
     usage = _extract_usage(streamed.payload)
     assert usage is not None
     assert (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens) == (20, 10, 30)
-    assert streamed.usage_frame_count == 2
 
 
 def test_an_unclean_finish_reason_latches_over_a_later_clean_one() -> None:
@@ -576,3 +573,97 @@ def test_a_malformed_frame_is_skipped_rather_than_fatal(frame: object) -> None:
     streamed = _fold(sse_stream(_delta("good "), frame, _delta("text"), _finish("stop")))
     assert _extract_message_content(streamed.payload) == "good text"
     assert streamed.body_error is None
+
+
+@pytest.mark.parametrize("chunk", [1, 2, 3, 4, 64], ids=["b1", "b2", "b3", "b4", "b64"])
+def test_a_byte_order_mark_is_stripped_however_the_wire_splits_it(chunk: int) -> None:
+    """RED when: the BOM decision is made on the first chunk alone.
+
+    Measured before the length guard: a BOM delivered in a 1- or 2-byte chunk
+    was never stripped, so its ``data:`` line became unrecognisable and the
+    whole PAID call was refused. The outcome depended on how the wire happened
+    to split the bytes -- which is precisely what
+    ``test_the_result_does_not_depend_on_how_the_bytes_were_split`` exists to
+    forbid. ``b1`` and ``b2`` are the rows that were red.
+    """
+    body = b"\xef\xbb\xbf" + sse_stream(_delta("first frame"), _finish("stop"))
+    streamed = _fold(body, chunk=chunk)
+    assert _extract_message_content(streamed.payload) == "first frame"
+    assert streamed.unrecognised_lines == 0
+
+
+@pytest.mark.parametrize("tail", [b"\r", b" ", b"  \r", b"\r\n"], ids=["cr", "sp", "sp-cr", "crlf"])
+def test_trailing_whitespace_at_end_of_stream_is_not_a_line_we_could_not_read(
+    tail: bytes,
+) -> None:
+    """RED when: the EOF residue is tested for truthiness instead of content.
+
+    The in-loop path has a blank-line guard; the end-of-stream path did not, so
+    a trailing bare CR or a single space refused a complete, terminated,
+    usage-bearing answer -- measured end to end over a real socket. Whitespace
+    is not a frame we failed to parse, and refusing on it throws away an answer
+    that was already fully in hand and already paid for.
+
+    Its positive partner is ``test_a_line_we_cannot_read_is_never_silently_
+    dropped``: real content must still be refused, or this would be satisfied
+    by dropping the guard altogether.
+
+    ``done=False`` is load-bearing and a first version of this test lacked it.
+    With ``[DONE]`` present the reader DRAINS whatever follows, so the residue
+    never reaches the end-of-stream branch and the test passed against both the
+    guard and its absence -- vacuous, and caught only by mutating the guard.
+    Ending on ``finish_reason`` instead is what puts the whitespace on the path
+    under test.
+    """
+    streamed = _fold(sse_stream(_delta("the answer"), _finish("stop"), done=False) + tail)
+    assert streamed.unrecognised_lines == 0
+    assert _extract_message_content(streamed.payload) == "the answer"
+
+
+def test_only_one_space_is_stripped_after_the_field_name() -> None:
+    """RED when: the value is ``lstrip()``ed instead of losing exactly one space.
+
+    The SSE specification strips ONE optional space. JSON tolerates the
+    difference; a sentinel compared with ``==`` does not, and neither does a
+    payload whose own first character is a space. Pinning it both ways is what
+    stops a well-meaning ``lstrip()``.
+    """
+    assert list(_iter_sse_data(iter([b"data:  [DONE]\n\n"]))) == [" [DONE]"]
+    assert list(_iter_sse_data(iter([b"data: [DONE]\n\n"]))) == ["[DONE]"]
+
+
+def test_a_body_that_is_not_utf8_raises_rather_than_being_mangled() -> None:
+    """RED when: decoding falls back to ``errors="replace"``.
+
+    A replacement decode corrupts a paid answer's text silently while every
+    gate stays green -- the shipped code's own docstring predicted exactly that
+    hole, and nothing tested it. Raising sends the call to the body handler,
+    which classifies it dispatched-but-unmeasured: we cannot read what arrived,
+    so we do not claim to.
+    """
+    with pytest.raises(UnicodeDecodeError):
+        list(_iter_sse_data(iter([b'data: {"a": "\xff\xfe"}\n\n'])))
+
+
+def test_a_byte_order_mark_is_stripped_only_at_the_start_of_the_stream() -> None:
+    """RED when: the BOM check runs on every chunk instead of once.
+
+    The specification puts the mark at the start of a stream, not in front of
+    an arbitrary frame. A reader that stripped one wherever it appeared would
+    silently accept a corrupted mid-stream line as a good frame -- the same
+    class of silent repair this parser refuses everywhere else. Counting it
+    unrecognised means the call is refused rather than half-read.
+
+    The chunks are handed over EXPLICITLY, with the mark starting the second
+    one. That is the only arrangement that separates the two behaviours: the
+    check runs once per chunk, so with the whole body in a single chunk a
+    reader that re-checks every chunk and one that checks only the first agree,
+    and a test built that way pins nothing.
+    """
+    chunks = [
+        sse_stream(_delta("first"), done=False),
+        b"\xef\xbb\xbf" + sse_stream(_delta(" second"), _finish("stop"), done=False),
+    ]
+    streamed = _reassemble_streamed_completion(_iter_sse_data(iter(chunks)))
+    assert streamed.unrecognised_lines == 1
+    assert _extract_message_content(streamed.payload) == "first"

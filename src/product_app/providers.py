@@ -1284,18 +1284,27 @@ class ProviderExecutionService:
                 # an 8.0s socket timeout read to completion in 12.044s with the
                 # timeout never firing. ``openrouter_call_budget_seconds`` is
                 # now the ONLY wall-clock brake on a paid call.
-                # The head is retained ONLY while no frame has parsed, so a
-                # response that is not a stream at all can still be read as the
-                # completion it is. A real stream drops it at frame one.
+                # Retained for every call up to _NON_SSE_BODY_LIMIT_BYTES, so
+                # a response that is not a stream at all can still be read as
+                # the completion it is. The tee cannot see frames, so this is a
+                # bounded cost on the happy path too -- which is why the bound
+                # is small. See that constant for the measurement.
                 head: list[bytes] = []
                 head_bytes = 0
 
                 def _tee(source: Iterator[bytes]) -> Iterator[bytes]:
                     nonlocal head_bytes
                     for piece in source:
-                        if head_bytes < _NON_SSE_BODY_LIMIT_BYTES:
-                            head.append(piece)
-                            head_bytes += len(piece)
+                        # Truncate EXACTLY at the limit. Checking the total
+                        # before appending the whole piece let the chunk that
+                        # crossed the bound through in full, so the real
+                        # ceiling was the limit plus one 64 KiB read -- a bound
+                        # that can overshoot by a whole chunk is not a bound,
+                        # and it let an oversized body through intact.
+                        allowance = _NON_SSE_BODY_LIMIT_BYTES - head_bytes
+                        if allowance > 0:
+                            head.append(piece[:allowance])
+                            head_bytes += min(len(piece), allowance)
                         yield piece
 
                 streamed = _reassemble_streamed_completion(
@@ -1330,7 +1339,6 @@ class ProviderExecutionService:
                                 payload=whole,
                                 terminator=_STREAM_TERMINATOR_NOT_A_STREAM,
                                 frame_count=0,
-                                usage_frame_count=1 if "usage" in whole else 0,
                                 unrecognised_lines=0,
                                 body_error=None,
                             )
@@ -2175,10 +2183,25 @@ _SSE_IGNORED_FIELDS: tuple[str, ...] = ("event:", "id:", "retry:")
 #: frame silently vanishes -- measured, not theorised.
 _SSE_BOM = b"\xef\xbb\xbf"
 
-#: How much of a body to retain while no SSE frame has parsed, so a response
-#: that is not a stream at all can still be read as the completion it is.
-#: Dropped the moment the first frame parses, so a real stream never holds it.
-_NON_SSE_BODY_LIMIT_BYTES: int = 1_048_576
+#: How much of a body to retain so a response that is not a stream at all can
+#: still be read as the completion it is.
+#:
+#: **It is retained for EVERY call, not only for a non-stream**, and an earlier
+#: version of this comment claimed the opposite -- that it was "dropped the
+#: moment the first frame parses". The tee that fills it cannot see frames, so
+#: that was false, and at the old 1 MiB cap a healthy streamed answer was
+#: measured holding the whole 1,048,576 bytes. This is therefore a per-call
+#: memory cost paid on the happy path, and the number is chosen as a bound on
+#: that cost rather than as a generous allowance.
+#:
+#: 64 KiB against a measured ~8.5 KB for a real non-streamed completion at
+#: ``initial_answer_max_tokens = 2000`` -- roughly 7x headroom, at one
+#: sixteenth the resident cost of the 1 MiB it replaced, on a 512 MB machine
+#: running up to 16 initial-answer workers. A non-stream body larger than this
+#: is truncated, so ``json.loads`` fails and the call is refused exactly as it
+#: would have been without the fallback: the safe direction, and the same
+#: outcome as before the fallback existed.
+_NON_SSE_BODY_LIMIT_BYTES: int = 65_536
 
 
 class _UnrecognisedLine:
@@ -2285,11 +2308,19 @@ def _iter_sse_data(chunks: Iterator[bytes]) -> Iterator[str | _UnrecognisedLine]
 
     for chunk in chunks:
         buffer += chunk
-        if not started:
+        if not started and len(buffer) >= len(_SSE_BOM):
             # Strip ONE byte-order mark, at the very start of the stream only.
             # Measured: without this, a BOM'd body loses its first frame
             # entirely -- the mark rides on the first ``data:`` line and makes
             # it unrecognisable.
+            #
+            # The length guard is not decorative. Deciding on the FIRST chunk
+            # alone made the outcome depend on how the wire happened to split
+            # the bytes: a BOM delivered in a 1- or 2-byte chunk was never
+            # stripped, so the call was refused -- measured, and it contradicts
+            # the very property ``test_the_result_does_not_depend_on_how_the_
+            # bytes_were_split`` exists to assert. Waiting until three bytes
+            # are in hand decides the same way at every chunk size.
             started = True
             if buffer.startswith(_SSE_BOM):
                 buffer = buffer[len(_SSE_BOM) :]
@@ -2308,8 +2339,11 @@ def _iter_sse_data(chunks: Iterator[bytes]) -> Iterator[str | _UnrecognisedLine]
                 yield value
             elif value is not None:
                 pending.append(value)
-    if buffer:
-        # A final line with NO trailing newline at all. A server may close
+    if buffer.strip():
+        # A final line with NO trailing newline at all. ``strip()`` and not
+        # merely truthiness: a trailing bare CR or a single space at end of
+        # stream is not a line we failed to read, and treating it as one
+        # refused a complete, terminated, usage-bearing answer -- measured. A server may close
         # immediately after writing its last frame, and that frame was still
         # DELIVERED -- dropping it loses whichever frame came last, which is
         # most often the usage frame and therefore the run's ``measured``
@@ -2349,7 +2383,6 @@ class _StreamedCompletion:
     payload: dict[str, object]
     terminator: str
     frame_count: int
-    usage_frame_count: int
     #: Lines that were neither a comment nor a field we know. Any at all means
     #: the stream carried something we could not read, so an answer assembled
     #: from the rest is missing content we cannot account for.
@@ -2435,7 +2468,6 @@ def _reassemble_streamed_completion(
     finish_reason: object = None
     latched = False
     usage: object = None
-    usage_frames = 0
     error: object = None
     frame_count = 0
     unrecognised = 0
@@ -2488,7 +2520,6 @@ def _reassemble_streamed_completion(
                 terminator = _STREAM_TERMINATOR_ERROR
         if isinstance(frame.get("usage"), dict):
             usage = frame["usage"]
-            usage_frames += 1
         choices = frame.get("choices")
         if not isinstance(choices, list):
             continue
@@ -2544,7 +2575,6 @@ def _reassemble_streamed_completion(
         payload=payload,
         terminator=terminator,
         frame_count=frame_count,
-        usage_frame_count=usage_frames,
         unrecognised_lines=unrecognised,
         body_error=body_error,
     )
