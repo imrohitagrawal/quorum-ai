@@ -39,7 +39,6 @@ and demonstrated again on this very seam during B1's enumeration).
 
 from __future__ import annotations
 
-import json
 import logging
 from typing import Any
 

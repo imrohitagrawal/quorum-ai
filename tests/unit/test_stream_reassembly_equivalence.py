@@ -99,8 +99,9 @@ def test_usage_is_read_from_a_frame_that_carries_no_choices() -> None:
     downgrades EVERY streamed run for ever.
     """
     streamed = _fold(sse_stream(_delta("hi"), _finish("stop"), {"choices": [], "usage": _USAGE}))
-    assert _extract_usage(streamed.payload) is not None
-    assert _extract_usage(streamed.payload).total_tokens == 4700
+    usage = _extract_usage(streamed.payload)
+    assert usage is not None
+    assert usage.total_tokens == 4700
     assert streamed.usage_frame_count == 1
 
 
@@ -325,8 +326,9 @@ def test_the_result_does_not_depend_on_how_the_bytes_were_split(chunk: int | Non
     )
     streamed = _fold(body, chunk=chunk)
     assert _extract_message_content(streamed.payload) == "café — 😀 costs €5"
-    assert _extract_usage(streamed.payload) is not None
-    assert _extract_usage(streamed.payload).total_tokens == 4700
+    usage = _extract_usage(streamed.payload)
+    assert usage is not None
+    assert usage.total_tokens == 4700
     assert streamed.terminator == "done"
 
 

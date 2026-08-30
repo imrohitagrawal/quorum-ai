@@ -18,6 +18,7 @@ margin); nothing here is written that tightly.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import socket
@@ -46,6 +47,7 @@ def _answer_frames() -> tuple[object, ...]:
     )
 
 
+@contextlib.contextmanager
 def _serve(
     *,
     prelude_frames: int = 0,
@@ -151,13 +153,9 @@ def test_a_real_streamed_response_becomes_a_real_answer(
     The full-string equality on ``answer_text`` is deliberate: a substring
     check would pass for a reassembler that kept only the last delta.
     """
-    server = _serve()
-    base, payloads = next(server)
-    try:
+    with _serve() as (base, payloads):
         _point_at(monkeypatch, base)
         result = _post()
-    finally:
-        server.close()
     assert isinstance(result, providers_module.LiveProviderResult)
     assert result.answer_text == "the answer"
     assert result.usage is not None
@@ -183,13 +181,9 @@ def test_the_request_actually_asks_the_upstream_to_stream(
     simulation -- a silent, total outage that costs $0 and so looks healthy to
     every gate.
     """
-    server = _serve()
-    base, payloads = next(server)
-    try:
+    with _serve() as (base, payloads):
         _point_at(monkeypatch, base)
         _post()
-    finally:
-        server.close()
     assert len(payloads) == 1
     assert payloads[0]["stream"] is True
     assert "stream_options" not in payloads[0]
@@ -210,19 +204,15 @@ def test_a_stream_that_stops_without_finishing_is_never_served_as_an_answer(
     one: a body-unreadable record would mean the frames failed to parse, which
     is a different fault with a different meaning for issue #105's dataset.
     """
-    server = _serve(
+    with _serve(
         body=sse_stream(
             {"choices": [{"index": 0, "delta": {"content": "half an ans"}}]},
             done=False,
         )
-    )
-    base, payloads = next(server)
-    try:
+    ) as (base, payloads):
         _point_at(monkeypatch, base)
         with caplog.at_level(logging.DEBUG, logger="product_app.providers"):
             result = _post()
-    finally:
-        server.close()
     assert result is providers_module._DISPATCH_UNMEASURED
     assert len(payloads) == 1, "a torn stream must never be retried"
     incomplete = [r for r in caplog.records if r.msg == "upstream_provider_stream_incomplete"]
@@ -249,9 +239,7 @@ def test_keep_alives_cannot_outrun_the_total_budget(
     against the setting under test, and it is wide enough that machine load
     cannot flip it.
     """
-    server = _serve(prelude_frames=200, prelude_tick=0.3)
-    base, _payloads = next(server)
-    try:
+    with _serve(prelude_frames=200, prelude_tick=0.3) as (base, _payloads):
         _point_at(
             monkeypatch,
             base,
@@ -261,8 +249,6 @@ def test_keep_alives_cannot_outrun_the_total_budget(
         started = time.monotonic()
         result = _post()
         wall = time.monotonic() - started
-    finally:
-        server.close()
     assert result is providers_module._DISPATCH_UNMEASURED
     assert 1.0 < wall < 20.0, f"the call ran {wall:.3f}s"
 
@@ -278,9 +264,7 @@ def test_the_same_keep_alives_complete_under_a_generous_budget(
     the failure rule 8c warns about, and it would look like a working product
     until the bill arrived with no answers attached.
     """
-    server = _serve(prelude_frames=3, prelude_tick=0.3)
-    base, _payloads = next(server)
-    try:
+    with _serve(prelude_frames=3, prelude_tick=0.3) as (base, _payloads):
         _point_at(
             monkeypatch,
             base,
@@ -288,8 +272,6 @@ def test_the_same_keep_alives_complete_under_a_generous_budget(
             openrouter_timeout_seconds=8.0,
         )
         result = _post()
-    finally:
-        server.close()
     assert isinstance(result, providers_module.LiveProviderResult)
     assert result.answer_text == "the answer"
     assert result.usage is not None
