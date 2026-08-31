@@ -103,10 +103,22 @@ contract.
 
 ### `stream_options: {"include_usage": true}` is deliberately not sent
 
-The claim "usage arrives in the final chunk with no opt-in" is recorded as
+**MEASURED 2026-08-31, and the decision holds on evidence rather than on the
+hedge below.** Two live production runs inside a declared window: `usage`
+arrived on **24 of 24** calls (`usage_absent: false`) with `stream_options`
+never sent, and `data: [DONE]` was sent on **24 of 24**
+(`stream_terminator: "done"`) across six distinct models. So the field is
+confirmed unnecessary, not merely unproven. Evidence and method:
+`docs/analysis/2026-08-26-b3-timeout-probe.md`, final block.
+
+What follows is the reasoning as it stood when the decision was taken, kept
+because the decision had to be made without that measurement and the shape of
+that judgement is the reusable part.
+
+The claim "usage arrives in the final chunk with no opt-in" was recorded as
 SETTLED by both `docs/adr/0078` and the B3 probe. Re-checked here: **both
 attribute it to OpenRouter's documentation, not to a probe row, and the probe
-script was not retained.** Per rule 11 it is therefore **ASSUMED, not
+script was not retained.** Per rule 11 it was therefore **ASSUMED, not
 measured**, and both documents are corrected in this change to say so.
 
 Sending the field would itself be a bet on unmeasured upstream behaviour — the
@@ -224,6 +236,13 @@ existing code decide, exactly as the non-streamed shape does.
   sample. `upstream_provider_stream_incomplete` is added to
   `telemetry_sink.BILLING_EVENTS` so the new failure mode reaches the durable
   file rather than repeating the omission corrected on 2026-08-26.
+- **The transport is confirmed live.** All four default answer models honour
+  `stream: true` in production — 8 of 8 `:online` slot calls completed with
+  `live_count` 4/4 and `local_count` 0, real prose and 2-5 citations each. Only
+  two of these models had ever been streamed before and only one was a default
+  slot, so this closes the largest reachability gap this ADR shipped with. The
+  citations arriving also exercise the annotation carry-across against the real
+  `:online` shape, which until now had only ever run against fixtures.
 - **An accepted divergence:** a non-streamed `message.content` may be a LIST of
   parts, joined with `"\n"` by `_extract_message_content`. A stream has no way
   to express that, so such a message arrives as one run of characters.

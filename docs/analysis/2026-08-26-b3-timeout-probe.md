@@ -58,9 +58,12 @@ unrelated numbers.
 
 - **Settled:** streaming collapses the inter-chunk gap; keep-alive comment
   frames exist and are counted below.
-- **CORRECTED 2026-08-30 (ADR-0084), and it was listed under "settled" until
-  then:** that `usage` arrives in the final chunk of a stream with **no opt-in**
-  required is **ASSUMED, not measured**. It came from OpenRouter's streaming
+- **SETTLED BY MEASUREMENT 2026-08-31.** See the block at the end of this file:
+  24 of 24 live production calls reported `usage_absent: false` and
+  `stream_terminator: "done"`. What follows is the correction that stood
+  between 2026-08-30 and that measurement, kept because the reasoning is the
+  point: that `usage` arrives in the final chunk of a stream with **no opt-in**
+  required was **ASSUMED, not measured**. It came from OpenRouter's streaming
   documentation, read 2026-08-26; no probe row here records it, and this
   script was not retained, so the raw frames cannot be re-read to check. The
   completion-token counts in the streamed table above are consistent with a
@@ -84,3 +87,53 @@ The approved plan and the 2026-08-26 session handoff both state "8 of 8 exceed
 it on wall clock". Against their own table it is **7 of 8** — 6.385s does not
 exceed 8.0. The per-recv figure they give, 6 of 8, is correct, and that is the
 number that decides anything.
+
+
+---
+
+# MEASURED, 2026-08-31 — the live window that settled it
+
+Two production runs on build `2d94f6c`, 04:52Z and 04:56Z, inside the declared
+window `2026-08-31T04:05Z-05:45Z` (owner `imrohitagrawal`, judge on). Read off
+`/data/telemetry-tokens.jsonl` via `fly ssh console`, which is the only place
+`stream_terminator` is written.
+
+| Question | Verdict | Evidence |
+|---|---|---|
+| Does `usage` arrive with no `stream_options`? | **YES** | `usage_absent: false` on **24 of 24** calls |
+| Is `data: [DONE]` sent? | **YES** | `stream_terminator: "done"` on **24 of 24** calls |
+| Do all four default answer models honour `stream: true`? | **YES** | 8 of 8 `:online` slot calls completed live; `live_count` 4/4 and `local_count` 0 in both runs |
+
+The 24 records span six distinct models — the four answer slots, the
+debate/synthesis model (`openai/gpt-5-mini`) and the judge
+(`openai/gpt-4.1-mini`) — so the result is not one vendor path generalised.
+
+**The pre/post split works.** `stream_terminator` is absent from **0 of 30**
+records written before the window and present on **all 24** after it, so the
+two regimes cannot be silently mixed into one percentile. That was the reason
+for adding the field, and it is now demonstrated rather than intended.
+
+**`stream_options` is confirmed unnecessary** and stays off the wire. ADR-0084
+rejected sending it partly on the argument that its failure mode was a silent
+total outage; that argument no longer has to carry the decision, because the
+premise it was hedging is now measured true.
+
+## Unplanned: issue #268's missing measurement
+
+The same records carry `injected_tokens_est` — provider-reported input tokens
+minus what we sent — for the eight `:online` calls, which is exactly the figure
+#268 was opened to obtain and had never had:
+
+```
+2173  2256  2267  2268  2344  2427  2504  2510
+```
+
+**8 of 8 exceed `cost_web_search_context_tokens = 2000`**, by 9-26%, across all
+four default models. The constant was grounded on a single run (`d7785cd8`);
+this is the first real distribution behind it. Under-estimating input is the
+FAIL-OPEN direction, since the cost guardrail keys off the estimate.
+
+**The constant is deliberately not moved here** — it is a money guardrail and
+ADR-0081 freezes this class pending a measured bound. n=8 on one question shape
+is a start, not a bound: every row shares one query, one prompt size and one
+day. Recorded on #268 so the next person starts from data.
