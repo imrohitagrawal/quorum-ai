@@ -32,7 +32,9 @@ Where the two disagree, the board wins: a gate checks it and nothing checks this
 > W1 measurement window in "The W1 → #290 lane" below. It does not generalise
 > to anything else, and it is not yours to open — see that section.**
 >
-> **Work W1 next, ahead of board ranking** (owner instruction, 2026-08-30).
+> **W1 is DONE and its measurement window is closed** (2026-08-31). The
+> override that used to sit here is spent — select by board ranking again, and
+> read "The W1 lane, and what it left behind" below before touching #290.
 >
 > You may use `Workflow` for review phases. **Ceiling: 14 agents per workflow,
 > one workflow at a time.** Do not turn ultracode on.
@@ -84,78 +86,48 @@ not two. Say which rows are in the cluster and why each belongs.
 Open the pull request with one line saying why this outranks the top of the
 backlog. If that line cannot be written honestly, the ranking is wrong.
 
-## The W1 → #290 lane — owner-directed, 2026-08-30
+## The W1 lane, and what it left behind — CLOSED 2026-08-31
 
-**W1 is the next package, ahead of anything ranking would pick.** That override
-exists because ranking cannot get there: W1 is the largest row, every rule above
-prefers cheap independent issue-backed rows, and there are always some — so W1
-loses every time and #290 (two hops behind it) is unreachable. Four sessions of
-board-ranked work never touched it. The owner broke the tie by instruction.
+**W1 (+W15) is merged, deployed and MEASURED.** The override that forced it
+ahead of ranking is spent. Do not re-run it; read this for what it settled and
+what it cost.
 
-**The sequence is fixed. Do not reorder it.**
+### What the live window settled — these are no longer assumptions
 
-1. **Build W1 hermetically, at $0.** Streaming is implemented and fully tested
-   against local loopback servers — the pattern `test_provider_call_time_budget.py`
-   and `_read_body_within_budget` already use. Merge it, deployed and verified,
-   before any money moves. The owner chose this shape explicitly over
-   "measure first": paying to learn what a hermetic test shows for free is waste.
-2. **Then measure it live, once**, in a declared production window.
-3. **Then W2/#290**, whose shape depends on W1's measured behaviour.
+One attended window (`2026-08-31T04:05Z–05:45Z`), two production runs, read off
+`/data/telemetry-tokens.jsonl` via `fly ssh console` — the only place
+`stream_terminator` is written:
 
-### The measurement window — what the owner authorised, exactly
+| Question | Verdict |
+|---|---|
+| Does `usage` arrive with no `stream_options`? | **YES** — `usage_absent: false` on 24 of 24 |
+| Is `data: [DONE]` sent? | **YES** — `stream_terminator: "done"` on 24 of 24 |
+| Do all four default models honour `stream: true`? | **YES** — 8 of 8 slot calls live, `local_count` 0 |
 
-Decided 2026-08-30, after being shown the alternatives:
+Six distinct models across those records. `stream_options` stays off the wire on
+evidence now, not on a hedge. Ledger delta `0 → 0.0871`; the judge ran and its
+spend reaches no ledger, so the true total is higher and is not quotable.
 
-- **Production, not a probe.** `OPENROUTER_LIVE_EXECUTION_ENABLED = "true"` in
-  `fly.toml`. The owner chose this over a bounded probe script.
-- **Judge ON**, matching production's current posture (`judge_enabled: true`).
+**Unplanned, and the more valuable half:** the same records gave issue #268 its
+first real distribution — `injected_tokens_est` 2173–2510 on the eight `:online`
+calls, **8 of 8 above `cost_web_search_context_tokens = 2000`**. Recorded on
+#268. The constant is NOT moved: money guardrail, ADR-0081 freezes the class,
+and n=8 sharing one query shape is a start, not a bound.
 
-**State the exposure in the PR that opens it, because it is the largest of the
-options offered and nobody should rediscover it later:**
+### What it cost, so nobody repeats it
 
-- That flag is the *only* thing gating spend — `providers.py` is
-  `bool(settings.openrouter_live_execution_enabled and openrouter_key)` and the
-  key is a deployed secret. So **any `/ui` visitor can spend real money** for
-  the window's duration.
-- The only monetary bound is `GLOBAL_DAILY_CEILING_USD = $5.00`, and **it resets
-  daily** — unnoticed, the exposure renews indefinitely. That is not a
-  hypothetical: ADR-0070 exists because a window "expected to be reverted in the
-  same session" ran for **three days**.
-- With the judge ON, **`global_daily_spend_usd` under-reports by exactly the
-  judge's cost**, because judge GET-path spend reaches no ledger (ADR-0013). You
-  will not be able to state what the window truly cost. Say so in the write-up
-  rather than quoting the ledger figure as the total.
+**Production served a live posture for ~9.5h, ~8.6h of it past the window's own
+expiry.** Zero spend beyond the sanctioned runs — luck, not design. The
+watchdog alerted correctly (#406). The revert was *blocked by CI*: the gate
+refuses `flag off + window still open`, so flipping the flag alone has no valid
+form while the window covers `now`. **Closing a window means flag → `false` AND
+`expires_at` → now, in the SAME commit.** Mechanical fix proposed in **#407**;
+until it lands, do that by hand and verify `/status.live_execution` yourself.
 
-### How to open it — use the mechanism, do not hand-roll one
+### #290 (W2) is now unblocked
 
-`configs/live-execution-windows.json` (`windows: []` today) is the machine-
-readable revert condition. `tests/unit/test_live_execution_posture_declaration.py`
-runs in the **blocking** pytest lane and refuses a `fly.toml` that sets the flag
-with no covering window, so **the window entry and the flag must land in the
-same pull request**. `.github/workflows/live-posture-watchdog.yml` then checks
-production every 30 minutes and opens an issue if the posture is undeclared,
-expired, or unattended for 24h.
-
-Every field is required and **none may be defaulted** — the file's own words:
-*"a defaulted money field is a decision nobody made."* Read its `_README` before
-writing an entry; it is the spec.
-
-**Two fields are the HUMAN's, not yours. Ask, do not guess:**
-
-- **`owner`** — a real person's GitHub account, the one that must post the 24h
-  re-affirmations. Do not infer it from git config.
-- **`expires_at`** — the window's actual length. The owner authorised a window
-  but has not set its duration; that is the whole bound, so it is the one number
-  you must not invent. `mode: "time_boxed"` unless the owner explicitly asks for
-  `standing`, which additionally requires a new ADR carrying
-  `**Authorises:** OPENROUTER_LIVE_EXECUTION_ENABLED` on its own line.
-
-Set `"judge": true` per the decision above. A window shorter than 24h needs no
-`reaffirm_issue`; anything longer MUST name one.
-
-**Closing the window is part of the package, not a follow-up.** Land the revert
-PR that sets the flag back to `false`, verify `/status.live_execution` is
-`false` again, and report the measured cost with the judge caveat above.
+W1 was the dependency and it is measured. W2 can be BUILT hermetically today;
+validating it still needs spend, and W3 stays deferred (ADR-0081).
 
 ## Two decisions are already made — do not re-open them
 
