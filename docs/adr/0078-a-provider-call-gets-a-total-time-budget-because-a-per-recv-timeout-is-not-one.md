@@ -87,6 +87,12 @@ unsupported. OpenRouter's streaming DOCUMENTATION says `usage` arrives in the
 final chunk with **no opt-in** required, which was the open question that could
 have made streaming break the cost ledger.
 
+**Settled by measurement 2026-08-31:** 24 of 24 live production calls reported
+`usage_absent: false` and `stream_terminator: "done"`, so the claim is now
+MEASURED true rather than assumed — see the block at the end of
+`docs/analysis/2026-08-26-b3-timeout-probe.md`. The correction below stands as
+the record of what was known before that, and of why it needed measuring.
+
 **Corrected 2026-08-30 by ADR-0084:** this paragraph said the documentation
 "confirms" it and that it "does not" break the ledger. That is one notch
 stronger than the evidence supports — the source is a vendor page, not a probe
