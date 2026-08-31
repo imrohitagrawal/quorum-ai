@@ -121,8 +121,10 @@ expiry.** Zero spend beyond the sanctioned runs — luck, not design. The
 watchdog alerted correctly (#406). The revert was *blocked by CI*: the gate
 refuses `flag off + window still open`, so flipping the flag alone has no valid
 form while the window covers `now`. **Closing a window means flag → `false` AND
-`expires_at` → now, in the SAME commit.** Mechanical fix proposed in **#407**;
-until it lands, do that by hand and verify `/status.live_execution` yourself.
+`expires_at` → now, in the SAME commit.** **#407 is fixed**: run
+`make close-window` (or `python3 scripts/close_live_window.py`) — it performs
+both edits atomically and refuses loudly if nothing is currently open. Still
+verify `/status.live_execution` yourself afterward.
 
 ### #290 (W2) is now unblocked
 
