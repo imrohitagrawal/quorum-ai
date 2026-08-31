@@ -4,7 +4,7 @@
 proves each row's state.** Issues on GitHub are the mirror; this file is the
 original, because a gate and an offline agent can read it and cannot read `gh`.
 
-Verified at: `59f402a7c951b90e2af376558f71ff4701b831a1`
+Verified at: `33c53793e2af19f0de73510ebe3dc49481219988`
 
 The board holds **19** rows, **4** of them unpinned.
 
@@ -105,7 +105,7 @@ caught by any automated check and 10 of 16 by adversarial review
 | W7 | Google sign-in and logout | UNPINNED | `—` | — | — |
 | W9 | Guard the moderator model overlapping a panel slot | PENDING | `ABSENT src/product_app/model_slots.py :: debate_model_id` | — | — |
 | W10 | Consensus certifies a mutual cluster it never checked | DONE | `PRESENT src/product_app/synthesis_consensus.py :: return sum(1 for partners in counts if partners >= 2) >= 3` | #382 | — |
-| W11 | Completeness divides by answers recorded, not slots requested | PENDING | `PRESENT src/product_app/evaluation.py :: slot_count = len(initial_answers)` | #380 | — |
+| W11 | Completeness divides by answers recorded, not slots requested | DONE | `ABSENT src/product_app/query_run_orchestration.py :: requested_slot_count = len(query_run.model_slots)` | #380 | — |
 | W12 | `last_live_charge_at` reports a pre-#376 row as a live charge | DONE | `ABSENT src/product_app/feedback_store.py :: _live_charge_cutover_id` | #379 | — |
 | W13 | Nothing bounds a call's INPUT — **STOP** | UNPINNED | `—` | #268 | — |
 | W14 | Close the 5xx possibly-billed premise with data | UNPINNED | `—` | #105 | production logs |
@@ -254,9 +254,14 @@ only 3 nodes, degree ≥2 already forced a full triangle). **This unblocks W4**
 — #382 ends *"whoever lifts those caps must fix this primitive first,"* and
 that primitive is now fixed.
 
-**W11 — #380.** The denominator is answers recorded, so a slot that produced
-nothing is absent from both sides and a run that requested four and recorded
-three scores 1.0. The product's own copy states the opposite contract.
+**W11 — #380. DONE.** The denominator was answers recorded, so a slot that
+produced nothing was absent from both sides and a run that requested four and
+recorded three scored 1.0 — the product's own copy states the opposite
+contract. `evaluate_layer_a`/`evaluate_run` now take an optional
+`requested_slot_count` (default `None`, meaning "fall back to
+`len(initial_answers)`" for callers with no run to ask); the one production
+call site in `query_run_orchestration.py` passes
+`len(query_run.model_slots)`.
 
 **W12 — #379. DONE** (merged `991669b`, deployed and verified: `/status`
 `last_live_charge_at` went from `"2026-08-25T17:00:10..."` to `null` on a
