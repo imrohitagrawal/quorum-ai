@@ -57,7 +57,7 @@ kill_timeout = "5s"
   # posts is typed "Bot" and refused. There is deliberately still no maximum
   # window length: #357 ran ~3 days and issue #105 needs ~7, so no number
   # separates them; "is anybody still watching" does.
-  OPENROUTER_LIVE_EXECUTION_ENABLED = "false"
+  OPENROUTER_LIVE_EXECUTION_ENABLED = "true"
   # issue #27: keep the feedback-event SQLite trail on the persistent volume
   # (mounted at /data below), NOT the ephemeral rootfs default (.data/…) which
   # is wiped on every deploy — that erased the self-improving-loop history.
