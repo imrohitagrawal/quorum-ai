@@ -18,14 +18,26 @@ WHAT THIS IS FOR
 
     On 2026-08-31 (#407) that two-part deduction was not made under incident
     pressure, and the gate blocked the revert for ~4.5 hours while production
-    kept serving a spend-capable posture. This script performs both edits
-    together so the recipe cannot be half-applied, and refuses loudly rather
-    than doing nothing when there is no open window to close.
+    kept serving a spend-capable posture (#407's own title; the same incident's
+    total live-posture exposure was ~9.5h, ~8.6h of it past the window's own
+    expiry — a different, larger measurement of the same event, both recorded
+    on #407). This script performs both edits in one run, and refuses loudly
+    rather than doing nothing when there is no open window to close.
+
+    The two file writes are not a single filesystem transaction — if the
+    second write fails partway (disk full, permissions), the flag is written
+    FIRST specifically so the worst surviving state is "flag off, window still
+    open in the file", which the gate above still refuses to let merge. The
+    reverse order risks the opposite and worse failure: a window marked closed
+    while the flag is still ``"true"``, which that gate would not catch.
 
 WHAT IT DOES NOT DO
     It never touches a ``standing`` window — those have no ``expires_at`` to
     close (the field is FORBIDDEN for that mode per the declaration file's own
-    README) and ending one is a policy decision, not a mechanical revert.
+    README) and ending one is a policy decision, not a mechanical revert. It
+    also refuses rather than guesses when ``fly.toml`` declares the flag more
+    than once, or when a window's ``mode`` is anything other than exactly
+    ``"time_boxed"`` or ``"standing"``.
 
 USAGE
     python3 scripts/close_live_window.py
@@ -41,12 +53,14 @@ import json
 import re
 import sys
 from pathlib import Path
+from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 FLY_TOML = REPO_ROOT / "fly.toml"
 WINDOWS_PATH = REPO_ROOT / "configs" / "live-execution-windows.json"
 FLAG = "OPENROUTER_LIVE_EXECUTION_ENABLED"
 MODE_STANDING = "standing"
+MODE_TIME_BOXED = "time_boxed"
 _FLAG_OFF_VALUES = frozenset({"false", "0", "no", "off", ""})
 
 # Scoped to the flag's own key so a coincidentally-identical value elsewhere in
@@ -71,7 +85,7 @@ def _parse_instant(value: object) -> dt.datetime | None:
     return parsed.astimezone(dt.UTC)
 
 
-def find_open_windows(payload: dict, now: dt.datetime) -> list[dict]:
+def find_open_windows(payload: dict[str, Any], now: dt.datetime) -> list[dict[str, Any]]:
     """The raw JSON entries in ``payload["windows"]`` that cover ``now``.
 
     Mirrors ``live_posture_check.DeclaredWindow.covers`` / ``is_standing``
@@ -90,7 +104,13 @@ def find_open_windows(payload: dict, now: dt.datetime) -> list[dict]:
     for entry in windows:
         if not isinstance(entry, dict):
             continue
-        if entry.get("mode") == MODE_STANDING:
+        # Exact match against the one recognised time-boxed spelling, not
+        # "anything that isn't 'standing'". A malformed or wrongly-cased mode
+        # (e.g. "Standing") must not fall through into being treated as
+        # closeable — the declaration file's own README says an unrecognised
+        # mode makes the WHOLE FILE untrusted rather than silently ignored;
+        # this mirrors that fail-closed stance instead of contradicting it.
+        if entry.get("mode") != MODE_TIME_BOXED:
             continue
         opened = _parse_instant(entry.get("opened_at"))
         expires = _parse_instant(entry.get("expires_at"))
@@ -101,7 +121,7 @@ def find_open_windows(payload: dict, now: dt.datetime) -> list[dict]:
     return open_windows
 
 
-def close_windows(payload: dict, now: dt.datetime) -> list[dict]:
+def close_windows(payload: dict[str, Any], now: dt.datetime) -> list[dict[str, Any]]:
     """Mutate ``payload`` in place: stamp every currently-open window's
     ``expires_at`` to ``now``. Returns the entries closed (empty if none were
     open). Only ``expires_at`` is written — every other field, including
@@ -126,13 +146,26 @@ def set_flag_false(fly_toml_text: str) -> tuple[str, bool]:
     Raises ``ValueError`` if the key is not present at all — silently doing
     nothing there would let a caller close the window's declaration while the
     flag itself stays exactly as risky as it was.
+
+    Also raises ``ValueError`` if the key appears MORE than once (TOML allows
+    the same key name in different tables). Fixing only the first occurrence
+    would report success while a second copy of the flag stayed live — fail
+    loud instead, since a silent partial fix here is worse than a refusal.
     """
-    match = _FLAG_LINE.search(fly_toml_text)
-    if match is None:
+    matches = list(_FLAG_LINE.finditer(fly_toml_text))
+    if not matches:
         raise ValueError(
             f"{FLAG} not found in fly.toml's [env] block — refusing to edit blind. "
             "Set it by hand and verify /status.live_execution yourself."
         )
+    if len(matches) > 1:
+        raise ValueError(
+            f"{FLAG} appears {len(matches)} times in fly.toml — refusing to edit "
+            "blind, since fixing only one occurrence would report success while "
+            "another copy stays live. Resolve the duplicate by hand and verify "
+            "/status.live_execution yourself."
+        )
+    match = matches[0]
     if match.group("value").strip().lower() in _FLAG_OFF_VALUES:
         return fly_toml_text, False
     new_line = f'{match.group("indent")}{FLAG} = "false"'
@@ -165,6 +198,13 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as exc:  # noqa: BLE001
         print(f"could not read {windows_path}: {exc!r}", file=sys.stderr)
         return 2
+    if not isinstance(payload, dict):
+        print(
+            f"{windows_path} does not contain a JSON object at the top level "
+            f"(got {type(payload).__name__}) — refusing to edit blind.",
+            file=sys.stderr,
+        )
+        return 2
 
     closed = close_windows(payload, now)
     if not closed:
@@ -191,11 +231,19 @@ def main(argv: list[str] | None = None) -> int:
         print(str(exc), file=sys.stderr)
         return 2
 
+    # Write the FLAG first, the window declaration second. If the second
+    # write fails partway (disk full, permissions, a concurrent edit), the
+    # worst surviving state is "flag off, window still open in the file" —
+    # which is exactly the state
+    # test_the_shipped_declaration_file_declares_no_window_right_now refuses
+    # to let merge, so a retry is forced rather than silently accepted. The
+    # reverse order risks the opposite: a window marked closed while the flag
+    # is still "true", which that same gate would NOT catch.
+    if flag_changed:
+        fly_path.write_text(new_fly_text, encoding="utf-8")
     windows_path.write_text(
         json.dumps(payload, indent=2, ensure_ascii=True) + "\n", encoding="utf-8"
     )
-    if flag_changed:
-        fly_path.write_text(new_fly_text, encoding="utf-8")
 
     for entry in closed:
         print(

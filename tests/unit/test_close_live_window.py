@@ -283,3 +283,76 @@ def test_main_leaves_a_standing_window_alone_and_still_refuses(
     assert rc == 1
     payload = json.loads(windows_file.read_text(encoding="utf-8"))
     assert "expires_at" not in payload["windows"][0]
+
+
+# --- fixes made after adversarial review (2026-08-31) ------------------------
+
+
+def test_find_open_windows_excludes_a_wrongly_cased_mode(closer: ModuleType) -> None:
+    """A mode of ``"Standing"`` (wrong case) is not the recognised
+    ``"standing"`` OR ``"time_boxed"`` spelling. The declaration file's own
+    README says an unrecognised mode makes the WHOLE FILE untrusted rather
+    than silently ignored — this closer must not fall the other way and treat
+    an unrecognised mode as closeable. RED IF: the exclusion narrows back to
+    "anything that isn't exactly 'standing'", which a wrongly-cased mode
+    slips past."""
+    payload = {"windows": [{**_window(opened=_OPEN_START, expires=_OPEN_END), "mode": "Standing"}]}
+    assert closer.find_open_windows(payload, _NOW) == []
+
+
+def test_set_flag_false_refuses_when_the_key_appears_twice(closer: ModuleType) -> None:
+    """TOML allows the same key name in different tables. Fixing only the
+    first occurrence would report success while a second copy of the flag
+    stayed live — exactly the false-success shape #407 is about. RED IF: the
+    duplicate check is dropped and only the first match is edited."""
+    text = (
+        '[env]\n  OPENROUTER_LIVE_EXECUTION_ENABLED = "true"\n'
+        '[env2]\n  OPENROUTER_LIVE_EXECUTION_ENABLED = "true"\n'
+    )
+    with pytest.raises(ValueError, match="appears 2 times"):
+        closer.set_flag_false(text)
+
+
+def test_main_refuses_on_a_non_dict_windows_payload(
+    closer: ModuleType, tmp_path: Path, capsys: Any
+) -> None:
+    """A syntactically valid JSON file whose top level is a list (or any
+    non-object) must be refused cleanly, not crash with a raw traceback. RED
+    IF: the type guard is removed and this raises AttributeError instead of
+    returning 2 with a clear message."""
+    fly, windows_file = _write_fixture(tmp_path, flag_value="true", windows=[])
+    windows_file.write_text("[]", encoding="utf-8")
+    rc = closer.main(
+        ["--fly-toml", str(fly), "--windows-file", str(windows_file), "--now", _NOW_ISO]
+    )
+    assert rc == 2
+    assert "does not contain a JSON object" in capsys.readouterr().err
+
+
+def test_main_writes_the_flag_before_the_window_declaration(
+    closer: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If the second write fails partway, the worst surviving state must be
+    "flag off, window still open" (still refused by the shipped gate, forcing
+    a retry) rather than "window closed, flag still true" (which the shipped
+    gate would NOT catch — a false-success state). RED IF: the write order is
+    reversed, since this test asserts the windows file write happens strictly
+    after the fly.toml write by making the SECOND write of two calls raise."""
+    fly, windows_file = _write_fixture(
+        tmp_path, flag_value="true", windows=[_window(opened=_OPEN_START, expires=_OPEN_END)]
+    )
+    write_calls: list[Path] = []
+    original_write_text = Path.write_text
+
+    def _tracking_write_text(self: Path, *args: Any, **kwargs: Any) -> int:
+        write_calls.append(self)
+        if len(write_calls) == 2:
+            raise OSError("simulated failure on the second write")
+        return original_write_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", _tracking_write_text)
+    with pytest.raises(OSError, match="simulated failure"):
+        closer.main(
+            ["--fly-toml", str(fly), "--windows-file", str(windows_file), "--now", _NOW_ISO]
+        )
+    assert write_calls == [fly, windows_file]
