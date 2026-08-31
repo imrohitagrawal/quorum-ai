@@ -114,7 +114,14 @@ def judge_calls(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
 
 
 def _terminal_run(account_id: UUID | None = None) -> Any:
-    """A COMPLETED run with one live answer — the shape the judge accepts."""
+    """A COMPLETED run with all four slots answered — the shape the judge accepts.
+
+    #380: completeness/live_ratio now divide by ``len(model_slots)`` (4, via
+    ``MODELS``), not ``len(initial_answers)``. A single recorded answer would
+    silently exercise the partial-completeness path in every test here that
+    doesn't mean to, so this fixture records all four requested slots to stay
+    a clean, fully-answered run.
+    """
     slots = validate_model_slots_with_search(MODELS)
     estimate = cost_estimation_service.estimate(query_text=QUERY_TEXT, model_slots=slots)
     run = query_run_repository.create(
@@ -123,7 +130,7 @@ def _terminal_run(account_id: UUID | None = None) -> Any:
         model_slots=slots,
         cost_estimate=estimate,
     )
-    run.initial_answers = [_answer(slot=1)]
+    run.initial_answers = [_answer(slot=n) for n in range(1, len(slots) + 1)]
     run.final_synthesis = None
     run.status = QueryRunStatus.COMPLETED
     return run

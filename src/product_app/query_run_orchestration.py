@@ -2423,11 +2423,19 @@ def _evaluate_terminal_run_with_suppression(
     # last wins for the entry's whole life — which is why the timed-out
     # reader below declines to store at all.
     judge = _request_path_judge(query_run)
+    # #380: the denominator for completeness/live_ratio must be the slots this
+    # run REQUESTED, not the slots that happened to record an answer — a slot
+    # lost to a worker timeout, an unexpected future failure, or
+    # ``_should_stop`` mid-turn is absent from ``initial_answers`` entirely,
+    # and dividing by its own (shrunk) length would silently drop it from
+    # both sides of the fraction and report a false 1.0.
+    requested_slot_count = len(query_run.model_slots)
     if judge is None:
         result = evaluate_run(
             initial_answers=query_run.initial_answers,
             final_synthesis=query_run.final_synthesis,
             agreement=agreement,
+            requested_slot_count=requested_slot_count,
         )
     else:
         result = evaluate_run(
@@ -2436,6 +2444,7 @@ def _evaluate_terminal_run_with_suppression(
             agreement=agreement,
             judge=judge,
             query_text=query_run.query_text,
+            requested_slot_count=requested_slot_count,
         )
         if judge.served_without_verdict:
             # This read gave up waiting on ANOTHER thread's in-flight judge

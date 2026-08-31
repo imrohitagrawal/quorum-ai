@@ -1602,6 +1602,50 @@ def test_live_ratio_and_completeness_are_measured_from_the_slots() -> None:
     assert evaluation.signals.completeness == pytest.approx(0.75)
 
 
+def test_a_slot_that_never_recorded_an_answer_is_not_dropped_from_the_denominator() -> None:
+    """#380: a slot lost to a worker timeout, an unexpected future failure, or
+    ``_should_stop`` mid-turn never reaches ``record_initial_answer`` at all —
+    it is absent from ``initial_answers`` entirely, unlike a FAILED slot
+    (which is present with a FAILED status). Dividing by
+    ``len(initial_answers)`` silently drops such a slot from BOTH sides of the
+    fraction and reports a false 1.0. The fix is to pass the run's true
+    REQUESTED slot count.
+
+    RED IF: ``requested_slot_count`` is ignored and the denominator reverts to
+    ``len(initial_answers)`` — this run requests 4 slots but only 3 ever
+    recorded, so that reversion would report ``completeness == 1.0`` and
+    ``live_ratio == 1.0`` instead of the correct ``0.75``.
+    """
+    evaluation = evaluate_layer_a(
+        initial_answers=[
+            _answer(slot=1),
+            _answer(slot=2),
+            _answer(slot=3),
+            # Slot 4 never recorded anything — simulating the three
+            # never-record paths in query_run_orchestration.py. It is simply
+            # ABSENT, not present-with-a-status.
+        ],
+        final_synthesis=_synthesis(),
+        agreement=AgreementSummary(aligned=2, total=3),
+        requested_slot_count=4,
+    )
+    assert evaluation.signals.live_ratio == pytest.approx(0.75)
+    assert evaluation.signals.completeness == pytest.approx(0.75)
+
+
+def test_requested_slot_count_defaults_to_the_recorded_count() -> None:
+    """POSITIVE PARTNER: a caller with no run to ask (most of this test file)
+    must keep today's behavior. RED IF: the default silently changes shape,
+    e.g. treating an omitted ``requested_slot_count`` as 0."""
+    evaluation = evaluate_layer_a(
+        initial_answers=[_answer(slot=1), _answer(slot=2)],
+        final_synthesis=_synthesis(),
+        agreement=AgreementSummary(aligned=2, total=2),
+    )
+    assert evaluation.signals.live_ratio == pytest.approx(1.0)
+    assert evaluation.signals.completeness == pytest.approx(1.0)
+
+
 def test_failed_openrouter_slot_is_not_counted_as_live() -> None:
     """RB-5 / D3 honesty fix: a slot that FAILED on the OpenRouter path is
     NOT a live answer, even though ``providers._failed_answer`` /
