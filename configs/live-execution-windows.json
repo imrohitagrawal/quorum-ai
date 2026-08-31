@@ -118,8 +118,8 @@
       "reason": "Measure W1 streaming live: does usage arrive without stream_options, is [DONE] sent, do all four default models honour stream:true",
       "mode": "time_boxed",
       "judge": true,
-      "opened_at": "2026-08-30T20:28:00Z",
-      "expires_at": "2026-08-30T21:28:00Z"
+      "opened_at": "2026-08-31T04:05:00Z",
+      "expires_at": "2026-08-31T05:05:00Z"
     }
   ]
 }
