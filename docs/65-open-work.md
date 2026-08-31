@@ -6,7 +6,7 @@ original, because a gate and an offline agent can read it and cannot read `gh`.
 
 Verified at: `33c53793e2af19f0de73510ebe3dc49481219988`
 
-The board holds **19** rows, **4** of them unpinned.
+The board holds **21** rows, **4** of them unpinned.
 
 `scripts/check_open_work.py --check` reads every row's evidence off disk and
 refuses if a claim is false. It runs inside `make validate`, and
@@ -112,9 +112,11 @@ caught by any automated check and 10 of 16 by adversarial review
 | W15 | `_bound_sniff_time` is referenced and does not exist | DONE | `PRESENT src/product_app/providers.py :: _bound_sniff_time` | — | — |
 | W16 | The catalog fetcher hardcodes the models URL | DONE | `PRESENT src/product_app/catalog_fetcher.py :: OPENROUTER_CATALOG_URL = "https://openrouter.ai/api/v1/models"` | — | — |
 | W17 | FR-004 names a model we do not ship | PENDING | `PRESENT docs/10-functional-requirements.md :: deepseek/deepseek-chat-v3.1` | — | — |
-| W18 | The paid call sends the API key to a configured base with no scheme guard | PENDING | `PRESENT src/product_app/providers.py :: url=f"{settings.openrouter_api_base_url}/chat/completions"` | — | — |
+| W18 | The paid call sends the API key to a configured base with no scheme guard | DONE | `PRESENT src/product_app/providers.py :: url=f"{settings.openrouter_api_base_url}/chat/completions"` | — | — |
 | W19 | A provider-timeout bound fails locally and passes in CI | PENDING | `PRESENT tests/unit/test_provider_call_time_budget.py :: assert wall < 4.0,` | — | — |
 | W20 | `panel_agreement()` reports "agreed" for a genuine N=1 panel | PENDING | `PRESENT src/product_app/synthesis_consensus.py :: return "agreed" if len(set(stance.values())) == 1 else "split"` | #394 | — |
+| W21 | A redirect carries the API key off the guarded base | PENDING | `PRESENT src/product_app/providers.py :: with urlopen(request, timeout=settings.openrouter_timeout_seconds) as response:` | — | W18 |
+| W22 | The Tavily search call sends its key to a configured base with no scheme guard | PENDING | `PRESENT src/product_app/providers.py :: url=f"{settings.tavily_api_base_url.rstrip('/')}/search"` | — | — |
 
 **STOP** marks a row that cannot be finished without a human decision — a money,
 cost or safety guardrail value that only real measurement could justify. Do not
@@ -315,13 +317,65 @@ to the real upstream. `catalog_url()` now derives it at call time. The row's
 Evidence cell still states the OPEN form — that is what `DONE` means: the
 opposite of that claim now holds.
 
-**W18 — the paid call's base URL is unguarded.** Found by review while shipping
-W16. `readiness.probe_key_auth` refuses to dial when the configured base is
-cleartext, because it sends a bearer token — but `providers.py` sends the *same*
-credential to `f"{settings.openrouter_api_base_url}/chat/completions"` with no
-such check. One of the two credential-bearing calls is guarded and the other is
-not. Pre-existing, not introduced by W16, and deliberately not fixed there:
-W16's concern is the catalog, and the paid path deserves its own reviewer.
+**W18 — the paid call's base URL is unguarded. DONE** (ADR-0085). Found by
+review while shipping W16. `readiness.probe_key_auth` refuses to dial when the
+configured base is cleartext, because it sends a bearer token — but
+`providers.py` sent the *same* credential to
+`f"{settings.openrouter_api_base_url}/chat/completions"` with no such check.
+
+The package found a **second** unguarded site the original grep could not see:
+`feedback_audit._call_audit_model` reads `os.environ["OPENROUTER_API_BASE_URL"]`
+directly rather than the settings attribute everyone had been grepping for, and
+sends the same key to the same endpoint. It also crashed outright with
+`ValueError: unknown url type: '/chat/completions'` when the variable was unset,
+which its own docstring said could not happen.
+
+Both now build the endpoint through `credentialed_url.chat_completions_url`,
+which returns the URL for `https` anywhere or `http` to loopback, and `None`
+otherwise — the shape both call sites already document as "nothing was
+dispatched, nothing can have been billed".
+
+**W21 — a redirect carries the key off the guarded base.** Opened by W18's own
+review, and the reason W18's guard is not the whole answer:
+`urllib.request.urlopen` follows redirects and copies every header except
+`Content-Length` and `Content-Type` onto the redirected request. Measured on
+loopback 2026-09-01 — a `POST` carrying `Authorization: Bearer sk-or-SECRET` to
+a server answering `302` arrived at the redirect target with that header intact.
+So an `https` base that redirects to `http://` still puts the key in clear, and
+W18 checks the configured base rather than the final URL.
+
+Sharper than a footnote, because W18's own loopback carve-out is the enabling
+condition for the worst form of it: a base of `http://localhost:PORT` — the
+deployment the carve-out exists to support — hands the key's final destination
+to whatever holds that port, since one `302` from it delivers the bearer token
+to an arbitrary remote host in clear.
+
+**The mechanism already exists in this repository.** `readiness.py` ships
+`class _NoRedirect(HTTPRedirectHandler)` and
+`_KEY_PROBE_OPENER = build_opener(_NoRedirect)`, with a docstring already
+recording the same measurement. So this is not novel work; it is applying the
+other half of readiness's credential policy to the paid call. It was not folded
+into W18 because every existing test doubles `providers.urlopen` directly, so
+moving to an opener changes how the whole paid seam is tested.
+
+The needle is deliberately **PRESENT**-polarity, on the line that calls the
+redirect-following default opener. An `ABSENT` needle naming an identifier was
+drafted first and rejected: `scripts/check_open_work.py` strips `#` comments but
+NOT docstrings, so a docstring saying *"we deliberately do not install an
+`HTTPRedirectHandler` here"* would have flipped the row to `DONE` with nothing
+fixed. A `PRESENT` needle fails the safe way — a stray mention keeps the row
+open rather than closing it.
+
+**W22 — the Tavily key has no scheme guard either.** Found by W18's review,
+which asked what else carries a credential to an operator-settable base.
+`providers._tavily_search` sends `Authorization: Bearer <the operator's Tavily
+key>` to `f"{settings.tavily_api_base_url.rstrip('/')}/search"`, and
+`tavily_api_base_url` is a plain settings field like the OpenRouter one.
+Demonstrated dialling `file:///etc/passwd/search` and
+`http://attacker.example.com/search` with the key attached. Not folded into W18
+because it is a different credential and a different setting (rule 17), and
+because the fix wants a second builder next to `chat_completions_url` rather
+than a reuse of it — the endpoint is `/search`, not `/chat/completions`.
 
 **W19 — a timing bound that flips with machine load.**
 `test_the_budget_covers_the_header_phase_not_only_the_body` asserts

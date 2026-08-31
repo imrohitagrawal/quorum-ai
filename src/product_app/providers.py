@@ -50,6 +50,7 @@ from uuid import UUID
 from pydantic import BaseModel, Field, model_validator
 
 from product_app.config import RuntimeEnvironment, settings
+from product_app.credentialed_url import base_url_provenance, chat_completions_url
 from product_app.feedback_store import record_event as _record_feedback_event
 from product_app.model_slots import ModelSlot, openrouter_model_catalog_service
 from product_app.provider_keys import ProviderCredentialSource
@@ -1246,8 +1247,53 @@ class ProviderExecutionService:
             payload["response_format"] = response_format
         if reasoning is not None:
             payload["reasoning"] = reasoning
+        # W18 / ADR-0085. ``OPENROUTER_API_BASE_URL`` is operator-settable and
+        # the headers below carry ``Authorization: Bearer <the operator's
+        # key>``. ``chat_completions_url`` returns ``None`` rather than an
+        # endpoint when that base must not carry a credential -- cleartext to
+        # anything that is not this machine, or a scheme ``urlopen`` speaks
+        # that is not a chat endpoint at all. Building the URL through the
+        # guard rather than checking a flag beside it is the point: the
+        # endpoint cannot be obtained without the check.
+        #
+        # ``None``, not ``_DISPATCH_UNMEASURED``. Nothing left the process, so
+        # nothing can have been billed, and this method's own contract already
+        # gives ``None`` exactly that meaning.
+        #
+        # Stated as a CONTRACT and not as an observed difference, because
+        # review measured the difference and could not find one: mutating this
+        # to ``_DISPATCH_UNMEASURED`` and diffing every run-level field
+        # (``status``, ``live_count``, ``local_count``, ``cost_source``,
+        # ``actual_cost_usd``, ``failed_steps``, the daily meter) left them
+        # identical. A refused base refuses EVERY call in the run, so no
+        # measured slot survives for the distinction to protect. It is still
+        # the right return -- a run that mixes a refused base with some other
+        # dispatch path would need it, and lying about billing is not
+        # something to do only when it is observable.
+        #
+        # What IS measured on ``origin/main``, with a recording ``urlopen``
+        # over one full query run against a cleartext base: 11 dispatched
+        # requests, every one carrying ``Authorization: Bearer``, and the run
+        # reporting ``live_count 4`` and a ``measured`` receipt. The leak was
+        # per-call, not per-run, and nothing looked wrong.
+        url = chat_completions_url(settings.openrouter_api_base_url)
+        if url is None:
+            base_scheme, base_host = base_url_provenance(settings.openrouter_api_base_url)
+            # Scheme and host only, NEVER the configured URL: a base URL can
+            # carry userinfo (``https://user:pass@host``) and that is
+            # credential material. ``urlsplit(...).hostname`` excludes it.
+            _LOGGER.warning(
+                "provider_base_url_refused",
+                extra={
+                    "model_id": model_id,
+                    "billing_class": "not_billed",
+                    "base_url_scheme": base_scheme,
+                    "base_url_host": base_host,
+                },
+            )
+            return None
         request = Request(
-            url=f"{settings.openrouter_api_base_url}/chat/completions",
+            url=url,
             data=json.dumps(payload).encode(),
             headers={
                 "Authorization": f"Bearer {openrouter_key}",

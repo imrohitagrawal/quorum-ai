@@ -88,6 +88,7 @@ ways, so the record shows what was believed on a date and what replaced it.
 | [ADR-0082](adr/0082-the-app-keeps-scaling-to-zero.md) | The app keeps scaling to zero | Architecture | Accepted — 2026-08-28 |
 | [ADR-0083](adr/0083-consensus-strength-requires-a-genuine-mutual-cluster.md) | Consensus strength requires a genuine mutual cluster, and a panel of one has none | Architecture | Accepted — 2026-08-28 |
 | [ADR-0084](adr/0084-the-provider-service-streams-and-a-stream-must-say-it-finished.md) | The provider service streams, and a stream must say it finished | Architecture | Accepted — 2026-08-30 |
+| [ADR-0085](adr/0085-a-credential-only-travels-over-https-or-to-loopback.md) | A credential only travels over https, or to loopback | Architecture | Accepted — 2026-09-01 |
 
 **This index was itself stale** until 2026-07-30: ADR-0002 had existed since
 2026-07-19 and was never listed here. A hand-maintained index is a derived fact
