@@ -749,3 +749,45 @@ def test_a_late_answer_re_evaluates_even_when_the_agreement_is_unchanged(
         assert calls[0] == 2, "a run whose body changed must be evaluated again"
         assert second is not None and first is not None
         assert second.evaluation.signals != first.evaluation.signals
+
+
+def test_a_slot_that_never_recorded_an_answer_is_reflected_in_the_persisted_completeness() -> None:
+    """#380, wired end to end through the real persist path.
+
+    This drives ``model_slots`` through the same
+    ``validate_model_slots_with_search`` construction a real create uses, then
+    simulates the three "never recorded" paths in
+    ``query_run_orchestration.py`` (a slot lost to a worker timeout, an
+    unexpected future failure, or ``_should_stop`` mid-turn) by simply never
+    calling ``record_initial_answer`` for slot 4 — the run turns COMPLETED
+    with 4 requested slots and 3 recorded answers.
+
+    RED IF: ``_persist_run_evaluation``'s call into ``evaluate_run`` stops
+    passing ``requested_slot_count=len(query_run.model_slots)`` — the
+    persisted ``completeness``/``live_ratio`` would then read ``1.0`` instead
+    of the correct ``0.75``, silently reporting a complete run as complete
+    when a quarter of it never answered.
+    """
+    with run_history_store.configure_for_tests() as store:
+        slots = validate_model_slots_with_search(DEFAULT_MODEL_IDS)
+        estimate = cost_estimation_service.estimate(query_text=QUERY_TEXT, model_slots=slots)
+        run = query_run_repository.create(
+            account_id=uuid4(),
+            query_text=QUERY_TEXT,
+            model_slots=slots,
+            cost_estimate=estimate,
+        )
+        for slot_number in (1, 2, 3):
+            query_run_repository.record_initial_answer(run.query_run_id, _answer(slot=slot_number))
+        run = query_run_repository.get(run.query_run_id)
+        assert run is not None
+        assert len(run.model_slots) == 4
+        assert len(run.initial_answers) == 3, "the fixture must genuinely lose one slot"
+        run.status = QueryRunStatus.COMPLETED
+
+        qr._persist_terminal_run(run.query_run_id)
+
+        row = store.get(str(run.query_run_id))
+        assert row is not None and row.eval_json is not None
+        assert row.eval_json["signals"]["completeness"] == pytest.approx(0.75)
+        assert row.eval_json["signals"]["live_ratio"] == pytest.approx(0.75)

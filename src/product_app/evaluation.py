@@ -1206,13 +1206,27 @@ def evaluate_layer_a(
     final_synthesis: FinalSynthesis | None,
     agreement: AgreementSummary,
     judge_verdict: EvalJudgeVerdict | None = None,
+    requested_slot_count: int | None = None,
 ) -> RunEvaluation:
     """Compute the deterministic evaluation for one terminal run.
 
     Pure and hermetic: no network, no clock, no randomness, no store. The
     same run always yields a byte-identical :class:`RunEvaluation`.
+
+    ``requested_slot_count`` is the number of slots the run ASKED for
+    (``len(query_run.model_slots)``), which can be larger than
+    ``len(initial_answers)`` when a slot never got recorded at all — a
+    worker-raised timeout with no run-budget left, a future that failed
+    unexpectedly, or ``_should_stop`` returning mid-slot
+    (``query_run_orchestration.py``). Such a slot is absent from BOTH
+    ``completed`` and ``initial_answers``, so dividing by
+    ``len(initial_answers)`` silently drops it from the denominator too and
+    reports a false 1.0 (#380) — the same hole ``app.js``'s degraded banner
+    had before it started reading the requested count instead of the
+    recorded one. Defaults to ``None`` (fall back to ``len(initial_answers)``)
+    for callers that only have a bag of answers with no run to ask.
     """
-    slot_count = len(initial_answers)
+    slot_count = len(initial_answers) if requested_slot_count is None else requested_slot_count
 
     # RB-5 / D3 honesty fix: a slot that FAILED on the OpenRouter path is NOT a
     # live answer. ``providers._failed_answer`` and ``cancelled_answer`` both
@@ -2168,6 +2182,7 @@ def evaluate_run(
     agreement: AgreementSummary,
     judge: EvalJudge | None = None,
     query_text: str | None = None,
+    requested_slot_count: int | None = None,
 ) -> RunEvaluationResult:
     """Evaluate one terminal run.
 
@@ -2175,6 +2190,8 @@ def evaluate_run(
     performs ZERO I/O: no evidence is built and the provider seam is never
     touched. With a judge, the verdict is attached as advisory metadata and
     can only ever flip ``support_verified`` — it never enters the composite.
+
+    See :func:`evaluate_layer_a` for what ``requested_slot_count`` fixes (#380).
     """
     verdict: EvalJudgeVerdict | None = None
     support_verified = False
@@ -2205,6 +2222,7 @@ def evaluate_run(
         final_synthesis=final_synthesis,
         agreement=agreement,
         judge_verdict=verdict,
+        requested_slot_count=requested_slot_count,
     )
     return RunEvaluationResult(
         evaluation=evaluation,
