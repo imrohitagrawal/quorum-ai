@@ -59,7 +59,7 @@ DIFF_BASE ?= origin/main
 # disagrees with the real pathspec is a lie waiting to be believed; the banner
 # now states the pathspec the code actually uses.
 
-.PHONY: check-python publishing-check skill-onboarding-check skill-discover handoff check-breaking apply-orbi-profile skill-route start next capture-idea validate validate-strict fr-completeness openapi-export openapi-check adr-index-check open-work-check open-work-write quality format format-check lint type-check test evals test-report gate-min-collected gate-min-executed perf-gate api-contract mutation-baseline diff-cover security-scan close-guard ci-evidence run docker-build feedback-audit session-clean
+.PHONY: check-python publishing-check skill-onboarding-check skill-discover handoff check-breaking apply-orbi-profile skill-route start next capture-idea validate validate-strict fr-completeness openapi-export openapi-check adr-index-check open-work-check open-work-write quality format format-check lint type-check test evals test-report gate-min-collected gate-min-executed perf-gate api-contract mutation-baseline diff-cover security-scan close-guard ci-evidence run docker-build feedback-audit session-clean close-window
 
 check-python:
 	@if [ -z "$(PYTHON)" ]; then 		echo "ERROR: Python 3 is required. Install python3, or set PYTHON=/path/to/python3."; 		exit 127; 	fi
@@ -95,6 +95,15 @@ open-work-check:
 # finished with no source change at all. See ADR-0079.
 open-work-write:
 	$(PYTHON) scripts/check_open_work.py
+
+# #407: the obvious revert (flag off, window untouched) is refused by
+# test_the_shipped_declaration_file_declares_no_window_right_now, because a
+# window still covering `now` may not be committed while the flag is off. This
+# performs both edits atomically: flag -> "false" in fly.toml AND the open
+# window's expires_at -> now, so the two-part deduction is never needed again
+# under incident pressure. Refuses loudly if nothing is currently open.
+close-window: check-python
+	$(PYTHON) scripts/close_live_window.py
 
 validate-strict: check-python fr-completeness
 	FACTORY_STRICT=1 $(PYTHON) scripts/validate_all.py
