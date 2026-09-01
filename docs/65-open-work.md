@@ -115,8 +115,8 @@ caught by any automated check and 10 of 16 by adversarial review
 | W18 | The paid call sends the API key to a configured base with no scheme guard | DONE | `PRESENT src/product_app/providers.py :: url=f"{settings.openrouter_api_base_url}/chat/completions"` | — | — |
 | W19 | A provider-timeout bound fails locally and passes in CI | DONE | `ABSENT tests/unit/test_provider_call_time_budget.py :: budget_handed_to_body_read` | — | — |
 | W20 | `panel_agreement()` reports "agreed" for a genuine N=1 panel | DONE | `ABSENT src/product_app/synthesis_consensus.py :: if len(stance) < 2:` | #394 | — |
-| W21 | A redirect carries the API key off the guarded base | PENDING | `PRESENT src/product_app/providers.py :: with urlopen(request, timeout=settings.openrouter_timeout_seconds) as response:` | — | W18 |
-| W22 | The Tavily search call sends its key to a configured base with no scheme guard | PENDING | `PRESENT src/product_app/providers.py :: url=f"{settings.tavily_api_base_url.rstrip('/')}/search"` | — | — |
+| W21 | A redirect carries the API key off the guarded base | DONE | `ABSENT src/product_app/providers.py :: urlopen = CREDENTIAL_OPENER.open` | — | W18 |
+| W22 | The Tavily search call sends its key to a configured base with no scheme guard | DONE | `PRESENT src/product_app/providers.py :: url=f"{settings.tavily_api_base_url.rstrip('/')}/search"` | — | — |
 | W23 | The mutation gate cannot run when a changed function is covered by a schemathesis case | UNPINNED | `—` | — | — |
 
 **STOP** marks a row that cannot be finished without a human decision — a money,
@@ -390,47 +390,66 @@ which returns the URL for `https` anywhere or `http` to loopback, and `None`
 otherwise — the shape both call sites already document as "nothing was
 dispatched, nothing can have been billed".
 
-**W21 — a redirect carries the key off the guarded base.** Opened by W18's own
-review, and the reason W18's guard is not the whole answer:
-`urllib.request.urlopen` follows redirects and copies every header except
-`Content-Length` and `Content-Type` onto the redirected request. Measured on
-loopback 2026-09-01 — a `POST` carrying `Authorization: Bearer sk-or-SECRET` to
-a server answering `302` arrived at the redirect target with that header intact.
-So an `https` base that redirects to `http://` still puts the key in clear, and
-W18 checks the configured base rather than the final URL.
+**W21 — a redirect carries the key off the guarded base. DONE, ADR-0090.**
+Opened by W18's own review, and the reason W18's guard was not the whole
+answer: `urllib.request.urlopen` follows redirects and copies every header
+except `Content-Length` and `Content-Type` onto the redirected request.
+Measured on loopback 2026-09-01 — a `POST` carrying `Authorization: Bearer
+sk-or-SECRET` to a server answering `302` arrived at the redirect target with
+that header intact. So an `https` base that redirects to `http://` still put
+the key in clear, and W18's guard checked the configured base rather than the
+final URL.
 
 Sharper than a footnote, because W18's own loopback carve-out is the enabling
 condition for the worst form of it: a base of `http://localhost:PORT` — the
-deployment the carve-out exists to support — hands the key's final destination
-to whatever holds that port, since one `302` from it delivers the bearer token
-to an arbitrary remote host in clear.
+deployment the carve-out exists to support — handed the key's final
+destination to whatever held that port, since one `302` from it delivered the
+bearer token to an arbitrary remote host in clear.
 
-**The mechanism already exists in this repository.** `readiness.py` ships
+**The mechanism already existed in this repository.** `readiness.py` ships
 `class _NoRedirect(HTTPRedirectHandler)` and
 `_KEY_PROBE_OPENER = build_opener(_NoRedirect)`, with a docstring already
-recording the same measurement. So this is not novel work; it is applying the
-other half of readiness's credential policy to the paid call. It was not folded
-into W18 because every existing test doubles `providers.urlopen` directly, so
-moving to an opener changes how the whole paid seam is tested.
+recording the same measurement. This was not novel work; it applies the other
+half of readiness's credential policy to the two paid calls. Clubbed with W22
+into one PR rather than folded into W18 itself, because both are the same
+concern — hardening the credential-bearing calls' TRANSPORT, as opposed to
+W18's scheme check on the CONFIGURED base — and because every existing test
+doubles `providers.urlopen` directly, so both fixes land by rebinding that
+same module attribute to `credentialed_url.CREDENTIAL_OPENER.open` rather
+than by widening one call site at a time.
 
-The needle is deliberately **PRESENT**-polarity, on the line that calls the
-redirect-following default opener. An `ABSENT` needle naming an identifier was
-drafted first and rejected: `scripts/check_open_work.py` strips `#` comments but
-NOT docstrings, so a docstring saying *"we deliberately do not install an
-`HTTPRedirectHandler` here"* would have flipped the row to `DONE` with nothing
-fixed. A `PRESENT` needle fails the safe way — a stray mention keeps the row
-open rather than closing it.
+The needle used to be **PRESENT**-polarity, on the line that called the
+redirect-following default opener, and a paragraph here explained why an
+`ABSENT` needle naming an identifier was rejected: `scripts/check_open_work.py`
+strips `#` comments but not docstrings, so a docstring merely CLAIMING the
+fix would flip the row without landing it. The fix that shipped keeps that
+call-site line's text unchanged on purpose (`providers.urlopen` still gets
+called at both sites, under that name, so every existing test double keeps
+working) and instead makes `urlopen` itself no longer the bare stdlib
+function — so the PRESENT-polarity needle on the call site can no longer
+distinguish fixed from broken, and the evidence cell now pins the line the
+fix actually ADDS instead: `urlopen = CREDENTIAL_OPENER.open`. That is not
+the identifier-in-a-sentence shape the rejected design worried about — it is
+a real assignment statement, not prose a docstring would plausibly restate
+without the code behind it — and it is backed by a real-socket bite-proof
+(`tests/unit/test_credential_transport_guard.py`) that a doc-only claim
+cannot pass.
 
-**W22 — the Tavily key has no scheme guard either.** Found by W18's review,
-which asked what else carries a credential to an operator-settable base.
-`providers._tavily_search` sends `Authorization: Bearer <the operator's Tavily
-key>` to `f"{settings.tavily_api_base_url.rstrip('/')}/search"`, and
+**W22 — the Tavily key has no scheme guard either. DONE, ADR-0090.** Found by
+W18's review, which asked what else carries a credential to an
+operator-settable base. `providers._tavily_search` sent `Authorization:
+Bearer <the operator's Tavily key>` to
+`f"{settings.tavily_api_base_url.rstrip('/')}/search"`, and
 `tavily_api_base_url` is a plain settings field like the OpenRouter one.
 Demonstrated dialling `file:///etc/passwd/search` and
-`http://attacker.example.com/search` with the key attached. Not folded into W18
-because it is a different credential and a different setting (rule 17), and
-because the fix wants a second builder next to `chat_completions_url` rather
-than a reuse of it — the endpoint is `/search`, not `/chat/completions`.
+`http://attacker.example.com/search` with the key attached. Not folded into
+W18 itself because it is a different credential and a different setting
+(rule 17) — but clubbed with W21 into one PR, both being the same narrower
+concern of hardening `providers.py`'s two credential-bearing outbound calls.
+The fix is `credentialed_url.tavily_search_url`, a second builder next to
+`chat_completions_url` rather than a reuse of it (the endpoint is `/search`,
+not `/chat/completions`), sharing the same `is_credential_safe` scheme check
+and the same `CREDENTIAL_OPENER` redirect guard W21 added.
 
 **W19 — a timing bound that flips with machine load. DONE, ADR-0089.**
 `test_the_budget_covers_the_header_phase_not_only_the_body` asserted

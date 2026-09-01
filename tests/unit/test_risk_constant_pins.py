@@ -498,6 +498,14 @@ BUCKET_C_NO_PIN = {
     "readiness.REASON_CATALOG_UNREACHABLE": "reason string; pinned via APPROVED_REASON_PREFIXES",
     "readiness.REASON_CATALOG_DRIFT_PREFIX": "reason prefix; pinned via APPROVED_REASON_PREFIXES",
     "readiness._KEY_PROBE_OPENER": "probe path; exercised by the readiness probe tests",
+    # --- Added 2026-09-01 with W21/W22, ADR-0090 ---
+    "credentialed_url.CREDENTIAL_OPENER": (
+        "opener object, not a literal value -- a wrong value here is either "
+        "the correct opener or a broken one, nothing in between for a literal "
+        "to pin. Its BEHAVIOUR (refuses every redirect) is exercised by "
+        "tests/unit/test_credential_transport_guard.py, which drives it "
+        "against real sockets."
+    ),
     "main.TEMPLATES_DIR": "filesystem path, exercised by every template render",
     "main.STATIC_DIR": "filesystem path, exercised by every static fetch",
     "main._FEEDBACK_DIR": "filesystem path, exercised by the feedback store tests",
