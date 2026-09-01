@@ -89,15 +89,25 @@ is a smaller cost than that.
 
 The direct fix — replace `urlopen(request, timeout=...)` with
 `CREDENTIAL_OPENER.open(request, timeout=...)` at both call sites — would
-work for production, and breaks the test suite: 17 test files across
-`tests/unit/` and `tests/integration/` intercept both calls with
-`monkeypatch.setattr(providers_module, "urlopen", double)` (or the
-string-path form of the same call), and none of them would be replaced by
-that edit's own diff, since the call sites would stop referencing the name
-`urlopen` at all. Every one of those tests would then dial the double-hop
-through the real opener with no double in place at all — in CI, with
-outbound sockets blocked, that is a hang or an immediate `OSError`, not a
-loud, legible failure naming its cause.
+work for production, and breaks the pre-existing test suite. Verified by
+`grep -rlE '(setattr\([^)]*"[^"]*\.?urlopen"|patch\("[^"]*\.urlopen"|patch\.object\([^)]*"urlopen")' tests`:
+18 files match, of which one (`tests/unit/test_catalog_fetcher.py`) patches
+an unrelated module attribute (`catalog_fetcher.urlopen`, a different
+function entirely — confirmed by reading its import line, which binds
+`catalog_fetcher_module`, not `providers_module`) and is not this seam. That
+leaves **16 pre-existing files** across `tests/unit/` and
+`tests/integration/` that intercept one or both of `providers.py`'s calls
+with `monkeypatch.setattr(providers_module, "urlopen", double)` or the
+string-path form of the same call, and none of them would be touched by
+that direct-fix diff, since the call sites would stop referencing the name
+`urlopen` at all. Every one of those 16 would then dial the double-hop
+through the real opener with no double in place — in CI, with outbound
+sockets blocked, that is a hang or an immediate `OSError`, not a loud,
+legible failure naming its cause. (This PR's own new test file,
+`tests/unit/test_credential_transport_guard.py`, also matches the grep — it
+is the 18th file — but it is written by this change to test the redirect
+guard directly over real sockets, not a pre-existing double that needed
+preserving.)
 
 Instead, `providers.py` keeps calling `urlopen(request, timeout=...)` at
 both sites — unchanged text — and rebinds the module-level name itself:
@@ -182,3 +192,21 @@ own refusal is — nothing left the process, so nothing can have been charged.
 `readiness.py`'s `_NoRedirect`/`_KEY_PROBE_OPENER` are untouched. They remain
 the probe's own copy of the same idea; nothing here refactors them, per the
 "Why this module builds its own" section above.
+
+### What this still does NOT do — `feedback_audit._call_audit_model`
+
+Adversarial review (2026-09-01) found that `feedback_audit.py:706` still
+calls the bare `urllib.request.urlopen(request, timeout=60)` directly — it
+carries the same `Authorization: Bearer <the operator's OpenRouter key>`
+ADR-0085 already scheme-guards via `chat_completions_url`, but it is exposed
+to the identical redirect-leak vector this ADR closes for `providers.py`'s
+two calls. This is not a gap in what this PR claims: the row it closes
+(W21) is `providers.py`'s call specifically, and ADR-0085 already scoped its
+own table to four named call sites without claiming the audit call's
+transport was hardened beyond the scheme check. It is recorded here, rather
+than silently left for the next person to re-discover, as a same-shape
+follow-up: `feedback_audit._call_audit_model` should eventually dial through
+`credentialed_url.CREDENTIAL_OPENER` too. Not fixed in this PR — `rule 17`
+(one concern per PR) and this ADR's own "Two separate PRs" rejection above
+both cut against also touching the audit-report code path, which is tested
+and exercised independently of the two calls this PR does harden.
