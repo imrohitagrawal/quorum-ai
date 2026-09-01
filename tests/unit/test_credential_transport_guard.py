@@ -142,7 +142,9 @@ def test_tavily_search_dispatches_nothing_on_a_hostile_base(
     assert result == []
 
 
-def test_tavily_search_still_dials_a_safe_base(monkeypatch: pytest.MonkeyPatch, boom: _Boom) -> None:
+def test_tavily_search_still_dials_a_safe_base(
+    monkeypatch: pytest.MonkeyPatch, boom: _Boom
+) -> None:
     """The positive partner: a guard that refused everything would pass the
     test above and fail this one.
     """
@@ -232,9 +234,10 @@ def _redirecting_server(location: str) -> Iterator[str]:
                     if not part:
                         break
                     buf += part
-                conn.sendall(
-                    f"HTTP/1.1 302 Found\r\nLocation: {location}\r\nContent-Length: 0\r\n\r\n".encode()
+                response = (
+                    f"HTTP/1.1 302 Found\r\nLocation: {location}\r\nContent-Length: 0\r\n\r\n"
                 )
+                conn.sendall(response.encode())
             except OSError:
                 pass
             finally:
@@ -258,20 +261,22 @@ def test_a_redirect_never_delivers_the_openrouter_key(monkeypatch: pytest.Monkey
     ``authorization: bearer sk-or-secret-w21`` in its headers -- the key,
     followed straight through the redirect. After the fix it records none.
     """
-    with _recording_server() as (never_reached_base, received):
-        with _redirecting_server(f"{never_reached_base}/chat/completions") as redirecting_base:
-            monkeypatch.setattr(
-                config.settings, "openrouter_api_base_url", redirecting_base, raising=False
-            )
-            monkeypatch.setattr(
-                config.settings, "openrouter_live_execution_enabled", True, raising=False
-            )
-            provider_execution_service._post_messages(
-                openrouter_key="sk-or-secret-w21",
-                model_id=_MODEL_ID,
-                messages=[{"role": "user", "content": "q"}],
-                max_tokens=100,
-            )
+    with (
+        _recording_server() as (never_reached_base, received),
+        _redirecting_server(f"{never_reached_base}/chat/completions") as redirecting_base,
+    ):
+        monkeypatch.setattr(
+            config.settings, "openrouter_api_base_url", redirecting_base, raising=False
+        )
+        monkeypatch.setattr(
+            config.settings, "openrouter_live_execution_enabled", True, raising=False
+        )
+        provider_execution_service._post_messages(
+            openrouter_key="sk-or-secret-w21",
+            model_id=_MODEL_ID,
+            messages=[{"role": "user", "content": "q"}],
+            max_tokens=100,
+        )
     assert received == []
 
 
@@ -283,7 +288,9 @@ def test_a_direct_openrouter_dial_with_no_redirect_still_carries_the_key(
     """
     with _recording_server() as (base, received):
         monkeypatch.setattr(config.settings, "openrouter_api_base_url", base, raising=False)
-        monkeypatch.setattr(config.settings, "openrouter_live_execution_enabled", True, raising=False)
+        monkeypatch.setattr(
+            config.settings, "openrouter_live_execution_enabled", True, raising=False
+        )
         provider_execution_service._post_messages(
             openrouter_key="sk-or-secret-direct",
             model_id=_MODEL_ID,
@@ -297,10 +304,12 @@ def test_a_direct_openrouter_dial_with_no_redirect_still_carries_the_key(
 def test_a_redirect_never_delivers_the_tavily_key(monkeypatch: pytest.MonkeyPatch) -> None:
     """The same proof for the Tavily call site, sharing the same opener."""
     monkeypatch.setattr(config.settings, "tavily_api_key", "tvly-secret-w22", raising=False)
-    with _recording_server() as (never_reached_base, received):
-        with _redirecting_server(f"{never_reached_base}/search") as redirecting_base:
-            monkeypatch.setattr(config.settings, "tavily_api_base_url", redirecting_base)
-            result = provider_execution_service._tavily_search(query_text="quorum voting")
+    with (
+        _recording_server() as (never_reached_base, received),
+        _redirecting_server(f"{never_reached_base}/search") as redirecting_base,
+    ):
+        monkeypatch.setattr(config.settings, "tavily_api_base_url", redirecting_base)
+        result = provider_execution_service._tavily_search(query_text="quorum voting")
     assert received == []
     assert result == []
 
