@@ -501,16 +501,30 @@ DeepSeek) — and **four** were left untouched: `PRODUCT_IDEA.md`,
 `anthropic/claude-3-haiku`, so it asserts nothing about defaults) and this board.
 
 Per rule 1a the row closes with a **gate**, not ten corrected sentences: Part G
-of `tests/test_doc_gate_consistency.py` reads each covered document's
-*default-claim blocks* and asserts the ordered tuple equals
-`product_app.model_slots.DEFAULT_MODEL_IDS`. The first implementation extracted
-every backticked token in the whole file, and review broke it three ways —
+of `tests/test_doc_gate_consistency.py` pins each covered document against
+`product_app.model_slots.DEFAULT_MODEL_IDS` in **two** ways — slot ORDER inside
+*default-claim blocks*, and set MEMBERSHIP over the whole file.
+
+**Two review rounds, five reproduced holes, and the second round is the one
+worth reading.** Round 1 broke the original whole-file extractor three ways:
 `README.md` could not be covered at all (line 42 names slot 2's model a second
 time for `debate_model_id`), a backticked MIME type turned a covered doc red
 blaming the model slots, and emptying `_DEFAULT_SLOT_SPEC_DOCS` left the gate
-**green over zero documents**. All three are closed and pinned. ADR-0088 has the
-rejected alternatives, the two stated blind spots (an unbackticked id; a fenced
-block with no cue line) and the five bite-proofs.
+green over zero documents. Round 2 then broke the FIX: block scoping had
+**silently traded away** detection the whole-file version had — a stale id
+appended outside the claim block of `docs/10-functional-requirements.md` passed
+— and the new corpus floor's `set()` dedup fell to respelling one entry
+`./README.md`, which read README twice and dropped `AC-CROSSWALK.md` from
+coverage while staying green. Both are closed and pinned, which is why the gate
+keeps both halves rather than replacing one with the other. **Rule 12's "expect
+your own fix to introduce a defect" was correct here twice over.**
+
+ADR-0088 has the rejected alternatives, the seven bite-proofs, and the stated
+blind spots — an unbackticked id, a fenced block with no cue, setext headings,
+ordered lists, a cue only in a table header, an interrupted bullet run, and a
+single id under a cue. `docs/architecture/40-decisions.md` was corrected but is
+**not** gated: it names a vendor family, not an id, which is also why the census
+could not see it.
 
 After the fix `git grep -l "deepseek/deepseek-chat-v3.1" | wc -l` returns
 **107** (92 `tests/`, 6 `docs/archive/` + `docs/validation/`, 6 live docs, 1

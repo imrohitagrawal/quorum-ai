@@ -190,8 +190,13 @@ also_copy = [
   # tests/test_doc_gate_consistency.py Part G, which pins the four default
   # model slot ids the README states against ``model_slots.DEFAULT_MODEL_IDS``.
   # Caught by ``test_mutation_copy_completeness`` the same hour Part G started
-  # reading the README, and named in its failure message. That is the THIRD
-  # time this guard has paid for itself on a freshly-added doc gate.
+  # reading the README, and named in its failure message. That makes README the
+  # FOURTH doc gate to need this entry, after ``AGENTS.md`` (2ba0519,
+  # 2026-08-04), ``.env.example`` (e18f196, 2026-08-05) and ``DEPLOY.md``
+  # (e509d7f, 2026-08-07) -- ordering from
+  # ``git log -S '"<name>"' -- pyproject.toml``. An earlier draft of this
+  # comment said "the THIRD time" while the sentence above it named three
+  # priors, which is an off-by-one anyone can check and nobody did.
   "README.md",
   # ``.env.example`` is read from ``REPO_ROOT`` by
   # tests/test_doc_gate_consistency.py Part E/E2, which pin it against

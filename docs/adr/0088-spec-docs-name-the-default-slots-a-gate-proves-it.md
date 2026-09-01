@@ -47,7 +47,8 @@ present-tense assertions about the shipped product:
 ## Decision
 
 **1. Correct only documents that assert, in the present tense, what the shipped
-product defaults to.** Ten files: `README.md`, `docs/01-product-brief.md`,
+product defaults to.** Eleven documents are in scope; **ten were edited** and
+`README.md` was already correct: `README.md`, `docs/01-product-brief.md`,
 `docs/08-prioritization.md`, `docs/10-functional-requirements.md`,
 `docs/118-qa-test-charter-jira.md`, `docs/12-acceptance-criteria.md`,
 `docs/20-architecture.md`, `docs/35-confluence-operational-guide.md`,
@@ -110,6 +111,18 @@ Block scoping fixes both, and a block counts only if it names at least two ids �
 a default-slot claim names a SET, which is what keeps `README.md:42`'s single-id
 aside out of the comparison.
 
+**Scoping alone was not a free win, and review measured the cost.** Appending
+*"Slot 4 is `deepseek/deepseek-chat-v3.1` in production."* to
+`docs/10-functional-requirements.md` — the file FR-004 lives in — was caught by
+the whole-file implementation and passed under the block-scoped one. So the
+redesign is NOT a pure improvement, and the gate keeps BOTH halves:
+`test_spec_docs_name_the_default_model_ids_the_app_actually_ships` pins slot
+ORDER inside default-claim blocks, and
+`test_no_covered_doc_names_a_non_default_model_anywhere` pins, over the whole
+file, that no backticked id outside `DEFAULT_MODEL_IDS` appears at all. The
+second is set MEMBERSHIP only — not order, not cardinality — which is precisely
+why it does not re-introduce the README and MIME-type false alarms.
+
 **Anchoring on the word "default" in the same LINE as the ids.** Rejected after
 measurement: `docs/12-acceptance-criteria.md:51` — one of the two documents at
 the centre of the defect — states the slot set without using the word anywhere
@@ -146,10 +159,32 @@ requires them — and a negative partner pins that an unbackticked mention is
   Both would be NEW contradicting prose rather than the existing sentence going
   stale, which is the drift this gate exists to stop. Closing them needs a
   meaning-level check, not a tighter regex.
-- **`docs/faq/index.html` and `docs/readme-verification-appendix.md` state the
-  defaults in `<code>` tags, not backticks**, so this extractor cannot read
-  them. Both are correct today. Covering them needs an HTML-aware reader and is
-  follow-on debt.
+- **`docs/faq/index.html` states the defaults in `<code>` tags, not backticks**,
+  so this extractor reads nothing from it (`_default_claim_blocks` over that
+  file returns `[]`). Its default-slot list at lines 611-614 IS correct
+  (`nvidia/nemotron-3-nano-30b-a3b` present). Two things there are NOT, and
+  neither is fixed here:
+  - line 1223 gives the SYNTHESIS default as `openai/gpt-4o-mini`, while
+    `config.py:545` and `.env.example:309` both ship `openai/gpt-5-mini`. That
+    is the moderator model, not a panel slot — a different concern under rule 17,
+    and pre-existing. Recorded as debt, not corrected here.
+  - lines 585 and 713 list "OpenAI, Anthropic, Google, DeepSeek" as the vendors
+    the OpenRouter gateway routes to. ADR-0032 examined these two and recorded
+    them as **deliberately correct** — they describe what the gateway routes to,
+    not what this product selects. Left alone on that record's authority;
+    reversing it is out of scope for this row.
+  An earlier draft of this ADR asserted both files were "correct today". That
+  was false for `docs/faq/index.html` (line 1223) and false about
+  `docs/readme-verification-appendix.md` in a second way: that file is Markdown
+  with **zero** `<code>` tags, and it does not state the default set at all — it
+  names one id once, as the model being replaced in a worked example. Covering
+  the FAQ needs an HTML-aware reader and is follow-on debt.
+- **`docs/architecture/40-decisions.md` was corrected by this change but is NOT
+  gated.** Its sentence names a vendor FAMILY ("OpenAI, Anthropic, Google,
+  NVIDIA") and no backticked id, so it is structurally unreadable by this
+  extractor and is deliberately absent from `_DEFAULT_SLOT_SPEC_DOCS`. It is
+  also the shape the census could not see: it never contained the string
+  `deepseek/deepseek-chat-v3.1`.
 - The extractor must exclude backticked repo paths (`docs/22-api-contract.md`,
   `src/product_app`) and MIME types, which these documents use heavily.
   `_FILE_SUFFIX_RE` is defence-in-depth only: review measured that removing it
@@ -171,9 +206,13 @@ copy and confirmed with `diff -q`. The first three are the drift the gate exists
 for; the last two are holes adversarial review opened in the first
 implementation and which the shipped one closes.
 
-1. **Against the uncorrected docs** — RED: *"docs/01-product-brief.md names
-   default model slots [… deepseek/deepseek-chat-v3.1]; the product ships […
-   nvidia/nemotron-3-nano-30b-a3b]"*.
+1. **Against the uncorrected docs** — RED: *"docs/01-product-brief.md claims
+   default model slots [… deepseek/deepseek-chat-v3.1] at line 40; the product
+   ships [… nvidia/nemotron-3-nano-30b-a3b]"*. (An earlier draft of this ADR
+   quoted the FIRST implementation's wording, "names … model id(s)", which the
+   shipped gate no longer emits. Quoting a message the code does not produce is
+   the same rule-11a failure this ADR exists to correct, so it is recorded
+   rather than quietly swapped.)
 2. **Slot 4 of `DEFAULT_MODEL_IDS` mutated** to `mistralai/mistral-small` —
    RED, naming both lists.
 3. **The four ids deleted from `docs/20-architecture.md`** — RED, i.e. it
@@ -185,6 +224,17 @@ implementation and which the shipped one closes.
    `test_the_default_slot_corpus_is_not_empty`. Against the first
    implementation this was **GREEN**: the gate measured zero documents and
    reported success, which is exactly the empty-input failure AGENTS.md forbids.
+
+6. **A stale id appended OUTSIDE the claim block** of
+   `docs/10-functional-requirements.md` — RED via
+   `test_no_covered_doc_names_a_non_default_model_anywhere`. This one passed
+   under the block-scoped gate before that test existed, which is the coverage
+   regression recorded above.
+7. **One corpus entry respelled `./README.md`**, displacing
+   `docs/design-handoff/AC-CROSSWALK.md` — RED via
+   `test_the_default_slot_corpus_is_not_empty`. Under a raw-string `set()`
+   comparison this was GREEN: ten entries, nine documents, README read twice,
+   and one of the two documents round 1 found silently uncovered.
 
 And one regression proof in the opposite direction: appending *"served as
 `application/json` over `text/event-stream`"* to `docs/20-architecture.md`
