@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import contextlib
 import re
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from decimal import Decimal
 from threading import RLock
@@ -28,11 +29,14 @@ from product_app.catalog_fetcher import (
     ModelCatalogEntry,
     openrouter_catalog_fetcher,
 )
+from product_app.config import settings
 from product_app.feedback_store import record_event as _record_feedback_event
 
 __all__ = [
     "EXPECTED_SLOT_COUNT",
     "default_model_slots",
+    "default_moderator_overlap_slots",
+    "moderator_overlap_slots",
     "openrouter_catalog_fetcher",
     "openrouter_model_catalog_service",
     "ModelDefaultsResponse",
@@ -172,6 +176,128 @@ def default_model_slots() -> list[ModelSlot]:
     1-4.
     """
     return openrouter_model_catalog_service.default_slots()
+
+
+# ---------------------------------------------------------------------------
+# W9: the moderator model overlapping a panel slot.
+#
+# ``settings.debate_model_id`` picks ONE model to audit the panel's answers,
+# and nothing has ever stopped that model also being ON the panel. It is, in
+# the shipped defaults: the moderator and slot 2 are both
+# ``anthropic/claude-haiku-4.5``.
+#
+# That is not cosmetic. ``debate._debate_user_prompt`` labels every answer with
+# its model ("- Slot 2 — Claude Haiku 4.5 (...)") and both moderator system
+# prompts say "Cite the model names", so the moderator reads its own answer,
+# knowing it is its own. It replies with a ``PanelStance`` carrying one position
+# per slot, and ``synthesis_consensus._usable_stance`` hands that to
+# ``panel_agreement`` and ``compute_consensus_strength`` — the "agreed"/"split"
+# and "strong"/"divided" verdicts the reader is shown. One of the votes behind
+# that verdict is a model's grade of its own work.
+#
+# THE POSTURE IS REPORT, NEVER REFUSE, and that is a decision rather than a
+# convenience: the SHIPPED DEFAULT is the overlapping configuration, so a guard
+# that raised would fail every run on the next deploy. Choosing a different
+# moderator is a spend change (``costs.py`` prices two debate rounds on
+# ``settings.debate_model_id``, and ``DEFAULT_MODEL_IDS`` above pins a measured
+# per-slot price table) and is deliberately not made here. See ADR-0086.
+#
+# This mirrors ``ModelDefaultsResponse.stale_model_ids``: a diagnostic computed
+# here, surfaced for operators, with the returned slots unchanged.
+# ---------------------------------------------------------------------------
+
+
+def _normalised_model_id(model_id: str) -> str:
+    """``model_id`` reduced to the identity that decides "same model".
+
+    Three things are NOT a difference of model:
+
+    * **Surrounding whitespace.** ``debate_model_id`` is a free-text
+      environment setting; a trailing newline from a deployment tool must not
+      switch the check off.
+    * **Case.** Same reason.
+    * **A trailing ``:variant`` routing suffix.** ``:free`` / ``:preview`` /
+      ``:batch`` are the same weights on a different tier and grade themselves
+      just as hard, so an id carrying one is the same model as the bare id.
+      The reachable shape is a CATALOG- or CALLER-supplied id that already
+      contains a colon: ``_MODEL_ID_RE`` permits it and the live catalog serves
+      such ids. ``providers.py``'s ``:online`` suffix is NOT that shape and the
+      first draft of this comment wrongly cited it — it is appended at dispatch
+      (``online_model_id = f"{bare_model_id}:online"``, and only when the slot's
+      ``search`` flag is set), never stored on a ``ModelSlot``, so it never
+      reaches this function.
+
+    The suffix is stripped from the MODEL segment only, after the first slash,
+    so two vendors can never be collapsed into each other. The bias is
+    deliberate: for a detector, a false negative defeats the whole purpose
+    while a false positive costs an operator one look.
+
+    Two limits, both stated rather than measured away:
+
+    * Exactly ONE trailing ``:segment`` is dropped, so ``a/b:online:free``
+      would not match ``a/b``. UNTESTED, because unreachable: **0 of the 425
+      ids** in the live public catalog carry two colons (measured 2026-09-01,
+      free unauthenticated GET), and **0 of the 13** shipped fallback-catalog
+      ids carry even one.
+    * Two ids differing only after a colon (``a/b:7b`` vs ``a/b:72b``) collapse
+      and would be reported as one model. That is the false-positive direction,
+      and the zero-colon measurement above says nothing we ship hits it.
+    """
+    bare = model_id.strip().casefold()
+    vendor, slash, model = bare.partition("/")
+    if not slash:
+        return bare
+    return f"{vendor}/{model.rsplit(':', 1)[0]}"
+
+
+def moderator_overlap_slots(
+    model_slots: Sequence[ModelSlot],
+    *,
+    moderator_model_id: str,
+) -> tuple[int, ...]:
+    """The slot numbers whose model IS ``moderator_model_id``.
+
+    Empty means no slot on this panel is the moderator — the ordinary,
+    non-self-grading shape. A blank ``moderator_model_id`` is also empty:
+    ``debate._call_debate_model`` returns before dispatching when the setting
+    is falsy, so there is no moderator call and nothing to report.
+
+    Pure over its arguments — no catalog read, no settings read — so a caller
+    can ask the question about a caller-supplied slot list and a test can ask
+    it about a constructed one. The numbers come from
+    :attr:`ModelSlot.slot_number` rather than from the sequence's positions,
+    because a filtered or caller-numbered list must not be able to make this
+    report a number belonging to a different slot. No panel size is assumed.
+    """
+    moderator = _normalised_model_id(moderator_model_id)
+    if not moderator:
+        return ()
+    return tuple(
+        slot.slot_number for slot in model_slots if _normalised_model_id(slot.model_id) == moderator
+    )
+
+
+def default_moderator_overlap_slots() -> tuple[int, ...]:
+    """:func:`moderator_overlap_slots` for this deployment's own configuration.
+
+    Reads :func:`default_model_slots` against ``settings.debate_model_id``.
+
+    Those slots ARE ``DEFAULT_MODEL_IDS``, always.
+    :meth:`OpenRouterModelCatalogService.default_model_ids` appends every entry
+    of that tuple unconditionally and consults the catalog only as a drift
+    check, so this reports on the deployment's own configured panel and not on
+    whatever the upstream catalog happens to serve today. An earlier draft of
+    this docstring said the opposite ("catalog-derived, therefore the live
+    answer"); three reviewers refuted it independently, and replacing the
+    catalog wholesale leaves the four ids unchanged.
+
+    It reports on the DEFAULT panel only. A run may pass its own slot list,
+    and nothing checks that one — :func:`moderator_overlap_slots` is pure and
+    would answer for it, but no caller asks. See ADR-0086's open items.
+    """
+    return moderator_overlap_slots(
+        default_model_slots(), moderator_model_id=settings.debate_model_id
+    )
 
 
 def _validate_model_id_list(model_ids: list[str]) -> None:

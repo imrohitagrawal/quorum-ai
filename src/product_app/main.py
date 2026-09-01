@@ -61,6 +61,7 @@ from product_app.logging_config import setup_json_logging
 from product_app.model_slots import (
     ModelDefaultsResponse,
     default_model_slots,
+    default_moderator_overlap_slots,
     openrouter_catalog_fetcher,
     openrouter_model_catalog_service,
 )
@@ -1073,6 +1074,17 @@ def status_snapshot() -> dict[str, object]:
             last_live_charge_at = None if stamped is None else stamped.isoformat()
         except Exception:  # noqa: BLE001 - status must not 500
             last_live_charge_at = None
+    # W9. Which default panel slots ARE the debate moderator. Best-effort and
+    # in its own ``try`` for the same reason the spend reads are: a catalog
+    # read that raises must not 500 this endpoint or null anything else. An
+    # empty list means "asked, and no slot is the moderator"; the read failing
+    # gives the same empty list rather than a separate token, because this is a
+    # diagnostic and the operator's next step on either is to look at the
+    # configuration, not at this field.
+    try:
+        moderator_slot_overlap = list(default_moderator_overlap_slots())
+    except Exception:  # noqa: BLE001 - status must not 500
+        moderator_slot_overlap = []
     # Sentry state
     sentry_client = sentry_sdk.get_client()
     sentry_state = "active" if sentry_client.is_active() else "inactive"
@@ -1155,6 +1167,39 @@ def status_snapshot() -> dict[str, object]:
         # key and the model id are set, since a key alone runs no judge.
         "judge_enabled": judge_configured(),
         "model_catalog_loaded": report.catalog_loaded,
+        # W9. The default panel slot numbers whose model IS the configured
+        # debate moderator, so a moderator grading its own answer is visible
+        # instead of silent. Non-empty means the run's "agreed"/"split" and
+        # "strong"/"divided" verdicts are decided partly by one model's grade
+        # of its own work: ``debate._debate_user_prompt`` labels each answer
+        # with its model and the moderator system prompts say "Cite the model
+        # names", so the overlap is not hidden from the moderator either.
+        #
+        # SLOT NUMBERS, never model ids. This endpoint is unauthenticated, and
+        # the discipline it actually keeps is the one its docstring states —
+        # never query text, account ids, session tokens or filesystem paths.
+        # (It plainly does report values: ``global_daily_spend_usd``,
+        # ``uptime_seconds``, ``build_sha``. An earlier draft of this comment
+        # said "state, never values", which is false on its face.)
+        #
+        # Numbers rather than ids is still the right call, but NOT because the
+        # id is a secret: ``GET /ui`` with no cookie already publishes all four
+        # slot ids, so ``[2]`` plus that page names the moderator's model to an
+        # anonymous caller either way. What numbers buy is that this field can
+        # never become a new place a model id leaks from, and that it stays
+        # meaningful for a caller-supplied panel whose ids are not on /ui.
+        #
+        # ALSO TRUE OF A DEPLOYMENT THAT GRADES NOTHING. ``debate``'s
+        # ``_call_debate_model`` returns before dispatch when live execution is
+        # off or the key is missing, so this reads ``[2]`` on the shipped local
+        # configuration too. Read it next to ``live_execution`` two keys below.
+        #
+        # REPORTED, NEVER ENFORCED. The shipped default IS the overlapping
+        # configuration (slot 2 and the moderator are both
+        # ``anthropic/claude-haiku-4.5``), so a refusal here would fail every
+        # run on the next deploy; and pointing the moderator elsewhere is a
+        # spend change with no measurement behind it. ADR-0086 records both.
+        "moderator_slot_overlap": moderator_slot_overlap,
         # Generic key on purpose (was ``sentry``): naming the vendor on an
         # unauthenticated endpoint is free recon for an attacker probing
         # the error-tracking pipeline. Health-only, vendor-neutral.
