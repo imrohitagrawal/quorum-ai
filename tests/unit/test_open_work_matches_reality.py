@@ -57,6 +57,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -981,6 +982,24 @@ def _git_at(cwd: Path, *args: str, committer: tuple[str, str] = _SANDBOX_ID) -> 
     ).stdout.strip()
 
 
+def _shell_git_env() -> dict[str, str]:
+    """Environment for running a remedy command VERBATIM through a shell.
+
+    The command text comes out of the gate's own message, so nothing may be
+    added to it. The two ``-c`` pins that every other sandbox call carries are
+    supplied through ``GIT_CONFIG_*`` instead, which git reads with the same
+    force -- otherwise a global ``protocol.file.allow = never`` kills a
+    local-path fetch with ``fatal: transport 'file' not allowed``.
+    """
+    env = dict(os.environ)
+    env["GIT_AUTHOR_NAME"], env["GIT_AUTHOR_EMAIL"] = _SANDBOX_ID
+    env["GIT_COMMITTER_NAME"], env["GIT_COMMITTER_EMAIL"] = _SANDBOX_ID
+    env["GIT_CONFIG_COUNT"] = "2"
+    env["GIT_CONFIG_KEY_0"], env["GIT_CONFIG_VALUE_0"] = "commit.gpgsign", "false"
+    env["GIT_CONFIG_KEY_1"], env["GIT_CONFIG_VALUE_1"] = "protocol.file.allow", "always"
+    return env
+
+
 def _upstream(repo: Path, *, committer: tuple[str, str] = _SANDBOX_ID) -> tuple[str, str, str]:
     """A repo with six commits on ``main`` and one commit on ``feature``.
 
@@ -1030,6 +1049,15 @@ def test_a_branch_only_anchor_is_refused_in_a_full_clone(tmp_path: Path) -> None
     failures = _survives(clone, branch_only)
     assert len(failures) == 1, failures
     assert "not on any `main`" in failures[0], failures
+    # THE MESSAGE MUST SAY WHICH COMMIT TO STAMP INSTEAD. This is a deliberate
+    # pin on operator advice, not on prose that merely explains code: the
+    # runtime string IS the product here. Omitting it is what let W1 stamp a
+    # branch commit on 2026-08-30 while the board's own paragraph said the
+    # right thing -- a failing author reads the error, not the document. Both
+    # escape routes must appear, because only one of them works before the
+    # merge and only the other works after it.
+    assert "cut FROM" in failures[0], failures[0]
+    assert "re-stamp after the merge" in failures[0], failures[0]
 
 
 def test_a_branch_only_anchor_committed_by_github_is_still_refused(tmp_path: Path) -> None:
@@ -1088,6 +1116,30 @@ def test_a_single_branch_clone_refuses_and_prints_a_remedy_that_actually_works(
     # shape. That is the accepted cost, and the remedy below is why it is not a
     # dead end.
     assert _survives(clone, main_tip) != []
+
+    # RUN THE COMMANDS THE MESSAGE ACTUALLY PRINTS, rather than commands a test
+    # author believes it prints. Replacing every backticked command in that
+    # message with `XXXX` left the whole suite green when this was written --
+    # the same class of defect as Design A shipping a remedy that did nothing.
+    printed = re.findall(r"`([^`]+)`", refused[0])
+    remedies = [c for c in printed if c.startswith("git ") and "fetch" in c]
+    working = [c for c in remedies if "set-branches" in c or c.endswith("origin/main")]
+    assert len(working) == 2, printed
+    for command in working:
+        fresh = tmp_path / f"retry{working.index(command)}"
+        _git_at(
+            tmp_path,
+            "clone",
+            "--quiet",
+            "--single-branch",
+            "--branch",
+            "feature",
+            str(tmp_path / "up"),
+            str(fresh),
+        )
+        assert CHECKER.known_main_refs(fresh) == []
+        subprocess.run(["sh", "-c", command], cwd=fresh, env=_shell_git_env(), check=True)
+        assert CHECKER.known_main_refs(fresh) == ["refs/remotes/origin/main"], command
 
     _git_at(clone, "remote", "set-branches", "--add", "origin", "main")
     _git_at(clone, "fetch", "--quiet", "origin")
