@@ -938,8 +938,11 @@ def test_this_module_resolves_the_real_repository_not_a_generated_copy() -> None
 # ``main`` and no deploy ran.
 #
 # TWO EARLIER DESIGNS DIED HERE, both with 100%-green suites, because their
-# tests pinned the wrong contract (``docs/analysis/2026-09-01-402-freshness-
-# gate-design.md``, sections 5 and 12). The discipline those two failures buy:
+# tests pinned the wrong contract. That postmortem is
+# ``2026-09-01-402-freshness-gate-design.md``, written to the session's
+# analysis notes and NOT on `main`, so it is named rather than linked; its
+# sections 5 and 12 are the ones cited below. The discipline those two
+# failures buy:
 # EVERY skip path below has a partner proving a branch-only anchor is still
 # caught in that same shape, varying the one dimension the check is about --
 # "is this anchor branch-only?" -- instead of sharing the input class that
@@ -1273,7 +1276,10 @@ def test_a_main_anchor_passes_in_a_shallow_clone(tmp_path: Path) -> None:
     url = f"file://{tmp_path / 'up'}"
     one = tmp_path / "d1"
     _git_at(tmp_path, "clone", "--quiet", "--depth", "1", "--branch", "main", url, str(one))
-    assert CHECKER.known_main_refs(one) == ["refs/remotes/origin/main", "refs/heads/main"]
+    # Only the remote ref: the local `refs/heads/main` is a fallback, consulted
+    # solely where no remote `main` resolves. Both exist here.
+    assert _git_at(one, "rev-parse", "refs/heads/main")
+    assert CHECKER.known_main_refs(one) == ["refs/remotes/origin/main"]
     assert _survives(one, main_tip) == []
 
     five = tmp_path / "d5"
@@ -1461,3 +1467,187 @@ def test_the_live_repository_resolves_at_least_one_main_ref() -> None:
     _failures, report = CHECKER.check_all(ROOT)
     assert "SKIPPED" not in report, report
     assert "anchor on refs/" in report, report
+
+
+# ---------------------------------------------------------------------------
+# Round-two bite-proofs. Every case below was a DEMONSTRATED defect in the
+# first version of this gate, found by adversarial review or by mutation, and
+# reproduced before it was fixed. None of them is hypothetical.
+# ---------------------------------------------------------------------------
+
+
+def test_a_broken_git_remote_refuses_instead_of_reading_as_no_remotes(tmp_path: Path) -> None:
+    """Turns red if: `git remote` failing is read as "this repo has no remotes".
+
+    DEMONSTRATED FALSE ACCEPTANCE, not a hypothetical. One invalid refspec
+    makes `git remote` exit 128 with empty stdout. Read as "no remotes", a
+    checkout with `refs/remotes/origin/main` sitting on disk skipped and
+    ACCEPTED a branch-only anchor while printing "no remote and no `main` ref
+    here" -- a message false on both counts. The trigger is reachable from
+    this gate's own printed remedy: `git remote set-branches --add origin
+    'mai?'` exits 0 and breaks that clone permanently.
+    """
+    _main_tip, _older, branch_only = _upstream(tmp_path / "up")
+    clone = tmp_path / "clone"
+    _git_at(tmp_path, "clone", "--quiet", str(tmp_path / "up"), str(clone))
+    _git_at(clone, "checkout", "--quiet", "-b", "feature", "origin/feature")
+    _git_at(clone, "branch", "--quiet", "-D", "main")
+
+    # POSITIVE PARTNER FIRST: with the config intact this same anchor is
+    # refused, so the refusal below cannot be "refuses everything".
+    assert CHECKER.known_main_refs(clone) == ["refs/remotes/origin/main"]
+    assert any("not on any `main`" in f for f in _survives(clone, branch_only))
+
+    _git_at(clone, "remote", "set-branches", "--add", "origin", "mai?")
+    broken = subprocess.run(
+        ["git", *_GIT_PINS, "remote"], cwd=clone, capture_output=True, text=True, check=False
+    )
+    assert broken.returncode != 0, broken
+    assert broken.stdout.strip() == "", broken.stdout
+    # The ref is still right there -- nothing about the repository changed.
+    assert _git_at(clone, "rev-parse", "refs/remotes/origin/main")
+
+    assert CHECKER.remote_names(clone) is None
+    assert CHECKER.known_main_refs(clone) is None
+    failures, note = CHECKER.check_anchor_is_on_main(_board_at(branch_only), clone)
+    assert len(failures) == 1, failures
+    assert "`git remote` failed" in failures[0], failures
+    assert "SKIPPED" not in note, note
+
+
+def test_a_local_main_fast_forwarded_onto_the_branch_does_not_launder_the_anchor(
+    tmp_path: Path,
+) -> None:
+    """Turns red if: `refs/heads/main` becomes a peer of the remote's `main`.
+
+    DEMONSTRATED FALSE ACCEPTANCE. A contributor who runs `git checkout main
+    && git merge --ff-only feature` puts their branch commit on the local
+    `main`. When the local ref was consulted alongside `origin/main`, the gate
+    found the anchor there and passed a commit the squash merge will discard.
+
+    The local ref is now a FALLBACK: consulted only when no remote's `main`
+    resolves at all. The bare-clone partner below is what stops that from
+    being a silent deletion of the local ref -- it is still the answer in the
+    layout that has nothing else.
+    """
+    _main_tip, _older, _branch = _upstream(tmp_path / "up")
+    clone = tmp_path / "clone"
+    _git_at(tmp_path, "clone", "--quiet", str(tmp_path / "up"), str(clone))
+    _git_at(clone, "checkout", "--quiet", "-b", "feature", "origin/feature")
+    branch_commit = _git_at(clone, "rev-parse", "HEAD")
+    _git_at(clone, "checkout", "--quiet", "main")
+    _git_at(clone, "merge", "--ff-only", "feature")
+    _git_at(clone, "checkout", "--quiet", "feature")
+
+    assert _git_at(clone, "rev-parse", "refs/heads/main") == branch_commit
+    assert _git_at(clone, "rev-parse", "refs/remotes/origin/main") != branch_commit
+    assert CHECKER.known_main_refs(clone) == ["refs/remotes/origin/main"]
+    assert any("not on any `main`" in f for f in _survives(clone, branch_commit))
+
+    # THE PARTNER: the local ref is not gone, it is ranked. Where no remote
+    # `main` resolves it is still the whole answer.
+    bare = tmp_path / "bare.git"
+    _git_at(tmp_path, "clone", "--quiet", "--bare", str(tmp_path / "up"), str(bare))
+    tree = tmp_path / "wt"
+    _git_at(bare, "worktree", "add", "--quiet", str(tree), "feature")
+    assert CHECKER.known_main_refs(tree) == ["refs/heads/main"]
+
+
+def test_a_shallow_clone_refusal_names_unshallow_and_not_a_plain_fetch(tmp_path: Path) -> None:
+    """Turns red if: a shallow checkout is told to run a fetch that cannot help.
+
+    Measured: in a `--depth 1` clone, `git fetch --depth 1 origin <older sha>`
+    brings the object in, and `git merge-base --is-ancestor` then answers
+    exit **1** -- "not an ancestor", confidently and wrongly -- because the
+    graft boundary cuts the link. The anchor is genuine `main`. Refusing is
+    acceptable (it fails closed); telling the author to re-stamp a correct
+    board without mentioning the graft is not.
+    """
+    _main_tip, main_older, _branch = _upstream(tmp_path / "up")
+    url = f"file://{tmp_path / 'up'}"
+    shallow = tmp_path / "shallow"
+    _git_at(tmp_path, "clone", "--quiet", "--depth", "1", "--branch", "main", url, str(shallow))
+    _git_at(shallow, "fetch", "--quiet", "--depth", "1", "origin", main_older)
+    assert _git_at(shallow, "rev-parse", "--is-shallow-repository") == "true"
+
+    failures = _survives(shallow, main_older)
+    assert len(failures) == 1, failures
+    assert "SHALLOW" in failures[0], failures[0]
+    assert "--unshallow" in failures[0], failures[0]
+
+    # POSITIVE PARTNER: a full clone refusing the same way must NOT claim to
+    # be shallow, or the sentence is printed at everyone and means nothing.
+    full = tmp_path / "full"
+    _git_at(tmp_path, "clone", "--quiet", str(tmp_path / "up"), str(full))
+    _git_at(full, "checkout", "--quiet", "-b", "feature", "origin/feature")
+    other = _survives(full, _git_at(full, "rev-parse", "HEAD"))
+    assert len(other) == 1, other
+    assert "SHALLOW" not in other[0], other[0]
+
+
+def test_the_refusal_names_every_remote_that_could_carry_main(tmp_path: Path) -> None:
+    """Turns red if: the remedy names `origin` when `upstream` is the fix.
+
+    A contributor with a stale fork as `origin` and an unfetched `upstream` was
+    told to fetch `origin`, which by the message's own next clause "advances
+    nothing". The refusal now lists the remotes actually configured.
+    """
+    _main_tip, main_older, branch_only = _upstream(tmp_path / "canonical")
+    fork = tmp_path / "fork.git"
+    _git_at(tmp_path, "clone", "--quiet", "--bare", str(tmp_path / "canonical"), str(fork))
+    _git_at(fork, "update-ref", "refs/heads/main", main_older)
+    work = tmp_path / "work"
+    _git_at(tmp_path, "clone", "--quiet", str(fork), str(work))
+    _git_at(work, "remote", "add", "upstream", str(tmp_path / "canonical"))
+    _git_at(work, "checkout", "--quiet", "-b", "feature", "origin/feature")
+
+    failures = _survives(work, branch_only)
+    assert len(failures) == 1, failures
+    assert "origin, upstream" in failures[0], failures[0]
+
+    # POSITIVE PARTNER: a repository with one remote must not be told about a
+    # second one that does not exist.
+    solo = tmp_path / "solo"
+    _git_at(tmp_path, "clone", "--quiet", str(tmp_path / "canonical"), str(solo))
+    _git_at(solo, "checkout", "--quiet", "-b", "feature", "origin/feature")
+    only = _survives(solo, _git_at(solo, "rev-parse", "HEAD"))
+    assert len(only) == 1, only
+    assert "configured here: origin)" in only[0], only[0]
+
+
+def test_an_absent_anchor_is_reported_once_and_the_skip_says_why(tmp_path: Path) -> None:
+    """Turns red if: the squash family runs on an anchor that does not exist.
+
+    Found by a reviewer's mutation, not by reading: deleting the
+    `anchor_commit_exists` guard in `check_all`, and replacing that branch's
+    report note with anything at all, both left the whole suite green. The
+    first hands the author two failures where one is the truth and the other
+    is `git could not answer ... (exit 128)`; the second is the silent skip
+    this file's own docstrings exist to prevent.
+    """
+    main_tip, _older, _branch = _upstream(tmp_path / "up")
+    work = tmp_path / "work"
+    _git_at(tmp_path, "clone", "--quiet", str(tmp_path / "up"), str(work))
+    _git_at(work, "checkout", "--quiet", "-b", "feature", "origin/feature")
+
+    rows, count = _enough_rows(CHECKER.PENDING)
+    (work / _DOCS).mkdir(parents=True, exist_ok=True)
+    (work / _TARGET_NAME).write_text("nothing here", encoding="utf-8")
+
+    def run_with(sha: str) -> tuple[list[str], str]:
+        (work / _DOCS / _BOARD_NAME).write_text(
+            _board_text(rows, row_count=count, unpinned=0, sha=sha), encoding="utf-8"
+        )
+        failures, report = CHECKER.check_all(work, 10**9)
+        return list(failures), str(report)
+
+    absent, report = run_with("0" * 40)
+    assert len(absent) == 1, absent
+    assert "is not in this repository" in absent[0], absent
+    assert "could not answer" not in absent[0], absent
+    assert ", squash-survival SKIPPED (no anchor commit to check)" in report, report
+
+    # POSITIVE PARTNER: a real anchor takes neither the skip nor its note.
+    good, good_report = run_with(main_tip)
+    assert good == [], good
+    assert "SKIPPED" not in good_report, good_report

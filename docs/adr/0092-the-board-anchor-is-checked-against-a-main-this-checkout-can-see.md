@@ -23,9 +23,10 @@ broken until a follow-up re-stamped it.
 
 Two earlier designs were built against this and both were withdrawn. Each
 shipped a 100 %-green suite with every mutation killed, and each pinned the
-wrong contract. The full measurements are in
-`docs/analysis/2026-09-01-402-freshness-gate-design.md`; the two that decide
-this ADR are:
+wrong contract. The full measurements are in the postmortem
+`2026-09-01-402-freshness-gate-design.md`, written to the session's analysis
+notes and not on `main`, so it is named here rather than linked. The two
+measurements that decide this ADR are:
 
 - **Design A** accepted a non-ancestor anchor whose committer was
   `GitHub <noreply@github.com>`, on the reasoning that GitHub performs every
@@ -51,7 +52,9 @@ than by matching a suffix:
 
 1. `refs/remotes/origin/main`;
 2. `refs/remotes/<other configured remote>/main`, sorted;
-3. the local `refs/heads/main`.
+3. the local `refs/heads/main` — **as a fallback, not a peer**: consulted only
+   when no remote's `main` resolves at all. Treating it as a peer was a
+   measured false acceptance; see Consequences.
 
 Then:
 
@@ -61,6 +64,14 @@ Then:
 | candidates exist, none contains the anchor | REFUSE — the #402 defect |
 | no candidate, but a remote is configured | REFUSE, naming a remedy measured to work |
 | no candidate and no remote | skip, and say so on the report line |
+| `git remote` itself fails | REFUSE — "could not enumerate", never "no remotes" |
+
+That last row is not defensive padding. One invalid refspec makes `git remote`
+exit 128 with empty stdout; read as "no remotes", a checkout holding
+`refs/remotes/origin/main` on disk skipped and **accepted a branch-only
+anchor** while printing "no remote and no `main` ref here". Reproduced, and
+reachable from this gate's own printed remedy — `git remote set-branches --add
+origin 'mai?'` exits 0, accepts the typo, and breaks that clone from then on.
 
 **"At least one", not "`origin/main`"**, is what admits a contributor whose
 `origin` is a fork that is behind while `upstream` is canonical — with no
@@ -102,6 +113,12 @@ into Design A's dead end.
   **second** config line, which a first-line-only parse misses.
 - **Matching candidate refs by the suffix `/main`.** A branch called
   `release/main` would then be treated as trunk.
+- **Treating the local `refs/heads/main` as a peer of the remote's.** Measured
+  false acceptance: `git checkout main && git merge --ff-only feature` puts the
+  branch commit on the local `main`, and the gate found it there and passed a
+  commit the squash merge discards. Demoting it to a fallback keeps the
+  bare-clone-plus-worktree layout answerable, which is the only place it was
+  ever needed.
 
 ## Consequences
 
@@ -112,6 +129,23 @@ into Design A's dead end.
   commit are both simply descendants of the ref tip. `git fetch` is the first
   remedy and it does **not** always clear it: when `origin` is a fork that is
   itself behind, fetching it advances nothing.
+- **A shallow clone refuses a correct anchor**, because a graft boundary makes
+  `git merge-base --is-ancestor` answer exit 1 — "not an ancestor" — with no
+  error at all. It fails closed, and the refusal says so and names
+  `git fetch --unshallow`.
+- **The false acceptance that remains, and why it is priced this way.** "At
+  least one known `main`", the quantifier that admits the fork-behind
+  contributor, also believes a remote whose `main` genuinely carries the
+  branch commit — a contributor who pushes their feature onto their own fork's
+  `main`. The two cannot be separated offline; this is the other half of the
+  trade, recorded here because the first draft of this ADR stated only the
+  benefit.
+  It costs nothing at the merge gate. Measured on CI run `33507457668`, a
+  `pull_request` build checks out `refs/remotes/pull/N/merge` **detached**, so
+  `refs/heads/main` does not exist in CI at all and `origin` is the canonical
+  repository, never a contributor's fork. Both this residual and the
+  fast-forwarded-local-`main` one are false negatives of a *local*
+  `make validate`, not of the blocking check.
 - The skip is ignorance, not permission. Its test gives the same repository a
   `main` and shows the same anchor refused at once.
 - `make validate` runs in one CI job (`ci.yml:77`, `validate-and-test`) whose
