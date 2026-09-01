@@ -113,7 +113,7 @@ caught by any automated check and 10 of 16 by adversarial review
 | W16 | The catalog fetcher hardcodes the models URL | DONE | `PRESENT src/product_app/catalog_fetcher.py :: OPENROUTER_CATALOG_URL = "https://openrouter.ai/api/v1/models"` | — | — |
 | W17 | FR-004 names a model we do not ship | DONE | `PRESENT docs/10-functional-requirements.md :: deepseek/deepseek-chat-v3.1` | — | — |
 | W18 | The paid call sends the API key to a configured base with no scheme guard | DONE | `PRESENT src/product_app/providers.py :: url=f"{settings.openrouter_api_base_url}/chat/completions"` | — | — |
-| W19 | A provider-timeout bound fails locally and passes in CI | PENDING | `PRESENT tests/unit/test_provider_call_time_budget.py :: assert wall < 4.0,` | — | — |
+| W19 | A provider-timeout bound fails locally and passes in CI | DONE | `ABSENT tests/unit/test_provider_call_time_budget.py :: budget_handed_to_body_read` | — | — |
 | W20 | `panel_agreement()` reports "agreed" for a genuine N=1 panel | DONE | `ABSENT src/product_app/synthesis_consensus.py :: if len(stance) < 2:` | #394 | — |
 | W21 | A redirect carries the API key off the guarded base | PENDING | `PRESENT src/product_app/providers.py :: with urlopen(request, timeout=settings.openrouter_timeout_seconds) as response:` | — | W18 |
 | W22 | The Tavily search call sends its key to a configured base with no scheme guard | PENDING | `PRESENT src/product_app/providers.py :: url=f"{settings.tavily_api_base_url.rstrip('/')}/search"` | — | — |
@@ -432,45 +432,58 @@ because it is a different credential and a different setting (rule 17), and
 because the fix wants a second builder next to `chat_completions_url` rather
 than a reuse of it — the endpoint is `/search`, not `/chat/completions`.
 
-**W19 — a timing bound that flips with machine load.**
-`test_the_budget_covers_the_header_phase_not_only_the_body` asserts
-`wall < 4.0` against a loopback server that dribbles headers. Measured both ways
-on the same box on 2026-08-28:
+**W19 — a timing bound that flips with machine load. DONE, ADR-0089.**
+`test_the_budget_covers_the_header_phase_not_only_the_body` asserted
+`wall < 4.0` against a loopback server that dribbles 72 header bytes at 0.05s.
+It failed locally and passed in CI: 5 of 5 under load on 2026-08-28, a paired
+interleaved comparison on 2026-08-30 where all six clean `origin/main` reps
+exceeded 4.0, and **10 of 10 re-measured 2026-09-01** on a pristine
+`origin/main` worktree at load average 5.6-6.0 (4.021-4.159 s). The record also
+had passing halves, kept here rather than dropped: 6 of 6 idle at 3.92-3.96 s
+and 11 of 11 for an independent reviewer on 2026-08-28, and 9 of 9 on a clean
+`dc25c95` clone at load 2.78. Both halves are the same phenomenon — the bound
+sat inside the noise.
 
-| Condition | Result |
-|---|---|
-| under concurrent load (full suites + review agents running) | **5 of 5 failed**, 4.13–4.18s |
-| idle | **6 of 6 passed**, 3.92–3.96s — and an independent reviewer got 11 of 11 |
+The plan recorded here was to re-derive the margin from a fresh distribution.
+**That plan was wrong, and what killed it is a comparison of the two arms
+rather than more reps of one.** Moving `call_started` to after `urlopen` — the
+exact defect the test names — and recording the budget handed to
+`_iter_body_within_budget`, paired and interleaved, 8 pairs at load ~4.9:
 
-It also failed on a clean `git archive` of `origin/main` while loaded, so no
-branch causes it. CI passes it. **A red result here is therefore NOT
-automatically W19** — re-run it isolated on an idle machine before dismissing
-it, because the margin is about 2% and a real regression would look the same.
+| | wall (s) | budget handed to the body read (s) |
+|---|---|---|
+| clean `origin/main` | 4.008-4.106, mean 4.056 | **-2.508 .. -2.606** |
+| clock after `urlopen` | 4.049-4.157, mean 4.091 | **+1.4999905 .. +1.4999957** |
 
-**Re-measured 2026-08-30, and the "idle passes" half no longer holds on this
-box.** Hit while shipping W1, where it mattered: W1 rewrites this exact code
-path, so the table above would have licensed dismissing a real regression. What
-settled it was a PAIRED, interleaved comparison against a clean
-`git archive origin/main`, 6 reps each, alternating, at load average ~5:
+**Four independent sessions could not agree on even the SIGN of the wall
+difference** — this one found the defect slower in 6 of 8 pairs; a reviewer
+found it reliably FASTER (3.868-3.928 s against clean 4.053-4.138, i.e. the
+bound was GREEN on the defect and RED on the fix); two others found the arms
+straddling 4.0. The wall is set by the SERVER — ~3.55 s of headers before the
+client can act — and a client-side budget cannot shorten a phase already over.
+The ARGUMENT separated the arms completely in every session that measured two
+arms (three of the four; reviewer A's run had only the clean arm).
 
-| | wall (s) |
-|---|---|
-| clean `origin/main` | 4.095 4.116 4.117 4.145 4.026 4.091 — mean **4.098** |
-| the W1 branch | 4.070 4.089 4.025 4.085 4.086 4.083 — mean **4.073** |
+The fix asserts on that argument (rule 8b): the clock must have charged at
+least 3.0 s to connect + request + headers, with an anti-vacuity floor that the
+body read was reached exactly once and a positive partner that the charge is a
+real elapsed slice of this call. Twelve source-side mutants were tried against
+it — including a `max(0.0, remaining)` clamp, a different clock, a stale
+timestamp and a module-level alias to dodge the spy — and every one goes red.
+**It cannot flake on the quantity it measures:** the charge is floored by 71
+`time.sleep(0.05)` calls that never return early, so ~3.55 s is structural;
+across 28 clean reps of this session's own, spanning load 3.6-20.9, the charge
+ranged 3.762-4.106 s, low 3.7617 s -- and the lowest values came at AMBIENT
+load, not under the `yes` generators. That is 25% headroom over the 3.0
+literal. Reviewers, reported as theirs: 34 of 34 green up to load 96, 10 of 10
+at load 77, and a round-two low of 3.7146 s over 29 reps.
 
-**All 6 clean-`main` reps exceed the 4.0 bound**, and the branch is if anything
-FASTER (lower in 5 of 6 paired reps). An earlier draft of this paragraph said
-"9 of 9 idle failures"; the table beside it shows 6 reps per arm at load
-average ~5, which is not idle and is not nine, so the sentence is now the one
-the data supports. (An independent reviewer separately reproduced 9 of 9 on a
-clean `dc25c95` clone at load 2.78, 4.052-4.132 s — consistent, but that run is
-not the table above and is not quoted as if it were.) So the bound now fails on
-a quiet machine too — this box has drifted past the 2% margin — and it is still
-not any diff's fault. Whoever fixes this row should re-derive the margin from a fresh
-distribution rather than nudging `4.0` upward: the number in the assertion has
-never been anything but the machine it was written on.
-Either widen the bound with a re-derived margin or make it CI-only — but measure
-first: its partner lower bound is what proves the dribble really happened.
+The needle had to be re-pinned. `PRESENT ... :: assert wall < 4.0,` also
+matches `test_a_slow_dribble_is_cut_at_the_budget` (its `wall` measures 1.502 s
+against a 4.0 s bound, a 2.66x margin), which is healthy and deliberately
+untouched — so the row would have stayed PENDING after a correct fix. What the
+change stops catching, and where that is and is not still covered, is in
+ADR-0089.
 
 **W17 — FR-004. DONE, ADR-0088.** `docs/10-functional-requirements.md` and
 `docs/12-acceptance-criteria.md` both named `deepseek/deepseek-chat-v3.1` as slot

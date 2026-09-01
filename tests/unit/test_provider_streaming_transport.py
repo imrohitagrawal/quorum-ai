@@ -11,9 +11,12 @@ SSE error stream, an HTTP 503 and a 200 error envelope are bit-for-bit
 identical, so an assertion there discriminates nothing.
 
 Every timing bound uses literals on both sides and leaves wide margins. The
-repo already has one timing test that flips with machine load
+repo used to have one timing test that flipped with machine load
 (``test_the_budget_covers_the_header_phase_not_only_the_body``, about 2% of
-margin); nothing here is written that tightly.
+margin); nothing here is written that tightly. That test no longer asserts on
+the wall clock at all -- it asserts on the budget ARGUMENT instead, for the
+reasons in ADR-0089 -- so it is no longer an example of a load-sensitive
+bound, and a red result there is not a flake.
 """
 
 from __future__ import annotations
