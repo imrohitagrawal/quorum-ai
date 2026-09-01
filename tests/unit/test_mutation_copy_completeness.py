@@ -69,21 +69,20 @@ EXEMPT = {
     ".env": "secrets — deliberately never copied (hermetic, $0)",
     "build": "gate artifacts; the specs that read them skip when absent",
     "mutants": "the copy target itself",
-    # FALSE POSITIVE of `_ROOT_FILE_LITERAL`, not a real read. The only
-    # `"README.md"` literal in the suite is in
-    # `tests/unit/test_vendored_assets_are_pinned.py`, as the right operand of
-    # `VENDOR_DIR / "README.md"` — i.e. `src/product_app/static/vendor/README.md`,
-    # which lives under `src/` and is already copied. The extractor cannot see
-    # which directory a bare filename is joined to, exactly as its own docstring
-    # notes for `"schemas"`.
+    # `"README.md"` WAS exempt here as a false positive of `_ROOT_FILE_LITERAL`,
+    # on the grounds that the only literal in the suite was the right operand of
+    # `VENDOR_DIR / "README.md"` (i.e. `src/product_app/static/vendor/README.md`,
+    # already copied under `src/`). That entry stated its own cost: *"if a future
+    # test really does read the ROOT `README.md`, this gate will now stay silent
+    # about it."*
     #
-    # The COST of this entry, stated rather than implied: if a future test
-    # really does read the ROOT `README.md`, this gate will now stay silent
-    # about it. Before assuming otherwise, run: grep -rn '"README.md"' tests/
-    "README.md": (
-        'false positive: the only literal is `VENDOR_DIR / "README.md"`, which '
-        "resolves under src/ and is already copied"
-    ),
+    # Removed 2026-09-01 (W17), because that future arrived.
+    # `tests/test_doc_gate_consistency.py` Part G reads the ROOT `README.md` to
+    # pin the four default model slot ids it states against
+    # `model_slots.DEFAULT_MODEL_IDS`, so the read is now genuine and
+    # `README.md` is in `also_copy`. The exemption's own instruction —
+    # `grep -rn '"README.md"' tests/` — is what settled it: the literal at
+    # `tests/test_doc_gate_consistency.py:2238` is a root read, not a vendor one.
 }
 
 # Modules that read REPO_ROOT paths and therefore fail inside ./mutants/ when

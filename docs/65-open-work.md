@@ -111,7 +111,7 @@ caught by any automated check and 10 of 16 by adversarial review
 | W14 | Close the 5xx possibly-billed premise with data | UNPINNED | `—` | #105 | production logs |
 | W15 | `_bound_sniff_time` is referenced and does not exist | DONE | `PRESENT src/product_app/providers.py :: _bound_sniff_time` | — | — |
 | W16 | The catalog fetcher hardcodes the models URL | DONE | `PRESENT src/product_app/catalog_fetcher.py :: OPENROUTER_CATALOG_URL = "https://openrouter.ai/api/v1/models"` | — | — |
-| W17 | FR-004 names a model we do not ship | PENDING | `PRESENT docs/10-functional-requirements.md :: deepseek/deepseek-chat-v3.1` | — | — |
+| W17 | FR-004 names a model we do not ship | DONE | `PRESENT docs/10-functional-requirements.md :: deepseek/deepseek-chat-v3.1` | — | — |
 | W18 | The paid call sends the API key to a configured base with no scheme guard | DONE | `PRESENT src/product_app/providers.py :: url=f"{settings.openrouter_api_base_url}/chat/completions"` | — | — |
 | W19 | A provider-timeout bound fails locally and passes in CI | PENDING | `PRESENT tests/unit/test_provider_call_time_budget.py :: assert wall < 4.0,` | — | — |
 | W20 | `panel_agreement()` reports "agreed" for a genuine N=1 panel | DONE | `ABSENT src/product_app/synthesis_consensus.py :: if len(stance) < 2:` | #394 | — |
@@ -472,10 +472,67 @@ never been anything but the machine it was written on.
 Either widen the bound with a re-derived margin or make it CI-only — but measure
 first: its partner lower bound is what proves the dribble really happened.
 
-**W17 — FR-004.** `docs/10-functional-requirements.md` and
-`docs/12-acceptance-criteria.md` both name `deepseek/deepseek-chat-v3.1` as slot
-4's default; `model_slots.py` ships `nvidia/nemotron-3-nano-30b-a3b` and its own
-comment says "replaces deepseek". No gate catches it.
+**W17 — FR-004. DONE, ADR-0088.** `docs/10-functional-requirements.md` and
+`docs/12-acceptance-criteria.md` both named `deepseek/deepseek-chat-v3.1` as slot
+4's default. deepseek actually left `DEFAULT_MODEL_IDS` on **2026-07-25** in
+commit f25696e (as `nvidia/nemotron-3-super-120b-a12b`); 3bf13a6 narrowed it two
+days later to the shipped `nvidia/nemotron-3-nano-30b-a3b`. Ten live documents
+carried the stale claim. No gate caught it for five weeks.
+
+The sizing warning below held, and the census below it was **incomplete in one
+direction** — worth recording, because the lesson generalises. It enumerated the
+population with the exact string `deepseek/deepseek-chat-v3.1`, and two live
+present-tense claims did not contain it: `docs/design-handoff/AC-CROSSWALK.md:48`
+wrote the ids **without vendor prefixes** (`deepseek-chat-v3.1`), and
+`docs/architecture/40-decisions.md:53` named no id at all (*"four vendor families
+(OpenAI, Anthropic, Google, DeepSeek)"*). Both were found by adversarial review,
+not by the grep. **A needle chosen for precision under-counts the population it
+is meant to size.**
+
+Of the files that needed reading, **ten** were corrected (the documents
+asserting, in the present tense, what the product defaults to), **three** got an
+additive `Superseded 2026-07-25` note rather than a rewrite because they record
+something that was true on 2026-06-16 — `docs/04-problem-statement.md` (decision
+D-010), `docs/13-open-questions.md` (OQ-005) and
+`docs/design-handoff/README.md` (an approved mock that really does show
+DeepSeek) — and **four** were left untouched: `PRODUCT_IDEA.md`,
+`docs/design-handoff/Quorum Final Review.dc.html`,
+`scripts/seed_feedback_audit_data.py` (demo data that already mixes in
+`anthropic/claude-3-haiku`, so it asserts nothing about defaults) and this board.
+
+Per rule 1a the row closes with a **gate**, not ten corrected sentences: Part G
+of `tests/test_doc_gate_consistency.py` pins each covered document against
+`product_app.model_slots.DEFAULT_MODEL_IDS` in **two** ways — slot ORDER inside
+*default-claim blocks*, and set MEMBERSHIP over the whole file.
+
+**Two review rounds, five reproduced holes, and the second round is the one
+worth reading.** Round 1 broke the original whole-file extractor three ways:
+`README.md` could not be covered at all (line 42 names slot 2's model a second
+time for `debate_model_id`), a backticked MIME type turned a covered doc red
+blaming the model slots, and emptying `_DEFAULT_SLOT_SPEC_DOCS` left the gate
+green over zero documents. Round 2 then broke the FIX: block scoping had
+**silently traded away** detection the whole-file version had — a stale id
+appended outside the claim block of `docs/10-functional-requirements.md` passed
+— and the new corpus floor's `set()` dedup fell to respelling one entry
+`./README.md`, which read README twice and dropped `AC-CROSSWALK.md` from
+coverage while staying green. Both are closed and pinned, which is why the gate
+keeps both halves rather than replacing one with the other. **Rule 12's "expect
+your own fix to introduce a defect" was correct here twice over.**
+
+ADR-0088 has the rejected alternatives, the seven bite-proofs, and the stated
+blind spots — an unbackticked id, a fenced block with no cue, setext headings,
+ordered lists, a cue only in a table header, an interrupted bullet run, and a
+single id under a cue. `docs/architecture/40-decisions.md` was corrected but is
+**not** gated: it names a vendor family, not an id, which is also why the census
+could not see it.
+
+After the fix `git grep -l "deepseek/deepseek-chat-v3.1" | wc -l` returns
+**107** (92 `tests/`, 6 `docs/archive/` + `docs/validation/`, 6 live docs, 1
+`src/` `_FALLBACK_CATALOG` — which lives in `catalog_fetcher.py`, not
+`model_slots.py` — 1 `PRODUCT_IDEA.md`, 1 `scripts/`). The live-docs figure fell
+13 -> 6; the six are the three annotated records, the `.dc.html` mock, this
+board, and ADR-0088 itself. The `tests/` figure rose 91 -> 92 because the new
+gate names the retired id in its own bite-proof.
 
 **W20 — #394. DONE, ADR-0087.** `panel_agreement()` shared the exact
 structural pattern `compute_consensus_strength` had at N=1 before ADR-0083:

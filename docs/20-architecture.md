@@ -67,7 +67,7 @@ was originally checked against without a matching module boundary in the code.
 
 1. User authenticates before execution. Anonymous users cannot start provider-consuming work. Trace: FR-001, NFR-005.
 2. UI displays sensitive/private-data and high-stakes decision-support warnings before submission. Trace: FR-003, NFR-007, NFR-008.
-3. User enters query and four model identifiers. Defaults are `openai/gpt-4o-mini`, `anthropic/claude-haiku-4.5`, `google/gemini-2.5-flash`, and `deepseek/deepseek-chat-v3.1`. Trace: FR-004.
+3. User enters query and four model identifiers. Defaults are `openai/gpt-4o-mini`, `anthropic/claude-haiku-4.5`, `google/gemini-2.5-flash`, and `nvidia/nemotron-3-nano-30b-a3b`. Trace: FR-004.
 4. API validates input, verifies no active query for the account, estimates cost, and returns confirmation or blocking behavior for threshold crossings. Trace: FR-002, FR-005, NFR-002.
 5. Accepted query creates a persisted `QueryRun` in `accepted` state with an owner account ID, selected model slots, cost estimate, safety-warning state, and correlation ID.
 6. Orchestration attempts OpenRouter source-backed answering for each selected model. If OpenRouter search fails or returns no usable source support, it uses Tavily or the approved fallback provider. Trace: FR-006.

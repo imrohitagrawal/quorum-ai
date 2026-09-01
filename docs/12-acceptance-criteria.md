@@ -48,7 +48,7 @@ Given a user is on the query submission screen, when they prepare to submit a qu
 
 ## AC-007 Default models populated
 
-Given an authenticated user opens the query workflow for the first time, when the model selector loads, then four slots are populated with `openai/gpt-4o-mini`, `anthropic/claude-haiku-4.5`, `google/gemini-2.5-flash`, and `deepseek/deepseek-chat-v3.1`.
+Given an authenticated user opens the query workflow for the first time, when the model selector loads, then four slots are populated with `openai/gpt-4o-mini`, `anthropic/claude-haiku-4.5`, `google/gemini-2.5-flash`, and `nvidia/nemotron-3-nano-30b-a3b`.
 
 - Requirement: FR-004
 - Test: TEST-FR-004

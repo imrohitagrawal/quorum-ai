@@ -30,7 +30,7 @@ This strategy defines safe test data for the Release 1 MVP query workflow. It su
 | TD-004 | Query runs in terminal states: `completed`, `partial`, `failed`, `timed_out`, `blocked_by_cost`, `cancelled`. | Active-slot release and result tests. | AC-004, AC-021, AC-022 |
 | TD-005 | High-stakes prompts for medical, legal, financial, safety, and regulated topics. | Warning and AI safety tests. | AC-005, AC-020, AC-034 |
 | TD-006 | Sensitive/private-data warning scenario with synthetic secret-like strings. | Privacy warning and redaction tests. | AC-006, AC-023, AC-024, AC-033 |
-| TD-007 | Default model slot set: `openai/gpt-4o-mini`, `anthropic/claude-haiku-4.5`, `google/gemini-2.5-flash`, `deepseek/deepseek-chat-v3.1`. | Model selector tests. | AC-007 |
+| TD-007 | Default model slot set: `openai/gpt-4o-mini`, `anthropic/claude-haiku-4.5`, `google/gemini-2.5-flash`, `nvidia/nemotron-3-nano-30b-a3b`. | Model selector tests. | AC-007 |
 | TD-008 | Replacement OpenRouter model IDs, including valid, invalid, long, duplicate, and mixed-case values. | Model validation and UI wrapping tests. | AC-008 |
 | TD-009 | Cost estimates at USD 0.05, USD 0.15, USD 0.1501, USD 0.25, and USD 0.2501. | Cost threshold tests. | AC-009, AC-010, AC-030 |
 | TD-010 | OpenRouter search success with four model answers and source links. | Search, result, citation, and E2E tests. | AC-011, AC-013, AC-014, AC-018, AC-027 |

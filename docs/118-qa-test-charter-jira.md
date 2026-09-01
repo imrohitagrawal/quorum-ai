@@ -186,7 +186,7 @@ Given QA opens `/ui`, when the page loads, then the workspace shows the query in
 
 ### QA-AC-006 Model Slot Defaults And Validation
 
-Given QA requests defaults or opens the UI, when model slots are rendered, then exactly four default slots appear: `openai/gpt-4o-mini`, `anthropic/claude-haiku-4.5`, `google/gemini-2.5-flash`, and `deepseek/deepseek-chat-v3.1`; invalid counts, duplicate IDs, and malformed model IDs are rejected server-side.
+Given QA requests defaults or opens the UI, when model slots are rendered, then exactly four default slots appear: `openai/gpt-4o-mini`, `anthropic/claude-haiku-4.5`, `google/gemini-2.5-flash`, and `nvidia/nemotron-3-nano-30b-a3b`; invalid counts, duplicate IDs, and malformed model IDs are rejected server-side.
 
 ### QA-AC-007 Query Validation Errors
 

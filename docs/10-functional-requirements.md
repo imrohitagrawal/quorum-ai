@@ -50,7 +50,7 @@ These requirements cover Release 1 MVP for the public AI cross-validation workfl
 
 - Actor: Authenticated user.
 - Trigger: The user opens or configures the query workflow.
-- Behavior: The system provides four model slots defaulting to `openai/gpt-4o-mini`, `anthropic/claude-haiku-4.5`, `google/gemini-2.5-flash`, and `deepseek/deepseek-chat-v3.1`, and allows the user to replace each slot with an OpenRouter-supported model identifier from the live catalog when available.
+- Behavior: The system provides four model slots defaulting to `openai/gpt-4o-mini`, `anthropic/claude-haiku-4.5`, `google/gemini-2.5-flash`, and `nvidia/nemotron-3-nano-30b-a3b`, and allows the user to replace each slot with an OpenRouter-supported model identifier from the live catalog when available.
 - Outcome: The user can compare four selected models while starting from known defaults.
 - Source: `docs/01-product-brief.md`, `docs/115-release-scope.md`, `docs/13-open-questions.md`.
 - Owner: Product owner.

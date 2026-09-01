@@ -28,7 +28,7 @@ Open `Quorum Final Review.dc.html` in a browser. It contains all screens at 1440
 - Privacy warning (amber panel, COPY-001) always visible above the question field.
 - Question field: white card, label "YOUR QUESTION" + mono char counter "163 / 20,000".
 - High-stakes gate (COPY-002): appears **only when a safety topic is detected**; red uppercase label "DECISION SUPPORT ONLY", body text, and an explicit acknowledgement checkbox "I understand this is not professional advice." **Run stays disabled until checked.** Send acknowledgements as `safety_acknowledgements[]` on estimate + create.
-- Four model slots (2×2 grid): avatar circle, display name, mono OpenRouter ID (`openai/gpt-4o-mini`, `anthropic/claude-haiku-4.5`, `google/gemini-2.5-flash`, `deepseek/deepseek-chat-v3.1`), per-model mono estimate, ▾ swap from live catalog (`GET /v1/models/defaults` + catalog). Unknown IDs → field-level error naming the slot (see 07). Duplicates allowed but visibly flagged.
+- Four model slots (2×2 grid): avatar circle, display name, mono OpenRouter ID (`openai/gpt-4o-mini`, `anthropic/claude-haiku-4.5`, `google/gemini-2.5-flash`, `deepseek/deepseek-chat-v3.1` — the mock predates the 2026-07-25 slot-4 swap; the shipped fourth default is `nvidia/nemotron-3-nano-30b-a3b`, see `product_app.model_slots.DEFAULT_MODEL_IDS`), per-model mono estimate, ▾ swap from live catalog (`GET /v1/models/defaults` + catalog). Unknown IDs → field-level error naming the slot (see 07). Duplicates allowed but visibly flagged.
 - Footer: total estimate + "Estimate & run →" ink button; one-run-at-a-time notice.
 
 ### 03 Cost gate (`cost_review`) — FR-005; AC-009/010; COPY-003/004; `POST /v1/query-runs/estimate`

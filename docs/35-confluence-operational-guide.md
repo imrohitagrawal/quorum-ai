@@ -186,7 +186,7 @@ The workflow must emit non-secret structured events for every accepted query sta
 
 ### AI Used
 
-The MVP uses multiple AI models through OpenRouter-supported model identifiers. Defaults are `openai/gpt-4o-mini`, `anthropic/claude-haiku-4.5`, `google/gemini-2.5-flash`, and `deepseek/deepseek-chat-v3.1`. AI output must be grounded where search succeeds, evaluated for hallucination risk, protected against prompt injection, and framed as decision support.
+The MVP uses multiple AI models through OpenRouter-supported model identifiers. Defaults are `openai/gpt-4o-mini`, `anthropic/claude-haiku-4.5`, `google/gemini-2.5-flash`, and `nvidia/nemotron-3-nano-30b-a3b`. AI output must be grounded where search succeeds, evaluated for hallucination risk, protected against prompt injection, and framed as decision support.
 
 ### Risks And Safe Usage
 

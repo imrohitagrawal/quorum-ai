@@ -2161,3 +2161,539 @@ def test_deploy_md_does_not_claim_rotation_logs_users_out() -> None:
         "DEPLOY.md no longer mentions QUORUM_TOKEN_SECRET at all — the two "
         "absence checks above would pass vacuously"
     )
+
+
+# --------------------------------------------------------------------------
+# Part G — the DEFAULT MODEL SLOT IDS a doc names, pinned to the code.
+#
+# Measured 2026-09-01 (board row W17). `docs/10-functional-requirements.md`
+# (FR-004) and `docs/12-acceptance-criteria.md` (AC-007) both named
+# `deepseek/deepseek-chat-v3.1` as the fourth default model slot. deepseek left
+# `DEFAULT_MODEL_IDS` on 2026-07-25 in commit f25696e (as
+# `nvidia/nemotron-3-super-120b-a12b`); 3bf13a6 narrowed it two days later to
+# the shipped `nvidia/nemotron-3-nano-30b-a3b`. Eight further live documents
+# carried the same stale id. Nothing failed for five weeks, because nothing
+# compared the sentence to the constant.
+#
+# Per AGENTS.md rule 1a this gets a GATE rather than ten corrected sentences:
+# the four ids are derivable from the tree OFFLINE.
+#
+# WHY THIS READS A BLOCK, NOT A WHOLE FILE. The first version of this gate
+# extracted every backticked `vendor/model` token in the file and compared the
+# lot. Adversarial review broke it twice:
+#   * `README.md` — the repo's front door, and the highest-traffic statement of
+#     the defaults — could not be covered at all, because line 42 names
+#     `anthropic/claude-haiku-4.5` a second time when describing
+#     `settings.debate_model_id`. Whole-file extraction read five ids and failed
+#     on a correct document.
+#   * A backticked MIME type (`application/json`, `text/event-stream`) added to
+#     any covered doc turned the gate red with a message blaming the model
+#     slots. Eight docs were one ordinary sentence away from a misleading
+#     failure.
+# So extraction is scoped to a DEFAULT-CLAIM BLOCK: a line carrying a "default"
+# cue (or sitting under a heading that does), plus any list items directly
+# beneath it that consist solely of one backticked id. A block counts only if it
+# names at least two ids, because a default-slot claim names a SET — that is
+# what keeps `README.md:42`'s single-id aside out of the comparison.
+#
+# WHAT THIS GATE CANNOT SEE, stated rather than implied. Every shape below was
+# reproduced by adversarial review against this implementation, and each lets a
+# retired id back into a covered document with the suite green:
+#   * an id written WITHOUT backticks ("the fourth slot is
+#     deepseek/deepseek-chat-v3.1") — `_model_ids_in` requires the markup that
+#     makes a token an identifier rather than prose, and
+#     `test_the_model_id_extractor_ignores_paths_and_mime_types` pins that on
+#     purpose;
+#   * an id inside a fenced code block that carries no "default" cue line;
+#   * a SETEXT heading (`Default model slots` underlined with `===`) — the cue
+#     propagates from `#`-style headings only;
+#   * an ORDERED list (`1. \u0060id\u0060`) — `_SOLE_ID_ITEM_RE` requires `-` or `*`;
+#   * a table whose "default" cue sits only in the header row;
+#   * a bullet run interrupted by a non-sole-id item, which stops the consume
+#     loop;
+#   * a SINGLE id under a cue ("the default for slot 4 is \u0060x\u0060"), because
+#     `_MIN_IDS_PER_BLOCK` is 2.
+# A blockquoted claim (`> Defaults are ...`) IS caught.
+#
+# These are shapes for NEW contradicting prose rather than the existing sentence
+# going stale, which is the drift this gate exists to stop. What DOES cover them
+# for the covered corpus is
+# `test_no_covered_doc_names_a_non_default_model_anywhere` below: a whole-file
+# MEMBERSHIP check that no backticked id outside `DEFAULT_MODEL_IDS` appears at
+# all. Block scoping and membership are deliberately two assertions — scoping
+# pins slot ORDER without false-alarming on `README.md:42`'s second mention of
+# slot 2's model, membership pins that no retired id survives anywhere. The
+# first implementation of this Part had only the whole-file half, and review
+# showed that dropping it in the redesign silently traded coverage away.
+#
+# `_default_claim_blocks` also carries a latent sharp edge: `heading_cues` is
+# cleared only by the next `#` line, so a "Default" heading covers its whole
+# section. Measured across the ten covered documents the longest such span is 11
+# lines (`docs/12-acceptance-criteria.md`), so nothing is affected today.
+#
+# SCOPE, deliberately narrow — only documents that assert, in the present
+# tense, what the SHIPPED product defaults to. Deliberately NOT covered:
+#   * `PRODUCT_IDEA.md` and `docs/04-problem-statement.md` record the product
+#     owner's 2026-06-16 intake answer (D-010). That answer really was
+#     deepseek; rewriting it would falsify a dated decision record.
+#   * `docs/13-open-questions.md` records the same answer against OQ-005.
+#   * `docs/design-handoff/Quorum Final Review.dc.html` is an approved visual
+#     mock that predates the swap and genuinely shows DeepSeek. (Its sibling
+#     `AC-CROSSWALK.md` is NOT a mock — it is live traceability evidence, and it
+#     IS covered below. The first version of this comment excluded the whole
+#     directory on the mock's rationale, and review found the crosswalk still
+#     asserting the retired id.)
+#   * `docs/archive/`, `docs/validation/` — records of runs that happened.
+#   * `tests/`, and the `_FALLBACK_CATALOG` row in
+#     `src/product_app/catalog_fetcher.py` (defined at line 127, deepseek row at
+#     line 244 — NOT in `model_slots.py`, which only imports it) — deepseek is
+#     still a real, selectable OpenRouter model. 3bf13a6 retained that row
+#     deliberately.
+#   * `docs/faq/index.html` and `docs/readme-verification-appendix.md` state the
+#     defaults in `<code>` tags rather than backticks, so this extractor cannot
+#     read them. They are correct today; covering them needs an HTML-aware
+#     reader and is recorded as follow-on debt in ADR-0088.
+# --------------------------------------------------------------------------
+
+#: Live documents that state the shipped default slot set. Each must carry at
+#: least one default-claim block, and those blocks must name exactly the ids of
+#: ``DEFAULT_MODEL_IDS``, in slot order.
+_DEFAULT_SLOT_SPEC_DOCS: tuple[str, ...] = (
+    "README.md",
+    "docs/01-product-brief.md",
+    "docs/08-prioritization.md",
+    "docs/10-functional-requirements.md",
+    "docs/118-qa-test-charter-jira.md",
+    "docs/12-acceptance-criteria.md",
+    "docs/20-architecture.md",
+    "docs/35-confluence-operational-guide.md",
+    "docs/51-test-data-strategy.md",
+    "docs/design-handoff/AC-CROSSWALK.md",
+)
+
+#: The smallest corpus this gate is allowed to measure. Without it,
+#: ``_DEFAULT_SLOT_SPEC_DOCS = ()`` makes every assertion below vacuously true
+#: and the suite stays green having read nothing — reproduced by review on the
+#: first version of this gate. AGENTS.md: every gate reports what it counted and
+#: refuses to pass on an empty input.
+_MIN_SPEC_DOCS = 10
+
+#: A backticked ``vendor/name`` token. Structure, not substring (rule 8): the
+#: backticks are the markup that marks it as an identifier rather than prose, so
+#: this cannot match the sentence that *explains* a model id.
+_BACKTICKED_SLASH_TOKEN_RE = re.compile(r"`([a-z][a-z0-9-]*/[a-z0-9][a-z0-9._-]*)`")
+
+#: First segments that make a backticked ``a/b`` token something other than a
+#: model id. Two families, both measured in the covered docs or their
+#: neighbours: repository paths (these docs cross-reference each other
+#: constantly — ``docs/22-api-contract.md``, ``src/product_app``) and MIME types
+#: (``application/json``, ``text/event-stream``), which review demonstrated
+#: would otherwise be counted as models.
+_NON_MODEL_PREFIXES: frozenset[str] = frozenset(
+    {
+        "docs",
+        "src",
+        "tests",
+        "e2e",
+        "scripts",
+        "build",
+        "configs",
+        "infra",
+        "policies",
+        "schemas",
+        "templates",
+        "profiles",
+        "application",
+        "text",
+        "image",
+        "audio",
+        "video",
+        "multipart",
+        "origin",
+        "refs",
+    }
+)
+
+#: A file extension is never part of an OpenRouter model id. Kept as
+#: defence-in-depth on top of the prefix set; note that it is NOT independently
+#: load-bearing today — review showed every current token it would reject is
+#: already rejected by ``_NON_MODEL_PREFIXES``. (An earlier version of this
+#: comment justified it with the claim that ``docs/07-open-questions.md`` "no
+#: longer exists on disk". That was FALSE — ``git ls-files
+#: docs/07-open-questions.md`` returns it, 10 lines, tracked. It was a location
+#: recalled rather than grepped, which is the exact failure mode AGENTS.md
+#: rule 1 names, committed inside a gate written to satisfy that rule.)
+_FILE_SUFFIX_RE = re.compile(r"\.(md|py|ts|tsx|js|mjs|css|html|ya?ml|json|toml|sh|txt)$")
+
+#: The word that marks a line as CLAIMING a default set, rather than merely
+#: mentioning a model. Matched case-insensitively so "Defaults are", "Default
+#: models populated" and "defaulting to" all anchor.
+_DEFAULT_CUE_RE = re.compile(r"default", re.I)
+
+#: A list item that is nothing but one backticked model id — the shape
+#: `README.md`, `docs/01-product-brief.md` and `docs/08-prioritization.md` use
+#: to enumerate the slots under a lead-in line.
+_SOLE_ID_ITEM_RE = re.compile(r"^\s*[-*]\s*`[a-z][a-z0-9-]*/[a-z0-9][a-z0-9._-]*`\s*$")
+
+#: A block must name at least this many ids to count as a default-SET claim.
+#: Two, not four: four would make "the doc names some but not all of them"
+#: invisible instead of red, which is the cardinality hole rule 6b warns about.
+_MIN_IDS_PER_BLOCK = 2
+
+
+def _model_ids_in(text: str) -> list[str]:
+    """Every backticked OpenRouter model id in ``text``, in order of appearance."""
+    found: list[str] = []
+    for token in _BACKTICKED_SLASH_TOKEN_RE.findall(text):
+        vendor = token.split("/", 1)[0]
+        if vendor in _NON_MODEL_PREFIXES or _FILE_SUFFIX_RE.search(token):
+            continue
+        found.append(token)
+    return found
+
+
+def _default_claim_blocks(text: str) -> list[tuple[int, list[str]]]:
+    """``(1-based line number, ids)`` for each default-SET claim in ``text``.
+
+    Split out from the tests so the bite-proofs below can drive it with
+    synthetic text, without touching the real docs (the same shape Part C and
+    Part D use).
+    """
+    lines = text.splitlines()
+    blocks: list[tuple[int, list[str]]] = []
+    heading_cues = False
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        if line.lstrip().startswith("#"):
+            # A heading carries its cue down to the lines it introduces. This is
+            # load-bearing: `docs/12-acceptance-criteria.md:51` — one of the two
+            # documents at the centre of the defect — states the slot set
+            # without the word "default" anywhere in the sentence. Its heading
+            # two lines up is `## AC-007 Default models populated`.
+            heading_cues = bool(_DEFAULT_CUE_RE.search(line))
+            i += 1
+            continue
+        if _DEFAULT_CUE_RE.search(line) or heading_cues:
+            ids = _model_ids_in(line)
+            j = i + 1
+            # A lead-in line ("The four model slots default to:") may be
+            # separated from its list by one blank line.
+            while j < len(lines) and not ids and not lines[j].strip():
+                j += 1
+            while j < len(lines) and _SOLE_ID_ITEM_RE.match(lines[j]):
+                ids += _model_ids_in(lines[j])
+                j += 1
+            if len(ids) >= _MIN_IDS_PER_BLOCK:
+                blocks.append((i + 1, ids))
+                i = max(j, i + 1)
+                continue
+        i += 1
+    return blocks
+
+
+def _check_default_slot_ids(*, text: str, expected: tuple[str, ...], label: str) -> None:
+    """Raise ``AssertionError`` unless ``text``'s default claims name ``expected``.
+
+    Three assertions, in this order, because they fail for three different
+    reasons and one combined equality would report the wrong one:
+
+    1. **Refuse an empty input** (AGENTS.md: every gate reports what it counted
+       and refuses to pass on nothing). "No wrong model named" is trivially true
+       of a document that claims no defaults at all.
+    2. **Cardinality** (rule 6b) — how MANY ids, not merely that no bad one
+       appeared. A doc that dropped three of the four slots would otherwise
+       satisfy a set-subset check.
+    3. **Ordered equality** — the docs list the ids in slot order, so this pins
+       which model is in which slot, not merely which four are present.
+    """
+    blocks = _default_claim_blocks(text)
+    assert blocks, (
+        f"{label} makes no default-model-slot claim this gate can read. It "
+        f"refuses to pass over an empty input — it exists to compare the ids a "
+        f"document states against product_app.model_slots.DEFAULT_MODEL_IDS, "
+        f"and it cannot do that over nothing. Restore the claim (a line "
+        f"carrying the word 'default', or a heading that does, naming at least "
+        f"{_MIN_IDS_PER_BLOCK} backticked `vendor/model` ids), or remove the "
+        f"document from _DEFAULT_SLOT_SPEC_DOCS with a stated reason."
+    )
+    found = [model_id for _, ids in blocks for model_id in ids]
+    where = ", ".join(f"line {line}" for line, _ in blocks)
+    assert len(found) == len(expected), (
+        f"{label} claims {len(found)} default model id(s) ({found}) at {where}; "
+        f"the product ships {len(expected)} default slots ({list(expected)}). "
+        f'The command that produces the real list is `python -c "from '
+        f"product_app.model_slots import DEFAULT_MODEL_IDS; "
+        f'print(DEFAULT_MODEL_IDS)"`.'
+    )
+    assert tuple(found) == expected, (
+        f"{label} claims default model slots {found} at {where}; the product "
+        f"ships {list(expected)} (product_app.model_slots.DEFAULT_MODEL_IDS), "
+        f"in that slot order. Update the document — or, if the product genuinely "
+        f"changed slots, update every document in _DEFAULT_SLOT_SPEC_DOCS to "
+        f"match the new constant. Do not delete this gate: it exists because "
+        f"FR-004 and AC-007 named a model this repo had not shipped for five "
+        f"weeks and nothing noticed."
+    )
+
+
+def test_the_default_model_ids_are_a_usable_reference_set() -> None:
+    """POSITIVE PARTNER for the doc checks: the CODE side is real and readable.
+
+    Every assertion in ``_check_default_slot_ids`` compares the docs against
+    ``DEFAULT_MODEL_IDS``. If that tuple were malformed or duplicated, the
+    comparisons could pass while measuring nothing useful.
+
+    What turns it red: give ``DEFAULT_MODEL_IDS`` a duplicate slot, or an entry
+    that is not a ``vendor/model`` identifier. (Emptying the tuple is NOT a
+    valid mutation proof for this test — it breaks collection in
+    ``tests/conftest.py`` via ``costs.py`` with ``ValueError: max() iterable
+    argument is empty``, and per rule 6 a mutation that breaks collection proves
+    nothing.)
+    """
+    from product_app.model_slots import DEFAULT_MODEL_IDS
+
+    assert DEFAULT_MODEL_IDS, "product_app.model_slots.DEFAULT_MODEL_IDS is empty"
+    assert len(set(DEFAULT_MODEL_IDS)) == len(DEFAULT_MODEL_IDS), (
+        f"DEFAULT_MODEL_IDS has a duplicate slot: {list(DEFAULT_MODEL_IDS)}"
+    )
+    for model_id in DEFAULT_MODEL_IDS:
+        assert _model_ids_in(f"`{model_id}`") == [model_id], (
+            f"{model_id!r} is not shaped like an OpenRouter model id, so the "
+            f"doc extractor would never match it and the doc gates below would "
+            f"silently stop comparing anything"
+        )
+
+
+def test_the_default_slot_corpus_is_not_empty() -> None:
+    """EMPTY-INPUT FLOOR for the corpus itself (AGENTS.md gate rule).
+
+    ``test_spec_docs_name_the_default_model_ids_the_app_actually_ships`` loops
+    over ``_DEFAULT_SLOT_SPEC_DOCS``. Emptying that tuple makes every assertion
+    inside the loop vacuously true and the gate green over nothing — reproduced
+    by review against the first version of this Part. The per-document floor
+    does not catch it, because no document is read.
+
+    What turns it red: delete an entry from ``_DEFAULT_SLOT_SPEC_DOCS`` without
+    lowering ``_MIN_SPEC_DOCS``, which forces the deletion to be a deliberate,
+    reviewable edit rather than a silent one.
+    """
+    assert len(_DEFAULT_SLOT_SPEC_DOCS) >= _MIN_SPEC_DOCS, (
+        f"_DEFAULT_SLOT_SPEC_DOCS holds {len(_DEFAULT_SLOT_SPEC_DOCS)} "
+        f"documents; this gate refuses to measure fewer than {_MIN_SPEC_DOCS}. "
+        f"If a document genuinely stopped stating the defaults, lower "
+        f"_MIN_SPEC_DOCS in the same commit and say why."
+    )
+    # Dedupe on the RESOLVED path, not the raw string. Review defeated a plain
+    # `set()` comparison by respelling one entry as `./README.md`: ten string
+    # entries, nine real documents, README read twice, and
+    # `docs/design-handoff/AC-CROSSWALK.md` — one of the two stale documents
+    # round 1 found — silently dropped from coverage while the suite stayed
+    # green. Same class as the empty-corpus hole this test already closes.
+    resolved = [(REPO_ROOT / rel).resolve() for rel in _DEFAULT_SLOT_SPEC_DOCS]
+    assert len(set(resolved)) == len(resolved), (
+        f"_DEFAULT_SLOT_SPEC_DOCS names the same document twice under different "
+        f"spellings, which inflates the corpus count without measuring anything "
+        f"more: {sorted({str(p) for p in resolved if resolved.count(p) > 1})}"
+    )
+
+
+def test_spec_docs_name_the_default_model_ids_the_app_actually_ships() -> None:
+    """Every covered doc's default-slot claim must equal ``DEFAULT_MODEL_IDS``.
+
+    What turns it red: change a slot in ``src/product_app/model_slots.py``
+    without editing the ten documents, or put
+    ``deepseek/deepseek-chat-v3.1`` back into any of them.
+    """
+    from product_app.model_slots import DEFAULT_MODEL_IDS
+
+    counted: dict[str, int] = {}
+    for rel in _DEFAULT_SLOT_SPEC_DOCS:
+        path = REPO_ROOT / rel
+        assert path.is_file(), (
+            f"{rel} is listed in _DEFAULT_SLOT_SPEC_DOCS but does not exist. "
+            f"The gate would otherwise skip it and pass having read nothing."
+        )
+        text = path.read_text(encoding="utf-8")
+        _check_default_slot_ids(text=text, expected=DEFAULT_MODEL_IDS, label=rel)
+        counted[rel] = len(_default_claim_blocks(text))
+
+    # NOTE: this test deliberately ends here. An earlier version closed with two
+    # "report what was counted" assertions — no document contributes zero
+    # blocks, and the block total is at least the document count. Review proved
+    # both INERT: `_check_default_slot_ids` already raises on an empty block
+    # list, and on a zero-block document the cardinality assertion fires first
+    # (`claims 0 default model id(s) ... assert 0 == 4`). Deleting them left the
+    # suite green under every attack. A dead assertion presented as an
+    # empty-input partner is worse than none, because it is believed. The real
+    # partners are `test_the_default_slot_corpus_is_not_empty` above and
+    # `test_no_covered_doc_names_a_non_default_model_anywhere` below.
+    assert counted, "no documents were read"  # loop-ran floor, and it can fire
+
+
+def test_the_default_slot_gate_bites_on_a_stale_id() -> None:
+    """The guard must FAIL on the exact drift it was written for.
+
+    What turns it red: make ``_check_default_slot_ids`` stop comparing, or make
+    ``_model_ids_in`` stop matching backticked identifiers.
+    """
+    expected = ("openai/gpt-4o-mini", "vendor-b/model-b", "vendor-c/model-c", "vendor-d/model-d")
+    stale = (
+        "Defaults are `openai/gpt-4o-mini`, `vendor-b/model-b`, "
+        "`vendor-c/model-c`, and `deepseek/deepseek-chat-v3.1`."
+    )
+    with pytest.raises(AssertionError) as caught:
+        _check_default_slot_ids(text=stale, expected=expected, label="synthetic.md")
+    assert "deepseek/deepseek-chat-v3.1" in str(caught.value)
+    assert "vendor-d/model-d" in str(caught.value)
+    assert "line 1" in str(caught.value)
+
+
+def test_the_default_slot_gate_refuses_an_empty_input() -> None:
+    """A doc claiming NO defaults must fail, not pass (rule 7 / empty-input floor).
+
+    This is the vacuity case: "no wrong model is named" is trivially true over a
+    document that names no models at all, and that is precisely how a negative
+    doc check rots.
+
+    What turns it red: delete the ``assert blocks`` floor in
+    ``_check_default_slot_ids``.
+    """
+    expected = ("vendor-a/model-a", "vendor-b/model-b")
+    with pytest.raises(AssertionError) as empty:
+        _check_default_slot_ids(
+            text="This document explains model slots but names none of them.",
+            expected=expected,
+            label="empty.md",
+        )
+    assert "makes no default-model-slot claim" in str(empty.value)
+
+    # A doc that names SOME but not all of them must fail on CARDINALITY, not
+    # slip through a set-subset comparison (rule 6b).
+    with pytest.raises(AssertionError) as short:
+        _check_default_slot_ids(
+            text="Defaults are `vendor-a/model-a` and `vendor-b/model-b`, `vendor-c/model-c`.",
+            expected=("vendor-a/model-a", "vendor-b/model-b"),
+            label="long.md",
+        )
+    assert "claims 3 default model id(s)" in str(short.value)
+
+
+def test_a_default_claim_is_read_from_a_block_not_the_whole_file() -> None:
+    """The scoping that lets `README.md` be covered at all.
+
+    `README.md:42` names `anthropic/claude-haiku-4.5` a second time while
+    describing `settings.debate_model_id`. Whole-file extraction read five ids
+    and failed on a correct document; a MIME type anywhere in a covered doc did
+    the same. Both were reproduced by review against the first version.
+
+    What turns it red: make ``_default_claim_blocks`` scan the whole file again,
+    drop ``_MIN_IDS_PER_BLOCK``, or drop the heading-cue rule.
+    """
+    # 1. A single-id aside near the word "default" is NOT a default-set claim.
+    aside = "By default this is the same model as slot 2 (`anthropic/claude-haiku-4.5`)."
+    assert _default_claim_blocks(aside) == []
+
+    # 2. A lead-in line plus its bulleted list IS one block, across a blank line.
+    listed = "The four model slots default to:\n\n- `openai/gpt-4o-mini`\n- `vendor-b/model-b`\n"
+    assert _default_claim_blocks(listed) == [(1, ["openai/gpt-4o-mini", "vendor-b/model-b"])]
+
+    # 3. A heading carries the cue to a sentence that lacks it — the AC-007
+    #    shape, and the reason a line-scoped cue anchor was rejected.
+    headed = (
+        "## AC-007 Default models populated\n"
+        "\n"
+        "Then four slots are populated with `openai/gpt-4o-mini` and `vendor-b/model-b`.\n"
+    )
+    assert _default_claim_blocks(headed) == [(3, ["openai/gpt-4o-mini", "vendor-b/model-b"])]
+
+    # 4. NEGATIVE PARTNER: the same sentence under a heading with no cue, and no
+    #    cue of its own, is not read at all.
+    unheaded = (
+        "## Response shape\n"
+        "\n"
+        "Then four slots are populated with `openai/gpt-4o-mini` and `vendor-b/model-b`.\n"
+    )
+    assert _default_claim_blocks(unheaded) == []
+
+
+def test_the_model_id_extractor_ignores_paths_and_mime_types() -> None:
+    """POSITIVE + NEGATIVE partner for ``_model_ids_in``'s filters.
+
+    The covered docs cross-reference each other with backticked paths
+    (``docs/22-api-contract.md``, ``src/product_app``) and describe HTTP content
+    types. If those were read as model ids the cardinality check above would
+    fail on correct documents, and the usual "fix" would be to loosen the gate.
+
+    What turns it red: drop ``_NON_MODEL_PREFIXES``, or tighten
+    ``_BACKTICKED_SLASH_TOKEN_RE`` so real ids stop matching. (``_FILE_SUFFIX_RE``
+    is deliberately NOT named here — review measured that removing it turns
+    nothing red today, because every token it would reject is already rejected
+    by the prefix set. It is defence-in-depth, and saying otherwise would be an
+    unverified red-line.)
+    """
+    mixed = (
+        "See `docs/22-api-contract.md` and `src/product_app`; the body is "
+        "`application/json` and the stream is `text/event-stream`. The slot is "
+        "`nvidia/nemotron-3-nano-30b-a3b` and the retired one was "
+        "`deepseek/deepseek-chat-v3.1`. Also `docs/07-open-questions.md`."
+    )
+    assert _model_ids_in(mixed) == [
+        "nvidia/nemotron-3-nano-30b-a3b",
+        "deepseek/deepseek-chat-v3.1",
+    ]
+    # Negative partner: an unbackticked mention is prose, not an identifier.
+    # This is a KNOWN blind spot, asserted so it is a stated design limit rather
+    # than an accident — see the Part G header and ADR-0088's Consequences.
+    assert _model_ids_in("the slot defaults to nvidia/nemotron-3-nano-30b-a3b") == []
+
+
+def test_no_covered_doc_names_a_non_default_model_anywhere() -> None:
+    """MEMBERSHIP partner to the block check: no retired id survives ANYWHERE.
+
+    ``test_spec_docs_name_the_default_model_ids_the_app_actually_ships`` reads
+    only default-claim blocks, which is what lets `README.md` be covered at all
+    (line 42 names slot 2's model a second time for ``settings.debate_model_id``).
+    The cost of that scoping, measured by review: a stale id added ELSEWHERE in a
+    covered document — ``"Slot 4 is `deepseek/deepseek-chat-v3.1` in
+    production."`` appended to `docs/10-functional-requirements.md` — was caught
+    by the first, whole-file implementation and slipped past the block-scoped
+    one. The redesign traded that coverage away silently; this test buys it back.
+
+    Set MEMBERSHIP, not ordered equality and not cardinality — that is the whole
+    point. Order and count are already pinned per block above; repeating them
+    here would re-introduce the two false alarms block scoping was written to
+    remove (README's five ids, and a backticked MIME type).
+
+    What turns it red: put any model id that is not a current default into any
+    document in ``_DEFAULT_SLOT_SPEC_DOCS``, anywhere in the file.
+    """
+    from product_app.model_slots import DEFAULT_MODEL_IDS
+
+    shipped = set(DEFAULT_MODEL_IDS)
+    total = 0
+    offenders: dict[str, list[str]] = {}
+    for rel in _DEFAULT_SLOT_SPEC_DOCS:
+        found = _model_ids_in((REPO_ROOT / rel).read_text(encoding="utf-8"))
+        total += len(found)
+        stray = sorted(set(found) - shipped)
+        if stray:
+            offenders[rel] = stray
+
+    # Positive partner FIRST (rule 7): "no stray id" is trivially true over a
+    # corpus in which nothing was read. Ten documents, at least four ids each.
+    assert total >= len(_DEFAULT_SLOT_SPEC_DOCS) * len(DEFAULT_MODEL_IDS), (
+        f"read only {total} backticked model ids across "
+        f"{len(_DEFAULT_SLOT_SPEC_DOCS)} covered documents; expected at least "
+        f"{len(_DEFAULT_SLOT_SPEC_DOCS) * len(DEFAULT_MODEL_IDS)}. The "
+        f"extractor has stopped matching, so the membership check below would "
+        f"pass over nothing."
+    )
+    assert not offenders, (
+        f"covered documents name model ids the product does not ship as "
+        f"defaults: {offenders}. The shipped set is {list(DEFAULT_MODEL_IDS)} "
+        f"(product_app.model_slots.DEFAULT_MODEL_IDS). If a document must "
+        f"legitimately mention a non-default model, remove it from "
+        f"_DEFAULT_SLOT_SPEC_DOCS with a stated reason rather than loosening "
+        f"this check."
+    )

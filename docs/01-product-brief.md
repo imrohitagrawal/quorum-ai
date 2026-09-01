@@ -41,7 +41,7 @@ The MVP proves that a user can reduce hallucination risk by running one query th
   - `openai/gpt-4o-mini`
   - `anthropic/claude-haiku-4.5`
   - `google/gemini-2.5-flash`
-  - `deepseek/deepseek-chat-v3.1`
+  - `nvidia/nemotron-3-nano-30b-a3b`
 - Ability for users to replace all four models with OpenRouter-supported models chosen from the live catalog when available.
 - Web-search-backed answers with source links, using OpenRouter search first and Tavily or another free search option as fallback.
 - Two critique/debate rounds before synthesis.
