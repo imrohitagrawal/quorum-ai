@@ -478,6 +478,11 @@ def _main_refs_for(root: Path, remotes: list[str]) -> list[str]:
     this ordering.
     """
     ordered = [name for name in ("origin",) if name in remotes]
+    # ``sorted`` is deliberately redundant. Measured on git 2.54.0, ``git
+    # remote`` already lists names alphabetically -- adding zulu, alpha, origin,
+    # mike printed alpha, mike, origin, zulu. Keeping the sort means the
+    # candidate ORDER does not depend on an upstream behaviour nothing here
+    # pins, so a mutation removing it is EQUIVALENT and no test can kill it.
     ordered += [name for name in sorted(remotes) if name != "origin"]
     remote_main = [
         ref
