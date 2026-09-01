@@ -125,29 +125,48 @@ def _row(row_id: str, state: str, evidence: str) -> str:
     return f"| {row_id} | x | {state} | {evidence} | — | — |\n"
 
 
-def _pinned(row_id: str, state: str, polarity: str = "ABSENT") -> str:
-    return _row(row_id, state, f"`{polarity} {_TARGET_NAME} :: {_NEEDLE}`")
+def _pinned(
+    row_id: str, state: str, polarity: str = "ABSENT", *, target_name: str = _TARGET_NAME
+) -> str:
+    return _row(row_id, state, f"`{polarity} {target_name} :: {_NEEDLE}`")
 
 
-def _sandbox(tmp_path: Path, *, board: str, target: str = "nothing here") -> Path:
-    """A root the checker can be pointed at: a board plus one target file."""
+def _sandbox(
+    tmp_path: Path, *, board: str, target: str = "nothing here", target_name: str = _TARGET_NAME
+) -> Path:
+    """A root the checker can be pointed at: a board plus one target file.
+
+    ``target_name`` defaults to a plain ``.txt`` file, matched against the
+    comment-only stripper. A caller who passes a ``.py`` name gets the
+    tokenize-based Python path instead -- see
+    ``test_a_needle_present_only_in_a_python_docstring_is_not_real_code``.
+    """
     (tmp_path / _DOCS).mkdir(parents=True)
     (tmp_path / _DOCS / _BOARD_NAME).write_text(board, encoding="utf-8")
-    (tmp_path / _TARGET_NAME).write_text(target, encoding="utf-8")
+    (tmp_path / target_name).write_text(target, encoding="utf-8")
     return tmp_path
 
 
-def _run(tmp_path: Path, *, board: str, target: str = "nothing here") -> tuple[list[str], str]:
+def _run(
+    tmp_path: Path, *, board: str, target: str = "nothing here", target_name: str = _TARGET_NAME
+) -> tuple[list[str], str]:
     """``check_all`` over a sandbox root, with the drift limit out of the way."""
-    root = _sandbox(tmp_path, board=board, target=target)
+    root = _sandbox(tmp_path, board=board, target=target, target_name=target_name)
     failures, report = CHECKER.check_all(root, 10**9)
     return list(failures), str(report)
 
 
-def _enough_rows(state: str, *, polarity: str = "ABSENT") -> tuple[str, int]:
+def _enough_rows(
+    state: str, *, polarity: str = "ABSENT", target_name: str = _TARGET_NAME
+) -> tuple[str, int]:
     """Enough pinned rows to clear ``MIN_EVIDENCE_CLAIMS``, all in one state."""
     n = CHECKER.MIN_EVIDENCE_CLAIMS
-    return "".join(_pinned(f"W{i}", state, polarity) for i in range(1, n + 1)), n
+    return (
+        "".join(
+            _pinned(f"W{i}", state, polarity, target_name=target_name) for i in range(1, n + 1)
+        ),
+        n,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -207,6 +226,12 @@ def test_the_checker_exits_non_zero_on_a_board_that_disagrees(tmp_path: Path) ->
     broken = _sandbox(tmp_path, board=_board_text(rows, row_count=n, unpinned=0))
     (broken / "scripts").mkdir()
     (broken / "scripts" / SCRIPT.name).write_bytes(SCRIPT.read_bytes())
+    # The checker loads tests/code_text.py BY PATH, relative to its own ROOT
+    # (#418), so a copy that keeps only the script -- not the tree it is
+    # normally part of -- must carry that dependency along too.
+    code_text_path = ROOT / "tests" / "code_text.py"
+    (broken / "tests").mkdir()
+    (broken / "tests" / "code_text.py").write_bytes(code_text_path.read_bytes())
     bad = subprocess.run(
         [sys.executable, str(broken / "scripts" / SCRIPT.name), "--check"],
         cwd=broken,
@@ -333,6 +358,36 @@ def test_a_comment_cannot_satisfy_a_needle(tmp_path: Path) -> None:
     # simply ignoring the file.
     as_code = f"x = {_NEEDLE}\n"
     landed, _ = _run(tmp_path / "b", board=board, target=as_code)
+    assert len(landed) == 1, landed
+    assert "the State column disagrees" in landed[0]
+
+
+def test_a_needle_present_only_in_a_python_docstring_is_not_real_code(tmp_path: Path) -> None:
+    """Turns red if: a needle inside a Python DOCSTRING counts as code.
+
+    ``code_text()`` stripped only ``#`` comment tails line-by-line and never
+    tokenized, so a needle string appearing inside a triple-quoted docstring
+    -- prose, not the construct it names -- was still counted PRESENT.
+    Reproduced independently against a real row (#418): deleting W20's guard
+    (``if len(stance) < 2:`` in ``synthesis_consensus.py``) correctly flipped
+    the board to PENDING, but adding that exact text to a DOCSTRING instead,
+    with the guard still deleted, flipped it back to DONE. This is the same
+    class of bug ``tests/code_text.py`` exists to prevent, documented in that
+    module's own docstring (PR #164): a literal match finds the prose that
+    EXPLAINS the code, not the code.
+    """
+    target_name = "target.py"
+    rows, n = _enough_rows(CHECKER.PENDING, target_name=target_name)
+    board = _board_text(rows, row_count=n, unpinned=0)
+
+    docstring_only = f'"""\nexplains the fix: {_NEEDLE}\n"""\n'
+    failures, _ = _run(tmp_path / "a", board=board, target=docstring_only, target_name=target_name)
+    assert failures == [], f"a needle mentioned only in a docstring must not count: {failures}"
+
+    # POSITIVE PARTNER: the same text as real, non-comment, non-docstring CODE
+    # does count, so this is not the tokenizer silently ignoring the file.
+    as_code = f'x = "{_NEEDLE}"\n'
+    landed, _ = _run(tmp_path / "b", board=board, target=as_code, target_name=target_name)
     assert len(landed) == 1, landed
     assert "the State column disagrees" in landed[0]
 

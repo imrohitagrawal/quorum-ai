@@ -78,11 +78,14 @@ def _blank_python(text: str) -> str:
     """Blank COMMENT tokens and docstrings, preserving every other character."""
     lines = text.splitlines(keepends=True)
     tokens = list(tokenize.generate_tokens(io.StringIO(text).readline))
+    depths = _bracket_depths(tokens)
 
     blank: list[tuple[int, int, int, int]] = []
     for index, token in enumerate(tokens):
         is_comment = token.type == tokenize.COMMENT
-        is_docstring = token.type == tokenize.STRING and _is_docstring(tokens, index)
+        is_docstring = (
+            token.type == tokenize.STRING and depths[index] == 0 and _is_docstring(tokens, index)
+        )
         if is_comment or is_docstring:
             blank.append((*token.start, *token.end))
 
@@ -97,12 +100,44 @@ def _blank_python(text: str) -> str:
     return "".join(lines)
 
 
+def _bracket_depths(tokens: list[tokenize.TokenInfo]) -> list[int]:
+    """The ``(``/``[``/``{`` nesting depth EACH token sits inside, by index.
+
+    Load-bearing for :func:`_is_docstring` (#418, found reusing this helper
+    from ``scripts/check_open_work.py``): a dict/list/set/tuple literal
+    written one entry per line puts a STRING as the first token on its
+    logical line, on every line after the first -- ``tokenize`` emits ``NL``
+    for the line break inside brackets, the exact same token
+    :func:`_is_docstring` treats as "a docstring follows". Without a depth
+    check, ``{"stream": True}`` written multi-line blanked the key
+    ``"stream"`` as if it were a module docstring. A real docstring can only
+    ever be a top-level expression statement, which is by definition at
+    depth 0 -- inside any bracket, a string is a collection element, a call
+    argument, or a subscript, never a docstring.
+    """
+    depth = 0
+    depths: list[int] = []
+    for token in tokens:
+        depths.append(depth)
+        if token.type == tokenize.OP:
+            if token.string in "([{":
+                depth += 1
+            elif token.string in ")]}":
+                depth -= 1
+    return depths
+
+
 def _is_docstring(tokens: list[tokenize.TokenInfo], index: int) -> bool:
     """A STRING that stands alone as a statement — module, class or function level.
 
     Detected by what precedes it rather than by parsing: a docstring is the first
     thing on its logical line. A string being assigned, returned or passed as an
     argument has a NAME, OP or KEYWORD before it on the same logical line.
+
+    Callers MUST also check the token's bracket depth is 0 (see
+    :func:`_bracket_depths`) — this function alone cannot tell a bracketed
+    collection's line-leading string from a real docstring, because both are
+    "the first token after an NL" from ``tokenize``'s point of view.
     """
     for previous in reversed(tokens[:index]):
         if previous.type in {tokenize.NL, tokenize.NEWLINE, tokenize.INDENT, tokenize.DEDENT}:
