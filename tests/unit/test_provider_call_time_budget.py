@@ -45,7 +45,7 @@ from typing import Any
 import pytest
 from tests.provider_wire import sse_from_completion
 
-from product_app import config
+from product_app import config, providers
 from product_app.providers import provider_execution_service
 
 _MODEL_ID = "openai/gpt-4o-mini"
@@ -618,19 +618,93 @@ def test_the_budget_covers_the_header_phase_not_only_the_body(
     ``openrouter_call_budget_seconds`` would not be the "total wall-clock
     budget for one provider call" that its own docstring claims.
 
-    This server dribbles ~70 header bytes at 0.05s each, about 3.5s, against a
-    1.5s budget. The literal 4.0s bound is well under the ~3.5s + full body
-    read the un-clocked version would take, and its positive partner is the
-    lower bound proving the dribble really happened.
+    **This test asserted ``wall < 4.0`` until 2026-09-01, and that assertion
+    could not tell the defect from the machine.** It fired on healthy code --
+    10 of 10 reps on unmodified ``origin/main``, 4.021-4.159s at load ~6 --
+    while CI passed it.
+
+    The wall clock here is set by the SERVER, not by the budget: 72 header
+    bytes at 0.05s is ~3.55s before the client can act at all, and no
+    client-side budget can shorten a phase that is already over by the time
+    the client regains control. So the two arms are separated by nothing but
+    noise, and FOUR independent measurement sessions could not agree on even
+    the SIGN of the difference -- one found the defect slower, one found it
+    reliably FASTER (an inverted detector), two found them straddling 4.0.
+    Paired and interleaved on this box, 8 pairs alternating, load ~4.9:
+
+        clean origin/main    wall 4.008-4.106 (mean 4.056)   arg -2.508 .. -2.606
+        clock after urlopen  wall 4.049-4.157 (mean 4.091)   arg +1.4999905 .. +1.4999957
+
+    No threshold separates those wall figures. The ARGUMENT separates them
+    completely, and did so in every session that measured two arms: the budget
+    handed to the body
+    read is what REMAINS after connect, request and headers -- negative here
+    (~3.55s of headers against a 1.5s budget), or the whole budget untouched if
+    the clock started too late. So this asserts on the argument rather than the
+    elapsed clock (AGENTS.md rule 8b), against a literal, and never against the
+    constant under test (rule 7a -- ``budget`` cancels algebraically, since
+    production computes the argument as ``budget - elapsed``).
+
+    **It cannot flake on the quantity it measures, and the reason is
+    structural rather than statistical.** The charge is floored by 71
+    ``time.sleep(0.05)`` calls that never return early, so it cannot fall below
+    ~3.55s whatever the machine is doing; the defect drives it to exactly zero.
+    Measured across 28 clean reps spanning load 3.6 to 20.9 the charge ranged
+    3.762-4.106s, low 3.7617s, and the LOWEST values came at ambient load
+    rather than under load generators -- it is load-INSENSITIVE, not
+    load-monotonic. That is 25% headroom over the 3.0 literal, where the old
+    bound had about 2% and an unstable sign.
+
+    What this does NOT cover, stated plainly: nothing here bounds the total
+    wall clock of a slow-header call any more, and ``header_tick`` has no other
+    call site in the suite. The budget can only CHARGE for the header phase, it
+    cannot CUT it, so that ceiling was never enforcing much -- but it is gone,
+    and this is where a reader should learn that. The separate claim that the
+    body read HONOURS the budget it was handed is covered elsewhere, chiefly
+    ``test_a_slow_dribble_is_cut_at_the_budget``.
     """
+    budget = 1.5
+    budget_handed_to_body_read: list[float] = []
+    real_reader = providers._iter_body_within_budget
+
+    def _record(response: Any, remaining: float, per_recv: float) -> Iterator[bytes]:
+        budget_handed_to_body_read.append(remaining)
+        return real_reader(response, remaining, per_recv)
+
+    monkeypatch.setattr(providers, "_iter_body_within_budget", _record)
+
     server = _raw_server(_content_length_headers(len(_COMPLETION)), _COMPLETION, header_tick=0.05)
     base_url = next(server)
     try:
-        result, wall = _call_against(monkeypatch, base_url, budget=1.5)
+        result, wall = _call_against(monkeypatch, base_url, budget=budget)
     finally:
         server.close()
-    assert wall < 4.0, f"the call ran {wall:.3f}s; a 1.5s budget must cover the headers"
-    assert wall >= 0.5, f"the call ran {wall:.3f}s; the header dribble did not happen"
+
+    # ANTI-VACUITY: without this, an implementation that never reaches the body
+    # read at all would leave the list empty and every assertion below would be
+    # over nothing.
+    assert len(budget_handed_to_body_read) == 1, (
+        f"the body read was reached {len(budget_handed_to_body_read)} times; "
+        "this test measured nothing"
+    )
+    charged_for_the_header_phase = budget - budget_handed_to_body_read[0]
+    assert charged_for_the_header_phase >= 3.0, (
+        f"the clock charged {charged_for_the_header_phase:.3f}s to connect + "
+        "request + headers. The server dribbles 72 header bytes at 0.05s, so a "
+        "clock that covers the header phase must see at least 3.0s; 0.0s means "
+        "it started after urlopen and the header phase is outside the budget."
+    )
+    # The positive partner for that lower bound: the charge is a real elapsed
+    # slice of THIS call, not a constant a stubbed reader could hand back. A
+    # spy returning a fixed large number passes the bound above and fails here.
+    assert charged_for_the_header_phase <= wall, (
+        f"the clock charged {charged_for_the_header_phase:.3f}s to a call that "
+        f"only ran {wall:.3f}s in total"
+    )
+    # Liveness only, and deliberately generous: this is the difference between
+    # "returns" and "never returns", not a speed measurement. The 2%-margin
+    # bound that used to sit here is what made this test flip with load.
+    assert wall < 30.0, f"the call ran {wall:.3f}s; the call did not terminate"
     assert result is not None
     assert result.answer_text == ""
 

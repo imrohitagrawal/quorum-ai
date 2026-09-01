@@ -259,14 +259,20 @@ Rules that earn the fan its cost, all paid for:
 5. **`make diff-cover` runs pytest first**, so it exits non-zero when ANY test
    fails, coverage notwithstanding. Read which failed before blaming coverage.
 6. **A local failure your diff cannot explain is a phantom until you re-run it on
-   a clean tree**: `git archive origin/main | tar -x -C <dir>`. The known example
-   is `test_the_budget_covers_the_header_phase_not_only_the_body` (board row
-   **W19**), which asserts `wall < 4.0` with about 2% of margin and flips with
-   machine load — measured 2026-08-28 on one box: **5 of 5 failing at 4.13–4.18s
-   under concurrent load, 6 of 6 passing at 3.92–3.96s idle**, and 11 of 11
-   passing for an independent reviewer. **Do not dismiss a red result there as
-   W19 without re-running it isolated on an idle machine** — a real regression
-   would look identical.
+   a clean tree**: `git archive origin/main | tar -x -C <dir>`. The long-running
+   example was `test_the_budget_covers_the_header_phase_not_only_the_body`
+   (board row **W19**), which asserted `wall < 4.0` with about 2% of margin and
+   flipped with machine load — 10 of 10 failing on unmodified `origin/main` at
+   load ~6 when it was finally measured. **That is FIXED as of 2026-09-01
+   (ADR-0089) and the advice has inverted: a red there is no longer a load
+   flake.** The bound was replaced by an assertion on the budget ARGUMENT
+   handed to the body read, which is load-INSENSITIVE (28 reps over load
+   3.6–20.9 stayed in 3.762–4.106 s against a 3.0 bound — 25% headroom). Do
+   not dismiss it as load. The one non-load red it can give is `this test
+   measured nothing`, which means `urlopen` never returned — a dead loopback
+   server, not your diff. The technique generalises: when a test drives a
+   server that controls the clock, the client's bound shows up in what the
+   client COMPUTES, not in how long the exchange took.
 7. **A merge fires 3–5 deploy runs; most are `cancelled` by concurrency.**
    Enumerate every run for the SHA and read each Deploy **JOB**, never the rollup.
    `gh run list --commit <SHA>` can return `[]` before runs exist, so assert one exists.
