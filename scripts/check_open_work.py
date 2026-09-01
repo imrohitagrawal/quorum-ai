@@ -157,6 +157,12 @@ MIN_EVIDENCE_CLAIMS = 8
 #: "google sign-in is still TODO" to ``auth.py``. Every live needle is 14+.
 MIN_NEEDLE_CHARS = 12
 
+#: The branch this repository merges into, and therefore the only branch a
+#: board anchor can safely sit on. Squash-merging discards every commit made on
+#: a feature branch, so an anchor stamped there stops existing the moment the
+#: branch lands (#402).
+MAIN_BRANCH = "main"
+
 _SHA_LINE = re.compile(r"^Verified at: `([0-9a-f]{40})`$", re.MULTILINE)
 #: DIGITS, not spelled-out words -- the whole point is that a machine re-reads
 #: them, and ``twelve`` is not machine-readable.
@@ -418,6 +424,136 @@ def has_git_history(root: Path) -> bool:
     return Path(shown.stdout.strip()).resolve() == root.resolve()
 
 
+def anchor_commit_exists(root: Path, sha: str) -> bool:
+    """Whether ``sha`` names a commit object in ``root``'s object store.
+
+    Shared by :func:`check_freshness` and :func:`check_all` so the
+    squash-survival family below can be skipped on an anchor that was already
+    refused here -- rather than being sniffed for out of the other family's
+    failure strings.
+    """
+    return _git(root, "cat-file", "-e", f"{sha}^{{commit}}").returncode == 0
+
+
+def known_main_refs(root: Path) -> list[str]:
+    """Every ref in this checkout that IS ``main``, most authoritative first.
+
+    THE WHOLE DESIGN OF #402 IS IN THIS FUNCTION: it asks which refs EXIST,
+    never which refspecs are configured. Two earlier designs asked the second
+    question and both shipped green while wrong, because git's answer and the
+    config's answer disagree in at least four measured ways (git 2.54.0):
+    ``refs/heads/main`` with no colon and ``+*:refs/remotes/origin/*`` both
+    look like tracking and produce no ref; ``+main:refs/remotes/origin/main``
+    looks like it does not track and produces one; and a refspec holding ``[``
+    or ``?`` is rejected by git outright. A ref either resolves or it does not.
+
+    ``origin`` comes first because it is the ref a contributor is most likely
+    to have current, then every other configured remote, then the local
+    ``refs/heads/main``. That last entry is what makes a ``git clone --bare``
+    plus ``git worktree add`` layout answerable: no refspec there mentions
+    ``main`` while a complete ``refs/heads/main`` sits in the same object
+    store.
+
+    A remote-tracking ref is built from a CONFIGURED REMOTE NAME, not matched
+    by suffix, so a branch called ``feature/main`` is not mistaken for trunk.
+    """
+    remotes = _git(root, "remote").stdout.split()
+    ordered = [name for name in ("origin",) if name in remotes]
+    ordered += [name for name in sorted(remotes) if name != "origin"]
+    candidates = [f"refs/remotes/{name}/{MAIN_BRANCH}" for name in ordered]
+    candidates.append(f"refs/heads/{MAIN_BRANCH}")
+    return [
+        ref
+        for ref in candidates
+        if _git(root, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}").returncode == 0
+    ]
+
+
+def check_anchor_is_on_main(board: Board, root: Path) -> tuple[list[str], str]:
+    """The anchor must live on a ``main`` this checkout can see (#402).
+
+    Returns ``(failures, note)``; the note goes on ``check_all``'s report line
+    so a skip is never silent and a pass says which ref answered.
+
+    WHY ANCESTRY AGAINST ``HEAD`` IS NOT ENOUGH. :func:`check_freshness`
+    compares the anchor with ``HEAD``. On a feature branch a commit made ON
+    that branch IS an ancestor of HEAD, so it passed; this repository
+    SQUASH-merges, which discards that commit, and the gate then refused on
+    ``main`` after the merge instead of on the pull request before it. PR #399:
+    anchor ``2350e59``, squash ``59f402a``, ``main`` red.
+
+    THE THREE ANSWERS, and why the middle one is not the shape that was
+    designed on paper:
+
+    * **at least one known ``main`` contains the anchor** -> pass. "At least
+      one", not "``origin/main``", is what admits a contributor whose ``origin``
+      is a fork that is behind while ``upstream`` is canonical -- with no
+      heuristic, because ``upstream/main`` simply answers.
+    * **no ``main`` ref at all, but a remote is configured** -> REFUSE. The
+      design note this was built from said skip here. Measured afterwards: a
+      ``--single-branch --branch <feature>`` clone has no ``main`` ref of any
+      kind, so skipping would fail open in the one shape where a branch-only
+      anchor is most likely to be typed. It refuses instead, and the message
+      names a remedy that was measured to work -- Design A's defect was not
+      the refusal, it was printing ``git fetch origin main``, which only writes
+      FETCH_HEAD and leaves ``origin/main`` absent.
+    * **no ``main`` ref and no remote either** -> skip, out loud. Nothing could
+      answer the question and nothing could be fetched; this is a ``git init``
+      sandbox. The skip is ignorance, not permission: give that same repository
+      a ``main`` and the same anchor is refused at once.
+
+    KNOWN LIMIT, stated rather than hidden: a ``main`` ref that is behind
+    refuses an anchor that really is on ``main``, because a genuine ``main``
+    commit and a branch commit are both just "descendants of the ref" and
+    nothing local separates them. ``git fetch`` is the first remedy and it does
+    NOT always clear it -- when ``origin`` is a fork that is itself behind,
+    fetching it advances nothing.
+    """
+    assert board.sha is not None  # guarded by check_all; see anchor_commit_exists
+    sha = board.sha
+    refs = known_main_refs(root)
+    if not refs:
+        remotes = _git(root, "remote").stdout.split()
+        if not remotes:
+            return [], ", squash-survival SKIPPED (no remote and no `main` ref here)"
+        return [
+            f"{BOARD.name}: this checkout has a remote ({', '.join(remotes)}) but no "
+            f"`{MAIN_BRANCH}` ref of any kind, so the anchor cannot be checked against "
+            f"`{MAIN_BRANCH}` and this gate will not guess. Measured on git 2.54.0: "
+            "`git fetch origin main` does NOT create `refs/remotes/origin/main` here, "
+            "it only writes FETCH_HEAD. Run `git remote set-branches --add origin "
+            "main && git fetch origin`, or `git fetch origin "
+            "main:refs/remotes/origin/main`."
+        ], ", squash-survival REFUSED (no `main` ref)"
+    unanswered: list[str] = []
+    for ref in refs:
+        # 0 = ancestor, 1 = not an ancestor, anything else = git could not
+        # answer. Collapsing those last two would print "re-stamp your board"
+        # at an author whose real problem is a broken invocation.
+        code = _git(root, "merge-base", "--is-ancestor", sha, ref).returncode
+        if code == 0:
+            return [], f", anchor on {ref}"
+        if code != 1:
+            unanswered.append(f"{ref} (exit {code})")
+    if unanswered:
+        return [
+            f"{BOARD.name}: git could not answer whether anchor commit {sha[:12]} is "
+            f"an ancestor of {', '.join(unanswered)}. That is a broken invocation, "
+            "not a stale board -- do not re-stamp until it is understood."
+        ], ", squash-survival UNANSWERED"
+    return [
+        f"{BOARD.name}: anchor commit {sha[:12]} is not on any `{MAIN_BRANCH}` this "
+        f"checkout can see (checked {', '.join(refs)}). This repository SQUASH-merges, "
+        "so a commit made on your branch is DISCARDED when the branch lands and the "
+        "anchor stops existing at all -- which turns `main` red for everyone after the "
+        "merge instead of turning your pull request red before it. Stamp the commit "
+        "your branch was cut FROM, or re-stamp after the merge. If you believe the "
+        "anchor really is on `main`, those refs may be behind: `git fetch origin main` "
+        "updates `origin/main`, though a fetch does not always clear this -- when "
+        "`origin` is a fork that is itself behind, fetching it advances nothing."
+    ], f", anchor on no known `{MAIN_BRANCH}`"
+
+
 def check_freshness(board: Board, root: Path, max_drift: int = MAX_DRIFT_COMMITS) -> list[str]:
     """The anchor SHA exists, is behind ``HEAD``, and not by too much."""
     if board.sha is None:
@@ -425,7 +561,7 @@ def check_freshness(board: Board, root: Path, max_drift: int = MAX_DRIFT_COMMITS
             f"{BOARD.name} no longer records its anchor commit in the form this "
             f"gate checks ({_SHA_LINE.pattern!r})."
         ]
-    if _git(root, "cat-file", "-e", f"{board.sha}^{{commit}}").returncode != 0:
+    if not anchor_commit_exists(root, board.sha):
         return [f"{BOARD.name}: anchor commit {board.sha[:12]} is not in this repository."]
     if _git(root, "merge-base", "--is-ancestor", board.sha, "HEAD").returncode != 0:
         return [
@@ -492,6 +628,13 @@ def check_all(root: Path = ROOT, max_drift: int = MAX_DRIFT_COMMITS) -> tuple[li
     git_note = ""
     if has_git_history(root):
         failures += check_freshness(board, root, max_drift)
+        if board.sha is not None and anchor_commit_exists(root, board.sha):
+            squash_failures, git_note = check_anchor_is_on_main(board, root)
+            failures += squash_failures
+        else:
+            # No second opinion on an anchor the family above already refused
+            # by name; a message about `main` would only bury the real one.
+            git_note = ", squash-survival SKIPPED (no anchor commit to check)"
     else:
         git_note = ", freshness SKIPPED (root is not a git working tree)"
     tally = {state: sum(1 for s in states.values() if s == state) for state in (PENDING, DONE)}
