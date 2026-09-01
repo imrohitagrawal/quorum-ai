@@ -2161,3 +2161,245 @@ def test_deploy_md_does_not_claim_rotation_logs_users_out() -> None:
         "DEPLOY.md no longer mentions QUORUM_TOKEN_SECRET at all — the two "
         "absence checks above would pass vacuously"
     )
+
+
+# --------------------------------------------------------------------------
+# Part G — the DEFAULT MODEL SLOT IDS a spec doc names, pinned to the code.
+#
+# Measured 2026-09-01 (board row W17). `docs/10-functional-requirements.md`
+# (FR-004) and `docs/12-acceptance-criteria.md` (AC-007) both named
+# `deepseek/deepseek-chat-v3.1` as the fourth default model slot. The app has
+# shipped `nvidia/nemotron-3-nano-30b-a3b` in that slot since commit 3bf13a6
+# (WP-G1, 2026-07-27). Six further live spec documents carried the same stale
+# id. Nothing failed for five weeks, because nothing compared the sentence to
+# `model_slots.DEFAULT_MODEL_IDS`.
+#
+# Per AGENTS.md rule 1a this gets a GATE rather than eight corrected sentences:
+# the four ids are derivable from the tree OFFLINE, so a machine can re-check
+# them on every run instead of a human re-reading eight files.
+#
+# SCOPE, deliberately narrow — only documents that assert, in the present
+# tense, what the SHIPPED product defaults to. Deliberately NOT covered, and
+# why:
+#   * `PRODUCT_IDEA.md` and `docs/04-problem-statement.md` record the product
+#     owner's 2026-06-16 intake answer (D-010). That answer really was
+#     deepseek; rewriting it would falsify a dated decision record.
+#   * `docs/13-open-questions.md` records the same answer against OQ-005.
+#   * `docs/design-handoff/` hands off an approved visual mock that predates
+#     the swap; the mock genuinely shows DeepSeek.
+#   * `docs/archive/`, `docs/validation/` — records of runs that happened.
+#   * `tests/` and `_FALLBACK_CATALOG` in `src/product_app/model_slots.py` —
+#     deepseek is still a real, selectable OpenRouter model, just not a
+#     default. Commit 3bf13a6 retained that catalog row deliberately.
+# Those three carry an explicit superseded-by note instead, so a reader is not
+# misled while the record stays intact.
+# --------------------------------------------------------------------------
+
+#: Live specification documents that state the shipped default slot set.
+#: Each must name exactly the four ids of ``DEFAULT_MODEL_IDS``, in slot order.
+_DEFAULT_SLOT_SPEC_DOCS: tuple[str, ...] = (
+    "docs/01-product-brief.md",
+    "docs/08-prioritization.md",
+    "docs/10-functional-requirements.md",
+    "docs/118-qa-test-charter-jira.md",
+    "docs/12-acceptance-criteria.md",
+    "docs/20-architecture.md",
+    "docs/35-confluence-operational-guide.md",
+    "docs/51-test-data-strategy.md",
+)
+
+#: A backticked ``vendor/name`` token. Structure, not substring (rule 8): the
+#: backticks are the markup that marks it as an identifier rather than prose,
+#: so this cannot match the sentence that *explains* a model id.
+_BACKTICKED_SLASH_TOKEN_RE = re.compile(r"`([a-z][a-z0-9-]*/[a-z0-9][a-z0-9._-]*)`")
+
+#: First segments that make a backticked ``a/b`` token a REPO PATH, not a model
+#: id. These docs cross-reference each other constantly (`docs/22-api-contract.md`,
+#: `src/product_app`), and every one of those would otherwise be read as a model.
+_REPO_PATH_PREFIXES: frozenset[str] = frozenset(
+    {"docs", "src", "tests", "e2e", "scripts", "build", "configs", "infra"}
+)
+
+#: Belt-and-braces on top of the prefix set: a file extension is never part of
+#: an OpenRouter model id. `docs/07-open-questions.md` is referenced by
+#: `docs/08-prioritization.md` and no longer exists on disk, so an
+#: "is it a real path?" test would have mis-classified it; the suffix rule and
+#: the prefix rule each catch it independently.
+_FILE_SUFFIX_RE = re.compile(r"\.(md|py|ts|tsx|js|mjs|css|html|ya?ml|json|toml|sh|txt)$")
+
+
+def _model_ids_in(text: str) -> list[str]:
+    """Every backticked OpenRouter model id in ``text``, in order of appearance.
+
+    Split out from the tests so the bite-proofs below can drive it with
+    synthetic text, without touching the real docs (the same shape Part C and
+    Part D use).
+    """
+    found: list[str] = []
+    for token in _BACKTICKED_SLASH_TOKEN_RE.findall(text):
+        vendor = token.split("/", 1)[0]
+        if vendor in _REPO_PATH_PREFIXES or _FILE_SUFFIX_RE.search(token):
+            continue
+        found.append(token)
+    return found
+
+
+def _check_default_slot_ids(*, text: str, expected: tuple[str, ...], label: str) -> None:
+    """Raise ``AssertionError`` unless ``text`` names exactly ``expected``, in order.
+
+    Three separate assertions, in this order, because they fail for three
+    different reasons and a single combined equality would report the wrong one:
+
+    1. **Refuse an empty input** (AGENTS.md: every gate reports what it counted
+       and refuses to pass on nothing). "No wrong model named" is trivially
+       true of a document that names no models at all.
+    2. **Cardinality** (rule 6b) — how MANY ids, not merely that no bad one
+       appeared. A doc that dropped three of the four slots would otherwise
+       satisfy a set-subset check.
+    3. **Ordered equality** — the docs list the ids in slot order, so this pins
+       which model is in which slot, not merely which four are present.
+    """
+    found = _model_ids_in(text)
+    assert found, (
+        f"{label} names no OpenRouter model ids at all. This gate refuses to "
+        f"pass over an empty input — it exists to compare the ids that document "
+        f"states against product_app.model_slots.DEFAULT_MODEL_IDS, and it "
+        f"cannot do that over nothing. Restore the ids, or remove the document "
+        f"from _DEFAULT_SLOT_SPEC_DOCS with a reason."
+    )
+    assert len(found) == len(expected), (
+        f"{label} names {len(found)} model id(s) ({found}); the product ships "
+        f"{len(expected)} default slots ({list(expected)}). The command that "
+        f"produces the real list is `python -c \"from product_app.model_slots "
+        f"import DEFAULT_MODEL_IDS; print(DEFAULT_MODEL_IDS)\"`."
+    )
+    assert tuple(found) == expected, (
+        f"{label} names default model slots {found}; the product ships "
+        f"{list(expected)} (product_app.model_slots.DEFAULT_MODEL_IDS), in that "
+        f"slot order. Update the document — or, if the product genuinely "
+        f"changed slots, update it to match the new constant. Do not delete "
+        f"this gate: it exists because FR-004 and AC-007 named a model this "
+        f"repo had not shipped for five weeks and nothing noticed."
+    )
+
+
+def test_the_default_model_ids_are_a_usable_reference_set() -> None:
+    """POSITIVE PARTNER for the doc checks: the CODE side is real and readable.
+
+    Every assertion in ``_check_default_slot_ids`` compares the docs against
+    ``DEFAULT_MODEL_IDS``. If that tuple were empty, malformed, or duplicated,
+    the comparisons could pass while measuring nothing useful.
+
+    What turns it red: ``DEFAULT_MODEL_IDS`` becomes empty, gains a duplicate,
+    or stops holding ``vendor/model`` identifiers.
+    """
+    from product_app.model_slots import DEFAULT_MODEL_IDS
+
+    assert DEFAULT_MODEL_IDS, "product_app.model_slots.DEFAULT_MODEL_IDS is empty"
+    assert len(set(DEFAULT_MODEL_IDS)) == len(DEFAULT_MODEL_IDS), (
+        f"DEFAULT_MODEL_IDS has a duplicate slot: {list(DEFAULT_MODEL_IDS)}"
+    )
+    for model_id in DEFAULT_MODEL_IDS:
+        assert _model_ids_in(f"`{model_id}`") == [model_id], (
+            f"{model_id!r} is not shaped like an OpenRouter model id, so the "
+            f"doc extractor would never match it and the doc gates below would "
+            f"silently stop comparing anything"
+        )
+
+
+def test_spec_docs_name_the_default_model_ids_the_app_actually_ships() -> None:
+    """Every live spec doc's default slot list must equal ``DEFAULT_MODEL_IDS``.
+
+    What turns it red: change slot 4 in ``src/product_app/model_slots.py``
+    without editing the eight documents, or put
+    ``deepseek/deepseek-chat-v3.1`` back into any of them.
+    """
+    from product_app.model_slots import DEFAULT_MODEL_IDS
+
+    total = 0
+    for rel in _DEFAULT_SLOT_SPEC_DOCS:
+        path = REPO_ROOT / rel
+        assert path.is_file(), (
+            f"{rel} is listed in _DEFAULT_SLOT_SPEC_DOCS but does not exist. "
+            f"The gate would otherwise skip it and pass having read nothing."
+        )
+        text = path.read_text(encoding="utf-8")
+        _check_default_slot_ids(text=text, expected=DEFAULT_MODEL_IDS, label=rel)
+        total += len(_model_ids_in(text))
+
+    # Cardinality across the whole corpus, reported so a green run says what it
+    # counted rather than merely that nothing was wrong.
+    expected_total = len(_DEFAULT_SLOT_SPEC_DOCS) * len(DEFAULT_MODEL_IDS)
+    assert total == expected_total, (
+        f"read {total} model ids across {len(_DEFAULT_SLOT_SPEC_DOCS)} spec "
+        f"docs; expected {expected_total}"
+    )
+
+
+def test_the_default_slot_gate_bites_on_a_stale_id() -> None:
+    """The guard must FAIL on the exact drift it was written for.
+
+    What turns it red: make ``_check_default_slot_ids`` stop comparing, or make
+    ``_model_ids_in`` stop matching backticked identifiers.
+    """
+    expected = ("openai/gpt-4o-mini", "vendor-b/model-b", "vendor-c/model-c", "vendor-d/model-d")
+    stale = (
+        "Defaults are `openai/gpt-4o-mini`, `vendor-b/model-b`, "
+        "`vendor-c/model-c`, and `deepseek/deepseek-chat-v3.1`."
+    )
+    with pytest.raises(AssertionError) as caught:
+        _check_default_slot_ids(text=stale, expected=expected, label="synthetic.md")
+    assert "deepseek/deepseek-chat-v3.1" in str(caught.value)
+    assert "vendor-d/model-d" in str(caught.value)
+
+
+def test_the_default_slot_gate_refuses_an_empty_input() -> None:
+    """A doc naming NO model ids must fail, not pass (rule 7 / empty-input floor).
+
+    This is the vacuity case: "no wrong model is named" is trivially true over
+    a document that names no models at all, and that is precisely how a
+    negative doc check rots.
+
+    What turns it red: delete the ``assert found`` floor in
+    ``_check_default_slot_ids``.
+    """
+    expected = ("vendor-a/model-a", "vendor-b/model-b")
+    with pytest.raises(AssertionError) as empty:
+        _check_default_slot_ids(
+            text="This document explains model slots but names none of them.",
+            expected=expected,
+            label="empty.md",
+        )
+    assert "names no OpenRouter model ids at all" in str(empty.value)
+
+    # And a doc that names SOME but not all of them must fail on cardinality,
+    # not slip through a set-subset comparison.
+    with pytest.raises(AssertionError) as short:
+        _check_default_slot_ids(
+            text="Defaults are `vendor-a/model-a`.", expected=expected, label="short.md"
+        )
+    assert "names 1 model id(s)" in str(short.value)
+
+
+def test_the_model_id_extractor_ignores_repo_paths() -> None:
+    """POSITIVE + NEGATIVE partner for ``_model_ids_in``'s path filter.
+
+    The spec docs cross-reference each other with backticked paths
+    (``docs/22-api-contract.md``, ``src/product_app``). If those were read as
+    model ids the cardinality check above would fail on correct documents, and
+    the usual "fix" would be to loosen the gate.
+
+    What turns it red: drop ``_REPO_PATH_PREFIXES`` or ``_FILE_SUFFIX_RE``, or
+    tighten ``_BACKTICKED_SLASH_TOKEN_RE`` so real ids stop matching.
+    """
+    mixed = (
+        "See `docs/22-api-contract.md` and `src/product_app`; the slot is "
+        "`nvidia/nemotron-3-nano-30b-a3b` and the retired one was "
+        "`deepseek/deepseek-chat-v3.1`. Also `docs/07-open-questions.md`."
+    )
+    assert _model_ids_in(mixed) == [
+        "nvidia/nemotron-3-nano-30b-a3b",
+        "deepseek/deepseek-chat-v3.1",
+    ]
+    # Negative partner: an unbackticked mention is prose, not an identifier.
+    assert _model_ids_in("the slot defaults to nvidia/nemotron-3-nano-30b-a3b") == []

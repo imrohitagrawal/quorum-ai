@@ -63,7 +63,7 @@ Scoring:
   - `openai/gpt-4o-mini`
   - `anthropic/claude-haiku-4.5`
   - `google/gemini-2.5-flash`
-  - `deepseek/deepseek-chat-v3.1`
+  - `nvidia/nemotron-3-nano-30b-a3b`
 - OpenRouter search first, with Tavily or another free search fallback.
 - Source-backed model outputs.
 - Two debate/critique rounds.

@@ -111,7 +111,7 @@ caught by any automated check and 10 of 16 by adversarial review
 | W14 | Close the 5xx possibly-billed premise with data | UNPINNED | `—` | #105 | production logs |
 | W15 | `_bound_sniff_time` is referenced and does not exist | DONE | `PRESENT src/product_app/providers.py :: _bound_sniff_time` | — | — |
 | W16 | The catalog fetcher hardcodes the models URL | DONE | `PRESENT src/product_app/catalog_fetcher.py :: OPENROUTER_CATALOG_URL = "https://openrouter.ai/api/v1/models"` | — | — |
-| W17 | FR-004 names a model we do not ship | PENDING | `PRESENT docs/10-functional-requirements.md :: deepseek/deepseek-chat-v3.1` | — | — |
+| W17 | FR-004 names a model we do not ship | DONE | `PRESENT docs/10-functional-requirements.md :: deepseek/deepseek-chat-v3.1` | — | — |
 | W18 | The paid call sends the API key to a configured base with no scheme guard | DONE | `PRESENT src/product_app/providers.py :: url=f"{settings.openrouter_api_base_url}/chat/completions"` | — | — |
 | W19 | A provider-timeout bound fails locally and passes in CI | PENDING | `PRESENT tests/unit/test_provider_call_time_budget.py :: assert wall < 4.0,` | — | — |
 | W20 | `panel_agreement()` reports "agreed" for a genuine N=1 panel | DONE | `ABSENT src/product_app/synthesis_consensus.py :: if len(stance) < 2:` | #394 | — |
@@ -472,10 +472,40 @@ never been anything but the machine it was written on.
 Either widen the bound with a re-derived margin or make it CI-only — but measure
 first: its partner lower bound is what proves the dribble really happened.
 
-**W17 — FR-004.** `docs/10-functional-requirements.md` and
-`docs/12-acceptance-criteria.md` both name `deepseek/deepseek-chat-v3.1` as slot
+**W17 — FR-004. DONE, ADR-0088.** `docs/10-functional-requirements.md` and
+`docs/12-acceptance-criteria.md` both named `deepseek/deepseek-chat-v3.1` as slot
 4's default; `model_slots.py` ships `nvidia/nemotron-3-nano-30b-a3b` and its own
-comment says "replaces deepseek". No gate catches it.
+comment says "replaces deepseek". Six further live spec docs carried the same
+stale id. No gate caught it for five weeks.
+
+The sizing warning below held. Of the 15 check-each files, **eight** were
+corrected (the documents asserting, in the present tense, what the product
+defaults to), **three** got an additive `Superseded 2026-07-27` note rather than
+a rewrite because they record something that was true on 2026-06-16 —
+`docs/04-problem-statement.md` (decision D-010), `docs/13-open-questions.md`
+(OQ-005) and `docs/design-handoff/README.md` (an approved mock that really does
+show DeepSeek) — and **four** were left untouched: `PRODUCT_IDEA.md`,
+`docs/design-handoff/Quorum Final Review.dc.html`,
+`scripts/seed_feedback_audit_data.py` (demo data that already mixes in
+`anthropic/claude-3-haiku`, so it asserts nothing about defaults) and this
+board.
+
+Per rule 1a the row closes with a **gate**, not eight corrected sentences:
+Part G of `tests/test_doc_gate_consistency.py` extracts every backticked
+`vendor/model` token from each of the eight spec docs and asserts the ordered
+tuple equals `product_app.model_slots.DEFAULT_MODEL_IDS`, refusing to pass over
+a document that names none. A cue-word anchor on the word "default" was tried
+and rejected — `docs/12-acceptance-criteria.md:51`, one of the two documents at
+the centre of the defect, states the slot set without ever using that word, so a
+cue anchor would have skipped it. ADR-0088 has the rejected alternatives and the
+three bite-proofs.
+
+After the fix `git grep -l "deepseek/deepseek-chat-v3.1" | wc -l` returns
+**107** (92 `tests/`, 6 `docs/archive/` + `docs/validation/`, 6 live docs, 1
+`src/` `_FALLBACK_CATALOG`, 1 `PRODUCT_IDEA.md`, 1 `scripts/`). The live-docs
+figure fell 13 -> 6; the six are the three annotated records, the `.dc.html`
+mock, this board, and ADR-0088 itself. The `tests/` figure rose 91 -> 92 because
+the new gate names the retired id in its own bite-proof.
 
 **W20 — #394. DONE, ADR-0087.** `panel_agreement()` shared the exact
 structural pattern `compute_consensus_strength` had at N=1 before ADR-0083:
