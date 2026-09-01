@@ -149,3 +149,16 @@ and confirming the assertion goes red for the demonstrated reason.
   as it always has. Tokenization proves the needle is *syntactically* code;
   it does not prove the code executes or is reachable. That is unchanged
   scope, not a new gap this ADR introduces.
+- **Found by review, recorded rather than fixed:** `_is_docstring` still
+  cannot tell a real module/class/function docstring from a bare
+  string-literal EXPRESSION STATEMENT sitting elsewhere in a function body at
+  depth 0 — e.g. `x = 1\n"needle"\nreturn x`. Both are "the first STRING
+  token after an NL/NEWLINE/INDENT/DEDENT at bracket depth 0"; nothing here
+  additionally checks that the statement is the FIRST one in its
+  module/class/def body. Reproduced in isolation; none of the board's 17
+  live needles sits in a bare string statement (each is a real assignment,
+  call, or dict-literal line), so this does not affect any currently-pinned
+  row. Narrowing this further would mean tracking each block's first
+  statement, which is closer to a real parse than this tokenizer pass does
+  anywhere else — left as a known gap rather than built speculatively for a
+  case with no live instance.
