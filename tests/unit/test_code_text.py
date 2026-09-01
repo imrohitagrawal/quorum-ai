@@ -87,6 +87,35 @@ def test_a_function_docstring_is_blanked_but_its_body_is_not(tmp_path: Path) -> 
     assert "--flag" in code
 
 
+def test_a_multiline_dict_key_is_not_mistaken_for_a_docstring(tmp_path: Path) -> None:
+    """A dict/list/tuple literal's line-leading string is code, not prose.
+
+    Found reusing this helper from ``scripts/check_open_work.py`` (#418).
+    ``tokenize`` emits ``NL`` for a line break INSIDE brackets, the same token
+    the docstring heuristic reads as "a docstring follows" -- so a payload
+    dict written one entry per line, e.g.::
+
+        payload = {
+            "model": model_id,
+            "stream": True,
+        }
+
+    had its ``"stream"`` key blanked as if it were a module docstring, taking
+    a real, shipped needle (``"stream": True`` in ``providers.py``, W1 on the
+    open-work board) down with it.
+
+    Turns red if: the docstring check stops requiring bracket depth 0.
+    """
+    path = _py(
+        tmp_path,
+        'payload = {\n    "model": model_id,\n    "stream": True,\n}\n',
+    )
+    code = code_without_comments(path)
+
+    assert '"stream": True' in code, code
+    assert '"model": model_id' in code, code
+
+
 def test_line_numbers_are_preserved(tmp_path: Path) -> None:
     """Blanked regions become spaces, not nothing.
 

@@ -94,6 +94,7 @@ ways, so the record shows what was believed on a date and what replaced it.
 | [ADR-0088](adr/0088-spec-docs-name-the-default-slots-a-gate-proves-it.md) | Docs name the shipped default slots, and a gate proves it | Architecture | Accepted — 2026-09-01 (board row W17) |
 | [ADR-0089](adr/0089-a-timing-gate-asserts-the-argument-not-the-wall-clock.md) | A timing gate asserts the argument, not the wall clock | Architecture | Accepted — 2026-09-01 (board row W19) |
 | [ADR-0090](adr/0090-a-credential-does-not-follow-a-redirect-and-tavily-gets-the-same-scheme-check.md) | A credential does not follow a redirect, and Tavily gets the same scheme check | Architecture | Accepted — 2026-09-01 |
+| [ADR-0091](adr/0091-the-board-checker-tokenizes-python-instead-of-stripping-hash-comments.md) | The board checker tokenizes Python instead of stripping `#` comments | Architecture | Accepted — 2026-09-01 |
 
 **This index was itself stale** until 2026-07-30: ADR-0002 had existed since
 2026-07-19 and was never listed here. A hand-maintained index is a derived fact

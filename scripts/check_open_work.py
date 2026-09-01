@@ -84,14 +84,54 @@ the State column.
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import re
 import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 ROOT = Path(__file__).resolve().parent.parent
 BOARD = ROOT / "docs" / "65-open-work.md"
+
+
+def _load_code_text_helper() -> Any:
+    """Load ``tests/code_text.py`` BY PATH, not as ``tests.code_text``.
+
+    WHY THIS EXISTS (#418). This script used to strip only ``#`` comment
+    tails, line by line, and never tokenize -- so a needle string that
+    appeared inside a Python DOCSTRING (prose, not the construct it names)
+    still counted PRESENT. ``tests/code_text.py`` already exists to fix
+    exactly this class of bug (its own docstring documents two prior
+    instances, PR #164), tokenizing Python source and blanking both comments
+    and docstrings. Rather than grow a second, weaker implementation here --
+    which is how #418 happened in the first place, two parallel strippers of
+    different strength -- this script reuses that one module. See
+    ADR-0091 for the layering decision and the rejected alternatives.
+
+    Loaded BY PATH, exactly like this script's own tests load *it*
+    (``tests/unit/test_open_work_matches_reality.py::_load_script``), for the
+    same two reasons stated there: ``tests`` has no ``__init__.py`` and this
+    script is run directly (``python3 scripts/check_open_work.py``, no
+    ``PYTHONPATH``), so a package import would only work by accident of
+    invocation directory; and ``make type-check`` runs ``mypy src tests``,
+    which follows static imports, so a real ``import tests.code_text`` here
+    would be a route for an unchecked ``scripts/`` file to be dragged into a
+    strict-mode gate. ``tests/code_text.py`` depends on nothing but
+    ``io``, ``tokenize`` and ``pathlib`` -- stdlib only, no pytest, no
+    fixtures -- so it is safe to load from a script that runs inside
+    ``make validate``.
+    """
+    path = ROOT / "tests" / "code_text.py"
+    spec = importlib.util.spec_from_file_location("_open_work_code_text", path)
+    assert spec and spec.loader
+    module: Any = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+_CODE_TEXT = _load_code_text_helper()
 
 #: How many first-parent commits the board may fall behind ``HEAD`` before this
 #: gate refuses. DERIVED, not chosen by taste: ``main`` took 308 first-parent
@@ -178,12 +218,35 @@ def _cell(raw: str) -> str:
 
 
 def code_text(source: str) -> str:
-    """``source`` with comment tails removed, so a needle matches code only."""
+    """``source`` with comment tails removed, so a needle matches code only.
+
+    Line-oriented, whitespace-guarded ``#`` stripping -- correct for
+    Markdown and TOML, where there is no Python parser to fall back on. A
+    ``.py`` evidence file is NOT read through this function; see
+    :func:`_evidence_text`, which routes those through
+    ``tests/code_text.py``'s tokenizer instead, because a docstring cannot be
+    told apart from code by this kind of line-oriented scan (#418).
+    """
     kept = []
     for line in source.splitlines():
         found = _COMMENT.search(line)
         kept.append(line[: found.start()] if found else line)
     return "\n".join(kept)
+
+
+def _evidence_text(target: Path) -> str:
+    """The searchable CODE TEXT of an evidence file -- comments/docstrings out.
+
+    ``.py`` files go through ``tests/code_text.py``'s tokenizer, which blanks
+    both comments and docstrings (#418: a needle living only in a docstring
+    must not count as the code it describes). Every other file the board pins
+    (Markdown, TOML) has no Python parser to use, so it keeps the simpler
+    whitespace-guarded ``#`` stripper in :func:`code_text` -- unchanged
+    behaviour, verified against all live non-Python needles.
+    """
+    if target.suffix == ".py":
+        return _CODE_TEXT.code_without_comments(target)
+    return code_text(target.read_text(encoding="utf-8"))
 
 
 def parse_board(text: str) -> Board:
@@ -263,7 +326,7 @@ def derive_states(board: Board, root: Path) -> tuple[dict[str, str], list[str], 
         if not target.is_file():
             failures.append(f"{row.row_id}: evidence path {rel_path} does not exist")
             continue
-        present = needle in code_text(target.read_text(encoding="utf-8"))
+        present = needle in _evidence_text(target)
         read += 1
         open_form_says_present = polarity == "PRESENT"
         states[row.row_id] = PENDING if present == open_form_says_present else DONE
