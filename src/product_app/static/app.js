@@ -4630,7 +4630,10 @@
     // one position. "split" and "undetermined" both withhold the green surface,
     // and "undetermined" is what every run without a usable moderator reading
     // gets — no debate, a templated round, a cancelled run, an unparseable
-    // reply, or a model that answered 400 to the JSON request.
+    // reply, or a model that answered 400 to the JSON request. Since #394 it is
+    // ALSO what a run gets when the moderator's reading is perfectly usable but
+    // covers fewer than two scored models: one answer is not a panel that
+    // agreed. Comment only — nothing rendered changes here.
     const panelAgreement = String((agreement && agreement.panel_agreement) || "undetermined");
     return Boolean(
       agreement &&
