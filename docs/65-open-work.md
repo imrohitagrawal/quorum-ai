@@ -681,17 +681,34 @@ stamp it without re-reading — the drift limit is deliberately loose precisely 
 that re-stamping stays a real act.
 
 **Stamp a commit that is already on `main`, never one from your branch.** This
-repository SQUASH-merges, so every commit you make on a branch is discarded and
-the anchor check (`is not an ancestor of HEAD`) fails the moment the branch
-lands. Measured 2026-08-30: W1 stamped its own branch commit `2350e59`, the
-squash produced `59f402a`, and `main` went RED across `Tests`, `CI` and every
-`Deploy` run for that SHA — the deploy gate correctly reporting a *stranded
-merge* rather than deploying. Nothing reached production, but `main` was broken
-until a follow-up re-stamped it.
+repository SQUASH-merges, so every commit you make on a branch is discarded the
+moment the branch lands. Measured 2026-08-30: W1 stamped its own branch commit
+`2350e59`, the squash produced `59f402a`, and `main` went RED across `Tests`,
+`CI` and every `Deploy` run for that SHA — the deploy gate correctly reporting a
+*stranded merge* rather than deploying. Nothing reached production, but `main`
+was broken until a follow-up re-stamped it.
 
 So either stamp the commit your branch was cut FROM, or re-stamp after the
 merge. "Stamp the current commit" is the natural reading and it is the wrong
 one here.
+
+**The gate now catches that on the pull request instead of on `main`** (#402,
+ADR-0092). Until then it only asked whether the anchor was an ancestor of
+`HEAD` — and on a feature branch a commit made ON that branch is one, so it
+passed the PR and refused only after the squash discarded it. It now ALSO
+requires the anchor to be an ancestor of at least one `main` ref this checkout
+can resolve: `origin/main`, then any other configured remote's `main`, then the
+local `refs/heads/main`. The report line names the ref that answered, so a
+skip is never silent.
+
+Two consequences worth knowing before you see the error. A `main` ref that has
+not been fetched refuses an anchor that really is on `main` — that fact is not
+derivable offline, so `git fetch` is the first thing to try, though it does not
+always clear it (when `origin` is a fork that is itself behind, fetching it
+advances nothing). And a clone with no `main` ref at all but a remote
+configured is refused rather than skipped; measured on git 2.54.0,
+`git fetch origin main` does NOT create `refs/remotes/origin/main` there, while
+`git remote set-branches --add origin main && git fetch origin` does.
 
 **Being on `main` is necessary, not sufficient**: the anchor must ALSO be within
 `MAX_DRIFT_COMMITS` (60) first-parent commits of HEAD, which at the time of
