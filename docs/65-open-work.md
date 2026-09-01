@@ -114,7 +114,7 @@ caught by any automated check and 10 of 16 by adversarial review
 | W17 | FR-004 names a model we do not ship | PENDING | `PRESENT docs/10-functional-requirements.md :: deepseek/deepseek-chat-v3.1` | — | — |
 | W18 | The paid call sends the API key to a configured base with no scheme guard | DONE | `PRESENT src/product_app/providers.py :: url=f"{settings.openrouter_api_base_url}/chat/completions"` | — | — |
 | W19 | A provider-timeout bound fails locally and passes in CI | PENDING | `PRESENT tests/unit/test_provider_call_time_budget.py :: assert wall < 4.0,` | — | — |
-| W20 | `panel_agreement()` reports "agreed" for a genuine N=1 panel | PENDING | `PRESENT src/product_app/synthesis_consensus.py :: return "agreed" if len(set(stance.values())) == 1 else "split"` | #394 | — |
+| W20 | `panel_agreement()` reports "agreed" for a genuine N=1 panel | DONE | `ABSENT src/product_app/synthesis_consensus.py :: if len(stance) < 2:` | #394 | — |
 | W21 | A redirect carries the API key off the guarded base | PENDING | `PRESENT src/product_app/providers.py :: with urlopen(request, timeout=settings.openrouter_timeout_seconds) as response:` | — | W18 |
 | W22 | The Tavily search call sends its key to a configured base with no scheme guard | PENDING | `PRESENT src/product_app/providers.py :: url=f"{settings.tavily_api_base_url.rstrip('/')}/search"` | — | — |
 | W23 | The mutation gate cannot run when a changed function is covered by a schemathesis case | UNPINNED | `—` | — | — |
@@ -477,15 +477,31 @@ first: its partner lower bound is what proves the dribble really happened.
 4's default; `model_slots.py` ships `nvidia/nemotron-3-nano-30b-a3b` and its own
 comment says "replaces deepseek". No gate catches it.
 
-**W20 — #394.** `panel_agreement()` shares the exact structural pattern
-`compute_consensus_strength` had at N=1 before ADR-0083: `len(set(stance.values()))
-== 1` is trivially true whenever the stance dict has one entry, so a genuine
-one-answer panel still reads `"agreed"`. Found by review while shipping W6/W10,
-deliberately not fixed there — a different function, a different concern
-(rule 17). **Confirmed zero live impact**: `isConsensusResult` (`app.js`)
-requires `panelAgreement === "agreed"` AND `false_consensus_preserved ===
-false`; the second is now correctly `True` at N=1 (blocking the green banner)
-regardless of what this function reports.
+**W20 — #394. DONE, ADR-0087.** `panel_agreement()` shared the exact
+structural pattern `compute_consensus_strength` had at N=1 before ADR-0083:
+`len(set(stance.values())) == 1` is trivially true whenever the stance dict has
+one entry, so a genuine one-answer panel read `"agreed"`. Found by review while
+shipping W6/W10, deliberately not fixed there — a different function, a
+different concern (rule 17). Reachable today with no unreleased feature: a run
+that loses three of four slots leaves one scored slot, measured on `ee27c19` at
+`_usable_stance` → `{1: 'nrr'}`, `panel_agreement` → `"agreed"`.
+
+The **banner** was already blocked and that was re-verified by execution, not
+inherited: `isConsensusResult` (`app.js`) requires `panelAgreement === "agreed"`
+AND `false_consensus_preserved === false`, and the second is correctly `True` at
+N=1 (`compute_consensus_strength` → `"weak"`, ADR-0083). But the row's older
+"zero live impact" wording was too broad — `agreement.panel_agreement` is a
+served API field, so the false claim reached every client that reads the JSON.
+`panel_agreement` now returns `"undetermined"` when the stance covers fewer than
+two models; N=2, 3 and 4 are byte-identical in both directions and pinned as
+such.
+
+The needle was **re-pinned** in the same change. The open form pinned
+`return "agreed" if len(set(stance.values())) == 1 else "split"`, a line the fix
+KEEPS — the guard is added above it — so the row would have read `PENDING`
+forever with the defect closed (trap 12, measured on W12/#379). It now pins
+`ABSENT … :: if len(stance) < 2:`, verified absent on `origin/main` and present
+after.
 
 ## What is deliberately NOT on this board
 

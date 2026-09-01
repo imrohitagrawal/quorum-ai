@@ -258,12 +258,44 @@ def panel_agreement(
     * ``"agreed"`` — a live moderator placed every scored model in ONE position
       group.
     * ``"split"`` — a live moderator placed them in more than one.
-    * ``"undetermined"`` — there is no usable reading. Never a claim about the
-      panel; only a statement about what we know. See :func:`_usable_stance` for
-      the five ways this happens.
+    * ``"undetermined"`` — there is no usable reading, OR the reading covers
+      fewer than two models. Never a claim about the panel; only a statement
+      about what we know. See :func:`_usable_stance` for the ways the reading
+      itself goes missing (its docstring enumerates five; the empty-``scored``
+      return is a further one it does not list), and the ``len(stance) < 2``
+      guard below for the case where the reading exists and covers fewer than
+      two models.
     """
     stance = _usable_stance(initial_answers, debate_outputs)
     if stance is None:
+        return "undetermined"
+    # #394 (W20), the sibling of #383. ``len(set(stance.values())) == 1`` below
+    # is trivially true whenever the stance holds ONE entry, so a genuine
+    # one-answer panel read "agreed" — a claim about a panel agreeing, drawn
+    # from a reading with nothing to disagree with. Two models placed in one
+    # group IS agreement; one is an absence of evidence, which is exactly what
+    # "undetermined" is for, so no fourth ``PanelAgreement`` literal is needed
+    # (the same call ADR-0083 made for ``ConsensusStrength``).
+    #
+    # Reachable today, no unreleased feature required: a run that loses three of
+    # its four slots leaves one scored slot, because :func:`counts_as_evidence`
+    # excludes a FAILED one. Measured on ee27c19 — three FAILED, one COMPLETED,
+    # one live moderator round: ``_usable_stance`` -> ``{1: 'nrr'}``,
+    # ``panel_agreement`` -> "agreed".
+    #
+    # The population is the STANCE, not the answer list: ``_scored_slot_numbers``
+    # returns a set of slot numbers, so two completed answers sharing a
+    # ``slot_number`` are two answers and one panel member. This function has a
+    # single branch, so unlike :func:`compute_consensus_strength` — which needed
+    # ADR-0083's central ``len(completed) == 1`` guard plus a stance residual —
+    # one guard on the stance closes every degenerate shape here.
+    #
+    # ``< 2`` rather than ``== 1`` states the bound the docstring means. An empty
+    # stance is unreachable — :func:`_usable_stance` returns ``None`` when
+    # nothing is scored, and otherwise returns a mapping covering every scored
+    # slot — so the two are behaviourally identical today; the inequality is the
+    # one that stays correct if that ever changes.
+    if len(stance) < 2:
         return "undetermined"
     return "agreed" if len(set(stance.values())) == 1 else "split"
 

@@ -201,6 +201,17 @@ fixing it is a separate concern from #382/#383 by this repo's own one-
 concern-per-PR rule. Filed as a follow-up rather than expanded into this
 PR.
 
+**Closed 2026-09-01 by ADR-0087** (issue #394, board row W20).
+`panel_agreement` now returns `"undetermined"` when the stance covers fewer
+than two models. The caveat above stands as written except for its
+SCOPE: it said the defect had "NO live user-facing effect", which was
+re-verified true of the green BANNER — the `false_consensus_preserved ===
+false` conjunct of `isConsensusResult` blocked it on every affected shape,
+independently of what `panel_agreement` reported — and too broad about the
+served field:
+`agreement.panel_agreement` crosses the API boundary, and it carried `"agreed"`.
+See ADR-0087's Context.
+
 A new `ConsensusStrength` state would touch the type, every consumer's
 `match`/comparison, and templated prose selection, for a distinction the
 module does not otherwise
