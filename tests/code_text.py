@@ -84,9 +84,7 @@ def _blank_python(text: str) -> str:
     for index, token in enumerate(tokens):
         is_comment = token.type == tokenize.COMMENT
         is_docstring = (
-            token.type == tokenize.STRING
-            and depths[index] == 0
-            and _is_docstring(tokens, index)
+            token.type == tokenize.STRING and depths[index] == 0 and _is_docstring(tokens, index)
         )
         if is_comment or is_docstring:
             blank.append((*token.start, *token.end))

@@ -162,7 +162,9 @@ def _enough_rows(
     """Enough pinned rows to clear ``MIN_EVIDENCE_CLAIMS``, all in one state."""
     n = CHECKER.MIN_EVIDENCE_CLAIMS
     return (
-        "".join(_pinned(f"W{i}", state, polarity, target_name=target_name) for i in range(1, n + 1)),
+        "".join(
+            _pinned(f"W{i}", state, polarity, target_name=target_name) for i in range(1, n + 1)
+        ),
         n,
     )
 
