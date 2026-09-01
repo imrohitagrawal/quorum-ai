@@ -18,14 +18,26 @@ so the audit can run independently of the application's runtime state; this
 module is the one exception, and it is safe to be one precisely because it
 pulls in no configuration, no logging setup and no store.
 
-Scope, stated because the sentence above invites a wider reading: this covers
-the calls built from ``OPENROUTER_API_BASE_URL``. It is NOT every credentialed
-request in the process — ``providers._tavily_search`` sends
-``Authorization: Bearer <the operator's Tavily key>`` to
-``f"{settings.tavily_api_base_url}/search"`` with no scheme guard at all, on a
-setting that is operator-settable in exactly the same way. That is a different
-credential and a different setting, so it is board row W21's neighbour W22
-rather than a fifth thing bolted on here.
+Scope, extended 2026-09-01 with W21/W22 (ADR-0090). This module now covers
+BOTH credential-bearing outbound calls in ``providers.py``:
+:func:`chat_completions_url` for ``OPENROUTER_API_BASE_URL`` (the OpenRouter
+key) and :func:`tavily_search_url` for ``TAVILY_API_BASE_URL`` (the Tavily
+key, sent by ``providers._tavily_search`` — it had NO scheme guard at all
+until W22, on a setting that is operator-settable in exactly the same way).
+
+It also exports :data:`CREDENTIAL_OPENER` (W21). A scheme check on the
+CONFIGURED base is not the whole story: ``urlopen``'s default redirect
+handling copies every header — including ``Authorization``— to wherever a
+3xx response's ``Location`` names, with no same-origin check and no scheme
+check of its OWN, so a base that passes the check above but answers its
+first request with a redirect can still hand the credential to a cleartext
+or off-machine host. Both call sites dial through ``CREDENTIAL_OPENER`` instead of the bare
+``urlopen`` free function so that a redirect is refused outright — the same
+shape :class:`product_app.readiness._NoRedirect` already uses for the
+key-auth probe. This module builds its own equivalent handler rather than
+importing readiness's: this module depends on nothing but the standard
+library (see above), and ``readiness.py`` does not, so importing from it
+here would give the guard a dependency it exists in part to avoid.
 
 Two sibling guards already exist and this one is not a copy of either:
 
@@ -44,6 +56,7 @@ from __future__ import annotations
 import ipaddress
 import re
 from urllib.parse import urlsplit
+from urllib.request import HTTPRedirectHandler, build_opener
 
 #: Hostnames that name this machine literally. Compared by EXACT equality
 #: after ``urlsplit`` has lower-cased the host, never by prefix or substring:
@@ -136,6 +149,52 @@ def chat_completions_url(base_url: str) -> str | None:
     """
     url = f"{base_url}/chat/completions"
     return url if is_credential_safe(url) else None
+
+
+def tavily_search_url(base_url: str) -> str | None:
+    """The Tavily search endpoint for ``base_url``, or ``None`` to refuse.
+
+    W22. ``None`` means the same thing it means for
+    :func:`chat_completions_url`: do not dial this, and do not report a
+    charge — ``providers._tavily_search`` already treats a transport failure
+    as a best-effort ``[]`` (degrade to the local-simulation stub), so this
+    refusal reuses that shape rather than inventing a second one.
+
+    The URL is built exactly as the call site built it before the guard —
+    ``base_url.rstrip('/')`` then ``/search`` — so the only behaviour this
+    function changes is the refusal, matching the rule
+    :func:`chat_completions_url` states for the same reason.
+    """
+    url = f"{base_url.rstrip('/')}/search"
+    return url if is_credential_safe(url) else None
+
+
+class _NoRedirect(HTTPRedirectHandler):
+    """Refuse every redirect on a request built by this module.
+
+    urllib's default redirect handler copies ALL headers to the new
+    location with no same-origin check, and permits ``http`` as a redirect
+    target — so following one would hand ``Authorization: Bearer <key>`` to
+    whatever host the redirect names, in cleartext if it names ``http``. A
+    302 from a captive portal, a load balancer, or a typo'd base URL is
+    enough. Returning ``None`` makes urllib raise ``HTTPError`` for the 3xx
+    instead of following it; both call sites already classify an
+    ``HTTPError`` off ``urlopen`` as an unbilled/best-effort failure, so a
+    refused redirect degrades exactly like any other transport error, never
+    as a lie that the call succeeded.
+    """
+
+    def redirect_request(self, *args: object, **kwargs: object) -> None:
+        return None
+
+
+#: The opener both credentialed call sites in ``providers.py`` dial through
+#: (W21). Built once at import time — the policy never varies per call, and
+#: every existing test that doubles ``providers.urlopen`` still intercepts
+#: the call, since production code calls through the module-level name
+#: ``urlopen``, which is bound to ``CREDENTIAL_OPENER.open`` rather than to
+#: the bare ``urlopen`` free function; see ``providers.py`` for that binding.
+CREDENTIAL_OPENER = build_opener(_NoRedirect)
 
 
 def base_url_provenance(base_url: str) -> tuple[str, str]:

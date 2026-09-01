@@ -44,13 +44,18 @@ from time import perf_counter
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
-from urllib.request import Request, urlopen
+from urllib.request import Request
 from uuid import UUID
 
 from pydantic import BaseModel, Field, model_validator
 
 from product_app.config import RuntimeEnvironment, settings
-from product_app.credentialed_url import base_url_provenance, chat_completions_url
+from product_app.credentialed_url import (
+    CREDENTIAL_OPENER,
+    base_url_provenance,
+    chat_completions_url,
+    tavily_search_url,
+)
 from product_app.feedback_store import record_event as _record_feedback_event
 from product_app.model_slots import ModelSlot, openrouter_model_catalog_service
 from product_app.provider_keys import ProviderCredentialSource
@@ -59,6 +64,18 @@ from product_app.untrusted_text import fence
 from product_app.visible_text import is_visible
 
 _LOGGER = logging.getLogger(__name__)
+
+# W21/W22 (ADR-0090). Both credentialed calls below dial through
+# ``CREDENTIAL_OPENER`` -- which refuses to follow a redirect -- rather than
+# through the bare ``urlopen`` free function, so a base that answers its
+# first request with a 302 cannot hand ``Authorization: Bearer <key>`` to an
+# unvalidated host. Bound under the name ``urlopen`` (not e.g.
+# ``_urlopen``) so every existing ``monkeypatch.setattr(providers_module,
+# "urlopen", double)`` in the test suite keeps intercepting the call: those
+# doubles replace whatever this module attribute is bound to, not a snapshot
+# of the stdlib function, and both ``_post_messages`` and ``_tavily_search``
+# look the name up from this module's globals on every call.
+urlopen = CREDENTIAL_OPENER.open
 
 CITATION_COVERAGE_TARGET = Decimal("0.80")
 
@@ -1856,9 +1873,28 @@ class ProviderExecutionService:
 
         The Tavily key is sent only in the ``Authorization`` header; it is
         never logged nor echoed into a source title.
+
+        W22 (ADR-0090). ``tavily_search_url`` refuses a base that would put
+        the key in clear or hand it to something that is not this endpoint at
+        all -- ``None`` means "do not dial this, and do not report a charge",
+        the same contract ``chat_completions_url`` gives ``_post_messages``.
         """
         query = (query_text or "").strip()
         if not query:
+            return []
+        url = tavily_search_url(settings.tavily_api_base_url)
+        if url is None:
+            base_scheme, base_host = base_url_provenance(settings.tavily_api_base_url)
+            # Scheme and host only, never the configured URL: it can carry
+            # userinfo, which is credential material.
+            _LOGGER.warning(
+                "tavily_base_url_refused",
+                extra={
+                    "billing_class": "not_billed",
+                    "base_url_scheme": base_scheme,
+                    "base_url_host": base_host,
+                },
+            )
             return []
         payload = json.dumps(
             {
@@ -1867,7 +1903,7 @@ class ProviderExecutionService:
             }
         ).encode()
         request = Request(
-            url=f"{settings.tavily_api_base_url.rstrip('/')}/search",
+            url=url,
             data=payload,
             headers={
                 "Authorization": f"Bearer {settings.tavily_api_key}",
