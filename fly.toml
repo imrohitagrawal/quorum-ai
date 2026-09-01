@@ -27,11 +27,11 @@ kill_timeout = "5s"
   SESSION_COOKIE_SECURE = "true"
   ACCOUNT_LEGACY_HEADER_ENABLED = "false"
   OPENROUTER_APP_URL = "https://quorum.stackclimb.com"
-  # ON, inside a declared window that expires 2026-09-01T22:57:00Z (see
-  # configs/live-execution-windows.json). Close it with `make close-window`,
-  # which flips this AND expires the window atomically — flipping this alone is
-  # REFUSED, because a window still covering `now` may not be committed with the
-  # flag off (#407).
+  # OFF. Re-open only with `make close-window`'s counterpart: a covering entry
+  # in configs/live-execution-windows.json in the SAME pull request. Closing is
+  # `make close-window`, which flips this AND expires the window atomically —
+  # flipping this alone is REFUSED, because a window still covering `now` may
+  # not be committed with the flag off (#407).
   #
   # This is the ONLY switch that lets real money be spent: providers.py:670 is
   # `openrouter_live_execution_enabled and openrouter_key`, and the key is
@@ -39,11 +39,13 @@ kill_timeout = "5s"
   # spends real money against GLOBAL_DAILY_CEILING_USD ($5.00/day) — not just
   # the operator.
   #
-  # THIS window (2026-09-01): #268 only. The prior window's injected-token
-  # sample shared one query, one prompt size and one day, which its own
-  # write-up calls "a start, not a bound"; this one runs THREE deliberately
-  # varied question shapes to get a distribution instead. Budget: three runs
-  # at a $0.0639 point estimate each = $0.1917, against DAILY_CAP_USD $0.20.
+  # The 2026-09-01 window (19:57Z-21:07Z, #268) MEASURED: three runs on three
+  # varied question shapes, $0.1649 actual spend, 12 `:online` calls, all three
+  # runs live_count 4/4 with cost_source "measured" and no failed steps.
+  # 11 of those 12 exceeded cost_web_search_context_tokens = 2000 (max 2890,
+  # 44% over); one was -63. Combined with the prior sample that is n=32 online
+  # calls, 27 over. Recorded on #268; the constant is NOT moved here (ADR-0081
+  # freezes that class, W3 STOP).
   #
   # It read "true" from 15d822c (2026-08-19) to 79b5222 (2026-08-22) to collect the
   # #268/#105 sample. Measured over that window: $0.1768 total spend, THREE
@@ -69,7 +71,7 @@ kill_timeout = "5s"
   # posts is typed "Bot" and refused. There is deliberately still no maximum
   # window length: #357 ran ~3 days and issue #105 needs ~7, so no number
   # separates them; "is anybody still watching" does.
-  OPENROUTER_LIVE_EXECUTION_ENABLED = "true"
+  OPENROUTER_LIVE_EXECUTION_ENABLED = "false"
   # issue #27: keep the feedback-event SQLite trail on the persistent volume
   # (mounted at /data below), NOT the ephemeral rootfs default (.data/…) which
   # is wiped on every deploy — that erased the self-improving-loop history.
