@@ -96,6 +96,7 @@ ways, so the record shows what was believed on a date and what replaced it.
 | [ADR-0090](adr/0090-a-credential-does-not-follow-a-redirect-and-tavily-gets-the-same-scheme-check.md) | A credential does not follow a redirect, and Tavily gets the same scheme check | Architecture | Accepted — 2026-09-01 |
 | [ADR-0091](adr/0091-the-board-checker-tokenizes-python-instead-of-stripping-hash-comments.md) | The board checker tokenizes Python instead of stripping `#` comments | Architecture | Accepted — 2026-09-01 |
 | [ADR-0092](adr/0092-the-board-anchor-is-checked-against-a-main-this-checkout-can-see.md) | The board anchor is checked against a `main` this checkout can see, not against `HEAD` | Architecture | Accepted — 2026-09-01 |
+| [ADR-0093](adr/0093-a-peer-critique-nests-inside-its-round-and-a-critics-spend-gets-its-own-row.md) | A peer critique nests inside its round, renderers read the digest, deciders read the critics | Architecture | Accepted — 2026-09-01 |
 
 **This index was itself stale** until 2026-07-30: ADR-0002 had existed since
 2026-07-19 and was never listed here. A hand-maintained index is a derived fact

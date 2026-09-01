@@ -330,8 +330,13 @@ class TokenUsage(BaseModel):
     #: default (the moderator/writer model id) in that case, so an absent
     #: value never changes existing behaviour. Not populated by
     #: ``_extract_usage`` itself, which only sees the response body, not
-    #: which model the request targeted; callers that know the model
-    #: (``debate.py``, ``synthesis.py``) stamp it after the call returns.
+    #: which model the request targeted. One caller stamps it today:
+    #: ``DebateOrchestrationService._call_debate_model`` in ``debate.py``,
+    #: after the call returns. ``synthesis.py`` does NOT — it never builds a
+    #: ``TokenUsage`` at all, and its spend is priced unconditionally at
+    #: ``settings.synthesis_model_id``, so it has nothing to stamp. An earlier
+    #: version of this note named it as a second stamping caller, which was
+    #: false (ADR-0093).
     model_id: str | None = None
 
 
