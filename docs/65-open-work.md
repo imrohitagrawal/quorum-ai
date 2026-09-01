@@ -6,7 +6,7 @@ original, because a gate and an offline agent can read it and cannot read `gh`.
 
 Verified at: `33c53793e2af19f0de73510ebe3dc49481219988`
 
-The board holds **21** rows, **4** of them unpinned.
+The board holds **22** rows, **5** of them unpinned.
 
 `scripts/check_open_work.py --check` reads every row's evidence off disk and
 refuses if a claim is false. It runs inside `make validate`, and
@@ -85,7 +85,7 @@ Stated narrowly, because both earlier drafts overclaimed here and were wrong:
 - **Work that lands by a different route under the same name.** W15 is pinned on
   `_bound_sniff_time` being present-and-undefined; deleting the dangling
   references flips it, but *defining* the function would not.
-- **The four unpinned rows.** Nothing is checked about them.
+- **The five unpinned rows.** Nothing is checked about them.
 - **A row that should exist and does not.**
 
 Review remains the primary defence — measured here, 0 of 16 `src/` defects were
@@ -117,6 +117,7 @@ caught by any automated check and 10 of 16 by adversarial review
 | W20 | `panel_agreement()` reports "agreed" for a genuine N=1 panel | PENDING | `PRESENT src/product_app/synthesis_consensus.py :: return "agreed" if len(set(stance.values())) == 1 else "split"` | #394 | — |
 | W21 | A redirect carries the API key off the guarded base | PENDING | `PRESENT src/product_app/providers.py :: with urlopen(request, timeout=settings.openrouter_timeout_seconds) as response:` | — | W18 |
 | W22 | The Tavily search call sends its key to a configured base with no scheme guard | PENDING | `PRESENT src/product_app/providers.py :: url=f"{settings.tavily_api_base_url.rstrip('/')}/search"` | — | — |
+| W23 | The mutation gate cannot run when a changed function is covered by a schemathesis case | UNPINNED | `—` | — | — |
 
 **STOP** marks a row that cannot be finished without a human decision — a money,
 cost or safety guardrail value that only real measurement could justify. Do not
@@ -265,6 +266,34 @@ execution is off. That is a product-owner decision, left open in ADR-0086
 along with excluding the moderator's own slot from the stance it grades —
 which would change every live run's verdict from a 4-slot to a 3-slot reading
 and is a rewrite of the consensus math, not a diagnostic.
+
+**W23 — the mutation gate aborts instead of measuring.** Found by W9, whose
+changed functions are the first to be covered by a schemathesis case.
+`mutmut` picks the tests that cover a changed function and re-invokes pytest
+with their node ids. Schemathesis parametrises by `"{METHOD} {PATH}"`, so one
+of those ids is
+`test_api_conforms_to_openapi_contract[GET /status]` — and **pytest cannot
+select a node id containing a space**, even though `--collect-only` lists it.
+Measured on the real tree, not only inside `./mutants/`:
+
+```
+uv run pytest 'tests/contract/test_api_contract_schemathesis.py::\
+  test_api_conforms_to_openapi_contract[GET /status]' --no-cov -q --collect-only
+  -> no tests collected in 0.20s
+```
+
+pytest exits 4 (usage error), `mutmut` raises
+`BadTestExecutionCommandsException`, and the gate dies **before scoring a
+single mutant** — exactly the "a RED gate is not evidence it measured" shape of
+rule 2, and the gate's own failure text says so. PR #414 is where it first
+fired; PR #413 the same night scored normally (38 survivors) because its scope
+was `providers.py`, which no schemathesis case covers.
+
+So the gate is blind for **any** future diff touching a function reachable from
+a documented endpoint — the `/status`, `/ready`, `/ui` and `/v1/*` handlers and
+everything under them. Not fixed in #414: it is gate machinery and a separate
+concern from the guard that found it (rule 17), and W9's changed functions were
+mutation-proven by hand instead — 16 mutants, 16 killed, 0 survivors.
 
 **W10 — #382. DONE** (ADR-0083). `_has_strong_overlap` asked for three answers
 each with two partners — a DEGREE check. Necessary but not sufficient: overlap
