@@ -24,8 +24,9 @@ broken until a follow-up re-stamped it.
 Two earlier designs were built against this and both were withdrawn. Each
 shipped a 100 %-green suite with every mutation killed, and each pinned the
 wrong contract. The full measurements are in the postmortem
-`2026-09-01-402-freshness-gate-design.md`, written to the session's analysis
-notes and not on `main`, so it is named here rather than linked. The two
+[`2026-09-01-402-freshness-gate-design.md`](../analysis/2026-09-01-402-freshness-gate-design.md),
+which was on the session's analysis notes only when this ADR was written and is
+now on `main`, so the citation resolves. The two
 measurements that decide this ADR are:
 
 - **Design A** accepted a non-ancestor anchor whose committer was
