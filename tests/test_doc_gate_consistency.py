@@ -2270,8 +2270,8 @@ def _check_default_slot_ids(*, text: str, expected: tuple[str, ...], label: str)
     assert len(found) == len(expected), (
         f"{label} names {len(found)} model id(s) ({found}); the product ships "
         f"{len(expected)} default slots ({list(expected)}). The command that "
-        f"produces the real list is `python -c \"from product_app.model_slots "
-        f"import DEFAULT_MODEL_IDS; print(DEFAULT_MODEL_IDS)\"`."
+        f'produces the real list is `python -c "from product_app.model_slots '
+        f'import DEFAULT_MODEL_IDS; print(DEFAULT_MODEL_IDS)"`.'
     )
     assert tuple(found) == expected, (
         f"{label} names default model slots {found}; the product ships "
