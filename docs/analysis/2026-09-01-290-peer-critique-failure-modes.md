@@ -34,13 +34,13 @@ recorded in the issue's own comment). It found the worst per-`recv` gap at
 **25.055 s** on `openai/gpt-4o-mini` against `openrouter_timeout_seconds = 8.0`,
 and concluded peer critique could not be built against the non-streaming call
 path. Board row **W1** then streamed the provider call (ADR-0084, accepted
-2026-08-30); `src/product_app/providers.py:1259` sends `"stream": True`
+2026-08-30); `src/product_app/providers.py:1264` sends `"stream": True`
 unconditionally, and `openrouter_call_budget_seconds = 60.0`
 (`src/product_app/config.py:110`) is now a cumulative bound.
 
 ```
 $ grep -n '"stream": True' src/product_app/providers.py
-1259:            "stream": True,
+1264:            "stream": True,
 ```
 
 What is **still** unsettled is not the probe but the observation: `docs/65-open-work.md`
@@ -81,7 +81,7 @@ $ grep -c "CREATE TABLE" src/product_app/run_history_store.py
 So "an in-flight run's existing usage records that predate the field" is a
 **non-case for the process**: a record and the code that reads it are always from
 the same process image. The only surviving back-compat surface is the field's own
-default — `TokenUsage.model_id: str | None = None` (`providers.py:335`) — and
+default — `TokenUsage.model_id: str | None = None` (`providers.py:340`) — and
 `_actual_cost`'s `or settings.debate_model_id` fallback, which ADR-0037 chose
 precisely so an unstamped record prices exactly as it did before.
 
@@ -94,7 +94,7 @@ cardinality assertion (rule 6b): under the peer shape, assert that the number of
 debate usage records carrying a stamp equals the number of critique calls
 dispatched, not merely that the run was billed.
 
-**A verified inaccuracy in ADR-0037's own artefact.** `providers.py:333-334` says
+**A verified inaccuracy in ADR-0037's own artefact.** `providers.py:333-334` (pre-diff numbering) says
 the stamp is applied by *"callers that know the model (`debate.py`,
 `synthesis.py`)"*. `synthesis.py` does not stamp it, and never constructs a
 `TokenUsage` at all:
@@ -107,14 +107,14 @@ $ grep -n "TokenUsage(" src/product_app/synthesis.py
 ```
 
 No live defect — synthesis prices unconditionally at `settings.synthesis_model_id`
-(`query_run_orchestration.py:2818`) and there is one synthesis model — but the
+(`query_run_orchestration.py:2816`) and there is one synthesis model — but the
 sentence is false as written and is corrected in the same pull request as this
 document.
 
 ## 2. Cancellation: billing partial critiques
 
 **What `_call_debate_model` guards today.** Three guards, in order
-(`src/product_app/debate.py:889-899`): the live-execution flag; a missing key or
+(`src/product_app/debate.py:889-899`; the `should_stop` check itself is `:898`): the live-execution flag; a missing key or
 empty `debate_model_id`; then
 
 ```python
@@ -142,10 +142,13 @@ $ grep -n "ThreadPoolExecutor(max_workers" src/product_app/synthesis.py
 With `max_workers=20` and at most 4 critics, every critic starts essentially at
 once, each re-checking `should_stop` in its own thread (synthesis does the same at
 `synthesis.py:1189`). A cancel landing after submission therefore un-bills only
-the critics whose thread has not yet reached the check — in practice **zero to
-three, and most often zero**, not "up to three". The un-billing guarantee that
-does survive is the one already stated in `_call_debate_model`'s docstring: round
-1's in-flight calls cannot be un-billed, only a round not yet dispatched.
+the critics whose thread has not yet reached the check — so the count is
+**between zero and three and is not predictable**, not "up to three". How often
+it is zero is UNVERIFIED: no command produces it, because the fan-out does not
+exist yet. The un-billing guarantee that does survive is the one already stated
+in an inline comment at `debate.py:893-897` — round 1's in-flight calls cannot be
+un-billed, only a round not yet dispatched. (It is NOT in the docstring, which
+covers only the F-06 billed/not-billed contract.)
 
 **Design consequence.** The honest contract for peer critique is per-round, not
 per-critic: a cancel between rounds un-bills the whole of the next round's fan-out;
@@ -175,7 +178,7 @@ $ sed -n '378,386p' src/product_app/model_slots.py
 `settings.debate_model_id = "anthropic/claude-haiku-4.5"` (`config.py:544`) is
 byte-identical to `DEFAULT_MODEL_IDS[1]` (`model_slots.py:69`). The repository
 already knows this — `moderator_overlap_slots` / `default_moderator_overlap_slots`
-(`model_slots.py:270-300`) report it, and ADR-0086 decided it is *reported, not
+(`model_slots.py:253-300`) report it, and ADR-0086 decided it is *reported, not
 refused*.
 
 **Where it would bite the receipt.** The result view pairs each estimate row to
@@ -197,7 +200,7 @@ per critic satisfies (a slot model then appears once as `model <id>` and once as
 `critique <id>` — distinct keys) and a second `kind="model"` row per critic would
 not. This is the constraint, and it is load-bearing.
 
-The per-slot estimate array is keyed by **position**, not id (`app.js:245-258`),
+The per-slot estimate array is keyed by **position**, not id (`app.js:246-258`),
 and filters `kind === "model"` (`app.js:6877`), so it is already immune.
 
 ## 4. UI rendering: pooled versus per-model
@@ -232,7 +235,8 @@ is unaffected: `debate_by_round` already sums per-model-priced records into
 through to the server-supplied display name. A `kind="critique"` row renders today.
 Confirmed by reading the expression; **UNVERIFIED by execution** — settling it
 needs the cost-gate integration test extended with a critique row
-(`tests/integration/test_cost_gate_js.py:142-145` pins the current five labels).
+(`tests/integration/test_cost_gate_js.py:136-145` pins the current five labels;
+`:145` is the `labels[4] == "Debate + synthesis"` line specifically).
 
 **The debate *narrative* surface cannot take a per-(round, model) list at all, and
 the damage is wider than the issue states.** Five consumers read `debate_outputs`,
@@ -248,6 +252,71 @@ each assuming one element per round:
 
 Only the first fails silently. The other four visibly misreport, and 4816 is an
 honesty defect of the same class the product exists to remove.
+
+## 5. The class this enumeration MISSED on its first pass
+
+Recorded rather than quietly folded in, because the omission is the most useful
+thing in this document.
+
+Sections 1-4 enumerated the money surface and its **renderers**. Adversarial
+review found two consumers of `critique_text` that are not renderers at all, and
+both are money- or trust-bearing:
+
+```
+$ grep -n "critique_text" src/product_app/synthesis.py src/product_app/synthesis_consensus.py
+src/product_app/synthesis.py:785:                    (round_output.critique_text or "")
+src/product_app/synthesis_consensus.py:662:        critique = (round_output.critique_text or "").lower()
+```
+
+**`synthesis.py:785`** slices the critique into every synthesis section at
+`SYNTHESIS_DEBATE_EXCERPT_MAX_CHARS`, whose value is *derived*:
+
+```
+$ grep -n "SYNTHESIS_DEBATE_EXCERPT_MAX_CHARS = " src/product_app/synthesis.py
+203:SYNTHESIS_DEBATE_EXCERPT_MAX_CHARS = int(DEBATE_ROUND_MAX_TOKENS * CHARS_PER_TOKEN)
+$ grep -n "CHARS_PER_TOKEN = " src/product_app/costs.py
+257:CHARS_PER_TOKEN = Decimal(4)
+```
+
+= 8000, and its own comment (`synthesis.py:195-197`) states the reason: *"A
+critique cannot be longer than the debate call that produced it was allowed to
+be."* A single `critique_text` holding four critics' output falsifies that
+sentence and means synthesis reads roughly the first quarter of it — about one
+critic — while the run paid for four. Nothing reports the loss.
+
+The same text then enters round 2's prompt with no treatment at all:
+
+```
+$ sed -n '996,997p' src/product_app/debate.py
+            lines.append("Round 1 critique:")
+            lines.append(prior_round)
+```
+
+`_one_line` (`debate.py:265`) is deliberately not applied there, and its docstring
+measures that `.replace("\n", " ")` misses `\r`, `U+2028`, `U+0085` and `U+001C`,
+each of which forges a `- Slot N — …` row. One untrusted output through that hole
+was the accepted risk; four concatenated is a different one.
+
+**`synthesis_consensus.py:662`** is inside `_debate_signals_convergence`
+(`:641`), reached from `:426`:
+
+```
+$ sed -n '425,427p' src/product_app/synthesis_consensus.py
+    # Strong path 2: debate critique signals convergence.
+    if _debate_signals_convergence(debate_outputs):
+        return "strong"
+```
+
+It scans for a convergence keyword, gated on the ROUND's `debate_mode` being
+live (`:660`) — the #185 guard, whose stated purpose (`:652-657`) is that
+*"a template wording change can never silently swing the panel to 'strong' on
+words this product wrote about itself."* Pool four critics into one string and
+any ONE of them saying "converge" flips the panel; mix a templated critic into a
+live round and this product's own words become eligible for the scan.
+
+Neither consumer renders. Both decide. **The rule this yields: enumerate a
+field's DECIDERS before its renderers** — a renderer that misreads shows
+something odd, a decider that misreads makes a claim.
 
 ## Summary of what each class demands of the design
 
