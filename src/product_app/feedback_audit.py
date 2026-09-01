@@ -47,6 +47,8 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
+from product_app.credentialed_url import base_url_provenance, chat_completions_url
+
 _log = logging.getLogger(__name__)
 
 
@@ -667,8 +669,30 @@ def _call_audit_model(
             {"role": "user", "content": user_prompt},
         ],
     }
+    # W18 / ADR-0085. This request carries the operator's key, and the base it
+    # is sent to is operator-settable, so it goes through the same guard as
+    # the paid answer call in ``providers.py``. Refusing returns ``None``,
+    # which is the shape this function already documents.
+    #
+    # It also closes a live defect in the same line: with the variable UNSET
+    # the URL was ``/chat/completions``, and ``Request`` raises
+    # ``ValueError("unknown url type: '/chat/completions'")`` -- not one of
+    # the three classes caught below, so "Returns ``None`` on any failure"
+    # was false and the whole audit crashed instead of falling back.
+    base_url = os.environ.get("OPENROUTER_API_BASE_URL", "")
+    url = chat_completions_url(base_url)
+    if url is None:
+        base_scheme, base_host = base_url_provenance(base_url)
+        # Scheme and host only; a base URL can carry userinfo, which is
+        # credential material.
+        _log.warning(
+            "feedback_audit: refusing to send the API key to base scheme %s host %s",
+            base_scheme or "(none)",
+            base_host or "(none)",
+        )
+        return None
     request = urllib.request.Request(
-        url=f"{os.environ.get('OPENROUTER_API_BASE_URL', '')}/chat/completions",
+        url=url,
         data=_json.dumps(payload).encode(),
         headers={
             "Authorization": f"Bearer {openrouter_key}",

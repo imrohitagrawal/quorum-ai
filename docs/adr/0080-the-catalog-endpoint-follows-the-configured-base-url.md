@@ -93,6 +93,14 @@ pre-existing and outside this change's concern (the catalog), and it is recorded
 as **W18** on `docs/65-open-work.md` rather than fixed here, because the paid
 path deserves its own reviewer.
 
+> **Closed 2026-09-01 by ADR-0085.** The paragraph above is kept in its original
+> tense because it records what was true when this decision was made. The gap it
+> names is fixed: `providers.py` — and a fourth call site this table missed,
+> `feedback_audit.py`, which reads the environment variable rather than the
+> settings attribute — now build the endpoint through
+> `credentialed_url.chat_completions_url`. The catalog's own `{http, https}`
+> policy below is unchanged, and ADR-0085 explains why it should be.
+
 That argument depends on a fact that could quietly stop being true, so it is
 pinned — **on the artefact, not on the source text**, and the difference is not
 academic. The first version of the pin read `_urlopen_catalog`'s source and

@@ -150,6 +150,13 @@ RISK_TIER_MODULES = (
     # because it is now a distinct file, not a rename of the same one.
     "query_run_orchestration.py",
     "store_reconnect.py",
+    # Added 2026-09-01 with ADR-0085. It decides which base URLs may carry the
+    # operator's API key. Its sibling `catalog_fetcher._FETCHABLE_SCHEMES`, a
+    # LOWER-stakes constant on the credential-free catalog call, has been in
+    # bucket A since ADR-0080; the higher-stakes one would have shipped with no
+    # triage at all, which is the "covered by omission" shape this list exists
+    # to prevent.
+    "credentialed_url.py",
 )
 
 #: A wrong value here is silently harmful and nothing else constrains it.
@@ -159,6 +166,11 @@ BUCKET_A_LITERAL_PIN = (
     # breaks every production catalog fetch, and adding "file" turns an
     # operator's typo into an arbitrary local-file read served as live prices.
     "catalog_fetcher._FETCHABLE_SCHEMES",
+    # The hostnames the credential guard treats as "this machine", and so the
+    # only ones it will send the operator's API key to in clear. Adding a name
+    # here is adding a host the key may reach unencrypted, which is silently
+    # harmful and constrained by nothing else.
+    "credentialed_url._LOOPBACK_HOSTNAMES",
     "costs.SOFT_THRESHOLD_USD",
     "costs.DAILY_CAP_USD",
     "costs.HARD_LIMIT_USD",
@@ -214,6 +226,18 @@ BUCKET_A_LITERAL_PIN = (
 #: Pin the BEHAVIOUR, not the literal — these legitimately change, and a literal
 #: pin would teach people to edit the test alongside the code.
 BUCKET_B_PIN_BEHAVIOUR = {
+    # --- Added 2026-09-01 with ADR-0085 ---
+    "credentialed_url._FORBIDDEN_IN_A_BASE_URL": (
+        "the character class that makes a configured base URL unusable for a "
+        "credentialed call. The PATTERN legitimately changes as more shapes "
+        "http.client rejects are found; what must not change is that "
+        "whitespace, control characters and a bare CRLF are refused by the "
+        "guard rather than raised as InvalidURL out of a call site that does "
+        "not catch it. Asserted by driving five such bases through "
+        "chat_completions_url, not by comparing the pattern to itself (rule "
+        "7a): tests/unit/test_credentialed_base_url_guard.py::"
+        "test_a_base_that_must_not_carry_a_credential_yields_nothing"
+    ),
     # --- Added 2026-08-26 with the live-vs-simulated ledger (#376, ADR-0074) ---
     "feedback_store._LAST_CHARGE_SCAN_LIMIT": (
         "how far last_live_charge_at walks back looking for a parseable "
@@ -1734,6 +1758,27 @@ def test_class_constants_still_hidden_for_a_real_enum_alias(
     )
     found = _class_constants_in(synthetic, "fake_module_alias")
     assert set(found) == {"fake_module_alias.Settings.TIMEOUT_SECONDS"}
+
+
+def test_the_credential_loopback_hostnames_are_pinned() -> None:
+    """Turns red if: `_LOOPBACK_HOSTNAMES` gains or loses a name.
+
+    A LITERAL pin, which is what bucket A means, and the direction that matters
+    is WIDENING: every name in this set is a host the guard will send the
+    operator's API key to over cleartext http. Demonstrated before this pin
+    existed -- adding `"host.docker.internal"` and `"openrouter-proxy.corp"`
+    left `tests/unit/test_credentialed_base_url_guard.py` entirely green, and
+    `chat_completions_url("http://openrouter-proxy.corp/v1")` then returned a
+    URL the key would have been sent to in clear.
+
+    The behaviour tests either side of it try only the spellings they already
+    know about, so a widening slips past them; this asserts the set itself.
+    Numeric loopback (127.0.0.0/8, ::1) is NOT in here -- it is decided by
+    `ipaddress.is_loopback`, deliberately, so this set stays a list of names.
+    """
+    from product_app import credentialed_url
+
+    assert frozenset({"localhost"}) == credentialed_url._LOOPBACK_HOSTNAMES
 
 
 def test_the_catalog_fetchable_schemes_are_pinned() -> None:
