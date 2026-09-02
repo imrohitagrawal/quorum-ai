@@ -178,8 +178,10 @@ gap. (The approved plan and two session handoffs say "8 of 8"; ADR-0078 and
 `docs/analysis/2026-08-26-b3-timeout-probe.md` both correct it against the
 probe's own table. The corrected figure is the one used here.) Streaming
 collapsed the gap to 0.478 / 0.208 s on a paired sample. Building critique first
-ships a feature that pays for discarded tokens and demotes every receipt to
-`estimated`.
+would have shipped a feature that pays for discarded tokens and demotes every
+receipt to `estimated`. **That blocker is now discharged** — see the W1 note
+below: two live windows measured the streamed path, most recently three runs
+that all came back `measured` with no failed steps.
 
 **W3 — the money constants. STOP, and DEFERRED by decision (ADR-0081).**
 The product owner decided 2026-08-28: **the three constants do not move until
@@ -646,13 +648,26 @@ SLOT**, which `model_slots.py` contradicts. The work is reading those 15
 check-each files and correcting only the ones making that claim — not a global
 replace, which would break fixtures and rewrite history.
 
-**Do not attempt W2 or W3 while `OPENROUTER_LIVE_EXECUTION_ENABLED` is false.**
-W2's shape depends on W1's measured streaming behaviour, and W3 is deferred.
-W1 is built and, once this lands, merged — but it is **latent-correct, not
-observed**: with
-live execution off nothing exercises the streaming path in production. The
-owner-authorised measurement window is what turns W1 from "tested" into
-"measured", and it is the step between W1 and W2 — not an optional follow-up.
+**W1 is MEASURED, and W2's dependency on it is discharged.** The
+owner-authorised window that turns W1 from "tested" into "measured" has been
+run twice, so this is no longer the step between W1 and W2:
+
+- 2026-08-31 (`64a3b14`): `usage_absent: false` and `stream_terminator: "done"`
+  on **24 of 24** live production calls, across six distinct models.
+- 2026-09-01 (`014b010`): three runs on three varied question shapes, every one
+  `live_count` 4/4 with `cost_source: "measured"` and zero `failed_steps` — so
+  no call fell back and no timeout demoted a receipt to `estimated`.
+
+This paragraph read *"latent-correct, not observed"* for two days after the
+first of those windows closed, and a session then recommended spending money to
+re-measure it. Nothing compared the sentence to the commit log. That is the
+failure mode rule 1a exists for.
+
+**W3 is still STOP**, but not for this reason: it is deferred by the product
+owner's decision in ADR-0081, independently of any measurement. **W2 remains
+PENDING because it is unbuilt**, not because it is blocked — ADR-0093 records
+the shape, and its decision 3 (a `kind="critique"` receipt row) needs the
+owner's sign-off before that part ships.
 
 W4 no longer waits on anything (W10 is done), and no longer overlaps W1
 either: W1 has landed and left `Field(ge=1, le=4)` in `providers.py`
