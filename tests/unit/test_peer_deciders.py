@@ -314,3 +314,22 @@ def test_the_user_visible_verdict_follows_the_critics_not_the_digest(
     assert (strength == "strong") is expected, (
         f"{converging} of 4 critics converged and the panel reads {strength!r}"
     )
+
+
+def test_a_negated_convergence_keyword_is_not_a_vote() -> None:
+    """RED WHEN: the negation guard is dropped from ``_text_signals_convergence``.
+
+    The keyword scan matches positive tokens as substrings, so "did not
+    converge" contains "converge". The guard checks a short window before the
+    match for a negation. It was extracted verbatim when the peer shape gave it
+    a second caller, and ``diff-cover`` showed the ``continue`` unreached — so
+    the peer path had never exercised the one branch that stops a DISSENT from
+    reading as agreement.
+    """
+    negated = "The panel did not converge; the answers remain far apart."
+    output = _peer_round([_critique(n, negated) for n in (1, 2, 3, 4)])
+    assert _debate_signals_convergence([output]) is False
+    # POSITIVE PARTNER: the same four critics WITHOUT the negation do converge,
+    # so the refusal is the guard and not the keyword failing to match at all.
+    converging = _peer_round([_critique(n, _CONVERGED) for n in (1, 2, 3, 4)])
+    assert _debate_signals_convergence([converging]) is True

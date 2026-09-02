@@ -39,7 +39,9 @@ from product_app.debate import (
     DebateOutput,
     DebateResult,
     DebateRoundStatus,
+    PanelStance,
     SlotCritique,
+    SlotPosition,
     debate_stub_service,
 )
 from product_app.providers import (
@@ -693,3 +695,80 @@ def test_a_critic_cannot_forge_a_slot_row_inside_the_digest(
         assert len(rows) == 4, f"{len(rows)} rows in a four-critic digest: {rows!r}"
         labels = [row.split(":", 1)[0] for row in rows]
         assert "Slot 9" not in " ".join(labels), f"a critic forged a row label: {labels!r}"
+
+
+# --- the defensive branches diff-cover flagged as unreached --------------------
+#
+# Each of these guards a real, reachable shape. They were written from the
+# rule-16e failure list rather than from a test, so `make diff-cover` reported
+# them uncovered — which is the honest signal that a branch exists and nothing
+# drives it. A guard nobody exercises is a guard nobody knows works.
+
+
+def test_a_critic_whose_envelope_carries_no_usable_prose_reads_templated(
+    monkeypatch: pytest.MonkeyPatch, peer_on: None
+) -> None:
+    """RED WHEN: the second ``is_visible`` check (on the PARSED prose) is dropped.
+
+    The critic ANSWERED — the raw reply is a well-formed JSON envelope, so the
+    first visibility gate passes — but its ``critique`` field is blank. Without
+    the second check the round ships ``critique_text=""`` for that slot from a
+    LIVE, BILLED call, and the reader sees an empty row where the template would
+    at least have said something. This is the same defect two reviewers found on
+    the moderator path, which is why the peer path applies the same two gates.
+    """
+    blank_envelope = _envelope("   ", {1: "adopt"})
+    result = _run(
+        monkeypatch,
+        _Recorder(replies={"prov/model-2": blank_envelope}, default=_envelope("A critique.")),
+    )
+    critiques = {c.critic_slot_number: c for c in result.debate_outputs[0].slot_critiques}
+    blank = critiques[2]
+    assert blank.critique_mode == DEBATE_MODE_FALLBACK
+    assert blank.stance is None, "a reply with no showable prose keeps no stance either"
+    assert blank.critique_text.strip(), "the templated notice must not itself be empty"
+    assert "Slot 2" in blank.critique_text
+    # POSITIVE PARTNER: the other three answered and are live, so the refusal
+    # above is the blank field and not a build that templates everything.
+    assert {critiques[n].critique_mode for n in (1, 3, 4)} == {DEBATE_MODE_LIVE}
+
+
+def test_the_digest_of_no_critics_is_empty_rather_than_malformed() -> None:
+    """RED WHEN: ``_peer_digest(())`` divides by zero.
+
+    Not reachable through ``run_debate_rounds`` any more — a round with no
+    dispatched critic returns ``None`` and takes the moderator path — but the
+    helper is called with whatever it is given, and its first act is
+    ``MAX // len(critiques)``. The guard is one line and the alternative is a
+    ``ZeroDivisionError`` on the paid path.
+    """
+    assert debate_stub_service._peer_digest(()) == ""
+
+
+def test_a_stance_cannot_be_derived_from_a_zero_panel() -> None:
+    """RED WHEN: the ``eligible_count <= 0`` floor is removed.
+
+    ``x >= 0 // 2 + 1`` is ``x >= 1``, so a zero denominator makes a SINGLE
+    critic's reading the whole panel's — rule 7's negative-check-over-nothing,
+    in the fail-open direction. Reachable on any round serialised before
+    ``eligible_critic_count`` existed, where the field defaults to 0.
+    """
+    lone = SlotCritique(
+        critic_slot_number=1,
+        critic_model_id="prov/model-1",
+        critique_text="Converged.",
+        critique_mode=DEBATE_MODE_LIVE,
+        stance=PanelStance(
+            author_model_id="prov/model-1",
+            round_number=1,
+            positions=(SlotPosition(slot=1, group="adopt"),),
+        ),
+    )
+    assert (
+        debate_stub_service._derive_peer_stance((lone,), round_number=1, eligible_count=0) is None
+    )
+    # POSITIVE PARTNER: the same critic against a panel of one DOES derive,
+    # so the refusal above is the zero and not a build that never derives.
+    derived = debate_stub_service._derive_peer_stance((lone,), round_number=1, eligible_count=1)
+    assert derived is not None
+    assert [(p.slot, p.group) for p in derived.positions] == [(1, "adopt")]

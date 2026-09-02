@@ -267,3 +267,50 @@ def test_no_query_text_reaches_the_correlator(monkeypatch: pytest.MonkeyPatch) -
     # POSITIVE PARTNER: the record really did carry the sentinel's SHAPE, so
     # the assertion above is not passing over an empty record.
     assert json.loads(emitted)["sent_chars"] >= len(sentinel)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        "not a mapping at all",
+        {},
+        {"choices": "not a list"},
+        {"choices": []},
+        {"choices": [None]},
+        {"choices": ["not a mapping"]},
+        {"choices": [{}]},
+    ],
+    ids=[
+        "not_dict",
+        "no_choices",
+        "choices_not_list",
+        "choices_empty",
+        "element_none",
+        "element_not_dict",
+        "element_empty",
+    ],
+)
+def test_a_malformed_payload_reports_absent_rather_than_raising(payload: object) -> None:
+    """RED WHEN: a shape guard is dropped from ``_finish_reason_label``.
+
+    This runs on the PAID path inside a ``contextlib.suppress``, and that is
+    exactly why it must not need one: a suppressed exception here means the
+    whole token row silently vanishes, so the dataset loses the call rather
+    than the field. The label must be total over every shape an upstream can
+    send, not only over every ``finish_reason`` VALUE — which is all the
+    parametrisation above this one covers.
+
+    ``diff-cover`` is what surfaced the gap: three guard lines with no test
+    reaching them.
+    """
+    from product_app.providers import FINISH_REASON_ABSENT, _finish_reason_label
+
+    assert _finish_reason_label(payload) == FINISH_REASON_ABSENT
+
+
+def test_a_well_formed_payload_still_reports_its_reason() -> None:
+    """The POSITIVE PARTNER (rule 7) for the sweep above: a function that
+    returned ``"absent"`` for everything would satisfy it."""
+    from product_app.providers import _finish_reason_label
+
+    assert _finish_reason_label({"choices": [{"finish_reason": "length"}]}) == "length"
