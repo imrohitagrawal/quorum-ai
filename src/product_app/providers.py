@@ -59,7 +59,10 @@ from product_app.credentialed_url import (
 from product_app.feedback_store import record_event as _record_feedback_event
 from product_app.model_slots import ModelSlot, openrouter_model_catalog_service
 from product_app.provider_keys import ProviderCredentialSource
-from product_app.telemetry_sink import TOKEN_TELEMETRY_LOGGER
+from product_app.telemetry_sink import (
+    TELEMETRY_STAGE_INITIAL_ANSWERS,
+    TOKEN_TELEMETRY_LOGGER,
+)
 from product_app.untrusted_text import fence
 from product_app.visible_text import is_visible
 
@@ -550,6 +553,15 @@ class ProviderExecutionService:
                 openrouter_key=openrouter_key,
                 query_text=query_text,
                 model_slot=model_slot,
+                # ADR-0093 decision 5. The initial stage labels itself here
+                # rather than taking a parameter: this method already holds
+                # both facts, and a caller-supplied stage would be a second
+                # source for something only this frame can be wrong about.
+                telemetry_labels=CallTelemetryLabels(
+                    query_run_id=str(query_run_id),
+                    stage=TELEMETRY_STAGE_INITIAL_ANSWERS,
+                    slot_number=model_slot.slot_number,
+                ),
             )
             if live_response is not None:
                 provider_attempt_order = [ProviderPath.OPENROUTER_SEARCH]
@@ -974,6 +986,7 @@ class ProviderExecutionService:
         openrouter_key: str,
         query_text: str,
         model_slot: ModelSlot,
+        telemetry_labels: CallTelemetryLabels | None = None,
     ) -> LiveProviderResult | None:
         """Call ``/chat/completions`` with web search enabled.
 
@@ -1001,6 +1014,7 @@ class ProviderExecutionService:
             openrouter_key=openrouter_key,
             query_text=query_text,
             model_slot=model_slot,
+            telemetry_labels=telemetry_labels,
         )
         if result is None or isinstance(result, _SearchRejected | _DispatchedUnmeasured):
             return None
@@ -1077,6 +1091,7 @@ class ProviderExecutionService:
         openrouter_key: str,
         query_text: str,
         model_slot: ModelSlot,
+        telemetry_labels: CallTelemetryLabels | None = None,
     ) -> LiveProviderResult | _SearchRejected | _DispatchedUnmeasured | None:
         bare_model_id = model_slot.model_id
 
@@ -1100,6 +1115,7 @@ class ProviderExecutionService:
                 query_text=query_text,
                 model_id=bare_model_id,
                 max_tokens=max_tokens,
+                telemetry_labels=telemetry_labels,
             )
 
         online_model_id = f"{bare_model_id}:online"
@@ -1110,6 +1126,7 @@ class ProviderExecutionService:
             query_text=query_text,
             model_id=online_model_id,
             max_tokens=max_tokens,
+            telemetry_labels=telemetry_labels,
         )
         if online_result is _SEARCH_REJECTED:
             #  re-try without the ``:online`` suffix.
@@ -1118,6 +1135,7 @@ class ProviderExecutionService:
                 query_text=query_text,
                 model_id=bare_model_id,
                 max_tokens=max_tokens,
+                telemetry_labels=telemetry_labels,
             )
         return online_result
 
@@ -1132,6 +1150,7 @@ class ProviderExecutionService:
         context: dict[str, Any] | None = None,
         response_format: dict[str, object] | None = None,
         reasoning: dict[str, object] | None = None,
+        telemetry_labels: CallTelemetryLabels | None = None,
     ) -> LiveProviderResult | _SearchRejected | _DispatchedUnmeasured | None:
         # ``_post_openrouter`` accepts a custom system prompt and
         # ``max_tokens`` cap. The debate and synthesis services pass their
@@ -1189,6 +1208,16 @@ class ProviderExecutionService:
             extra["response_format"] = response_format
         if reasoning is not None:
             extra["reasoning"] = reasoning
+        # ADR-0093 decision 5 rides the SAME conditional-forwarding rule, and
+        # for the same measured reason ``response_format`` does:
+        # ``test_a_non_judge_call_reaches_the_transport_with_an_unchanged_SIGNATURE``
+        # pins that a caller wanting none of these parameters passes none of
+        # them, which is what keeps the several pre-existing fixed-signature
+        # ``_post_messages`` doubles working. Forwarding ``telemetry_labels=None``
+        # unconditionally turned that gate RED while changing no wire payload
+        # at all — measured here, not reasoned about.
+        if telemetry_labels is not None:
+            extra["telemetry_labels"] = telemetry_labels
         return self._post_messages(
             openrouter_key=openrouter_key,
             model_id=model_id,
@@ -1206,6 +1235,7 @@ class ProviderExecutionService:
         max_tokens: int | None = None,
         response_format: dict[str, object] | None = None,
         reasoning: dict[str, object] | None = None,
+        telemetry_labels: CallTelemetryLabels | None = None,
     ) -> LiveProviderResult | _SearchRejected | _DispatchedUnmeasured | None:
         # ``response_format`` and ``reasoning`` are EXPLICIT named parameters
         # rather than a ``**extra`` passthrough, and both default to ``None``.
@@ -1690,6 +1720,8 @@ class ProviderExecutionService:
                 max_tokens=max_tokens,
                 usage=usage,
                 stream_terminator=streamed.terminator,
+                finish_reason=_finish_reason_label(parsed),
+                labels=telemetry_labels,
             )
         return LiveProviderResult(
             answer_text=content,
@@ -1709,6 +1741,7 @@ class ProviderExecutionService:
         context: dict[str, Any] | None = None,
         response_format: dict[str, object] | None = None,
         reasoning: dict[str, object] | None = None,
+        telemetry_labels: CallTelemetryLabels | None = None,
     ) -> LiveProviderResult | None:
         """Public entry point for internal callers (debate, synthesis)
         that need to call a specific model with a custom system prompt
@@ -1747,6 +1780,7 @@ class ProviderExecutionService:
             context=context,
             response_format=response_format,
             reasoning=reasoning,
+            telemetry_labels=telemetry_labels,
         )
         if isinstance(result, _DispatchedUnmeasured):
             return LiveProviderResult(answer_text="", sources=[], usage=None)
@@ -2890,6 +2924,95 @@ _CHARS_PER_TOKEN_ESTIMATE: int = 4
 _TOKEN_LOGGER = logging.getLogger(TOKEN_TELEMETRY_LOGGER)
 
 
+@dataclass(frozen=True, slots=True)
+class CallTelemetryLabels:
+    """Which run, stage and slot one provider call belongs to (ADR-0093 dec. 5).
+
+    Passed EXPLICITLY down the call chain rather than read from a context
+    variable. Both the synthesis sections and #290's critics dispatch through
+    a :class:`~concurrent.futures.ThreadPoolExecutor`, which does not propagate
+    ``contextvars`` to its workers — a correlator that silently emptied itself
+    on exactly the fan-out it exists to disentangle would be worse than none.
+
+    IDENTIFIERS ONLY. ``query_run_id`` is the run's UUID as a string, already
+    carried on every event-recorder record; it says nothing about what was
+    asked. Nothing here is read by any decision — see ``telemetry_sink``'s
+    module docstring and ADR-0031.
+    """
+
+    #: The run's UUID, stringified. ``str`` and not ``UUID`` because the value
+    #: is written straight into JSON and ``JsonFormatter`` would otherwise have
+    #: to know how to serialise it.
+    query_run_id: str
+    #: One of :data:`telemetry_sink.TELEMETRY_STAGES` — the receipt's own
+    #: ``by_stage`` name, so a row joins a receipt line by string equality.
+    stage: str
+    #: The answer slot this call belongs to: the answerer on the initial stage,
+    #: the CRITIC on a peer-critique debate call. ``None`` for a call that
+    #: belongs to no slot (the moderator, synthesis, the judge).
+    slot_number: int | None = None
+
+
+#: ``finish_reason`` values this product recognises, mapped to themselves. Any
+#: other string becomes ``"other"`` and an absent or non-string value becomes
+#: ``"absent"``.
+#:
+#: A CLOSED SET, because the upstream controls this string and the durable sink
+#: writes shapes and enumerations, never content (ADR-0031). Passing the raw
+#: value through would put an unbounded, provider-authored string into a file
+#: with a fixed byte ceiling.
+#:
+#: Wider than :data:`_UNCLEAN_FINISH_REASONS`, and deliberately so: that set
+#: answers "must the answer be marked shortened?", which is a user-visible
+#: claim and is kept narrow on purpose. This answers "what did the provider
+#: say?", which is a measurement, and collapsing ``"stop"`` and
+#: ``"content_filter"`` into one bucket would destroy the distinction #290 is
+#: measuring for.
+_KNOWN_FINISH_REASONS: frozenset[str] = frozenset(
+    {"stop", "length", "content_filter", "tool_calls", "error"}
+)
+
+#: What a reason that is present but unrecognised is reported as.
+FINISH_REASON_OTHER = "other"
+
+#: What a missing or malformed reason is reported as. Distinct from
+#: :data:`FINISH_REASON_OTHER`: "the provider said something we do not know"
+#: and "the provider said nothing" are different observations, and #290 needs
+#: to tell a truncated critique from an unreadable envelope.
+FINISH_REASON_ABSENT = "absent"
+
+
+def _finish_reason_label(payload: object) -> str:
+    """The bounded label for ``choices[0].finish_reason``.
+
+    Total over every input shape, by construction: a payload that is not a
+    mapping, a missing/empty/non-list ``choices``, a non-mapping element, a
+    missing reason, or a reason that is not a string all report
+    :data:`FINISH_REASON_ABSENT`. This runs on the paid path inside a
+    ``contextlib.suppress``, but it must not need it — instrumentation that can
+    raise is instrumentation that can be dropped.
+
+    Deliberately NOT built on :func:`_finish_reason_indicates_truncation`. That
+    function returns a bool over a two-value set and is a MONEY-adjacent gate
+    (it sets the user-visible "(shortened)" marker); widening it to serve a
+    measurement is how a measurement's needs come to move a product claim.
+    """
+    if not isinstance(payload, dict):
+        return FINISH_REASON_ABSENT
+    choices = payload.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return FINISH_REASON_ABSENT
+    first = choices[0]
+    if not isinstance(first, dict):
+        return FINISH_REASON_ABSENT
+    reason = first.get("finish_reason")
+    if not isinstance(reason, str):
+        return FINISH_REASON_ABSENT
+    if reason in _KNOWN_FINISH_REASONS:
+        return reason
+    return FINISH_REASON_OTHER
+
+
 def _log_call_token_shape(
     *,
     model_id: str,
@@ -2897,6 +3020,8 @@ def _log_call_token_shape(
     max_tokens: int | None,
     usage: TokenUsage | None,
     stream_terminator: str,
+    finish_reason: str,
+    labels: CallTelemetryLabels | None,
 ) -> None:
     """Record how many INPUT tokens this call carried (issue #268).
 
@@ -2962,11 +3087,21 @@ def _log_call_token_shape(
         "sent_tokens_est": sent_tokens_est,
         "usage_absent": usage is None,
         "stream_terminator": stream_terminator,
+        "finish_reason": finish_reason,
     }
     if usage is not None:
         fields["prompt_tokens"] = usage.prompt_tokens
         fields["completion_tokens"] = usage.completion_tokens
         fields["injected_tokens_est"] = usage.prompt_tokens - sent_tokens_est
+    # ABSENT, not defaulted. A call that genuinely belongs to no run must say
+    # so by omission: a placeholder id would sit in the dataset looking exactly
+    # like a real one, which is the same reason ``usage_absent`` is reported
+    # rather than a fabricated ``prompt_tokens: 0``.
+    if labels is not None:
+        fields["query_run_id"] = labels.query_run_id
+        fields["stage"] = labels.stage
+        if labels.slot_number is not None:
+            fields["slot_number"] = labels.slot_number
     _TOKEN_LOGGER.info("provider_call_tokens", extra=fields)
 
 

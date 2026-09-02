@@ -125,6 +125,9 @@ def _drive_zwsp_run(monkeypatch: pytest.MonkeyPatch) -> tuple[dict[str, Any], li
         model_id: str,
         messages: list[dict[str, str]],
         max_tokens: int | None = None,
+        # ADR-0093 decision 5: the initial stage now labels its calls, and this
+        # double stands in for ``_post_messages``. Accepted and ignored.
+        telemetry_labels: object = None,
     ) -> LiveProviderResult:
         bare_model_id = model_id.replace(":online", "")
         assert bare_model_id in _MODEL_IDS, (
@@ -221,6 +224,9 @@ def test_control_visible_text_still_serves_as_a_live_answer(
         model_id: str,
         messages: list[dict[str, str]],
         max_tokens: int | None = None,
+        # ADR-0093 decision 5: the initial stage now labels its calls, and this
+        # double stands in for ``_post_messages``. Accepted and ignored.
+        telemetry_labels: object = None,
     ) -> LiveProviderResult:
         bare_model_id = model_id.replace(":online", "")
         if bare_model_id in _MODEL_IDS:

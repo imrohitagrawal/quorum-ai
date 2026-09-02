@@ -91,7 +91,9 @@ class _FixedJudge:
         self._verdict = verdict
         self.calls = 0
 
-    def evaluate(self, evidence: object) -> EvalJudgeVerdict | None:
+    def evaluate(
+        self, evidence: object, *, query_run_id: str | None = None
+    ) -> EvalJudgeVerdict | None:
         del evidence
         self.calls += 1
         return self._verdict

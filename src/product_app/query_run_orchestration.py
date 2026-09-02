@@ -2021,7 +2021,9 @@ class _MemoisedRunJudge:
         """True once this instance served the suppressed, verdict-less shape."""
         return self.suppression_reason is not None
 
-    def evaluate(self, evidence: JudgeEvidence) -> EvalJudgeVerdict | None:
+    def evaluate(
+        self, evidence: JudgeEvidence, *, query_run_id: str | None = None
+    ) -> EvalJudgeVerdict | None:
         run_id = self._query_run_id
         # THE MONEY SEAM (#216, ADR-0051). Three ways this method can answer,
         # and only ONE of them spends:
@@ -2090,7 +2092,7 @@ class _MemoisedRunJudge:
             # ``EvalJudgeService.evaluate`` is contractually non-raising (the
             # judge is advisory), but the finally block guarantees the future
             # resolves and the in-flight claim clears even if that ever breaks.
-            verdict = service.evaluate(evidence)
+            verdict = service.evaluate(evidence, query_run_id=query_run_id)
         finally:
             outcome = _JudgeOutcome(
                 verdict=verdict,
@@ -2445,6 +2447,7 @@ def _evaluate_terminal_run_with_suppression(
             judge=judge,
             query_text=query_run.query_text,
             requested_slot_count=requested_slot_count,
+            query_run_id=str(query_run.query_run_id),
         )
         if judge.served_without_verdict:
             # This read gave up waiting on ANOTHER thread's in-flight judge

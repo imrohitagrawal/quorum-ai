@@ -56,6 +56,7 @@ from product_app.config import settings
 from product_app.debate import AgreementSummary
 from product_app.providers import (
     LOCAL_SIMULATION_URL_PREFIX,
+    CallTelemetryLabels,
     InitialAnswerStatus,
     InitialModelAnswer,
     ProviderPath,
@@ -66,6 +67,7 @@ from product_app.providers import (
 )
 from product_app.synthesis import FinalSynthesis
 from product_app.synthesis_consensus import _has_polar_disagreement
+from product_app.telemetry_sink import TELEMETRY_STAGE_JUDGE
 from product_app.untrusted_text import (
     UNTRUSTED_BEGIN,
     UNTRUSTED_END,
@@ -1812,7 +1814,9 @@ class EvalJudge(Protocol):
         """
         ...
 
-    def evaluate(self, evidence: JudgeEvidence) -> EvalJudgeVerdict | None: ...
+    def evaluate(
+        self, evidence: JudgeEvidence, *, query_run_id: str | None = None
+    ) -> EvalJudgeVerdict | None: ...
 
 
 def _judge_enabled() -> bool:
@@ -1878,7 +1882,9 @@ class EvalJudgeService:
         #: at the top of every call, for the same reason ``last_usage`` is.
         self.last_outcome: JudgeCallOutcome | None = None
 
-    def evaluate(self, evidence: JudgeEvidence) -> EvalJudgeVerdict | None:
+    def evaluate(
+        self, evidence: JudgeEvidence, *, query_run_id: str | None = None
+    ) -> EvalJudgeVerdict | None:
         self.last_usage = None
         self.last_outcome = None
         # The SAME predicate as the request-path gate and /status.judge_enabled.
@@ -1896,6 +1902,19 @@ class EvalJudgeService:
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
                 max_tokens=settings.quorum_eval_judge_max_tokens,
+                # ADR-0093 decision 5. The run id is a PARAMETER rather than a
+                # field on ``JudgeEvidence``: that dataclass is documented as
+                # "the untrusted material handed to the judge", and an
+                # identifier this product generated is neither untrusted nor
+                # anything the judge should read. ``None`` when the caller has
+                # no run to point at, which leaves the row uncorrelated rather
+                # than carrying a placeholder id that would sit in the dataset
+                # looking exactly like a real one.
+                telemetry_labels=(
+                    None
+                    if query_run_id is None
+                    else CallTelemetryLabels(query_run_id=query_run_id, stage=TELEMETRY_STAGE_JUDGE)
+                ),
                 # MEASURED 2026-08-07 against the live API with the pinned
                 # ``openai/gpt-5-mini`` over real golden-case evidence.
                 #
@@ -1967,8 +1986,11 @@ class StubEvalJudge:
     verifies_support = False
     MODEL_ID = "stub/eval-judge-v0"
 
-    def evaluate(self, evidence: JudgeEvidence) -> EvalJudgeVerdict | None:
-        del evidence  # a stub reads nothing; the parameter exists for the Protocol
+    def evaluate(
+        self, evidence: JudgeEvidence, *, query_run_id: str | None = None
+    ) -> EvalJudgeVerdict | None:
+        # a stub reads neither; both parameters exist for the Protocol
+        del evidence, query_run_id
         return EvalJudgeVerdict(
             faithfulness=3,
             grounding=3,
@@ -2183,6 +2205,10 @@ def evaluate_run(
     judge: EvalJudge | None = None,
     query_text: str | None = None,
     requested_slot_count: int | None = None,
+    #: ADR-0093 decision 5. Optional and defaulted so every existing caller —
+    #: and the ``judge=None`` configuration, which makes no call at all — is
+    #: unchanged. An unlabelled judge row is uncorrelated, never fabricated.
+    query_run_id: str | None = None,
 ) -> RunEvaluationResult:
     """Evaluate one terminal run.
 
@@ -2201,7 +2227,7 @@ def evaluate_run(
             initial_answers=initial_answers,
             final_synthesis=final_synthesis,
         )
-        verdict = judge.evaluate(evidence)
+        verdict = judge.evaluate(evidence, query_run_id=query_run_id)
         # THREE conditions, and none replaces another (#267):
         #   * a verdict came back at all;
         #   * the JUDGE is the kind of thing that verifies anything — the stub

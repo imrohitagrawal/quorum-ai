@@ -289,6 +289,9 @@ def test_query_run_live_path_records_all_four_slots_as_openrouter_search(
         model_id: str,
         messages: list[dict[str, str]],
         max_tokens: int | None = None,
+        # ADR-0093 decision 5: the initial stage now labels its calls, and this
+        # double stands in for ``_post_messages``. Accepted and ignored.
+        telemetry_labels: object = None,
     ) -> LiveProviderResult:
         bare_model_id = model_id.replace(":online", "")
         if bare_model_id in DEFAULT_MODEL_IDS:
@@ -406,6 +409,9 @@ def test_query_run_live_path_records_search_off_slot_as_openrouter_search_too(
         model_id: str,
         messages: list[dict[str, str]],
         max_tokens: int | None = None,
+        # ADR-0093 decision 5: the initial stage now labels its calls, and this
+        # double stands in for ``_post_messages``. Accepted and ignored.
+        telemetry_labels: object = None,
     ) -> LiveProviderResult:
         # Real live result regardless of ``:online`` suffix.
         return LiveProviderResult(
