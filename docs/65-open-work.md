@@ -196,6 +196,20 @@ W13 (#268) is a change that would eat into it. `SOFT_THRESHOLD_USD <
 DAILY_CAP_USD < HARD_LIMIT_USD` is mandatory or the confirmation band is dead
 code. When W2 lands, re-measure and bring a number back with its measurement.
 
+**The numbers are now pre-computed — see ADR-0094.** A hermetic sweep over all
+**715** four-slot mixes of the shipped catalog (C(13,4); the often-quoted "495"
+is stale, from a twelve-model catalog) established the whole target set:
+`cost_debate_output_tokens` 400 -> 1700, `SYNTHESIS_SECTION_MAX_TOKENS`
+3000 -> 6000, and `SOFT`/`DAILY_CAP`/`HARD` 0.15/0.20/0.25 -> 0.18/0.27/0.28,
+with `GLOBAL_DAILY_CEILING_USD` held at 5.00 by owner constraint. The threshold
+shift is +$0.03 exactly, because synthesis runs on one fixed model so its delta
+is constant across every mix — which restores today's 251/715 confirmations and
+220/715 blocks bit-for-bit. **This is still STOP.** The debate constant is the
+number #290 most invalidates (one debate call per run becomes eight, from four
+models), so it is deliberately NOT set ahead of the feature. **W3 is the next
+action after W2** — re-measure with `finish_reason` in place, re-run the sweep,
+and land both token constants and all three thresholds in ONE pull request.
+
 **W4 — variable panel size.** `Field(ge=1, le=4)` appears at three sites
 (`debate.py` twice, `providers.py` once) and they move together. **No longer
 blocked**: #382 ended *"whoever lifts those caps must fix this primitive
