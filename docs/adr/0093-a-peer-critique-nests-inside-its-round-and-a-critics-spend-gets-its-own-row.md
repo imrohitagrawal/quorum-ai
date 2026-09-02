@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted — 2026-09-01. This record decides a SHAPE; nothing here is built, and decision 3 additionally needs the product owner's sign-off before it ships.
+Accepted — 2026-09-01. Decision 3 **signed off by the product owner 2026-09-02**; see "Owner decision" below, which also adds decisions 4 and 5. This record decides a SHAPE — **nothing here is built**, and the build is deliberately not scheduled.
 
 ## Context
 
@@ -208,7 +208,7 @@ each must move in the same change:
 - `debate.py:769` and `debate.py:831` — `parse_moderator_output(author_model_id=settings.debate_model_id)`
   attributes every critic's stance to the moderator.
 
-### 3. Critique spend gets its own `by_model` row — **this one needs the owner**
+### 3. Critique spend gets its own `by_model` row — **APPROVED 2026-09-02**
 
 `writer_cost = debate_total + synthesis_cost` (`costs.py:2216`) folds every
 debate call into one row whose `model_id` is the literal string `"synthesis"`
@@ -258,6 +258,96 @@ the loop that fills it knew the model. Decision 2's "no widening" is about the
 under a judge-ON production run (four slots, the writer row, the judge) become up
 to ten. That is a user-visible money surface, and the owner has been the decider
 on this product's money surfaces throughout.
+
+## Owner decision, 2026-09-02
+
+Decision 3 is **approved as written**: one `kind="critique"` row per critic,
+`model_id` = the critic's model id, `display_name` carrying a critique marker,
+critique rows LAST. Two further decisions were taken at the same time.
+
+**The question that settled it.** The owner's framing was that peer critique
+changes who does the work — a debate that used to be one moderator becomes four
+models actually debating — so the spend should sit with the models that earn it.
+That is decision 3. But it admits two spellings, and the choice is not
+cosmetic:
+
+| | Receipt | Critique cost isolable? |
+|---|---|---|
+| **A — separate `critique` rows** (chosen) | 6 rows → up to 10 | **yes** |
+| B — fold critique into each model's existing row | stays 6 | **no** |
+
+B satisfies "the spend goes to the models" and still loses the thing that
+matters, because `docs/65-open-work.md` freezes **W3** until *"#290 is built and
+its cost is measured"*. Under B a critique's cost is summed into the same figure
+as its answer and can never be separated from the receipt, so W3 could not be
+unblocked by the very feature it waits on. B is also a one-way door: once merged
+into one number the split is unrecoverable without new telemetry. **A was chosen
+for that reason, not for the display.**
+
+Worth stating plainly: this fixes a NUMBER, not a label. Today
+`_actual_cost` prices every debate call at `settings.debate_model_id`, so under
+peer critique four different models would be charged at one model's rate while
+the receipt still says `measured`.
+
+### 4. The writer row is renamed `Synthesis`
+
+Under peer critique the debate half moves to the four slot models and only
+synthesis remains with the writer. §Consequences already states the sharper
+version: **under a fully-eligible peer run that row holds NO debate spend at
+all**, because no moderator call is made — so the name does not merely drift,
+it becomes false. That section logged the rename as deferred "to decision 3's
+owner review"; this is that review, and it is now decided. It moves with
+decision 3, in the same change, because the two touch the same two sites
+(`costs.py:1533`, `costs.py:2220`) and the same `app.js:6519` ternary.
+
+The #16 relabel is the precedent in the opposite direction: "Synthesis writer"
+was renamed BECAUSE it hid what the row contained. Keeping
+`"Debate + synthesis"` on a row with no debate in it repeats that defect
+mirrored.
+
+### 5. The telemetry record gains a correlator, IN THE SAME WORK PACKAGE
+
+`TELEMETRY_FIELD_NAMES` (`telemetry_sink.py`) has **no** `query_run_id`, `stage`,
+`round`, `slot_number`, `finish_reason` or elapsed field — each verified absent
+by `grep`, zero hits. Two consequences, both measured against the shipped list
+rather than assumed:
+
+- a telemetry row **cannot be joined to a receipt**, and round 1 cannot be told
+  from round 2. The only grouping available is file order plus `model_id`, which
+  is guesswork and breaks whenever two runs overlap.
+- peer critique makes this materially worse: **8 critique calls per run** instead
+  of one, from four models that also appear as answerers, all unattributable.
+
+So `query_run_id` plus a `stage`/`round` field ships **with** #290, not after it.
+Without it, "cost per model per phase" and "is a critic using its 2000-token
+budget" are answerable and "per-model per-round" is not.
+
+**Candidates recorded, not decided**, with the reason each is worth the field:
+
+- **`finish_reason`** — the #290 probe measured **seven of eight** calls
+  returning `"length"`, i.e. the 2000-token cap genuinely reached and the reply
+  clipped. That is a QUALITY signal no cost row can carry: full price for a
+  truncated critique, on a receipt that looks healthy. (Distinct from the *other*
+  seven-of-eight in `docs/analysis/2026-08-26-b3-timeout-probe.md:87`, which
+  counts wall-clock timeout exceedance. Two different measurements that happen to
+  share a ratio — do not merge them.)
+- **per-call elapsed time** — `stream_terminator` and `stream_frames` exist,
+  elapsed does not. One debate call becomes eight; without timing the tail model
+  is invisible.
+- **eligibility outcome** — decision 1 gates critique on "completed *and*
+  actually invoked". Record WHY a slot did not critique, or "3 critiques, not 4"
+  is unexplainable afterwards.
+
+### What is NOT decided
+
+The build is **not scheduled**. #290 stays open and W2 stays PENDING because it
+is unbuilt. No critique call has ever run, so every per-model number this design
+would expose is **UNVERIFIED**; the first live run after #290 ships is what
+produces them, and that same run is what unblocks W3.
+
+The correlator in decision 5 is a **recommendation inferred from the absent
+field list**, not a measured requirement. The `finish_reason` and timeout ratios
+above are measured.
 
 ## Rejected alternatives
 
@@ -370,8 +460,8 @@ Streaming (ADR-0084) removed the reason to consider it.
 - **Under a fully-eligible peer run the `"Debate + synthesis"` row holds no
   debate spend**, because no moderator call is made. The #16 relabel exists
   because the old "Synthesis writer" name hid what the row contained; this is
-  the mirror image, and renaming it is left to decision 3's owner review rather
-  than decided here.
+  the mirror image. **DECIDED 2026-09-02** — the owner approved the rename to
+  `Synthesis`; see decision 4 under "Owner decision".
 
 ## References
 
