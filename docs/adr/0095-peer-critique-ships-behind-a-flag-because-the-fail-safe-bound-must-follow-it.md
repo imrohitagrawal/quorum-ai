@@ -43,9 +43,13 @@ columns read `$0.0052`, which is the defect stated as a number.
 Reproduce it:
 
 ```
-uv run pytest tests/unit/test_peer_bound_is_a_true_ceiling.py \
-  ::test_the_bound_prices_one_call_per_slot_not_one_per_round -q --no-cov
+uv run pytest "tests/unit/test_peer_bound_is_a_true_ceiling.py::test_the_bound_prices_one_call_per_slot_not_one_per_round" -q --no-cov
 ```
+
+(That command is quoted and unbroken deliberately: a first draft wrapped it
+across two lines and left a space before the `::`, which pytest rejects with
+`directory argument cannot contain :: selection parts`. A reproduction command
+that does not run is not a reproduction command.)
 
 **A first draft of this record said `$0.0207` and `3.98`, and read that 3.98 as
 CONFIRMATION of the four-calls argument.** Both were wrong, and the second more
@@ -176,8 +180,10 @@ ORDERING changed.
   `None` unconditionally turned
   `test_a_non_judge_call_reaches_the_transport_with_an_unchanged_SIGNATURE` red
   while changing no wire payload at all.
-- **`openapi.yaml` moved** (+45 lines: two `DebateOutput` properties and a
-  `SlotCritique` component), which moves the blocking Schemathesis context.
+- **`openapi.yaml` moved** (+51 lines: THREE `DebateOutput` properties —
+  `critique_shape`, `slot_critiques` and `eligible_critic_count` — plus a
+  `SlotCritique` component; the third arrived with the fix round and an earlier
+  draft of this line still said "two ... +45"), which moves the blocking Schemathesis context.
   Regenerated with `make openapi-export`; `make openapi-check` passes.
 - **Two USER-VISIBLE strings become false when the flag is turned on, and are
   deliberately NOT changed here.** `app.js`'s result-debate caption ("Quorum does
@@ -237,9 +243,16 @@ panel the claim is ABOUT, never the subset that answered.
 branch REPLACED the moderator's price instead of taking the max, so with the
 flag on and no slot eligible — four slots fallen back to local simulation, the
 degraded case this product has a banner for — the moderator still billed two
-calls the bound never priced. Two reviewers measured it on two different legal
-mixes: `$0.0967 -> $0.0740` and `$0.0953 -> $0.0652`. **Turning the feature on
-LOWERED the quoted ceiling.** Separately, round 2's prior-critique input was
+calls the bound never priced. **Turning the feature on LOWERED the quoted
+ceiling**, on **522 of 3,640** legal mixes, largest drop `$0.0853 -> $0.0532`.
+
+Those are the numbers a third sweep of the pre-fix tree produced. The first
+draft of this record instead repeated two reviewers' own pairs — `$0.0967 ->
+$0.0740` and `$0.0953 -> $0.0652` — **as measured, having re-derived neither**,
+and neither reproduces at any query length. The defect was real and LARGER than
+the figures quoted for it. This is rule 11 ("mark an inherited claim measured or
+assumed") broken three paragraphs after the confession about `$0.0207`, in the
+same document. Writing the lesson down did not stop the next instance. Separately, round 2's prior-critique input was
 charged once at the moderator's rate and paid N times at the critics' — worth
 `$0.0640` on the four priciest catalog models, on the NORMAL peer path.
 
@@ -264,6 +277,63 @@ services instead; the five mutations that previously survived now fail. The same
 review found the moderator debate path carried no correlator at all — so with
 the flag off, the shape that actually ships, `query_run_id` and `stage` were
 absent from exactly the rows decision 5 exists to make joinable.
+
+## Round 2: what the FIX round broke, and what is deliberately left
+
+Rule 12 says to expect a fix round to introduce a defect and budget a review for
+it. It did, and the review found one WORSE than several it closed.
+
+**`debate_mode` was doing two jobs, and tightening it for one loosened the
+other.** The fix round changed the peer round's `debate_mode` from
+`any(critics live)` to `all(...)`, correctly, so `app.js`'s "Written by Quorum"
+disclosure fails closed. But `_usable_stance` used that same flag as its
+EVIDENCE-ADMISSIBILITY gate — so one blank critic now discarded the round's
+correct, majority-derived stance, and `compute_consensus_strength` fell through
+to `_has_strong_overlap`, the 4-gram vocabulary heuristic whose own comment
+records that it "said 'strong' on a panel split down the middle". Measured: a
+genuinely 2-2 panel read `divided` with four usable critics and `strong` with
+three. **Losing evidence raised the claim.**
+
+The safety direction is not the same for both jobs, so they cannot share one
+predicate. `_stance_is_admissible` is the split: the moderator shape still gates
+on `debate_mode` (#185's rule — one author, so authorship IS admissibility);
+the peer shape gates on the stance existing, because `_derive_peer_stance`
+already excluded templated critics per critic and already used the eligible
+denominator. Re-applying a round-level gate on top of a filtered result does not
+add safety, it destroys evidence.
+
+**A money test was order-dependent**, and its literal was a fact about global
+state. It picked "the four priciest models in the shipped catalog", and
+`price_index()` is a process global (rule 16a) holding 13 entries in one session
+and 420 in another. Green in CI, red under `pytest tests/unit` — and in
+full-suite ordering it was the ONLY killer of the round-2 prior-critique
+pricing, so the guard could not report the regression it exists for. It now owns
+its price list.
+
+**Deliberately NOT fixed, and filed instead:**
+
+- **The moderator path still prices its system prompt at the flat
+  `cost_system_prompt_tokens = 350`** against a real 442.75. Worth at most
+  `$0.000466`, pre-existing, and correcting it would move every figure in
+  ADR-0094's measured 715-mix sweep — which the owner is holding as the basis
+  for the money constants. The peer branch, which this feature owns and which
+  pays the shortfall EIGHT times instead of twice, is corrected.
+- **`_estimate_bound_usd` quantizes with `ROUND_HALF_UP`**, so the bound can sit
+  up to `$0.00005` BELOW its own raw total — 335 of 715 mixes. A ceiling should
+  use `ROUND_CEILING`. Pre-existing, sub-cent, and it moves flag-off numbers, so
+  it belongs with ADR-0094's constants pass.
+- **`CHARS_PER_TOKEN = 4` is an average, not a bound.** 8000 chars of CJK or
+  code is far more than 2000 tokens, so every char-derived term here is a
+  best-effort estimate rather than a true ceiling. Pre-existing and orthogonal.
+
+**A methodology note worth more than any single finding.** The repository's
+mutation protocol — `cp` aside, mutate, run, restore, `diff -q` — can measure
+STALE BYTECODE, and `diff -q` cannot see it: CPython's `.pyc` header stores
+source mtime truncated to whole SECONDS plus source SIZE, so a size-preserving
+swap like `any(`/`all(` restored within the same second leaves the mutant's
+bytecode in place. Every mutation in this branch ran under
+`PYTHONDONTWRITEBYTECODE=1`, and `__pycache__` is now purged between steps as
+well. It nearly produced a false result during the review itself.
 
 ## Rejected alternatives
 

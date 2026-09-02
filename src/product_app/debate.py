@@ -35,7 +35,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from product_app.config import RuntimeEnvironment, settings
 from product_app.costs import CHARS_PER_TOKEN
 from product_app.feedback_store import record_event as _record_feedback_event
-from product_app.model_slots import ModelSlot
+from product_app.model_slots import EXPECTED_SLOT_COUNT, ModelSlot
 from product_app.providers import (
     CallTelemetryLabels,
     InitialAnswerStatus,
@@ -354,7 +354,40 @@ class DebateOutput(BaseModel):
     #:
     #: It also answers "3 critiques, not 4" after the fact, which ADR-0093
     #: decision 5 listed as a recorded-not-decided candidate.
-    eligible_critic_count: int = Field(default=0, ge=0, le=4)
+    eligible_critic_count: int = Field(default=0, ge=0, le=EXPECTED_SLOT_COUNT)
+
+
+def debate_system_prompt_max_chars(*, peer: bool) -> int:
+    """The LONGEST system prompt a single debate call can carry, in characters.
+
+    Exists for the cost layer, which cannot import this module at module scope
+    (``debate`` imports ``costs``), and which was pricing every debate call's
+    system prompt at the flat ``settings.cost_system_prompt_tokens = 350``.
+
+    Measured 2026-09-03: the real prompts are 442.75 and 439.25 tokens, and the
+    peer directive adds a further 36.75 to EVERY critic call — so the worst case
+    is 479.5 tokens against 350 priced, a shortfall of 129.5 per call.
+
+    That shortfall is why this function exists rather than a second constant.
+    With the moderator it is paid twice; under peer critique it is paid EIGHT
+    times, at four models' prices, and adversarial review demonstrated the
+    result: a mix quoted a ceiling of $0.2496 whose worst real spend is
+    $0.251788 — waved through at REQUIRE_CONFIRMATION and able to bill past the
+    $0.25 hard limit it was never allowed to cross.
+
+    Derived from the prompts themselves, not written down, because a copied
+    number is one that drifts the next time a prompt is edited — and these
+    prompts have been edited repeatedly (#354 added the stance instruction).
+    """
+    longest = max(len(ROUND_ONE_SYSTEM_PROMPT), len(ROUND_TWO_SYSTEM_PROMPT))
+    if not peer:
+        return longest
+    # ``slot_number`` changes the directive's length by one digit at most, and
+    # the panel is 1..4, so this max is over the whole reachable set.
+    return longest + max(
+        len(DebateOrchestrationService._peer_critic_directive(slot_number=slot))
+        for slot in range(1, EXPECTED_SLOT_COUNT + 1)
+    )
 
 
 def _one_line(text: str) -> str:
@@ -1090,7 +1123,8 @@ class DebateOrchestrationService:
             if answer.status is InitialAnswerStatus.COMPLETED and model_was_invoked(answer)
         ]
 
-    def _peer_critic_directive(self, *, slot_number: int) -> str:
+    @staticmethod
+    def _peer_critic_directive(*, slot_number: int) -> str:
         """The one thing a critic is told that the moderator is not.
 
         Goes in the SYSTEM prompt, i.e. the trusted half. The evidence block

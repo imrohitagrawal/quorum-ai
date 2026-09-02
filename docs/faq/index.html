@@ -640,7 +640,7 @@ pre code {
         <span class="honesty built">● Built</span>
         <div class="example project">
           <div class="example-label">In your project</div>
-          <p>The <code>costs.py</code> module exports <code>CostEstimationService</code> which computes <code>estimated_cost_usd</code>, <code>max_cost_usd</code> (the fail-safe bound), and a <code>CostBreakdown</code> partitioned both by model (four slot rows + one "Synthesis" row, plus one row per peer critic when #290's flag is on) and by stage (initial answers, debate round 1, debate round 2, synthesis). The breakdown re-sums to the quantized total exactly (largest-remainder / Hamilton method). A daily cap of $0.20 is enforced against the durable SQLite feedback store, not the in-memory ring buffer, so trickle attacks over hours are also bounded.</p>
+          <p>The <code>costs.py</code> module exports <code>CostEstimationService</code> which computes <code>estimated_cost_usd</code>, <code>max_cost_usd</code> (the fail-safe bound), and a <code>CostBreakdown</code> partitioned both by model (four slot rows + one "Synthesis" row)  and by stage (initial answers, debate round 1, debate round 2, synthesis). The breakdown re-sums to the quantized total exactly (largest-remainder / Hamilton method). A daily cap of $0.20 is enforced against the durable SQLite feedback store, not the in-memory ring buffer, so trickle attacks over hours are also bounded.</p>
         </div>
         <div class="example real-life">
           <div class="example-label">Picture it in real life</div>
@@ -1210,7 +1210,7 @@ pre code {
         <span class="honesty built">● Built</span>
         <div class="example project">
           <div class="example-label">In your project</div>
-          <p>The <code>costs.py</code> module's <code>_estimate_breakdown</code> method prices each of the seven billed calls individually. The <code>by_model</code> partition shows four slot rows plus a "Synthesis" row (renamed from "Debate + synthesis" by ADR-0093, because under a fully-eligible peer run that row holds no debate spend at all), plus one <code>kind="critique"</code> row per peer critic on a measured peer run. The <code>by_stage</code> partition shows initial answers, debate round 1, debate round 2, and synthesis. Both re-sum to the quantized total exactly. The <code>max_cost_usd</code> field is always ≥ <code>estimated_cost_usd</code> and is what the guardrail checks — not the point estimate.</p>
+          <p>The <code>costs.py</code> module's <code>_estimate_breakdown</code> method prices each of the seven billed calls individually. The <code>by_model</code> partition shows four slot rows plus a "Synthesis" row (renamed from "Debate + synthesis" by ADR-0093, because under a fully-eligible peer run that row holds no debate spend at all). The MEASURED breakdown — built by <code>build_measured_breakdown</code>, a module-level function rather than a <code>CostEstimationService</code> method — additionally carries one <code>kind="critique"</code> row per peer critic. The pre-run estimate carries none: it cannot know which slots will turn out eligible, and a row for a call that may not happen is a claim. The <code>by_stage</code> partition shows initial answers, debate round 1, debate round 2, and synthesis. Both re-sum to the quantized total exactly. The <code>max_cost_usd</code> field is always ≥ <code>estimated_cost_usd</code> and is what the guardrail checks — not the point estimate.</p>
         </div>
       </div>
     </div>

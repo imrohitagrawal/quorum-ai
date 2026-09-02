@@ -30,8 +30,8 @@ from product_app import config
 from product_app.costs import CostEstimate, cost_estimation_service
 from product_app.model_slots import (
     DEFAULT_MODEL_IDS,
-    FALLBACK_CATALOG_OPTIONS,
     ModelSlot,
+    openrouter_model_catalog_service,
 )
 
 _QUERY = "Which database should we choose for a write-heavy workload?"
@@ -111,11 +111,21 @@ def test_the_bound_prices_one_call_per_slot_not_one_per_round(
     moderator = _debate_line(False)
     peer = _debate_line(True)
     assert moderator > 0, "the moderator-shape debate line priced nothing to compare against"
-    # Four critics, one model, so the ratio is exactly four -- give or take the
-    # single display quantum the largest-remainder reconciliation may move.
-    assert abs(peer - moderator * 4) <= Decimal("0.0002"), (
+    # Four critics on one model, so the ratio is FOUR plus one honest extra: the
+    # peer branch prices the debate system prompt at its real 479.5 tokens
+    # (443 of prompt + 36.75 of per-critic directive) where the moderator branch
+    # uses the flat `cost_system_prompt_tokens = 350`. So `peer` is a little
+    # ABOVE `4 x moderator`, and that gap is the fix for a demonstrated ceiling
+    # breach, not slack. Both figures MEASURED 2026-09-03; literals on both
+    # sides (rule 7a).
+    assert (moderator, peer) == (Decimal("0.0052"), Decimal("0.0213"))
+    assert peer > moderator * 4, (
         f"debate_round_1 is {peer} under peer critique against {moderator} under "
         f"the moderator on an identical four-slot panel; four critics are not priced"
+    )
+    assert peer < moderator * 5, (
+        f"{peer} is more than five moderator calls; the peer branch is pricing "
+        "something it should not"
     )
 
 
@@ -165,6 +175,10 @@ def test_the_shipped_posture_is_byte_identical(monkeypatch: pytest.MonkeyPatch) 
     # catalog with the query at the top of this file.
     assert estimate.estimated_cost_usd == Decimal("0.0548")
     assert _max_cost(estimate) == Decimal("0.1043")
+    # The peer branch's honest system-prompt pricing must NOT reach this path.
+    # Correcting the moderator's flat 350 would move every figure in ADR-0094's
+    # measured 715-mix sweep, which the owner is holding — so it is filed, not
+    # fixed here, and this literal is what keeps that promise.
     assert [line.usd for line in breakdown.by_stage] == [
         Decimal("0.0094"),
         Decimal("0.0052"),
@@ -256,6 +270,17 @@ def test_the_bound_never_falls_on_any_mix_when_the_flag_is_turned_on(
     assert not fell, f"the bound FELL on {len(fell)} of {len(mixes)} mixes: {fell}"
 
 
+#: A price list this test OWNS. Deliberately not the shipped catalog: the four
+#: slots below are priced here, so the figure asserted is a fact about the
+#: pricing CODE and not about which catalog happened to be loaded.
+_FIXED_PRICES: dict[str, tuple[Decimal, Decimal]] = {
+    "vendor/expensive-1": (Decimal("0.015"), Decimal("0.075")),
+    "vendor/expensive-2": (Decimal("0.010"), Decimal("0.050")),
+    "vendor/expensive-3": (Decimal("0.005"), Decimal("0.025")),
+    "vendor/expensive-4": (Decimal("0.002"), Decimal("0.010")),
+}
+
+
 def test_round_twos_prior_critique_is_priced_for_every_critic(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -264,48 +289,96 @@ def test_round_twos_prior_critique_is_priced_for_every_critic(
 
     Round 2's prompt carries round 1's critique in full, and
     ``_build_peer_round`` passes the SAME ``prior_round`` to every critic — so
-    under peer critique that input is paid N times, at N different input
-    prices. Charging it once under-prices the NORMAL, all-eligible peer path.
+    under peer critique that input is paid N times, at N different input prices.
+    Charging it once under-prices the NORMAL, all-eligible peer path.
 
-    Driven on the four priciest models in the shipped catalog, where the term is
-    large enough to pin. Both figures MEASURED on 2026-09-03 IN THIS TEST'S OWN
-    ENVIRONMENT, the second by reverting the per-critic branch and re-running:
+    HERMETIC ON PURPOSE. An earlier version picked "the four priciest models in
+    the shipped catalog" and pinned the resulting dollar figure. Review proved
+    that test ORDER-DEPENDENT: ``price_index()`` is a process global (AGENTS
+    rule 16a names the model catalog as exactly such a global), it holds 13
+    entries when this file runs alone and 420 inside the whole ``tests/unit``
+    session, so the "priciest four" changed and the literal was a fact about
+    what had run before rather than about the code.
 
-        with the per-critic term:      max_cost_usd = $1.6296
-        charged once at the moderator: max_cost_usd = $1.5656   (-$0.0640)
+        pytest tests/unit/test_peer_bound_is_a_true_ceiling.py   -> passed
+        pytest tests/unit -k test_round_twos_prior_critique...   -> FAILED
+        pytest tests/                                            -> passed
 
-    That $0.0640 is the money the bound was missing on the normal peer path,
-    and it matches the ~$0.0645 an independent reviewer measured on a mix of
-    their own choosing.
+    Worse than flaky: in FULL-SUITE ordering this was the only killer of the
+    per-critic pricing, so the guard could not report the regression it exists
+    for. It now supplies its own prices and its own slot ids.
 
-    Measured under pytest deliberately: a bare ``uv run python`` script gives
-    $1.0786 / $1.0401 for the same call, because the judge and catalog state
-    differ outside the fixtures. A figure quoted from a different environment
-    than the one that asserts it is how a "measured" number becomes wrong —
-    which is exactly the mistake this branch's first draft made with $0.0207.
+    Both figures MEASURED on 2026-09-03 against that fixed list, the second by
+    reverting the per-critic branch and re-running:
+
+        with the per-critic term:      max_cost_usd = $1.7801
+        charged once at the moderator: max_cost_usd = $1.7181   (-$0.0620)
+
+    Reproduce the second by replacing ``elif settings.peer_critique_enabled:``
+    in ``costs._cost_components``'s ``prior_critique_input_cost`` with
+    ``elif False:`` and re-running this test.
 
     Literals on both sides (rule 7a): the bound must not be derived from the
     expression that computes it, or the test agrees with the code by
-    construction. RE-MEASURE if a catalog price moves; do not adjust.
+    construction.
     """
-    from product_app.model_slots import openrouter_model_catalog_service
-
-    prices = openrouter_model_catalog_service.price_index()
-    priciest = sorted(
-        (entry.model_id for entry in FALLBACK_CATALOG_OPTIONS),
-        key=lambda model_id: prices.get(model_id, (Decimal(0), Decimal(0)))[1],
-        reverse=True,
-    )[:4]
-    assert len(priciest) == 4, "the catalog did not yield four models to price"
+    monkeypatch.setattr(
+        openrouter_model_catalog_service, "price_index", lambda: dict(_FIXED_PRICES)
+    )
     slots = [
         ModelSlot(slot_number=n + 1, model_id=model_id, search=True)
-        for n, model_id in enumerate(priciest)
+        for n, model_id in enumerate(_FIXED_PRICES)
     ]
     with monkeypatch.context() as mp:
         mp.setattr(config.settings, "peer_critique_enabled", True)
         bound = _max_cost(cost_estimation_service.estimate(query_text=_QUERY, model_slots=slots))
-    assert bound == Decimal("1.6296"), (
-        f"the fail-safe bound on the four priciest models is {bound}; charging "
-        "round 2's prior critique once at the moderator's rate gives $1.5656, "
-        "which under-prices by $0.0640 the input every critic actually pays"
+    assert bound == Decimal("1.7801"), (
+        f"the fail-safe bound on the fixed price list is {bound}; charging round "
+        "2's prior critique once at the moderator's rate gives $1.7181, which "
+        "under-prices by $0.0620 the input every critic actually pays"
+    )
+
+
+def test_the_peer_branch_prices_the_system_prompt_it_actually_sends(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """RED WHEN: the peer branch prices the debate system prompt at the flat
+    ``cost_system_prompt_tokens`` instead of its real length.
+
+    Adversarial review demonstrated the breach this closes. The bound modelled
+    EVERY debate call's system prompt at 350 tokens; the real prompt is 442.75,
+    and ``_peer_critic_directive`` — added by this very feature — puts a further
+    36.75 on every critic call, priced nowhere. Under the moderator that
+    shortfall is paid on 2 calls; under peer critique on EIGHT, at four models'
+    prices.
+
+    Consequence, measured by review on the shipped catalog: a mix quoted a
+    ceiling of ``$0.2496`` whose worst real spend is ``$0.251788`` — waved
+    through at REQUIRE_CONFIRMATION and able to bill past the ``$0.25`` hard
+    limit it was never allowed to cross.
+
+    The assertion is on the TOKEN COUNT, not on a dollar figure derived from it,
+    because the dollars depend on the price list and the defect does not.
+    """
+    from product_app.config import settings
+    from product_app.costs import CHARS_PER_TOKEN
+    from product_app.debate import debate_system_prompt_max_chars
+
+    peer_tokens = Decimal(debate_system_prompt_max_chars(peer=True)) / CHARS_PER_TOKEN
+    flat = Decimal(settings.cost_system_prompt_tokens)
+    # LITERALS on both sides (rule 7a): 479.5 measured, 350 the shipped flat
+    # price. Asserting `peer_tokens > flat` alone would stay green if the
+    # prompt shrank below 350 for an unrelated reason.
+    assert peer_tokens == Decimal("479.5")
+    assert flat == Decimal(350)
+    assert peer_tokens - flat == Decimal("129.5"), (
+        "the per-call shortfall the peer branch exists to stop pricing away"
+    )
+    # The MODERATOR shape is deliberately NOT corrected — see the comment in
+    # `_cost_components`. Its own prompt is still longer than the flat price,
+    # and that pre-existing gap is filed, not fixed here.
+    moderator_tokens = Decimal(debate_system_prompt_max_chars(peer=False)) / CHARS_PER_TOKEN
+    assert moderator_tokens == Decimal("442.75")
+    assert moderator_tokens > flat, (
+        "the pre-existing moderator shortfall this change deliberately leaves alone"
     )

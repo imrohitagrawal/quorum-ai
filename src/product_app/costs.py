@@ -1680,8 +1680,36 @@ class CostEstimationService:
         # Same prefix for debate (system) and synthesis (user).
         context_input_tokens = context_tokens
         upstream_answers_tokens = Decimal(4) * init_output_tokens
+        # #290 / ADR-0095. The debate call's SYSTEM prompt, priced from its real
+        # length rather than the flat ``cost_system_prompt_tokens = 350`` the
+        # other stages use.
+        #
+        # Adversarial review measured the gap: `ROUND_ONE_SYSTEM_PROMPT` is
+        # 442.75 tokens and the peer directive adds 36.75 more to every critic
+        # call, so the worst case is 479.5 against 350 priced. With the
+        # moderator that shortfall is paid twice; under peer critique it is paid
+        # EIGHT times at four models' prices, and the result was a demonstrated
+        # ceiling breach — a mix quoted at $0.2496 whose worst real spend is
+        # $0.251788, waved through at REQUIRE_CONFIRMATION and able to bill past
+        # the $0.25 hard limit.
+        #
+        # ONLY under the flag, deliberately. The moderator path's 350 is a
+        # PRE-EXISTING approximation worth at most $0.000466, and correcting it
+        # would move every figure in ADR-0094's measured 715-mix sweep — which
+        # the owner is holding as the basis for the money constants. Correcting
+        # the boundary this feature owns, and filing the rest, is the smaller
+        # responsible change. Local import: ``debate`` imports ``costs``, so the
+        # module-level edge is a cycle; same precedent as ``judge_configured``.
+        if settings.peer_critique_enabled:
+            from product_app.debate import debate_system_prompt_max_chars
+
+            debate_system_tokens = (
+                Decimal(debate_system_prompt_max_chars(peer=True)) / CHARS_PER_TOKEN
+            )
+        else:
+            debate_system_tokens = system_tokens
         debate_prompt_tokens = (
-            system_tokens + query_tokens + upstream_answers_tokens + context_input_tokens
+            debate_system_tokens + query_tokens + upstream_answers_tokens + context_input_tokens
             # Round 2's prompt also carries round 1's critique in full
             # (``debate._debate_user_prompt`` appends ``prior_round``, sliced
             # nowhere), so debate input is NOT the same for both rounds. Without
@@ -1737,11 +1765,18 @@ class CostEstimationService:
             # the moderator's price with the critics' made the "ceiling"
             # LOWER than a shape the run can still take.
             #
-            # Measured by two independent reviewers on two different legal
-            # mixes: four cheap slots against the default Haiku moderator moved
-            # ``max_cost_usd`` $0.0967 -> $0.0740 and $0.0953 -> $0.0652 when
-            # the flag was turned ON. Turning a feature on must never lower the
+            # MEASURED by sweeping the pre-fix tree, not inherited: the bound
+            # FELL on 522 of 3,640 legal mixes (13 catalog ids, combinations
+            # with replacement x search on/off), largest drop
+            # ``$0.0853 -> $0.0532``. Turning a feature on must never lower the
             # figure the guardrail evaluates.
+            #
+            # Two reviewers first reported this as ``$0.0967 -> $0.0740`` and
+            # ``$0.0953 -> $0.0652``, and an earlier version of this comment
+            # repeated both AS MEASURED. Neither reproduces — a third sweep
+            # could not find either pair at any query length. The defect was
+            # real and larger than the quoted figures; the figures were
+            # inherited and unchecked, which is rule 11 exactly.
             debate_round_cost = max(peer_round_cost, moderator_round_cost)
         else:
             debate_round_cost = moderator_round_cost
@@ -1787,10 +1822,15 @@ class CostEstimationService:
         # by one moderator — it is read by EVERY critic, each at its own input
         # price (``debate._build_peer_round`` passes the same ``prior_round``
         # to all of them). Charging it once at the moderator's rate under-prices
-        # the normal, all-eligible peer path, not an edge case: measured by
-        # review at up to $0.0645 on one legal four-slot mix, against a bound of
-        # $1.01. Same ``max`` reasoning as the round cost above — the moderator
-        # shape stays reachable, so its price stays in the worst case.
+        # the normal, all-eligible peer path, not an edge case. MEASURED on this
+        # tree, against a price list the test owns so the figure cannot drift
+        # with the catalog: ``$1.7801`` with the per-critic term against
+        # ``$1.7181`` without, a shortfall of ``$0.0620``
+        # (``test_round_twos_prior_critique_is_priced_for_every_critic``).
+        # An earlier version of this comment quoted "$0.0645 ... against a bound
+        # of $1.01" from a reviewer's own mix, unchecked and unreproducible.
+        # Same ``max`` reasoning as the round cost above — the moderator shape
+        # stays reachable, so its price stays in the worst case.
         if not price_round_two_prior_critique:
             prior_critique_input_cost = Decimal(0)
         elif settings.peer_critique_enabled:

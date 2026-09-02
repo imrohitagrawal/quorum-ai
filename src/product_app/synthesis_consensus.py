@@ -115,6 +115,47 @@ def _scored_slot_numbers(initial_answers: list[InitialModelAnswer]) -> set[int]:
     return {a.slot_number for a in initial_answers if counts_as_evidence(a)}
 
 
+def _stance_is_admissible(output: DebateOutput) -> bool:
+    """May this round's ``panel_stance`` be read as evidence?
+
+    Two shapes, two different guards, and conflating them cost this branch a
+    CRITICAL fail-open that adversarial review caught — one WORSE than the
+    defect whose fix introduced it.
+
+    **Moderator shape: gate on ``debate_mode``.** #185's rule. One model wrote
+    the round, so "were these words a moderator's?" is the whole question, and a
+    templated round's stance is this product reading its own template.
+
+    **Peer shape: gate on the stance EXISTING.** The templated guard already ran,
+    per critic, inside ``debate._derive_peer_stance``: templated critics are
+    excluded from the numerator and still counted in the denominator, so a
+    surviving stance is already a strict majority of LIVE critics over the
+    ELIGIBLE panel. Re-applying a round-level ``debate_mode`` gate on top of that
+    does not add safety — it DESTROYS evidence that has already been filtered.
+
+    Why that is fail-OPEN and not merely lossy, measured: ``debate_mode`` under
+    the peer shape is ``all(critics live)``, so ONE blank critic — a 400 on
+    ``response_format``, a torn body, an unusable envelope — flipped the round to
+    ``fallback``. The round's correct, majority-derived stance, showing a panel
+    SPLIT 2-2, was then discarded, and ``compute_consensus_strength`` fell
+    through to ``_has_strong_overlap`` — the 4-gram vocabulary heuristic whose
+    own comment records that it "said 'strong' on a panel split down the
+    middle". A run that read ``divided`` with four usable critics read
+    ``strong`` with three. Losing a critic must never raise the verdict.
+
+    The root cause is that ``debate_mode`` does two jobs: authorship disclosure
+    for ``app.js`` (where ALL is right — a digest with one templated row
+    contains this product's words) and evidence admissibility here (where ALL is
+    wrong). The safety direction is not the same for both, so they cannot share
+    one predicate. This function is the split.
+    """
+    if output.panel_stance is None:
+        return False
+    if output.critique_shape == CRITIQUE_SHAPE_PEER:
+        return True
+    return output.debate_mode == DEBATE_MODE_LIVE
+
+
 def _usable_stance(
     initial_answers: list[InitialModelAnswer],
     debate_outputs: list[DebateOutput],
@@ -169,11 +210,7 @@ def _usable_stance(
     scored = _scored_slot_numbers(initial_answers)
     if not scored:
         return None
-    live_rounds = [
-        output
-        for output in debate_outputs
-        if output.debate_mode == DEBATE_MODE_LIVE and output.panel_stance is not None
-    ]
+    live_rounds = [output for output in debate_outputs if _stance_is_admissible(output)]
     if not live_rounds:
         return None
     latest = max(live_rounds, key=lambda output: output.round_number)

@@ -569,7 +569,13 @@ def test_a_cancelled_peer_round_serves_the_template_not_an_empty_critique(
     ``_call_debate_model`` checks ``should_stop`` too and returns ``None``
     there. Asserted BOTH ways: the text is non-empty AND nothing was billed.
     """
+    # A recorder IS installed, and that is the point: if anything dispatched,
+    # this would record it and the usage assertion below would fail. An earlier
+    # version built a recorder and never installed it, so the test was hermetic
+    # only by accident — it would have passed against a build that dispatched
+    # through the real provider seam.
     rec = _Recorder(default=_envelope("A critique."))
+    monkeypatch.setattr("product_app.debate.provider_execution_service.call_with_prompt", rec)
     result = debate_stub_service.run_debate_rounds(
         account_id=uuid4(),
         query_run_id=uuid4(),
@@ -578,7 +584,7 @@ def test_a_cancelled_peer_round_serves_the_template_not_an_empty_critique(
         openrouter_key=_KEY,
         should_stop=lambda: True,
     )
-    del rec
+    assert rec.calls == [], "a cancelled run dispatched something"
     for output in result.debate_outputs:
         assert output.critique_text.strip(), (
             f"round {output.round_number} shipped COMPLETED with an empty critique"
@@ -616,6 +622,13 @@ def test_a_round_with_one_templated_critic_is_not_reported_as_live(
     # not "always fallback under the peer shape".
     every = _run(monkeypatch, _Recorder(default=_envelope("A real critique.")))
     assert every.debate_outputs[0].debate_mode == DEBATE_MODE_LIVE
+
+    # BOTH ROUNDS, not just round 1. The quantifier is written twice — once per
+    # round — and review proved the round-TWO site was unguarded: reverting it
+    # alone to `any(` left 3089 tests passing. A rule applied at two sites needs
+    # asserting at two sites, or half of it is decorative.
+    assert mixed.debate_outputs[1].debate_mode == DEBATE_MODE_FALLBACK
+    assert every.debate_outputs[1].debate_mode == DEBATE_MODE_LIVE
 
 
 def test_a_critic_that_answered_nothing_is_recorded_as_templated(

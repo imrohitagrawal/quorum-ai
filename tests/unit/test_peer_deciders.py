@@ -35,7 +35,9 @@ from product_app.debate import (
     DEBATE_MODE_LIVE,
     DebateOutput,
     DebateRoundStatus,
+    PanelStance,
     SlotCritique,
+    SlotPosition,
 )
 from product_app.providers import (
     CitationCoverage,
@@ -45,6 +47,7 @@ from product_app.providers import (
 )
 from product_app.synthesis_consensus import (
     _debate_signals_convergence,
+    _usable_stance,
     compute_consensus_strength,
 )
 
@@ -84,7 +87,17 @@ def _peer_round(
         focus_areas=["disagreement"],
         critique_text=_CONVERGED if digest is None else digest,
         status=DebateRoundStatus.COMPLETED,
-        debate_mode=DEBATE_MODE_LIVE,
+        # DERIVED from the critics, exactly as ``run_debate_rounds`` derives it
+        # (``all(...)``), NOT hardcoded live. An earlier version of this helper
+        # pinned it live, and the fixture then could not model the coupling
+        # between the authorship flag and the evidence gate — the mutation that
+        # reverts `_stance_is_admissible` SURVIVED against it. A fixture that
+        # cannot reach the defect is a fixture that certifies its absence.
+        debate_mode=(
+            DEBATE_MODE_LIVE
+            if critiques and all(c.critique_mode == DEBATE_MODE_LIVE for c in critiques)
+            else DEBATE_MODE_FALLBACK
+        ),
         critique_shape=CRITIQUE_SHAPE_PEER,
         slot_critiques=tuple(critiques),
         eligible_critic_count=len(critiques) if eligible is None else eligible,
@@ -333,3 +346,115 @@ def test_a_negated_convergence_keyword_is_not_a_vote() -> None:
     # so the refusal is the guard and not the keyword failing to match at all.
     converging = _peer_round([_critique(n, _CONVERGED) for n in (1, 2, 3, 4)])
     assert _debate_signals_convergence([converging]) is True
+
+
+# --- the fail-open a FIX introduced, and the split that closes it -------------
+
+
+def _answers_that_split_two_two() -> list[InitialModelAnswer]:
+    """Four answers a vocabulary heuristic could read either way.
+
+    Deliberately NOT four unlike sentences: the point of these tests is what
+    happens when the STANCE is discarded and `_has_strong_overlap` decides
+    instead, so the answers have to be similar enough for that fallback to be a
+    live possibility.
+    """
+    return [
+        _answer(1, "Adopt the enterprise plan; the seat price dominates the decision."),
+        _answer(2, "Adopt the enterprise plan; the seat price dominates the decision."),
+        _answer(3, "Reject the enterprise plan; rebuild in house and ignore seat price."),
+        _answer(4, "Reject the enterprise plan; rebuild in house and ignore seat price."),
+    ]
+
+
+def _split_stance(round_number: int = 1) -> PanelStance:
+    """Every critic reads the same 2-2 split: slots 1,2 adopt; 3,4 reject."""
+    return PanelStance(
+        author_model_id="peer-panel/strict-majority",
+        round_number=round_number,
+        positions=(
+            SlotPosition(slot=1, group="adopt"),
+            SlotPosition(slot=2, group="adopt"),
+            SlotPosition(slot=3, group="reject"),
+            SlotPosition(slot=4, group="reject"),
+        ),
+    )
+
+
+@pytest.mark.parametrize("templated_critics", [0, 1, 2, 3])
+def test_losing_a_critic_never_raises_the_verdict(templated_critics: int) -> None:
+    """RED WHEN: `_usable_stance` gates a PEER round on `debate_mode`.
+
+    THE defect review found in the FIX round — worse than the one whose fix
+    introduced it, which is exactly why rule 12 budgets a round for this.
+
+    `debate_mode` under the peer shape is `all(critics live)`, so ONE blank
+    critic flips the round to `fallback`. Gating the stance on that threw away a
+    correct, majority-derived reading of a SPLIT panel and fell through to
+    `_has_strong_overlap` — the 4-gram vocabulary heuristic whose own comment
+    records that it "said 'strong' on a panel split down the middle".
+
+    Measured before the split: four usable critics read `divided`; the same run
+    with critic 4 blank read `strong`. **Losing evidence raised the claim.**
+
+    Swept over 0..3 templated critics because the defect is a CLIFF, not a
+    gradient: at 0 the round is `live` and the old code worked. Every other
+    value is where it broke.
+    """
+    critiques = [
+        _critique(
+            slot,
+            _DIVERGED,
+            mode=DEBATE_MODE_FALLBACK if slot > 4 - templated_critics else DEBATE_MODE_LIVE,
+        )
+        for slot in (1, 2, 3, 4)
+    ]
+    output = _peer_round(critiques)
+    output = output.model_copy(update={"panel_stance": _split_stance()})
+    strength = compute_consensus_strength(_answers_that_split_two_two(), [output])
+    assert strength == "divided", (
+        f"with {templated_critics} templated critic(s) the panel reads {strength!r}; "
+        "a genuinely 2-2 split must not become a stronger claim because a critic "
+        "went blank"
+    )
+
+
+def test_a_templated_moderator_round_still_has_its_stance_refused() -> None:
+    """RED WHEN: the peer relaxation leaks onto the moderator shape.
+
+    The POSITIVE PARTNER for the split above (rule 7), and the guard that stops
+    the fix becoming a regression of #185. Under ONE moderator there is no
+    per-critic filter, so a templated round's stance is this product reading its
+    own template — and it must still be refused.
+    """
+    templated_moderator = DebateOutput(
+        round_number=1,
+        focus_areas=["disagreement"],
+        critique_text=_CONVERGED,
+        status=DebateRoundStatus.COMPLETED,
+        debate_mode=DEBATE_MODE_FALLBACK,
+        critique_shape=CRITIQUE_SHAPE_MODERATOR,
+        panel_stance=_split_stance(),
+    )
+    assert _usable_stance(_answers_that_split_two_two(), [templated_moderator]) is None
+    # ... and a LIVE moderator round's stance IS read, so the refusal above is
+    # the mode and not a build that refuses every moderator stance.
+    live_moderator = templated_moderator.model_copy(update={"debate_mode": DEBATE_MODE_LIVE})
+    assert _usable_stance(_answers_that_split_two_two(), [live_moderator]) == {
+        1: "adopt",
+        2: "adopt",
+        3: "reject",
+        4: "reject",
+    }
+
+
+def test_a_peer_round_with_no_derived_stance_is_still_refused() -> None:
+    """RED WHEN: the peer branch admits a round whose stance is None.
+
+    `_derive_peer_stance` returns None when no strict majority exists, and that
+    is the honest "no evidence" reading. Admitting the round anyway would make
+    the assertion in `_usable_stance` fire on a null.
+    """
+    no_stance = _peer_round([_critique(n, _DIVERGED) for n in (1, 2, 3, 4)])
+    assert no_stance.panel_stance is None
+    assert _usable_stance(_answers_that_split_two_two(), [no_stance]) is None
