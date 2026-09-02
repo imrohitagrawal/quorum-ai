@@ -35,10 +35,25 @@ the multiplier is independent of what any model costs:
 | `peer_critique_enabled` | `by_stage.debate_round_1` |
 |---|---|
 | `false` | `$0.0052` |
-| `true` | `$0.0207` |
+| `true` | `$0.0208` |
 
-`0.0207 / 0.0052 = 3.98` — one call per slot, as it should be. Before the fix
-both columns read `$0.0052`, which is the defect stated as a number.
+`0.0208 / 0.0052 = 4.0000` — one call per slot, exactly. Before the fix both
+columns read `$0.0052`, which is the defect stated as a number.
+
+Reproduce it:
+
+```
+uv run pytest tests/unit/test_peer_bound_is_a_true_ceiling.py \
+  ::test_the_bound_prices_one_call_per_slot_not_one_per_round -q --no-cov
+```
+
+**A first draft of this record said `$0.0207` and `3.98`, and read that 3.98 as
+CONFIRMATION of the four-calls argument.** Both were wrong, and the second more
+instructively than the first: the figure came from a probe run with a different
+`query_text` than the test uses, and 3.98 is a display-quantum artefact of the
+clean 4.0000 the sentence was arguing for. A dollar amount quoted without the
+call that produced it is not a measurement — which is the rule this repository
+already has, applied to its own ADR.
 
 On the SHIPPED default mix the same change moves the debate line `$0.0052` ->
 `$0.0081`, a ratio of **1.56**, because the four default slots are collectively
@@ -71,8 +86,17 @@ setting, so the ceiling is true in both postures — never one without the other
 
 With the flag off, every figure on the estimate, the receipt's row composition
 and the debate's dispatch pattern are what shipped. That is asserted, not
-assumed: `test_the_shipped_posture_is_byte_identical` and
-`test_the_flag_off_leaves_the_moderator_shape_untouched`.
+assumed: `test_the_flag_off_leaves_the_moderator_shape_untouched`, which pins the
+dispatched model ids, the shape and the empty `slot_critiques`, and
+`test_the_shipped_posture_is_byte_identical`, which pins the estimate's actual
+`Decimal` figures.
+
+The second of those was VACUOUS when this record first named it. It asserted a
+row count and that the two debate rounds displayed equal, while its docstring
+claimed it compared "the LITERAL numbers the default mix produces today" — and
+it contained no numbers. Review proved it by forcing the flag check to `True`,
+the shipped posture then quoting four times the debate bound, and watching it
+pass. It now carries the literals.
 
 **Turning this on is a MONEY decision.** It raises the quoted bound, which moves
 mixes into the confirmation band. It belongs in the same pull request as a
@@ -120,7 +144,8 @@ them MUST move; say which and why."
 emitted on the MEASURED path only**. The estimate path cannot know which slots
 will be eligible, and a row for a call that may not happen is a claim — so the
 estimate keeps five rows (six with a judge) and both
-`tests/integration/test_cost_gate_js.py:145` (`labels[4]`) and
+`tests/integration/test_cost_gate_js.py` (`labels[4]`, moved to `:150` by this
+change) and
 `tests/unit/test_cost_breakdown.py` (`len == 5`, `by_model[-1]`) still hold.
 Both needed their LABEL updated for decision 4's rename; neither needed its
 ORDERING changed.
@@ -154,6 +179,23 @@ ORDERING changed.
 - **`openapi.yaml` moved** (+45 lines: two `DebateOutput` properties and a
   `SlotCritique` component), which moves the blocking Schemathesis context.
   Regenerated with `make openapi-export`; `make openapi-check` passes.
+- **Two USER-VISIBLE strings become false when the flag is turned on, and are
+  deliberately NOT changed here.** `app.js`'s result-debate caption ("Quorum does
+  not record a per-model, line-by-line exchange") and its live-round placeholder
+  ("The moderator model is critiquing the four answers") are both true in the
+  shipped posture and false under the peer shape. They are left because the
+  first is a UI-copy contract spanning `workspace.html`, ADR-0063 and
+  `docs/32-ui-state-matrix.md`, and changing rendered text also moves the
+  blocking visual-baseline lane — a decision of its own, not a line to change in
+  passing. **The package that turns the flag on MUST carry both.** Recorded
+  here, and in a comment at the caption itself, so it cannot be missed.
+- **The ESTIMATE path emits no critique rows, so a peer run's per-row
+  est->actual comparison is misleading**, even though no dollar is lost (the
+  actual-only backfill keeps the rows summing). Review argued this is defensible
+  but not resolved, and that is the right reading: the resolution would be an
+  estimate-side note in the UI, not silence. Emitting a row for a call that may
+  not happen is a claim, so the rows stay measured-path-only and the gap is
+  recorded rather than papered over.
 - **W3 stays STOP.** Its precondition is unchanged: #290 built AND its cost
   measured. This record ships the first half. The second half needs a declared
   window with the flag ON, and that is the next work package.
@@ -166,6 +208,62 @@ ORDERING changed.
     called `build_measured_breakdown` with the critique lines already computed,
     so the builder was well covered and its only CALLER was not. Deleting the
     split left the whole suite green.
+
+## What adversarial review found, and what it changed
+
+Four lenses ran read-only over the built branch. They produced four largely
+disjoint finding sets, which is the shape AGENTS.md rule 10 predicts. Six
+findings changed the code; they are recorded here because each one is a class
+of mistake, not a typo.
+
+**Two deciders took their majority over the critics they HEARD FROM.** That is
+one root cause with two fail-open faces, and neither was visible from the
+design:
+
+- a CANCEL made the product more confident. Four critics split 2-2 read `weak`;
+  the same run with a cancel after the first two read `strong`, on identical
+  model opinions, because the two dissenters were never asked and the threshold
+  fell from 3 to 2.
+- the "one critic of four flips the panel" defect this branch claimed to have
+  closed was closed only in the KEYWORD channel. It survived in the STANCE
+  channel, which `compute_consensus_strength` reaches FIRST. One critic
+  returning a parseable envelope while three answered in prose carried the whole
+  panel to `agreed`.
+
+`DebateOutput.eligible_critic_count` is the fix for both: the denominator is the
+panel the claim is ABOUT, never the subset that answered.
+
+**The bound was breached in two more ways, both found independently.** The peer
+branch REPLACED the moderator's price instead of taking the max, so with the
+flag on and no slot eligible — four slots fallen back to local simulation, the
+degraded case this product has a banner for — the moderator still billed two
+calls the bound never priced. Two reviewers measured it on two different legal
+mixes: `$0.0967 -> $0.0740` and `$0.0953 -> $0.0652`. **Turning the feature on
+LOWERED the quoted ceiling.** Separately, round 2's prior-critique input was
+charged once at the moderator's rate and paid N times at the critics' — worth
+`$0.0640` on the four priciest catalog models, on the NORMAL peer path.
+
+**`debate_mode` was LIVE-if-ANY**, so a round with one live critic and three
+templated ones suppressed `app.js`'s "Written by Quorum, not by a model"
+disclosure while three of four rendered rows were this product's own words.
+Under one moderator the round was all-or-nothing and the quantifier could not
+matter; four critics is what makes it matter. It is now ALL, which is the
+direction that element's own comment says it fails in.
+
+**A cancelled peer round shipped `COMPLETED` with an EMPTY critique**, where the
+moderator path has always served its template — and synthesis was then fed
+`- round 1: ` with nothing after it, an evidence line asserting a round happened
+and carrying none.
+
+**The correlator was tested at the type and not at the wire.** All four stage
+labels could be renamed to strings that join to no receipt line, and three of
+the four wirings could be severed outright, with NO new failures in the full
+suite. Every green result was green against labels the tests constructed
+themselves. `tests/unit/test_correlator_is_actually_wired.py` drives the real
+services instead; the five mutations that previously survived now fail. The same
+review found the moderator debate path carried no correlator at all — so with
+the flag off, the shape that actually ships, `query_run_id` and `stage` were
+absent from exactly the rows decision 5 exists to make joinable.
 
 ## Rejected alternatives
 

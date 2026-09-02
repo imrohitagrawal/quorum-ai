@@ -176,9 +176,11 @@ why the flag exists and it is not caution: `_estimate_bound_usd` calls itself a
 TRUE CEILING and prices exactly two debate calls, while a peer run makes two
 PER ELIGIBLE CRITIC. The bound now reads the same flag, so the ceiling holds in
 both postures — measured on four identical slots, `debate_round_1` goes
-`$0.0052` -> `$0.0207`, one call per slot.
+`$0.0052` -> `$0.0208`, a ratio of exactly 4.0000: one call per slot.
 
-**#290 stays OPEN and W2's row stays PENDING on purpose.** Done here means
+**#290 stays OPEN, and W2's row reads DONE only in the mechanical sense that
+the mechanism is in the tree.** The State cell is DERIVED from the needle, so it
+says what the tree says and nothing more. Done in this repository's sense means
 running in production, and with the flag off nothing peer-shaped runs. What
 closes both is the next package: a declared live-execution window with
 `PEER_CRITIQUE_ENABLED=true`, which is also what produces the measurement W3 has
@@ -228,9 +230,12 @@ action after W2** — re-measure with `finish_reason` in place, re-run the sweep
 and land both token constants and all three thresholds in ONE pull request.
 
 `finish_reason` is now IN PLACE (ADR-0093 decision 5, shipped with W2): the
-durable token stream carries `query_run_id`, `stage`, `slot_number` and a
-bounded `finish_reason` on every provider call, so the post-#290 sweep can group
-by run and round instead of inferring from `model_id`. What is still missing is
+durable token stream carries `query_run_id`, `stage` and a bounded
+`finish_reason` on every provider call, plus `slot_number` on the calls that
+belong to an answer slot — the initial answers and, under the flag, each critic.
+A call belonging to no slot (the moderator, synthesis, the judge) OMITS that
+field rather than nulling it. So the post-#290 sweep can group by run and round
+instead of inferring from `model_id`. What is still missing is
 the RUN — no peer-shaped call has ever been made, so every per-model number the
 design exposes remains UNVERIFIED. W3's window is what produces them.
 

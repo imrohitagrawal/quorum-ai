@@ -223,10 +223,13 @@ def test_an_impossible_split_is_refused_rather_than_reconciled() -> None:
     implementation that clamps it would report a receipt whose writer row was
     quietly invented, and "measured" would stop meaning measured.
 
-    This also pins the ``max(Decimal("0"), ...)`` guard as a floor on the
-    WRITER row and not as a licence to reconcile nonsense.
+    The ``match`` is not decoration. Without it this test passed on a pydantic
+    ``ValidationError`` raised by a NEGATIVE row several frames later — a
+    different failure with the same exception base — so it could not tell
+    "refused by design" from "blew up". Review proved that by deleting the guard
+    and watching the whole suite stay green.
     """
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="critique spend .* exceeds debate spend"):
         _measured(
             debate_by_round={1: Decimal("0.001"), 2: Decimal("0")},
             critique_by_model=[("prov/model-1", "Model 1 (critique)", Decimal("0.900"))],

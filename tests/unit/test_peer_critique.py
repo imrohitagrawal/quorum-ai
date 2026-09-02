@@ -310,11 +310,20 @@ def test_each_critique_is_billed_to_the_model_that_wrote_it(
 def test_no_critic_is_dispatched_after_should_stop_first_returns_true(
     monkeypatch: pytest.MonkeyPatch, peer_on: None
 ) -> None:
-    """RED WHEN: ``should_stop`` is checked only inside the worker.
+    """RED WHEN: the loop-head ``should_stop`` check is deleted.
+
+    That is the edit that turns this red, and it is NOT the edit an earlier
+    draft of this docstring named. It said "RED WHEN: ``should_stop`` is checked
+    only inside the worker" — and review proved that false by making exactly
+    that edit and watching the file stay green: ``_call_debate_model`` has its
+    OWN pre-dispatch check (F-05 layer 2), so the observable dispatch count is
+    identical either way. Both checks now ship, because a second one can only
+    ever un-bill more; but only the loop-head one is observable, so only it is
+    what this test can claim to pin.
 
     ADR-0093's consequences: a test asserting HOW MANY critics were un-billed
     inside one round asserts a RACE. What is not a race, and what is asserted
-    here, is that the fan-out checks ``should_stop`` in the SUBMITTING thread
+    here, is that the fan-out checks ``should_stop`` in the SUBMITTING frame
     before each dispatch -- so nothing is dispatched after it first says stop.
     """
     rec = _Recorder(default=_envelope("A critique."))
@@ -357,8 +366,18 @@ def test_the_digest_stays_inside_the_synthesis_excerpt_bound(
     rec = _Recorder(default=_envelope("z" * 40_000))
     result = _run(monkeypatch, rec)
     for output in result.debate_outputs:
-        assert len(output.critique_text) <= SYNTHESIS_DEBATE_EXCERPT_MAX_CHARS, (
+        # LITERAL on both sides (rule 7a). Asserting against
+        # ``SYNTHESIS_DEBATE_EXCERPT_MAX_CHARS`` alone would stay green if that
+        # constant were RAISED — the bound asserted against the constant that
+        # defines it. 8000 is its measured value today and 7999 is what four
+        # critics actually produce (each row spends its own label out of its
+        # share), so both sides are pinned.
+        assert len(output.critique_text) == 7999, (
             f"round {output.round_number} digest is {len(output.critique_text)} chars"
+        )
+        assert len(output.critique_text) <= 8000
+        assert SYNTHESIS_DEBATE_EXCERPT_MAX_CHARS == 8000, (
+            "the synthesis slice moved; re-measure the digest length above"
         )
 
 
@@ -473,6 +492,128 @@ def test_a_unique_plurality_is_still_not_a_majority(
     stance = cleared.debate_outputs[0].panel_stance
     assert stance is not None
     assert [(p.slot, p.group) for p in stance.positions] == [(1, "adopt")]
+
+
+def test_one_critic_with_a_parseable_stance_cannot_carry_the_panel(
+    monkeypatch: pytest.MonkeyPatch, peer_on: None
+) -> None:
+    """RED WHEN: the stance denominator is ``len(live)`` instead of the eligible
+    panel.
+
+    THE fail-open adversarial review found, and the one my own commit body
+    wrongly claimed was already closed. I fixed "one critic of four flips the
+    panel" in the KEYWORD channel; it survived untouched in the STANCE channel —
+    and ``compute_consensus_strength`` reaches the stance branch FIRST, so the
+    stance channel is the one that decides.
+
+    The shape is ORDINARY, not exotic: a critic that answers in prose rather
+    than the JSON envelope is live and carries no stance. ``debate.py``'s own
+    comment records that 360 of 419 catalog entries declare ``response_format``,
+    so roughly one model in seven answers 400 and falls back.
+
+    Here three critics answer in plain prose (live, no stance) and ONE returns a
+    parseable envelope. One of four is not a strict majority, so the panel must
+    read no stance at all.
+    """
+    rec = _Recorder(
+        replies={
+            "prov/model-1": _envelope("Converged.", {1: "adopt", 2: "adopt"}),
+            "prov/model-2": "Plain prose critique with no envelope at all.",
+            "prov/model-3": "Another plain prose critique, still no envelope.",
+            "prov/model-4": "A third plain prose critique, no envelope either.",
+        }
+    )
+    result = _run(monkeypatch, rec)
+    round_one = result.debate_outputs[0]
+    # The three prose critics ARE live — this is not a run where nobody spoke.
+    assert sum(1 for c in round_one.slot_critiques if c.critique_mode == DEBATE_MODE_LIVE) == 4
+    assert sum(1 for c in round_one.slot_critiques if c.stance is not None) == 1
+    assert round_one.eligible_critic_count == 4
+    assert round_one.panel_stance is None, (
+        "one critic of four supplied a stance and it became the whole panel's"
+    )
+    # POSITIVE PARTNER: three of four with the SAME reading does clear the bar,
+    # so the refusal above is the denominator and not a build that never derives
+    # a stance once a critic answers in prose.
+    agreeing = _envelope("Converged.", {1: "adopt", 2: "adopt"})
+    cleared = _run(
+        monkeypatch,
+        _Recorder(
+            replies={
+                "prov/model-1": agreeing,
+                "prov/model-2": agreeing,
+                "prov/model-3": agreeing,
+                "prov/model-4": "Plain prose critique with no envelope at all.",
+            }
+        ),
+    )
+    stance = cleared.debate_outputs[0].panel_stance
+    assert stance is not None
+    assert {p.slot: p.group for p in stance.positions} == {1: "adopt", 2: "adopt"}
+
+
+def test_a_cancelled_peer_round_serves_the_template_not_an_empty_critique(
+    monkeypatch: pytest.MonkeyPatch, peer_on: None
+) -> None:
+    """RED WHEN: a cancel before the first dispatch returns an empty tuple.
+
+    The moderator path has always emitted its TEMPLATE on a cancel. The peer
+    path returned an empty tuple, ``_peer_digest(())`` gave ``""``, and the
+    round shipped ``status=COMPLETED`` carrying nothing — after which
+    ``synthesis.py`` fed the model ``- round 1: `` with an empty right-hand
+    side: an evidence line asserting a round happened and carrying none.
+
+    Falling through to the moderator path costs nothing, because
+    ``_call_debate_model`` checks ``should_stop`` too and returns ``None``
+    there. Asserted BOTH ways: the text is non-empty AND nothing was billed.
+    """
+    rec = _Recorder(default=_envelope("A critique."))
+    result = debate_stub_service.run_debate_rounds(
+        account_id=uuid4(),
+        query_run_id=uuid4(),
+        query_text="Which option?",
+        initial_answers=_four(),
+        openrouter_key=_KEY,
+        should_stop=lambda: True,
+    )
+    del rec
+    for output in result.debate_outputs:
+        assert output.critique_text.strip(), (
+            f"round {output.round_number} shipped COMPLETED with an empty critique"
+        )
+        assert output.debate_mode == DEBATE_MODE_FALLBACK
+        assert output.critique_shape == CRITIQUE_SHAPE_MODERATOR
+    assert result.live_call_usages == [], "a cancelled run was billed for something"
+
+
+def test_a_round_with_one_templated_critic_is_not_reported_as_live(
+    monkeypatch: pytest.MonkeyPatch, peer_on: None
+) -> None:
+    """RED WHEN: ``debate_mode`` is LIVE if ANY critic was live.
+
+    ``app.js`` renders "Written by Quorum, not by a model" on any round whose
+    ``debate_mode`` is not ``"live"``, and its own comment states the contract:
+    attributing this product's template text to a model is a false authorship
+    claim, and the element FAILS CLOSED.
+
+    Measured by review on the ANY quantifier: a round with one live critic and
+    three templated ones reported ``live``, so the disclosure was suppressed
+    while THREE OF FOUR rendered digest rows were Quorum's own words. Under one
+    moderator the round was all-or-nothing and the quantifier could not matter.
+    """
+    mixed = _run(
+        monkeypatch,
+        _Recorder(replies={"prov/model-1": _envelope("A real critique.")}, default=""),
+    )
+    round_one = mixed.debate_outputs[0]
+    assert sum(1 for c in round_one.slot_critiques if c.critique_mode == DEBATE_MODE_LIVE) == 1
+    assert round_one.debate_mode == DEBATE_MODE_FALLBACK, (
+        "three of four digest rows are Quorum's template and the round claims live"
+    )
+    # POSITIVE PARTNER: all four live still reports live, so the rule is ALL and
+    # not "always fallback under the peer shape".
+    every = _run(monkeypatch, _Recorder(default=_envelope("A real critique.")))
+    assert every.debate_outputs[0].debate_mode == DEBATE_MODE_LIVE
 
 
 def test_a_critic_that_answered_nothing_is_recorded_as_templated(

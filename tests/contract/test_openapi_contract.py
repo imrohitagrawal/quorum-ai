@@ -123,6 +123,12 @@ def test_debate_output_fields_are_current() -> None:
         # eight rounds.
         "critique_shape",
         "slot_critiques",
+        # The DENOMINATOR every panel-level claim about a peer round is measured
+        # against. Published because a consumer reading `slot_critiques` without
+        # it would compute the same two fail-opens adversarial review found —
+        # a cancel raising the verdict, and one critic of four carrying the
+        # panel. Defaulted 0, so it stays out of `required`.
+        "eligible_critic_count",
     }
     for phantom in ("contributing_models", "latency_ms", "provider_notice"):
         assert phantom not in debate["properties"], (

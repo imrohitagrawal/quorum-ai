@@ -4526,11 +4526,24 @@
   // no user has ever seen it there. The reader's only route was the transcript
   // link. This puts it on the page the run lands on.
   //
-  // HONESTY (non-negotiable, same rule as the transcript view): the backend
-  // records ONE `critique_text` per round with NO per-model attribution — there
-  // is no "who challenged whom". So this renders one card per ROUND, captions
-  // itself as such, and must never grow per-model exchange cards. That is #290,
-  // which is NOT built.
+  // HONESTY (non-negotiable, same rule as the transcript view): this renders
+  // one card per ROUND and captions itself as such.
+  //
+  // #290 IS built as of ADR-0093/ADR-0095, so the old form of this note ("the
+  // backend records ONE `critique_text` per round with NO per-model
+  // attribution ... that is #290, which is NOT built") is no longer true: under
+  // `critique_shape === "peer"` the round carries `slot_critiques`, one entry
+  // per eligible critic. What has NOT changed is what this view renders — the
+  // round-level digest, one card per round.
+  //
+  // THE CAPTION BELOW IS NOW A DEFERRED DEBT, stated here rather than hidden:
+  // it tells the reader Quorum "does not record a per-model, line-by-line
+  // exchange", which is false whenever the flag is on. The flag ships OFF, so
+  // no user can see the false form today; the package that turns it on MUST
+  // carry the copy change. Recorded in ADR-0095's consequences, because that
+  // caption is also fixed in `workspace.html` and asserted by ADR-0063 and
+  // `docs/32-ui-state-matrix.md`, so it is a UI-copy decision of its own and
+  // not a line to change in passing.
   //
   // The cards are `buildTranscriptRound` verbatim — the same builder the
   // transcript uses. Shared deliberately: one treatment for one kind of content
@@ -4553,9 +4566,10 @@
     // "The debate rounds", matching the export's `## Debate rounds` heading and
     // the transcript's section title. An earlier draft read "What the panel
     // argued", which attributes the text to the four models — the panel — and
-    // implies they argued WITH EACH OTHER. They never read each other (#290 is
-    // not built), and the critique is one moderator-or-template summary per
-    // round. A heading is a claim; this one now makes none.
+    // implies they argued WITH EACH OTHER. Under the shipped default they do
+    // not read each other, and the critique is one moderator-or-template
+    // summary per round; under #290's peer shape they do. A heading is a claim,
+    // and this one deliberately makes neither.
     head.appendChild(mkEl("span", "result-debate-title", "The debate rounds"));
     head.appendChild(
       mkEl(

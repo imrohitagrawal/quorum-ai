@@ -617,6 +617,12 @@ components:
           type: array
           title: Slot Critiques
           default: []
+        eligible_critic_count:
+          type: integer
+          maximum: 4.0
+          minimum: 0.0
+          title: Eligible Critic Count
+          default: 0
       type: object
       required:
       - round_number

@@ -93,9 +93,10 @@ test.describe("#290 critique receipt rows", () => {
     // renders the same string four times against four different figures.
     await driveWith(page, goldenRespWithCritiqueRows());
     const labels = await receiptLabels(page);
-    // FLOOR: the column was found and rendered. An empty selector would make
-    // every assertion below vacuous (AGENTS.md rule 7).
-    expect(labels.length).toBeGreaterThan(4);
+    // EXACT, not a floor. `toBeGreaterThan(4)` left one row of slack against
+    // the 6 the moderator shape renders, so a dropped row could hide in it.
+    // 4 slot rows + the writer row + 4 critique rows + Total = 10.
+    expect(labels).toHaveLength(10);
     const critique = labels.filter((l) => l.includes("(critique)"));
     expect(critique).toHaveLength(4);
     expect(new Set(critique).size).toBe(4);
@@ -111,9 +112,17 @@ test.describe("#290 critique receipt rows", () => {
     // grow a critique row it was never sent.
     await driveWith(page, goldenCompletedResp());
     const labels = await receiptLabels(page);
-    expect(labels.length).toBeGreaterThan(4);
+    // 4 slot rows + the writer row + Total = 6, exactly.
+    expect(labels).toHaveLength(6);
     expect(labels.filter((l) => l.includes("(critique)"))).toHaveLength(0);
-    expect(labels).toContain("Synthesis");
-    expect(labels).not.toContain("Debate + synthesis");
+    // NOT asserting the writer row's TEXT here. Review showed that would test
+    // the fixture, not `src/`: this receipt column renders
+    // `line.display_name` straight through, so `toContain("Synthesis")` is
+    // satisfied by golden-run.ts's own hard-coded string and cannot go red for
+    // any server change. The label is pinned where the override actually lives
+    // — `test_cost_gate_js.py::test_the_javascript_writer_label_matches_the_server_constant`,
+    // which drives the cost-gate mapper and compares it against
+    // `costs.WRITER_ROW_DISPLAY_NAME`.
+    expect(labels.filter((l) => l === "Total")).toHaveLength(1);
   });
 });

@@ -61,13 +61,23 @@ def _critique(slot: int, text: str, *, mode: str = DEBATE_MODE_LIVE) -> SlotCrit
     )
 
 
-def _peer_round(critiques: list[SlotCritique], *, digest: str | None = None) -> DebateOutput:
+def _peer_round(
+    critiques: list[SlotCritique],
+    *,
+    digest: str | None = None,
+    eligible: int | None = None,
+) -> DebateOutput:
     """A peer round whose DIGEST says the opposite of its critics, on purpose.
 
     The digest defaults to a converging sentence while the critics may not
     converge at all. That is the whole instrument: a decider reading the digest
     returns ``True``, a decider reading the critics returns what the critics
     actually said.
+
+    ``eligible`` defaults to the number of critics supplied, which is the
+    uncancelled shape. Pass it EXPLICITLY to model a cancel: the critics that
+    were never dispatched are absent from ``slot_critiques`` and still present
+    in ``eligible_critic_count``, which is the whole point of that field.
     """
     return DebateOutput(
         round_number=1,
@@ -77,6 +87,7 @@ def _peer_round(critiques: list[SlotCritique], *, digest: str | None = None) -> 
         debate_mode=DEBATE_MODE_LIVE,
         critique_shape=CRITIQUE_SHAPE_PEER,
         slot_critiques=tuple(critiques),
+        eligible_critic_count=len(critiques) if eligible is None else eligible,
     )
 
 
@@ -133,14 +144,18 @@ def test_two_of_four_is_not_a_majority() -> None:
     assert _debate_signals_convergence([output]) is False
 
 
-def test_a_templated_critic_is_not_counted_as_a_vote() -> None:
-    """RED WHEN: ``critique_mode`` is ignored when counting.
+def test_a_templated_critic_counts_in_the_denominator_and_not_the_numerator() -> None:
+    """RED WHEN: ``critique_mode`` is ignored, OR a templated critic is dropped
+    from the denominator.
 
-    #185's guard, applied PER CRITIC. Three live critics and one templated one
-    carry a single round-level ``debate_mode``, so a round-level guard would
-    admit this product's own template words to the keyword scan. Here the
-    template is written to contain the keyword, so a build that counts it
-    reaches a majority and a build that skips it does not.
+    #185's guard applied PER CRITIC, and the half review had to correct. A
+    templated critique is this product's own words, so it may not VOTE — but it
+    is still one of the four the claim is about, so it may not shrink the bar
+    either. Both halves are asserted, and each needs the other: excluding it
+    from both would make 2 of 3 a "majority" of a four-critic panel.
+
+    The template below deliberately CONTAINS the convergence keyword, so a
+    build that counts it reaches the bar and a build that skips it does not.
     """
     output = _peer_round(
         [
@@ -150,19 +165,67 @@ def test_a_templated_critic_is_not_counted_as_a_vote() -> None:
             _critique(4, _DIVERGED),
         ]
     )
-    # 2 live converging of 3 live critics IS a strict majority -> True.
-    assert _debate_signals_convergence([output]) is True
-    # ... and with one fewer live convergence it is not, which is what proves
-    # the templated critic was excluded rather than merely outvoted.
-    output_2 = _peer_round(
+    assert _debate_signals_convergence([output]) is False, (
+        "2 live convergences of 4 eligible critics is not a strict majority; "
+        "the templated critic must not shrink the denominator"
+    )
+    # POSITIVE PARTNER: one more LIVE convergence clears the bar, so the
+    # refusal above is the arithmetic and not a build that never converges.
+    cleared = _peer_round(
         [
             _critique(1, _CONVERGED),
-            _critique(2, _DIVERGED),
-            _critique(3, _CONVERGED, mode=DEBATE_MODE_FALLBACK),
+            _critique(2, _CONVERGED),
+            _critique(3, _CONVERGED),
             _critique(4, _DIVERGED),
         ]
     )
-    assert _debate_signals_convergence([output_2]) is False
+    assert _debate_signals_convergence([cleared]) is True
+    # SECOND PARTNER: the templated critic's own words never vote. Same four
+    # critics, same denominator; only critic 3's MODE differs from `cleared`.
+    templated_vote = _peer_round(
+        [
+            _critique(1, _CONVERGED),
+            _critique(2, _CONVERGED),
+            _critique(3, _CONVERGED, mode=DEBATE_MODE_FALLBACK),
+            _critique(4, _CONVERGED),
+        ]
+    )
+    assert _debate_signals_convergence([templated_vote]) is True, (
+        "3 live convergences of 4 clears the bar without the template's vote"
+    )
+
+
+def test_a_cancel_cannot_make_the_panel_more_confident() -> None:
+    """RED WHEN: the denominator comes from ``slot_critiques``.
+
+    THE defect adversarial review found, and the one nobody would guess: taking
+    the majority over the critics that were HEARD FROM meant a cancel — which
+    removes dissenters as readily as agreers — could RAISE the verdict.
+
+    Reproduced before the fix, on IDENTICAL model opinions: four critics split
+    2-2 read ``weak``; the same run with a cancel after the first two read
+    ``strong``, because the threshold fell from 3 to 2. Cancelling a run must
+    never increase what this product claims.
+    """
+    heard_from = [_critique(1, _CONVERGED), _critique(2, _CONVERGED)]
+    full = _peer_round(heard_from + [_critique(3, _DIVERGED), _critique(4, _DIVERGED)])
+    assert _debate_signals_convergence([full]) is False
+    cancelled = _peer_round(heard_from, eligible=4)
+    assert _debate_signals_convergence([cancelled]) is False, (
+        "a cancel removed the two dissenters and the panel became MORE confident"
+    )
+
+
+def test_a_zero_denominator_is_never_unanimous() -> None:
+    """RED WHEN: ``eligible_critic_count`` is not floored before the compare.
+
+    ``x >= 0 // 2 + 1`` is ``x >= 1``, so a zero denominator turns a SINGLE
+    voice into a majority — rule 7's negative-check-over-nothing, in the
+    fail-open direction. Reachable on any round serialised before this field
+    existed, where the default is 0.
+    """
+    stale = _peer_round([_critique(1, _CONVERGED)], eligible=0)
+    assert _debate_signals_convergence([stale]) is False
 
 
 def test_a_peer_round_with_no_live_critic_at_all_signals_nothing() -> None:

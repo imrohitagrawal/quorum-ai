@@ -708,7 +708,7 @@ def _peer_round_signals_convergence(round_output: DebateOutput) -> bool:
     is ADR-0075's, already this product's rule for a panel-level reading: a
     strict majority of the panel that was read.
 
-    **Live critics only, counted per critic.** #185 put this guard on the round
+    **Live critics only in the NUMERATOR.** #185 put this guard on the round
     because a templated critique is this product's own words and reading a
     verdict off them is the product agreeing with itself. Under the peer shape
     a round with three live critics and one templated one carries a SINGLE
@@ -716,21 +716,30 @@ def _peer_round_signals_convergence(round_output: DebateOutput) -> bool:
     template — which is why ``SlotCritique.critique_mode`` exists and why the
     filter is here rather than one level up.
 
-    An empty live set returns ``False``, not ``True``: "no critic disagreed" is
-    trivially satisfied over nothing (AGENTS rule 7), and the honest reading of
-    no evidence is no claim.
+    **The DENOMINATOR is ``eligible_critic_count``, not the critics we heard
+    from.** This is the correction adversarial review forced, and taking it from
+    ``slot_critiques`` was fail-open in a way nobody would guess: it made a
+    CANCEL make the product more confident. Measured, on identical model
+    opinions — four critics split 2-2 read ``weak``; the same run with a cancel
+    landing after the first two read ``strong``, because the two dissenters were
+    never asked and the threshold fell from 3 to 2. A critic that was cancelled,
+    refused, or answered nothing is a critic that did NOT signal convergence. It
+    does not get to leave the denominator.
+
+    A zero denominator returns ``False``: ``x >= 0 // 2 + 1`` is ``x >= 1``, so
+    it would make a SINGLE voice unanimous — rule 7's negative-check-over-
+    nothing, in the fail-open direction.
     """
-    live = [
-        critique
-        for critique in round_output.slot_critiques
-        if critique.critique_mode == DEBATE_MODE_LIVE
-    ]
-    if not live:
+    eligible = round_output.eligible_critic_count
+    if eligible <= 0:
         return False
     converging = sum(
-        1 for critique in live if _text_signals_convergence((critique.critique_text or "").lower())
+        1
+        for critique in round_output.slot_critiques
+        if critique.critique_mode == DEBATE_MODE_LIVE
+        and _text_signals_convergence((critique.critique_text or "").lower())
     )
-    return converging >= len(live) // 2 + 1
+    return converging >= eligible // 2 + 1
 
 
 def _keyword_negated(haystack: str, keyword: str) -> bool:

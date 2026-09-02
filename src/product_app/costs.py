@@ -1718,18 +1718,33 @@ class CostEstimationService:
         # and the worst case is that all four slots complete and critique.
         # Both rounds still cost the same, so the equal-rounds invariant holds
         # under either shape.
+        moderator_round_cost = _cost(
+            settings.debate_model_id, debate_prompt_tokens, debate_output_tokens
+        )
         if settings.peer_critique_enabled:
-            debate_round_cost = sum(
+            peer_round_cost = sum(
                 (
                     _cost(slot.model_id, debate_prompt_tokens, debate_output_tokens)
                     for slot in model_slots
                 ),
                 Decimal("0"),
             )
+            # MAX, not the peer figure alone. The moderator is REACHABLE with
+            # the flag on: ``debate._build_peer_round`` returns ``None`` when no
+            # slot is eligible — four slots that all fell back to local
+            # simulation, the degraded case this product has a banner for — and
+            # ``run_debate_rounds`` then bills two MODERATOR calls. Replacing
+            # the moderator's price with the critics' made the "ceiling"
+            # LOWER than a shape the run can still take.
+            #
+            # Measured by two independent reviewers on two different legal
+            # mixes: four cheap slots against the default Haiku moderator moved
+            # ``max_cost_usd`` $0.0967 -> $0.0740 and $0.0953 -> $0.0652 when
+            # the flag was turned ON. Turning a feature on must never lower the
+            # figure the guardrail evaluates.
+            debate_round_cost = max(peer_round_cost, moderator_round_cost)
         else:
-            debate_round_cost = _cost(
-                settings.debate_model_id, debate_prompt_tokens, debate_output_tokens
-            )
+            debate_round_cost = moderator_round_cost
         synthesis_prompt_tokens = (
             system_tokens
             + query_tokens
@@ -1768,11 +1783,31 @@ class CostEstimationService:
         # Bound-only keeps the ceiling EXACT and leaves both displayed
         # contracts (round_1 == round_2, and both partitions reconciling)
         # untouched.
-        prior_critique_input_cost = (
-            _cost(settings.debate_model_id, debate_output_tokens, Decimal(0))
-            if price_round_two_prior_critique
-            else Decimal(0)
-        )
+        # Under peer critique round 2's prior-round critique is not read once
+        # by one moderator — it is read by EVERY critic, each at its own input
+        # price (``debate._build_peer_round`` passes the same ``prior_round``
+        # to all of them). Charging it once at the moderator's rate under-prices
+        # the normal, all-eligible peer path, not an edge case: measured by
+        # review at up to $0.0645 on one legal four-slot mix, against a bound of
+        # $1.01. Same ``max`` reasoning as the round cost above — the moderator
+        # shape stays reachable, so its price stays in the worst case.
+        if not price_round_two_prior_critique:
+            prior_critique_input_cost = Decimal(0)
+        elif settings.peer_critique_enabled:
+            prior_critique_input_cost = max(
+                sum(
+                    (
+                        _cost(slot.model_id, debate_output_tokens, Decimal(0))
+                        for slot in model_slots
+                    ),
+                    Decimal("0"),
+                ),
+                _cost(settings.debate_model_id, debate_output_tokens, Decimal(0)),
+            )
+        else:
+            prior_critique_input_cost = _cost(
+                settings.debate_model_id, debate_output_tokens, Decimal(0)
+            )
         # Issue #265: the Layer-B judge is a FIFTH billable call, and until this
         # term existed ``max_cost_usd`` priced only four stages while a fired
         # judge's cost WAS added to ``actual_cost_usd``. So ``actual > max`` —
@@ -2277,11 +2312,27 @@ def build_measured_breakdown(
     # ``debate_total`` already contains it (``by_stage`` keeps critique under
     # the round it was spent in), so adding the critique rows without this
     # subtraction would count the same dollars twice — a partition that still
-    # reconciles, against a total that is itself too large. ``max`` guards the
-    # arithmetic rather than the world: the two figures come from one loop and
-    # cannot disagree, and a negative writer row would break the ">= 0 on every
-    # line" invariant the UI relies on if they ever did.
-    writer_cost = max(Decimal("0"), debate_total - critique_total) + synthesis_cost
+    # reconciles, against a total that is itself too large.
+    #
+    # An over-large critique total is INCOHERENT input, not a number to clamp:
+    # critique spend is a SUBSET of debate spend, the same dollars seen from the
+    # other partition, and both are accumulated in one loop over one snapshot.
+    # Raising is also the SAFE direction by construction — ``_actual_cost``
+    # catches ``ValueError`` and demotes the whole run to ``estimated``.
+    #
+    # This was a ``max(Decimal("0"), ...)`` clamp until review pointed out what
+    # a clamp buys: if the two ever disagreed, ``raw_model`` would sum to more
+    # than ``total`` and ``_reconcile_usd_lines`` would silently squeeze every
+    # line to fit — a receipt that still reconciles, still says "measured", and
+    # is wrong on every row. The test that claimed to pin the clamp was passing
+    # on a pydantic ``ValidationError`` from a negative row, which is a
+    # different failure with the same exception base.
+    if critique_total > debate_total:
+        raise ValueError(
+            f"critique spend {critique_total} exceeds debate spend {debate_total}; "
+            "critique is a subset of debate and the two cannot disagree"
+        )
+    writer_cost = debate_total - critique_total + synthesis_cost
     raw_model: list[tuple[str, str, Decimal, str]] = [
         (mid, name, cost, "model") for mid, name, cost in per_model_initial
     ]

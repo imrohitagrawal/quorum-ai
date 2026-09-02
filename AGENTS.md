@@ -603,7 +603,7 @@ this file. But when you touch the workspace UI (`src/product_app/static/app.js`,
   a `playwright test` command in `e2e.yml` — 16 in the first blocking lane,
   `real-integration-smoke` in the second, and `trust-score-visual` +
   `visual-snapshots` in the visual-baseline lane. Three are detailed below
-  because they have contracts worth stating; the other fifteen bind just as
+  because they have contracts worth stating; the other sixteen bind just as
   hard. Enumerate the directory rather than trusting this list.
   **This count said "twelve" until 2026-08-04**, and the error is instructive:
   the FIRST blocking lane runs exactly 12 invariant specs, so a number that was
