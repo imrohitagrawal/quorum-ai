@@ -115,6 +115,14 @@ def test_debate_output_fields_are_current() -> None:
         # Carries a default (``None``) so it stays out of ``required``, same as
         # ``debate_mode``.
         "panel_stance",
+        # #290 / ADR-0093 decision 1. Both carry defaults, so both stay out of
+        # ``required`` and every existing client keeps parsing unchanged. This
+        # is the shape that keeps ONE element per round: the rejected
+        # alternative, one row per ``(round, model)``, would have needed no
+        # schema change at all and would have told the user a two-round run had
+        # eight rounds.
+        "critique_shape",
+        "slot_critiques",
     }
     for phantom in ("contributing_models", "latency_ms", "provider_notice"):
         assert phantom not in debate["properties"], (
@@ -126,6 +134,41 @@ def test_debate_output_fields_are_current() -> None:
         "critique_text",
         "status",
     ]
+
+
+def test_the_slot_critique_schema_is_published_and_additive() -> None:
+    """RED WHEN: ``SlotCritique`` stops being published, or gains a required field.
+
+    #290 / ADR-0093. ``DebateOutput`` is a published schema and ``openapi.yaml``
+    is byte-compared, so nesting the peer detail adds a component every client
+    can see. Three fields are required and three carry defaults — the defaults
+    are what let a moderator-shaped round, which is what ships, serialise
+    unchanged.
+
+    ``critic_slot_number`` is bounded 1..4 because that is the panel size the
+    rest of the model already asserts (``model_slots.EXPECTED_SLOT_COUNT``); a
+    fifth critic would be a slot that does not exist.
+    """
+    spec = yaml.safe_load(OPENAPI_PATH.read_text(encoding="utf-8"))
+    critique = spec["components"]["schemas"]["SlotCritique"]
+    assert set(critique["properties"]) == {
+        "critic_slot_number",
+        "critic_model_id",
+        "critique_text",
+        "focus_areas",
+        "critique_mode",
+        "stance",
+    }
+    assert critique["required"] == [
+        "critic_slot_number",
+        "critic_model_id",
+        "critique_text",
+    ]
+    slot = critique["properties"]["critic_slot_number"]
+    assert (slot["minimum"], slot["maximum"]) == (1, 4)
+    # The defaulted three are what keep the change additive for a client that
+    # has never seen a peer round.
+    assert critique["properties"]["critique_mode"]["default"] == "fallback"
 
 
 def test_debate_round_status_enum_is_current() -> None:

@@ -36,6 +36,7 @@ from collections import Counter
 from typing import Literal
 
 from product_app.debate import (
+    CRITIQUE_SHAPE_PEER,
     DEBATE_MODE_LIVE,
     DebateOutput,
     ModelAlignment,
@@ -657,21 +658,79 @@ def _debate_signals_convergence(debate_outputs: list[DebateOutput]) -> bool:
     on words this product wrote about itself.
     """
     for round_output in debate_outputs:
+        # ADR-0093 decision 1a. Under the peer shape this is a DECIDER reading
+        # per-critic evidence, never the pooled digest — see
+        # :func:`_peer_round_signals_convergence` for what the digest would
+        # cost here.
+        if round_output.critique_shape == CRITIQUE_SHAPE_PEER:
+            if _peer_round_signals_convergence(round_output):
+                return True
+            continue
         if round_output.debate_mode != DEBATE_MODE_LIVE:
             continue
         critique = (round_output.critique_text or "").lower()
         if not critique:
             continue
-        for keyword in _CONVERGE_KEYWORDS:
-            if keyword in critique:
-                # Reject simple negations like "did not converge".
-                # We check a 12-char window around the keyword and
-                # refuse to match if "not" / "no " appears within
-                # 3 words before.
-                if _keyword_negated(critique, keyword):
-                    continue
-                return True
+        if _text_signals_convergence(critique):
+            return True
     return False
+
+
+def _text_signals_convergence(critique: str) -> bool:
+    """Does one already-lowercased critique report convergence?
+
+    Extracted verbatim from the loop above when the peer shape gave it a second
+    caller. One matcher, not two: a copy would drift, and the two callers must
+    agree about what a keyword means or the peer and moderator shapes would
+    answer the same words differently.
+    """
+    for keyword in _CONVERGE_KEYWORDS:
+        if keyword in critique:
+            # Reject simple negations like "did not converge".
+            # We check a 12-char window around the keyword and
+            # refuse to match if "not" / "no " appears within
+            # 3 words before.
+            if _keyword_negated(critique, keyword):
+                continue
+            return True
+    return False
+
+
+def _peer_round_signals_convergence(round_output: DebateOutput) -> bool:
+    """Did a STRICT MAJORITY of this round's LIVE critics report convergence?
+
+    Two rules, and the design turns on both.
+
+    **Per-critic, never the digest.** ``critique_text`` under the peer shape is
+    a pooled digest of up to four critics. Scanning it would let ANY ONE of
+    them flip the whole panel to ``"strong"`` — a roughly 4x fail-open widening
+    of a user-visible trust claim, reached with no code change at all. The bar
+    is ADR-0075's, already this product's rule for a panel-level reading: a
+    strict majority of the panel that was read.
+
+    **Live critics only, counted per critic.** #185 put this guard on the round
+    because a templated critique is this product's own words and reading a
+    verdict off them is the product agreeing with itself. Under the peer shape
+    a round with three live critics and one templated one carries a SINGLE
+    round-level ``debate_mode``, so the round-level guard would admit the
+    template — which is why ``SlotCritique.critique_mode`` exists and why the
+    filter is here rather than one level up.
+
+    An empty live set returns ``False``, not ``True``: "no critic disagreed" is
+    trivially satisfied over nothing (AGENTS rule 7), and the honest reading of
+    no evidence is no claim.
+    """
+    live = [
+        critique
+        for critique in round_output.slot_critiques
+        if critique.critique_mode == DEBATE_MODE_LIVE
+    ]
+    if not live:
+        return False
+    converging = sum(
+        1 for critique in live if _text_signals_convergence((critique.critique_text or "").lower())
+    )
+    return converging >= len(live) // 2 + 1
 
 
 def _keyword_negated(haystack: str, keyword: str) -> bool:

@@ -544,6 +544,26 @@ class Settings(BaseSettings):
     debate_model_id: str = "anthropic/claude-haiku-4.5"
     synthesis_model_id: str = "openai/gpt-5-mini"
 
+    #: #290 / ADR-0093 / ADR-0095. When true, each ELIGIBLE answer slot writes
+    #: its own critique of the others in both rounds, instead of one moderator
+    #: writing both.
+    #:
+    #: DEFAULT FALSE, and this is not timidity. ``CostEstimationService.
+    #: _estimate_bound_usd`` documents itself as a TRUE CEILING -- "the
+    #: guardrail keying off it can only ever over-protect, never wave through a
+    #: run that then bills more" -- and it prices exactly TWO debate calls. A
+    #: peer run makes two PER ELIGIBLE CRITIC, up to eight. The bound therefore
+    #: reads this same flag (``costs._cost_components``), so the ceiling stays
+    #: true in both postures; the flag defaults off so the SHIPPED posture,
+    #: ADR-0094's measured 715-mix sweep, and every threshold derived from it
+    #: are unmoved until the owner opens a measurement window.
+    #:
+    #: Turning it on is therefore a MONEY decision, not a feature toggle: it
+    #: raises the quoted bound, which moves how many catalog mixes need
+    #: confirmation. ADR-0094 holds the constants that absorb that until #290's
+    #: real cost has been measured, and W3 is the pass that measures it.
+    peer_critique_enabled: bool = False
+
     # --- Catalog fetcher -------------------------------------------------
     # The  model catalog is fetched from a public, unauthenticated
     # endpoint and cached in process memory. Six hours is the

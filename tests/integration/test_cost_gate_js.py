@@ -9,7 +9,7 @@ we can exercise it directly via ``node`` the same way
 Pinned contract:
 
 * by_model uses each row's ``display_name``, EXCEPT the
-  ``kind === "synthesis"`` row, which renders as "Debate + synthesis".
+  ``kind === "synthesis"`` row, which renders as "Synthesis".
 * by_stage maps the four PIPELINE stage keys (``initial_answers`` /
   ``debate_round_1`` / ``debate_round_2`` / ``synthesis``) to friendly labels,
   and any other stage falls back to its raw key. Those four are no longer the
@@ -35,6 +35,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+
+from product_app.costs import WRITER_ROW_DISPLAY_NAME
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 APP_JS = REPO_ROOT / "src" / "product_app" / "static" / "app.js"
@@ -139,10 +141,13 @@ def test_cost_gate_by_model_labels_synthesis_writer() -> None:
         "Gemini 2.5 Flash",
         "DeepSeek V3.1",
     ]
-    # The kind=="synthesis" row renders as the fixed "Debate + synthesis"
-    # label (issue #16 relabel — it folds in the two debate rounds too), NOT
-    # its raw display_name.
-    assert labels[4] == "Debate + synthesis"
+    # The kind=="synthesis" row renders as a FIXED label, NOT its raw
+    # display_name. Renamed "Debate + synthesis" -> "Synthesis" by #290 /
+    # ADR-0093 decision 4: under a fully-eligible peer run that row holds no
+    # debate spend at all. The override itself is unchanged and still
+    # load-bearing — the fixture below sends "GPT-4o mini (writer)", the #16
+    # defect, and it must not reach the receipt.
+    assert labels[4] == "Synthesis"
     assert "GPT-4o mini (writer)" not in labels
 
 
@@ -303,4 +308,26 @@ def test_an_unknown_stage_row_still_renders_with_its_raw_key() -> None:
     # The rows still account for the total the gate prints next to them.
     assert sum(row["usd"] for row in out["byStage"]) == pytest.approx(
         _BREAKDOWN_WITH_ADVISORY["total"]
+    )
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not available")
+def test_the_javascript_writer_label_matches_the_server_constant() -> None:
+    """RED WHEN: one of the two spellings of the writer label moves alone.
+
+    ``app.js`` OVERRIDES the writer row's ``display_name`` with a literal, and
+    the server emits ``costs.WRITER_ROW_DISPLAY_NAME`` for the same row. Two
+    spellings for one label is how an estimate row and its measured row come to
+    render as two unpaired half-rows on a money surface -- the same class of
+    defect issue #217 fixed for the composite key. Nothing else compares them,
+    because the override means the JavaScript never reads the server's string.
+
+    Driven through the real gate rather than by grepping the file, so it pins
+    what a browser would actually show.
+    """
+    out = _run(_BREAKDOWN)
+    labels = [row["label"] for row in out["byModel"]]
+    assert labels[4] == WRITER_ROW_DISPLAY_NAME, (
+        f"app.js renders the writer row as {labels[4]!r} while the server sends "
+        f"{WRITER_ROW_DISPLAY_NAME!r}"
     )

@@ -607,6 +607,16 @@ components:
           anyOf:
           - $ref: '#/components/schemas/PanelStance'
           - type: 'null'
+        critique_shape:
+          type: string
+          title: Critique Shape
+          default: moderator
+        slot_critiques:
+          items:
+            $ref: '#/components/schemas/SlotCritique'
+          type: array
+          title: Slot Critiques
+          default: []
       type: object
       required:
       - round_number
@@ -1474,6 +1484,41 @@ components:
       - version
       - message
       title: SafetyWarning
+    SlotCritique:
+      properties:
+        critic_slot_number:
+          type: integer
+          maximum: 4.0
+          minimum: 1.0
+          title: Critic Slot Number
+        critic_model_id:
+          type: string
+          maxLength: 256
+          minLength: 1
+          title: Critic Model Id
+        critique_text:
+          type: string
+          title: Critique Text
+        focus_areas:
+          items:
+            type: string
+          type: array
+          title: Focus Areas
+        critique_mode:
+          type: string
+          title: Critique Mode
+          default: fallback
+        stance:
+          anyOf:
+          - $ref: '#/components/schemas/PanelStance'
+          - type: 'null'
+      type: object
+      required:
+      - critic_slot_number
+      - critic_model_id
+      - critique_text
+      title: SlotCritique
+      description: One answer model's critique of the other slots, inside one round.
     SlotPosition:
       properties:
         slot:

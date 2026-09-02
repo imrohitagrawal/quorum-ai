@@ -97,7 +97,7 @@ caught by any automated check and 10 of 16 by adversarial review
 | ID | Item | State | Evidence | Issue | Depends on |
 |----|------|-------|----------|-------|------------|
 | W1 | Stream the provider call (was "B2") | DONE | `ABSENT src/product_app/providers.py :: "stream": True` | — | — |
-| W2 | Peer critique: the answer models critique each other, two rounds | PENDING | `PRESENT src/product_app/debate.py :: model_id=settings.debate_model_id,` | #290 | W1 |
+| W2 | Peer critique: the answer models critique each other, two rounds (built; ships default-off) | DONE | `ABSENT src/product_app/debate.py :: def _build_peer_round(` | #290 | W1 |
 | W3 | Re-set the money constants against a measured bound — **STOP** | PENDING | `PRESENT src/product_app/costs.py :: DAILY_CAP_USD = Decimal("0.20")` | — | W2 |
 | W4 | Variable panel size N ∈ {2,3,4} | PENDING | `PRESENT src/product_app/model_slots.py :: if len(model_ids) != EXPECTED_SLOT_COUNT:` | — | — (W10 done) |
 | W5 | Quick-answer N=1 mode | UNPINNED | `—` | — | W4 |
@@ -169,9 +169,26 @@ asserting it are corrected here), and `_extract_citations`' FLAT annotation
 read is carried across faithfully but not fixed — settling that shape needs a
 live `:online` call, which is spend.
 
-**W2 — peer critique (#290).** Today there is exactly one debate caller and it
-always dispatches `settings.debate_model_id`; `debate.py` says so in a comment
-next to the usage stamp #290 already added. Blocked on W1 because the #290 spike
+**W2 — peer critique (#290). BUILT, and shipping DEFAULT-OFF.** ADR-0093's
+shape is implemented in full (decisions 1, 1a, 1b, 2, 3, 4, 5) behind
+`settings.peer_critique_enabled`, which defaults to `false`. ADR-0095 records
+why the flag exists and it is not caution: `_estimate_bound_usd` calls itself a
+TRUE CEILING and prices exactly two debate calls, while a peer run makes two
+PER ELIGIBLE CRITIC. The bound now reads the same flag, so the ceiling holds in
+both postures — measured on four identical slots, `debate_round_1` goes
+`$0.0052` -> `$0.0207`, one call per slot.
+
+**#290 stays OPEN and W2's row stays PENDING on purpose.** Done here means
+running in production, and with the flag off nothing peer-shaped runs. What
+closes both is the next package: a declared live-execution window with
+`PEER_CRITIQUE_ENABLED=true`, which is also what produces the measurement W3 has
+been waiting for. The needle was REPLACED for this row — the old one pinned
+`model_id=settings.debate_model_id,`, a literal the moderator call sites still
+carry, so it would have read PENDING for a reason that is no longer the reason.
+
+The history below is why it was blocked, kept because W3 still leans on it.
+Before this change there was exactly one debate caller and it
+always dispatched `settings.debate_model_id`. Blocked on W1 because the #290 spike
 measured **7 of 8** probe calls exceeding the 8s timeout on wall clock —
 `nvidia/nemotron`'s first rep at 6.385s does not — and 6 of 8 on the per-`recv`
 gap. (The approved plan and two session handoffs say "8 of 8"; ADR-0078 and
@@ -209,6 +226,13 @@ number #290 most invalidates (one debate call per run becomes eight, from four
 models), so it is deliberately NOT set ahead of the feature. **W3 is the next
 action after W2** — re-measure with `finish_reason` in place, re-run the sweep,
 and land both token constants and all three thresholds in ONE pull request.
+
+`finish_reason` is now IN PLACE (ADR-0093 decision 5, shipped with W2): the
+durable token stream carries `query_run_id`, `stage`, `slot_number` and a
+bounded `finish_reason` on every provider call, so the post-#290 sweep can group
+by run and round instead of inferring from `model_id`. What is still missing is
+the RUN — no peer-shaped call has ever been made, so every per-model number the
+design exposes remains UNVERIFIED. W3's window is what produces them.
 
 **W4 — variable panel size.** `Field(ge=1, le=4)` appears at three sites
 (`debate.py` twice, `providers.py` once) and they move together. **No longer

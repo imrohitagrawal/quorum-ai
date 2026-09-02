@@ -63,6 +63,7 @@ from product_app.costs import (
     measured_call_cost_usd,
 )
 from product_app.debate import (
+    CRITIQUE_SHAPE_PEER,
     AgreementSummary,
     DebateOutput,
     PositionMovement,
@@ -88,6 +89,7 @@ from product_app.feedback_store import record_event as _record_feedback_event
 from product_app.model_slots import (
     InvalidModelSlotError,
     ModelSlot,
+    openrouter_model_catalog_service,
     validate_model_slots_with_search,
 )
 from product_app.provider_keys import ProviderCredentialSource
@@ -527,6 +529,18 @@ class BillingSnapshot:
     model_slots: tuple[ModelSlot, ...]
     initial_answers: tuple[InitialModelAnswer, ...]
     debate_call_usages: tuple[tuple[int, TokenUsage | None], ...]
+    #: #290 / ADR-0093 decision 3. The round numbers whose critique was written
+    #: by the SLOT models rather than the moderator, so each of their usage
+    #: records prices to its own ``kind="critique"`` receipt row.
+    #:
+    #: Captured HERE, inside the atomic copy, rather than read off the live
+    #: ``query_run`` next to it. Reading it outside would re-open the exact
+    #: TOCTOU this class exists to close, in a new place: the shapes and the
+    #: usage list would be read at different instants, so a run whose rounds
+    #: were recorded between the two reads could price peer-shaped usages
+    #: against a moderator-shaped view — the critics' dollars silently folded
+    #: back into the writer row on a receipt still labelled ``measured``.
+    peer_debate_rounds: frozenset[int]
     synthesis_call_usages: tuple[TokenUsage | None, ...]
     debate_stage: StageBillingState
     synthesis_stage: StageBillingState
@@ -866,6 +880,11 @@ class InMemoryQueryRunRepository:
                 model_slots=tuple(query_run.model_slots),
                 initial_answers=tuple(query_run.initial_answers),
                 debate_call_usages=tuple(query_run.debate_call_usages),
+                peer_debate_rounds=frozenset(
+                    output.round_number
+                    for output in query_run.debate_outputs
+                    if output.critique_shape == CRITIQUE_SHAPE_PEER
+                ),
                 synthesis_call_usages=tuple(query_run.synthesis_call_usages),
                 debate_stage=query_run.billing_stages[BillableStage.DEBATE],
                 synthesis_stage=query_run.billing_stages[BillableStage.SYNTHESIS],
@@ -2792,6 +2811,16 @@ def _actual_cost(
                 )
             )
 
+        # #290 / ADR-0093 decision 3. Which rounds ran the PEER shape, read
+        # off the rounds themselves rather than carried on a widened usage
+        # tuple (decision 2). Every debate usage tagged with a peer round is a
+        # critique, attributed to the model stamped on the record; a usage
+        # tagged with a moderator round is the moderator's. That is the whole
+        # discriminator, and it needs no new field on the usage tuple —
+        # ``BillingSnapshot`` carries it, under the same lock as the usages, so
+        # the two cannot be read at different instants.
+        peer_rounds = snapshot.peer_debate_rounds
+        critique_by_model_id: dict[str, Decimal] = {}
         debate_by_round: dict[int, Decimal] = {}
         for round_number, debate_usage in snapshot.debate_call_usages:
             if debate_usage is None:
@@ -2805,13 +2834,19 @@ def _actual_cost(
             # moment a debate call dispatches a different model, it prices
             # that call at the wrong rate while the receipt still reports
             # ``measured``.
-            debate_by_round[round_number] = debate_by_round.get(
-                round_number, Decimal("0")
-            ) + measured_call_cost_usd(
-                model_id=debate_usage.model_id or settings.debate_model_id,
+            call_model_id = debate_usage.model_id or settings.debate_model_id
+            call_cost = measured_call_cost_usd(
+                model_id=call_model_id,
                 prompt_tokens=debate_usage.prompt_tokens,
                 completion_tokens=debate_usage.completion_tokens,
             )
+            debate_by_round[round_number] = (
+                debate_by_round.get(round_number, Decimal("0")) + call_cost
+            )
+            if round_number in peer_rounds:
+                critique_by_model_id[call_model_id] = (
+                    critique_by_model_id.get(call_model_id, Decimal("0")) + call_cost
+                )
 
         synthesis_cost = sum(
             (
@@ -2837,11 +2872,28 @@ def _actual_cost(
                 ),
             )
 
+        # ``display_name`` carries a critique MARKER, not a bare short name.
+        # ``app.js`` uses this string as the entire visible label, so a bare
+        # name would print twice on one receipt against two different figures —
+        # a money surface a reader cannot resolve. Sorted by model id so the
+        # row order is stable across runs rather than dict-insertion order.
+        critique_lines = [
+            (
+                critique_model_id,
+                f"{
+                    openrouter_model_catalog_service.lookup_short_name(critique_model_id)
+                    or critique_model_id
+                } (critique)",
+                cost,
+            )
+            for critique_model_id, cost in sorted(critique_by_model_id.items())
+        ]
         breakdown = build_measured_breakdown(
             per_model_initial=per_model_initial_named,
             debate_by_round=debate_by_round,
             synthesis_cost=synthesis_cost,
             judge=judge_line,
+            critique_by_model=critique_lines,
         )
         return breakdown.total, breakdown, "measured"
     except (InvalidOperation, ArithmeticError, ValueError):

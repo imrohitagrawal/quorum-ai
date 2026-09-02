@@ -37,16 +37,19 @@ from product_app.costs import CHARS_PER_TOKEN
 from product_app.feedback_store import record_event as _record_feedback_event
 from product_app.model_slots import ModelSlot
 from product_app.providers import (
+    CallTelemetryLabels,
     InitialAnswerStatus,
     InitialModelAnswer,
     LiveProviderResult,
     ProviderPath,
     TokenUsage,
+    model_was_invoked,
     provider_execution_service,
 )
 from product_app.safety import (
     SafetyAcknowledgement,
 )
+from product_app.telemetry_sink import debate_round_stage
 from product_app.untrusted_text import UNTRUSTED_DATA_SYSTEM_RULE, fence
 from product_app.visible_text import is_visible
 
@@ -242,6 +245,52 @@ class PanelStance(BaseModel):
     positions: tuple[SlotPosition, ...]
 
 
+#: Which MECHANISM produced a round's critique. A closed set, enumerated for
+#: the same reason :data:`DEBATE_MODES` is — the precedent two screens above:
+#: "the comment is the promise, the test is the guarantee". A third value
+#: reaching the browser would fall through every ``=== "peer"`` test silently.
+#:
+#: ``"moderator"`` = one configured moderator wrote both rounds. Today's shape,
+#: and the DEFAULT, so every pre-existing construction site and fixture keeps
+#: its current meaning without editing.
+#: ``"peer"`` = each eligible answer slot wrote its own critique of the others
+#: (#290 / ADR-0093).
+CRITIQUE_SHAPE_MODERATOR = "moderator"
+CRITIQUE_SHAPE_PEER = "peer"
+CRITIQUE_SHAPES: frozenset[str] = frozenset({CRITIQUE_SHAPE_MODERATOR, CRITIQUE_SHAPE_PEER})
+
+#: ``PanelStance.author_model_id`` for a stance DERIVED from several critics.
+#:
+#: NOT a model id, and deliberately not any one critic's: attributing a
+#: majority reading to a single member would be a false claim about who said
+#: it. It is spelled with a ``/`` so it cannot collide with a real catalog id,
+#: and it is safe in that field because nothing prices, dispatches or renders
+#: from ``author_model_id`` — verified by grep, the only readers are tests.
+#: Each critic's OWN reading is kept unpooled on
+#: :attr:`SlotCritique.stance`; this names the derivation, not an author.
+PEER_PANEL_STANCE_AUTHOR = "peer-panel/strict-majority"
+
+
+class SlotCritique(BaseModel):
+    """One answer model's critique of the other slots, inside one round."""
+
+    critic_slot_number: int = Field(ge=1, le=4)
+    critic_model_id: str = Field(min_length=1, max_length=256)
+    critique_text: str
+    focus_areas: list[str] = Field(default_factory=list)
+    #: Per-critic provenance, mirroring :attr:`DebateOutput.debate_mode` and
+    #: defaulting the same conservative way: assume templated unless told.
+    #: Read by the DECIDERS — a templated critic is skipped there, which is
+    #: #185's guard applied per critic instead of per round. A round carrying
+    #: only a round-level mode would let one templated critic's words (this
+    #: product's OWN template) become eligible for the keyword scan that guard
+    #: exists to exclude.
+    critique_mode: str = DEBATE_MODE_FALLBACK
+    #: This critic's own structured reading, when it gave one. Required so the
+    #: peer shape has a producer for ``panel_stance`` at all.
+    stance: PanelStance | None = None
+
+
 class DebateOutput(BaseModel):
     round_number: int = Field(ge=1, le=2)
     focus_areas: list[str]
@@ -260,6 +309,24 @@ class DebateOutput(BaseModel):
     #: parse. Defaulted ``None`` so that every pre-existing construction site and
     #: fixture keeps the conservative reading without editing.
     panel_stance: PanelStance | None = None
+    #: #290 / ADR-0093 decision 1. Which mechanism produced this round — see
+    #: :data:`CRITIQUE_SHAPE_MODERATOR`. Defaults to the shape that ships
+    #: today, so every existing construction site and fixture keeps its current
+    #: meaning without editing.
+    critique_shape: str = CRITIQUE_SHAPE_MODERATOR
+    #: #290 / ADR-0093 decision 1. Empty under the moderator shape. One entry
+    #: per DISPATCHED eligible critic under the peer shape.
+    #:
+    #: "Dispatched", not "eligible": on an uncancelled run they are the same
+    #: set, and on a cancelled one the critics that were never asked contribute
+    #: nothing here — recording a templated row for a model nobody spoke to
+    #: would claim it critiqued.
+    #:
+    #: RENDERERS read :attr:`critique_text`; DECIDERS read THIS (ADR-0093
+    #: decision 1a). Reading the digest instead would let any ONE of four
+    #: critics flip a panel-level trust claim, a roughly 4x fail-open widening
+    #: with no code change.
+    slot_critiques: tuple[SlotCritique, ...] = ()
 
 
 def _one_line(text: str) -> str:
@@ -587,27 +654,57 @@ class DebateOrchestrationService:
         # support, and missing reasoning signals from the initial answers
         # to produce a critique text that the synthesis step can build on.
         round_one_started = perf_counter()
-        (
-            round_one_text,
-            round_one_fallback,
-            round_one_live,
-            round_one_stance,
-        ) = self._build_round_one_text(
+        round_one_critiques: tuple[SlotCritique, ...] = ()
+        round_one_shape = CRITIQUE_SHAPE_MODERATOR
+        peer_one = self._build_peer_round(
+            round_number=1,
+            system_prompt=ROUND_ONE_SYSTEM_PROMPT,
             initial_answers=initial_answers,
             query_text=query_text,
+            prior_round=None,
             openrouter_key=openrouter_key,
+            query_run_id=query_run_id,
             context=context,
             should_stop=should_stop,
         )
+        if peer_one is not None:
+            round_one_critiques, peer_one_live = peer_one
+            round_one_shape = CRITIQUE_SHAPE_PEER
+            round_one_text = self._peer_digest(round_one_critiques)
+            round_one_stance = self._derive_peer_stance(round_one_critiques, round_number=1)
+            # The ROUND is live when any critic's own reply was. A round of
+            # nothing but templated notices is this product talking to itself,
+            # which is what ``debate_mode`` has always meant.
+            round_one_mode = (
+                DEBATE_MODE_LIVE
+                if any(c.critique_mode == DEBATE_MODE_LIVE for c in round_one_critiques)
+                else DEBATE_MODE_FALLBACK
+            )
+            for live_result in peer_one_live:
+                live_call_usages.append((1, live_result.usage))
+        else:
+            (
+                round_one_text,
+                round_one_fallback,
+                round_one_live,
+                round_one_stance,
+            ) = self._build_round_one_text(
+                initial_answers=initial_answers,
+                query_text=query_text,
+                openrouter_key=openrouter_key,
+                context=context,
+                should_stop=should_stop,
+            )
+            round_one_mode = (
+                DEBATE_MODE_FALLBACK if round_one_fallback is not None else DEBATE_MODE_LIVE
+            )
+            # A non-None live result means a billed moderator call happened;
+            # record it against round 1 (usage may itself be None if the
+            # provider omitted it).
+            if round_one_live is not None:
+                live_call_usages.append((1, round_one_live.usage))
         round_one_ms = max(1, round((perf_counter() - round_one_started) * 1000))
         round_timings_ms[1] = round_one_ms
-        round_one_mode = (
-            DEBATE_MODE_FALLBACK if round_one_fallback is not None else DEBATE_MODE_LIVE
-        )
-        # A non-None live result means a billed moderator call happened; record
-        # it against round 1 (usage may itself be None if the provider omitted it).
-        if round_one_live is not None:
-            live_call_usages.append((1, round_one_live.usage))
         debate_event_recorder.record(
             event_type="debate_round_completed",
             account_id=account_id,
@@ -626,6 +723,8 @@ class DebateOrchestrationService:
                 status=DebateRoundStatus.COMPLETED,
                 debate_mode=round_one_mode,
                 panel_stance=round_one_stance,
+                critique_shape=round_one_shape,
+                slot_critiques=round_one_critiques,
             ),
         )
 
@@ -661,26 +760,52 @@ class DebateOrchestrationService:
             )
 
         round_two_started = perf_counter()
-        (
-            round_two_text,
-            round_two_fallback,
-            round_two_live,
-            round_two_stance,
-        ) = self._build_round_two_text(
+        round_two_critiques: tuple[SlotCritique, ...] = ()
+        round_two_shape = CRITIQUE_SHAPE_MODERATOR
+        peer_two = self._build_peer_round(
+            round_number=2,
+            system_prompt=ROUND_TWO_SYSTEM_PROMPT,
             initial_answers=initial_answers,
             query_text=query_text,
-            round_one_text=round_one_text,
+            prior_round=round_one_text,
             openrouter_key=openrouter_key,
+            query_run_id=query_run_id,
             context=context,
             should_stop=should_stop,
         )
+        if peer_two is not None:
+            round_two_critiques, peer_two_live = peer_two
+            round_two_shape = CRITIQUE_SHAPE_PEER
+            round_two_text = self._peer_digest(round_two_critiques)
+            round_two_stance = self._derive_peer_stance(round_two_critiques, round_number=2)
+            round_two_mode = (
+                DEBATE_MODE_LIVE
+                if any(c.critique_mode == DEBATE_MODE_LIVE for c in round_two_critiques)
+                else DEBATE_MODE_FALLBACK
+            )
+            for live_result in peer_two_live:
+                live_call_usages.append((2, live_result.usage))
+        else:
+            (
+                round_two_text,
+                round_two_fallback,
+                round_two_live,
+                round_two_stance,
+            ) = self._build_round_two_text(
+                initial_answers=initial_answers,
+                query_text=query_text,
+                round_one_text=round_one_text,
+                openrouter_key=openrouter_key,
+                context=context,
+                should_stop=should_stop,
+            )
+            round_two_mode = (
+                DEBATE_MODE_FALLBACK if round_two_fallback is not None else DEBATE_MODE_LIVE
+            )
+            if round_two_live is not None:
+                live_call_usages.append((2, round_two_live.usage))
         round_two_ms = max(1, round((perf_counter() - round_two_started) * 1000))
         round_timings_ms[2] = round_two_ms
-        round_two_mode = (
-            DEBATE_MODE_FALLBACK if round_two_fallback is not None else DEBATE_MODE_LIVE
-        )
-        if round_two_live is not None:
-            live_call_usages.append((2, round_two_live.usage))
         debate_event_recorder.record(
             event_type="debate_round_completed",
             account_id=account_id,
@@ -699,6 +824,8 @@ class DebateOrchestrationService:
                 status=DebateRoundStatus.COMPLETED,
                 debate_mode=round_two_mode,
                 panel_stance=round_two_stance,
+                critique_shape=round_two_shape,
+                slot_critiques=round_two_critiques,
             ),
         )
 
@@ -743,6 +870,7 @@ class DebateOrchestrationService:
             "Query context preserved without re-quoting the user prompt."
         )
         live = self._call_debate_model(
+            model_id=settings.debate_model_id,
             openrouter_key=openrouter_key,
             system_prompt=ROUND_ONE_SYSTEM_PROMPT,
             user_prompt=self._debate_user_prompt(
@@ -812,6 +940,7 @@ class DebateOrchestrationService:
             "Round 2 narrows to the strongest residual concerns without re-quoting the user prompt."
         )
         live = self._call_debate_model(
+            model_id=settings.debate_model_id,
             openrouter_key=openrouter_key,
             system_prompt=ROUND_TWO_SYSTEM_PROMPT,
             user_prompt=self._debate_user_prompt(
@@ -853,14 +982,275 @@ class DebateOrchestrationService:
             return templated, self._debate_fallback_notice(round_number=2), live, None
         return prose, None, live, stance
 
+    # ---------------------------------------------------------------- peer
+    # #290 / ADR-0093. Everything from here to ``_call_debate_model`` is the
+    # peer shape. It is reached only when ``settings.peer_critique_enabled`` is
+    # true AND at least one slot is eligible; otherwise the moderator path
+    # above runs byte-identically to what shipped.
+
+    @staticmethod
+    def _eligible_critics(
+        initial_answers: list[InitialModelAnswer],
+    ) -> list[InitialModelAnswer]:
+        """The slots that may critique: COMPLETED **and** actually invoked.
+
+        Two conjuncts, two different questions, and dropping either one is a
+        defect with a measured precedent. ``model_was_invoked`` is what #247
+        added after four SIMULATED slots — text this product wrote, differing
+        only by model id — scored pairwise 4-gram Jaccard 0.500-0.579 against a
+        0.1 threshold and were reported as "4 of 4 models aligned" on a run
+        that asked nobody. Asking such a slot to critique would manufacture the
+        exact fake this feature exists to remove.
+
+        Order is slot order, because the digest, the cost rows and the
+        cancellation contract all read it and three orderings for one list is
+        how they come to disagree.
+        """
+        return [
+            answer
+            for answer in sorted(initial_answers, key=lambda a: a.slot_number)
+            if answer.status is InitialAnswerStatus.COMPLETED and model_was_invoked(answer)
+        ]
+
+    def _peer_critic_directive(self, *, slot_number: int) -> str:
+        """The one thing a critic is told that the moderator is not.
+
+        Goes in the SYSTEM prompt, i.e. the trusted half. The evidence block
+        stays fenced and untrusted exactly as it is for the moderator; this
+        sentence is ours, so fencing it would put our own instruction inside a
+        block whose rule tells the model to ignore instructions.
+        """
+        return (
+            f"\n\nYou are the model that wrote Slot {slot_number}'s answer. "
+            "Critique the OTHER slots' answers against the lens above. Do not "
+            "defend or restate your own answer."
+        )
+
+    def _build_peer_round(
+        self,
+        *,
+        round_number: int,
+        system_prompt: str,
+        initial_answers: list[InitialModelAnswer],
+        query_text: str,
+        prior_round: str | None,
+        openrouter_key: str,
+        query_run_id: UUID,
+        context: dict[str, Any] | None,
+        should_stop: Callable[[], bool] | None,
+    ) -> tuple[tuple[SlotCritique, ...], list[LiveProviderResult]] | None:
+        """Dispatch one round of peer critique, or ``None`` for "not applicable".
+
+        ``None`` means the caller must run the moderator path: either the
+        feature is off, or no slot is eligible. Returning ``None`` rather than
+        an empty tuple keeps "nobody was asked" distinguishable from "everybody
+        was asked and said nothing" — which are priced differently.
+
+        Dispatch is SEQUENTIAL and ``should_stop`` is checked in THIS frame
+        before each call. ADR-0093's consequences say why: with critics
+        dispatched through a pool, a test asserting how many were un-billed
+        inside one round asserts a RACE. Checking in the submitting thread
+        makes "no critic is dispatched after the cancel first lands"
+        deterministic, and that is the invariant worth having.
+        """
+        if not settings.peer_critique_enabled:
+            return None
+        critics = self._eligible_critics(initial_answers)
+        if not critics:
+            return None
+
+        critiques: list[SlotCritique] = []
+        live_results: list[LiveProviderResult] = []
+        for critic in critics:
+            if should_stop is not None and should_stop():
+                break
+            live = self._call_debate_model(
+                model_id=critic.model_id,
+                openrouter_key=openrouter_key,
+                system_prompt=system_prompt
+                + self._peer_critic_directive(slot_number=critic.slot_number),
+                user_prompt=self._debate_user_prompt(
+                    query_text=query_text,
+                    initial_answers=initial_answers,
+                    prior_round=prior_round,
+                ),
+                context=context,
+                # NOT passed on: ``should_stop`` is already checked above, in
+                # the submitting frame. Passing it again would re-check it
+                # inside the seam and make the dispatch count depend on WHEN
+                # the cancel lands rather than on whether it had landed — the
+                # race this loop exists to avoid.
+                should_stop=None,
+                telemetry_labels=CallTelemetryLabels(
+                    query_run_id=str(query_run_id),
+                    stage=debate_round_stage(round_number),
+                    slot_number=critic.slot_number,
+                ),
+            )
+            if live is not None:
+                live_results.append(live)
+            critiques.append(
+                self._critique_from_reply(critic=critic, live=live, round_number=round_number)
+            )
+        return tuple(critiques), live_results
+
+    def _critique_from_reply(
+        self,
+        *,
+        critic: InitialModelAnswer,
+        live: LiveProviderResult | None,
+        round_number: int,
+    ) -> SlotCritique:
+        """One critic's reply, read with the SAME gates the moderator's is.
+
+        The two ``is_visible`` checks and the reason the stance is dropped with
+        the prose are lifted from ``_build_round_one_text``, deliberately
+        unchanged: a critic that answered but said nothing showable is one
+        whose conformance we have no reason to trust (ADR-0021), so the whole
+        reply is refused and that critic reads templated.
+        """
+        templated = self._peer_fallback_notice(
+            slot_number=critic.slot_number, round_number=round_number
+        )
+        text = "" if live is None else live.answer_text.strip()
+        if not is_visible(text):
+            return SlotCritique(
+                critic_slot_number=critic.slot_number,
+                critic_model_id=critic.model_id,
+                critique_text=templated,
+                focus_areas=list(FOCUS_AREAS),
+            )
+        prose, stance = parse_moderator_output(
+            text, author_model_id=critic.model_id, round_number=round_number
+        )
+        if not is_visible(prose):
+            return SlotCritique(
+                critic_slot_number=critic.slot_number,
+                critic_model_id=critic.model_id,
+                critique_text=templated,
+                focus_areas=list(FOCUS_AREAS),
+            )
+        return SlotCritique(
+            critic_slot_number=critic.slot_number,
+            critic_model_id=critic.model_id,
+            critique_text=prose,
+            focus_areas=list(FOCUS_AREAS),
+            critique_mode=DEBATE_MODE_LIVE,
+            stance=stance,
+        )
+
+    def _peer_fallback_notice(self, *, slot_number: int, round_number: int) -> str:
+        return (
+            f"Slot {slot_number} did not return a usable critique for debate round {round_number}."
+        )
+
+    @staticmethod
+    def _peer_digest(critiques: tuple[SlotCritique, ...]) -> str:
+        """The RENDER-ONLY digest every existing consumer keeps reading.
+
+        Two properties, both load-bearing, both pinned by their own test.
+
+        **BOUNDED.** The total stays inside
+        ``synthesis.SYNTHESIS_DEBATE_EXCERPT_MAX_CHARS`` — the slice
+        ``synthesis.py`` already takes of this field. That constant's stated
+        derivation is "a critique cannot be longer than the debate call that
+        produced it was allowed to be", which an unbounded join of four critics
+        falsifies. Worse than untidy: synthesis would read roughly the first
+        quarter of the digest, about one critic, and never learn the other
+        three were PAID for. Each critic's share is the budget MINUS its own
+        label, so the label overhead cannot push the total past the bound.
+
+        **SANITISED.** Each critique passes ``_one_line`` before it enters.
+        This text flows into round 2's prompt raw (``prior_round``, appended
+        with no treatment), and ``_one_line``'s docstring measures that a
+        newline-only replace misses carriage return, U+2028, U+0085 and
+        U+001C — each of which forges a ``Slot N`` row. One model's output
+        through that hole was the accepted risk; four concatenated outputs is a
+        different one.
+        """
+        if not critiques:
+            return ""
+        # Local import: ``synthesis`` imports ``debate``, so the module-level
+        # edge would be a cycle. The constant is read, not redefined, so the
+        # two cannot drift.
+        from product_app.synthesis import SYNTHESIS_DEBATE_EXCERPT_MAX_CHARS
+
+        per_critic = SYNTHESIS_DEBATE_EXCERPT_MAX_CHARS // len(critiques)
+        rows: list[str] = []
+        for critique in critiques:
+            label = f"Slot {critique.critic_slot_number}: "
+            # ``- 1`` for the newline this row contributes to the join.
+            budget = max(0, per_critic - len(label) - 1)
+            rows.append(label + _one_line(critique.critique_text)[:budget])
+        return "\n".join(rows)
+
+    @staticmethod
+    def _derive_peer_stance(
+        critiques: tuple[SlotCritique, ...], *, round_number: int
+    ) -> PanelStance | None:
+        """The round's stance as the STRICT MAJORITY of the live critics.
+
+        ADR-0093 decision 1b. ``panel_stance`` is produced today only from the
+        moderator's structured reply; with no producer under the peer shape
+        every peer run would leave it ``None``, and ``_usable_stance`` reads
+        ``None`` as "no evidence" — collapsing the whole #354 stance channel to
+        "undetermined" on exactly the runs carrying the most evidence.
+
+        The bar is not invented here. ADR-0075 already decided that "the
+        moderator's bar is a strict majority of the panel it read", and a
+        PLURALITY is not that: two-two returns ``None``, the existing
+        conservative reading. A tie between two labels that both clear the bar
+        is impossible by arithmetic, but the uniqueness check is written
+        anyway, because "impossible" is what the code says and not what it
+        proves.
+
+        Templated critics are excluded before counting, which is #185's guard
+        applied per critic: their words are this product's own template, and
+        counting them is the product voting for itself.
+        """
+        live = [
+            critique
+            for critique in critiques
+            if critique.critique_mode == DEBATE_MODE_LIVE and critique.stance is not None
+        ]
+        if not live:
+            return None
+        threshold = len(live) // 2 + 1
+        votes: dict[int, list[str]] = {}
+        for critique in live:
+            stance = critique.stance
+            assert stance is not None  # noqa: S101 - narrowed by the filter above
+            for position in stance.positions:
+                # Case and surrounding space are not a difference of POSITION,
+                # the same normalisation ``_usable_stance`` applies one level up.
+                votes.setdefault(position.slot, []).append(position.group.strip().lower())
+        positions: list[SlotPosition] = []
+        for slot in sorted(votes):
+            counts: dict[str, int] = {}
+            for label in votes[slot]:
+                counts[label] = counts.get(label, 0) + 1
+            top = max(counts.values())
+            winners = [label for label, count in counts.items() if count == top]
+            if top >= threshold and len(winners) == 1 and winners[0]:
+                positions.append(SlotPosition(slot=slot, group=winners[0]))
+        if not positions:
+            return None
+        return PanelStance(
+            author_model_id=PEER_PANEL_STANCE_AUTHOR,
+            round_number=round_number,
+            positions=tuple(positions),
+        )
+
     def _call_debate_model(
         self,
         *,
+        model_id: str,
         openrouter_key: str,
         system_prompt: str,
         user_prompt: str,
         context: dict[str, Any] | None = None,
         should_stop: Callable[[], bool] | None = None,
+        telemetry_labels: CallTelemetryLabels | None = None,
     ) -> LiveProviderResult | None:
         """Call the configured debate model.
 
@@ -888,7 +1278,12 @@ class DebateOrchestrationService:
         # explicitly disabled live execution for the run.
         if not settings.openrouter_live_execution_enabled:
             return None
-        if not openrouter_key or not settings.debate_model_id:
+        # ADR-0093 decision 2. Gated on the model THIS call will dispatch, not
+        # on ``settings.debate_model_id``. Reading the moderator setting here
+        # made peer critique silently not run whenever an unrelated moderator
+        # setting was blank — a config value for a model this call never
+        # touches deciding whether four other models get asked.
+        if not openrouter_key or not model_id:
             return None
         # F-05 Layer 2 (#106): a cancel that lands between rounds must stop
         # the NEXT round from billing at all. Checked here rather than in
@@ -902,7 +1297,7 @@ class DebateOrchestrationService:
         # Collapsing the two here is precisely the F-06 defect.
         result = provider_execution_service.call_with_prompt(
             openrouter_key=openrouter_key,
-            model_id=settings.debate_model_id,
+            model_id=model_id,
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             max_tokens=DEBATE_ROUND_MAX_TOKENS,
@@ -917,6 +1312,7 @@ class DebateOrchestrationService:
             # catalog declare ``response_format`` (measured 2026-08-24), so that
             # path is a real configuration and not a hypothetical.
             response_format=MODERATOR_RESPONSE_FORMAT,
+            telemetry_labels=telemetry_labels,
         )
         # Issue #290: stamp the model actually dispatched onto the usage
         # record, at the one seam that knows both. Today ``model_id`` above
@@ -931,9 +1327,7 @@ class DebateOrchestrationService:
         # a model other than the configured moderator (peer critique, #290's
         # own follow-on work, is exactly that case).
         if result is not None and result.usage is not None:
-            result = replace(
-                result, usage=result.usage.model_copy(update={"model_id": settings.debate_model_id})
-            )
+            result = replace(result, usage=result.usage.model_copy(update={"model_id": model_id}))
         return result
 
     def _debate_user_prompt(

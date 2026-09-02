@@ -6516,7 +6516,16 @@
       : [];
     return {
       byModel: byModelRows.map((row) => ({
-        label: row.kind === "synthesis" ? "Debate + synthesis" : row.display_name,
+        // #290 / ADR-0093 decision 4: renamed from "Debate + synthesis". Under
+        // a fully-eligible peer run no moderator call is made, so that row
+        // holds no debate spend and the old name is not merely stale but
+        // false. KEPT as an override rather than deferred to display_name: the
+        // override is what stops a server sending a model-specific writer name
+        // ("GPT-4o mini (writer)") from reaching this money surface, which is
+        // the #16 defect. tests/integration/test_cost_gate_js.py pins this
+        // literal against costs.WRITER_ROW_DISPLAY_NAME so the two spellings
+        // cannot drift apart.
+        label: row.kind === "synthesis" ? "Synthesis" : row.display_name,
         usd: row.usd,
       })),
       byStage: byStageRows.map((row) => ({
