@@ -137,3 +137,35 @@ FAIL-OPEN direction, since the cost guardrail keys off the estimate.
 ADR-0081 freezes this class pending a measured bound. n=8 on one question shape
 is a start, not a bound: every row shares one query, one prompt size and one
 day. Recorded on #268 so the next person starts from data.
+
+### SUPERSEDED as a sample size, 2026-09-01 — the shapes were varied
+
+The "one question shape" limitation above was the explicit reason for a second
+window (`ae9865f` open, `014b010` closed, ~54 minutes, **$0.1649** actual spend
+over three runs). Three deliberately different shapes were run — broad
+comparative, ambiguous low-signal, narrow factual — giving 12 more `:online`
+calls:
+
+```
+-63  2353  2370  2449  2477  2500  2520  2570  2595  2668  2719  2890
+```
+
+**11 of 12 exceed 2000**, by up to 44% (max 2890). Pooled with the 20 `:online`
+calls already in `/data/telemetry-tokens.jsonl`, the distribution is now
+**n=32 across four question shapes, 27 over**, range -63 to 2890.
+
+Two corrections to how the figure above was produced, both worth keeping:
+
+- The headline "8 of 8" counted one window's slot calls, not the file. The file
+  already held **20** `:online` readings at that point, of which 16 exceeded
+  2000 — so "8 of 8" was a true statement about a subset presented as the
+  sample.
+- A negative `injected_tokens_est` is real (the provider reports FEWER input
+  tokens than were sent) and an extraction using
+  `grep -o '"injected_tokens_est": *[0-9][0-9]*'` **silently drops those rows**.
+  Parse the JSON; do not pattern-match it. Rule 8 applies to analysis, not only
+  to tests.
+
+The constant STILL does not move. ADR-0081 freezes the class pending a measured
+bound and W3 stays STOP; one day's traffic on four shapes is a better sample,
+not yet a bound.
