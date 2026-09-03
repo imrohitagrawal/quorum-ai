@@ -97,12 +97,22 @@ test.describe("#290 peer-critique copy", () => {
   });
 
   test("no surface names the moderator as the critic", async ({ page }) => {
-    // RED WHEN: the live-round placeholder names the moderator again.
-    // Under the peer shape no moderator call is made at all, and the
-    // placeholder renders BEFORE the response carries a shape to read — so it
-    // cannot name either mechanism honestly and must name neither.
+    // RED WHEN: any surface names the moderator on a peer run.
+    // Under the peer shape no moderator call is made at all, so naming one is
+    // a claim about work that did not happen.
+    //
+    // The bare `not.toContain` below is NOT the test — on its own it would
+    // pass against a page that rendered nothing at all, which is exactly what
+    // `check-negative-assertions.mjs` flagged when this spec was first
+    // written. The two POSITIVE assertions around it are what make the
+    // absence meaningful: the debate section must have rendered, and must be
+    // saying the true thing, before "does not say the false thing" carries
+    // any weight (AGENTS.md rule 7).
     await driveWith(page, goldenRespWithPeerDebate());
-    const body = (await page.locator("#main-content").innerText()).toLowerCase();
+    const main = page.locator("#main-content");
+    await expect(main.locator(".result-debate-caption")).toBeVisible();
+    const body = (await main.innerText()).toLowerCase();
+    expect(body).toContain("critiqued the others");
     expect(body).not.toContain("the moderator model is critiquing");
   });
 });
