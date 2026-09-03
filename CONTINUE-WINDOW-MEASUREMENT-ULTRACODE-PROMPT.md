@@ -205,11 +205,34 @@ sentence and uses it on the other branch — `app.js:3885` and `app.js:3914`
 So a URL a model may have hallucinated counts toward the coverage percentage the
 verdict band leans on, and a genuinely retrieved page does not.
 
-**UNVERIFIED, and it decides whether A2's Tavily half is live or latent:**
-is `TAVILY_API_KEY` set in production? It is a Fly secret, absent from
-`fly.toml`, unreported on `/status`. Settling command:
-`fly secrets list -a quorum-ai | grep -i TAVILY`. **Ask the owner** — it needs
-their `fly` auth.
+**A2 IS LIVE, NOT LATENT — settled 2026-09-03 by the owner running
+`fly secrets list -a quorum-ai | grep -i TAVILY`:**
+
+```
+TAVILY_API_KEY  |  ffaaa5f919871e59  |  Deployed
+```
+
+So `_tavily_search` runs in production and its results are being presented to
+users as "not a real source" right now. Do not re-ask this question.
+
+**The coverage arithmetic is the other half, and it is the one that matters**
+(`providers.py:759-761`, read from disk):
+
+```python
+primary_source_count = sum(1 for source in sources if not source.is_fallback)
+sourced_answer_count = 1 if primary_source_count > 0 else 0
+```
+
+An answer whose only sources came from a REAL web search counts as
+**un-sourced**. An answer whose "source" is a URL the model typed into its own
+prose counts as **sourced**. Citation coverage feeds the verdict band, so the
+metric currently prefers the unverifiable input over the retrieved one.
+
+**A precision for whoever fixes this:** the `is_fallback` FLAG is arguably named
+correctly — Tavily genuinely is the fallback retrieval path. The defects are
+(a) the UI copy that translates `is_fallback=True` into "not a real source", and
+(b) the coverage arithmetic that discards it. Fixing the flag's meaning would
+be the wrong lever; fix the presentation and the denominator.
 
 ### PR B — the MECHANISM copy. The landing page is the front door.
 
