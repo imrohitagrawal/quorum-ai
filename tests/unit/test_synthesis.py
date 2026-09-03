@@ -618,6 +618,11 @@ def test_user_prompt_carries_the_critique_up_to_the_debate_derived_cap() -> None
     class _FakeRound:
         round_number: int
         critique_text: str
+        # ADR-0096: the prompt builder now derives the panel's REVISED answers
+        # from the rounds, so a round stand-in has to carry the field. Empty
+        # here — this test is about the CRITIQUE cap, and a revision would
+        # change which text the answer excerpts are drawn from.
+        slot_critiques: tuple[object, ...] = ()
 
     user_prompt = synth_mod.synthesis_stub_service._user_prompt(
         initial_answers=[],

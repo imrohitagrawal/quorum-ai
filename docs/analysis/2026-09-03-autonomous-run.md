@@ -529,3 +529,102 @@ Fixed in PR #431 (`fix/290-mutation-survivors`), which also records that
 changed `src/` lines are executable statements, so it measured zero of them and
 the 95% would have been over an empty denominator. The evidence there is the
 mutation result, not a coverage tick.
+
+---
+
+## Package 9 — ADR-0096, and the second time the mutation gate paid for itself
+
+The owner read the shipped debate and asked what round 1 and round 2 actually
+do. That question found four defects no gate could:
+
+1. **Critics were judging sources they were never shown.** Round 1's system
+   prompt asked about "weak or missing source support" while `grep -c sources`
+   over the debate prompt builder returned **0**. Debate calls also cannot
+   search, so a critic had no evidence available at all.
+2. **The directive forbade the behaviour.** ADR-0093's build shipped "Do not
+   defend or restate your own answer". A model that may not reconsider cannot
+   converge.
+3. **Every stage measured concord**, so a model could satisfy all three prompts
+   without once saying a claim was wrong and citing why — while agreement alone
+   paints the green verdict.
+4. **The debate could not change the answer.** Nothing asked a model what it
+   now believed to be correct.
+
+Round 2 now asks each critic where it stands on its own answer
+(`held_agreement` / `held_solution` / `amended` / `changed`, with rationale,
+sources and a revised answer), and synthesis reads those REVISED answers as its
+primary input. Anti-sycophancy is the constraint: a change of position must
+cite sources, and `held_solution` is a first-class outcome rather than a weaker
+`changed`.
+
+Honest about the limit, in the ADR, the PR body and a test: this is **L1** — a
+source was CITED. Not resolved, not verified. Nothing opens a URL. L3 would
+cost $0.03–$0.40 per run against a $0.25 hard limit.
+
+### The mutation gate, again
+
+The gate scored **271 of 377** mutants before its own 1440s deadline and
+reported **15 survivors**. Six required contexts were green; the branch was
+mergeable. Classifying the survivors by measurement rather than by reading:
+
+**Seven are EQUIVALENT.** Computing the function under each mutant's iteration
+set:
+
+| | round 1 | round 2 | round 3 |
+|---|---|---|---|
+| `_peer_critic_directive` length, slots 0–5 | 152 | 1106 | 1106 |
+
+The length does not vary with the slot number at all — the panel is
+single-digit — and any round other than 1 takes the round-2 branch. All seven
+mutations of the slot `range(...)` and the round tuple return **3695**, the
+same as the original. No test can kill them.
+
+The `max(...)` was NOT restructured to stop them being generated. It is what
+keeps the ceiling correct if the panel ever grows past nine slots; removing it
+to satisfy an advisory gate would make the code worse. What was added is a test
+pinning the two invariants that MAKE the equivalence true, so the day it stops
+being true the ceiling goes red instead of silently under-pricing.
+
+**Eight were real**, all in code ADR-0096 had just added. The one that matters:
+the source filter's `and` becoming `or` yields
+`('', '', 'https://example.org/report', '')` — three blank strings admitted as
+cited sources — and raises `TypeError` on a non-string. ADR-0096 makes a source
+the price of changing position; a filter that counts `"   "` as a citation is
+one that lets a model buy a position change with nothing. Also real: the
+`live is None` path — a critic whose call returned NOTHING — was reached by no
+test, and substituting any visible string makes that critic read as a `live`
+critique carrying that text, because `parse_moderator_output` returns a
+non-JSON reply as prose verbatim.
+
+### The harness lied first
+
+The first mutation-proof run reported **3 of the 8 surviving**, which reads as
+"your new tests are decoration". It was the harness that was wrong:
+`text = "" if live is None` occurs **three times** in `debate.py` and the anchor
+hit the moderator path, and the second fallback return needs a reply that is
+visible as raw text but parses to empty prose (`{"critique": ""}`) — `"   "` is
+caught by the first gate and returns from the branch the previous test already
+covered.
+
+Trusting that run would have meant concluding the tests were fine and shipping
+three that assert nothing. **A mutation harness aimed at the wrong line is a
+green light for a defect**, and it is the same shape as every other failure in
+this run: the reading was confident and the command disagreed.
+
+Corrected: **8 killed / 8**, `cp` aside and restored, `diff -q` byte-identical
+after each, `__pycache__` purged between steps, re-proved after `make format`
+rewrote the assertions.
+
+### The window
+
+`OPENROUTER_LIVE_EXECUTION_ENABLED` and `PEER_CRITIQUE_ENABLED` go `true`
+together with a declared 5-day window, judge included, `reaffirm_issue: 290`.
+It measures what eight critique calls cost (W3 is blocked on it), whether the
+2000-token round cap still fits now that round 2 also returns a revised answer,
+and whether OpenRouter's `:online` annotations carry passage content — the
+input to any L2 decision.
+
+Two actions are the owner's and cannot be done by an agent: re-affirming the
+window on issue #290 every 24 hours from a human account (a workflow token is
+typed `Bot` and refused), and the spend exposure of up to ~$25 over five days
+($0.20/account/day, $5.00/day global ceiling).

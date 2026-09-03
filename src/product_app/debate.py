@@ -37,6 +37,7 @@ from product_app.costs import CHARS_PER_TOKEN
 from product_app.feedback_store import record_event as _record_feedback_event
 from product_app.model_slots import EXPECTED_SLOT_COUNT, ModelSlot
 from product_app.providers import (
+    _MAX_SOURCE_TITLE_LEN,
     CallTelemetryLabels,
     InitialAnswerStatus,
     InitialModelAnswer,
@@ -50,7 +51,12 @@ from product_app.safety import (
     SafetyAcknowledgement,
 )
 from product_app.telemetry_sink import debate_round_stage
-from product_app.untrusted_text import UNTRUSTED_DATA_SYSTEM_RULE, fence
+from product_app.untrusted_text import (
+    MAX_SOURCE_URL_LEN,
+    UNTRUSTED_DATA_SYSTEM_RULE,
+    fence,
+    flatten_for_prompt,
+)
 from product_app.visible_text import is_visible
 
 DEBATE_HARD_TIMEOUT_MS = 180_000
@@ -84,6 +90,16 @@ DEBATE_ROUND_MAX_TOKENS = 2000
 DEBATE_ANSWER_EXCERPT_MAX_CHARS = int(settings.initial_answer_max_tokens * CHARS_PER_TOKEN)
 
 FOCUS_AREAS: tuple[str, ...] = ("disagreement", "weak_support", "missing_reasoning")
+
+#: How many of an answer's sources reach the debate prompt, and how much of each.
+#: Matched to ``synthesis.py``'s slice deliberately: the two prompts must show a
+#: critic and the synthesiser the SAME evidence, or a critic can be blamed for
+#: missing something the synthesiser could see.
+#: NOT redefined here. ``_MAX_SOURCE_TITLE_LEN`` is ``providers``' own cap,
+#: already imported by ``synthesis`` for the identical purpose; a second
+#: definition here (a first draft wrote 200 against providers' 300) is two
+#: sources for one fact, and they disagreed on their first day.
+_MAX_SOURCES_PER_ANSWER = 3
 HIGH_STAKES_NOTICE_FRAGMENT = (
     "This summary is decision support only and is not medical, legal, "
     "financial, safety, or regulated professional advice."
@@ -133,21 +149,63 @@ MODERATOR_STANCE_INSTRUCTION = (
     "DIFFERENT labels. Include every slot exactly once."
 )
 
+#: ADR-0096 reframed both rounds. The old wording asked a "debate moderator" to
+#: "identify specific points of disagreement" — which catalogues CONCORD and
+#: never asks what is CORRECT. A model could satisfy it perfectly without once
+#: saying a claim is wrong and citing why.
+#:
+#: The goal is not for models to prove themselves. It is to arrive at the answer
+#: the user should actually get. So the lens is evidence: agreement that rests
+#: on nothing is called out as readily as disagreement, because four models
+#: sharing an unsourced assumption is the failure a multi-vendor panel exists to
+#: catch — and it is the failure that reads as "strong consensus" today.
 ROUND_ONE_SYSTEM_PROMPT = (
-    "You are a debate moderator. Read the four model answers below. "
-    "Identify specific points of disagreement and specific points of "
-    "weak or missing source support. Cite the model names and quote "
-    "the specific passage. Be concrete; do not write generic 'they "
-    "differ on X' phrasing. The output is for a human reviewer, not "
-    "the user.\n\n" + MODERATOR_STANCE_INSTRUCTION + "\n\n" + UNTRUSTED_DATA_SYSTEM_RULE
+    "Four models were asked the same question independently. Their answers and "
+    "the sources each cited are below. Your job is not to win a debate; it is "
+    "to help establish what is actually TRUE for the person who asked.\n"
+    "Work through, concretely:\n"
+    "  1. Where do the answers agree — and is that agreement supported by a "
+    "cited source, or is it a shared assumption none of them evidenced? Say "
+    "which. Unevidenced agreement is a risk, not a result.\n"
+    "  2. Where do they genuinely differ on FACT (not on wording or emphasis)? "
+    "Quote the specific passages that conflict.\n"
+    "  3. What did another answer get RIGHT that yours missed or understated?\n"
+    "  4. What is factually WRONG or unsupported in any answer, including your "
+    "own — and what is your evidence? Name the source you are relying on. If "
+    "you have none, say 'no source' rather than asserting it anyway.\n"
+    "Judge the sources shown, not just the prose: a claim whose source does not "
+    "cover it is unsupported even when it sounds right. You cannot open the "
+    "links, so reason only from the titles, URLs and text you were given, and "
+    "say when that is not enough to decide.\n"
+    "The output is for a human reviewer, not the user.\n\n"
+    + MODERATOR_STANCE_INSTRUCTION
+    + "\n\n"
+    + UNTRUSTED_DATA_SYSTEM_RULE
 )
 
+#: Round 2 is the CONVERGENCE step (ADR-0096). Round 1 opened the disagreements;
+#: this one settles them and asks each model to state where it now stands.
+#:
+#: Under the MODERATOR shape this reads as it always did — one model refining
+#: its own round-1 critique. Under the PEER shape the per-critic directive adds
+#: the self-assessment contract, because only a model that WROTE an answer can
+#: report whether it still stands by it.
 ROUND_TWO_SYSTEM_PROMPT = (
-    "You are a debate moderator refining the round 1 critique. Focus "
-    "specifically on (a) the strongest residual disagreements after "
-    "round 1, and (b) reasoning the round 1 critique flagged as "
-    "missing. Cite the model names and quote the specific passage. "
-    "Be concrete. The output is for a human reviewer, not the user.\n\n"
+    "This is the second and final round. Round 1's critique is below. The aim "
+    "now is to CONVERGE on what is correct for the person who asked — not to "
+    "restate the disagreement.\n"
+    "Work through, concretely:\n"
+    "  1. Which round 1 disagreements are now SETTLED by evidence, and which "
+    "remain genuinely open? Name the source that settles each one.\n"
+    "  2. Where the panel still differs, which position does the evidence "
+    "actually favour, and why? If the evidence does not decide it, say so "
+    "plainly — an open question reported as open is a correct answer.\n"
+    "  3. What should the person asking actually do or believe, given all of "
+    "the above?\n"
+    "Agreement reached without evidence is not convergence. Do not change a "
+    "position because others hold it; change it only when the evidence does, "
+    "and say which source moved you.\n"
+    "The output is for a human reviewer, not the user.\n\n"
     + MODERATOR_STANCE_INSTRUCTION
     + "\n\n"
     + UNTRUSTED_DATA_SYSTEM_RULE
@@ -159,6 +217,40 @@ ROUND_TWO_SYSTEM_PROMPT = (
 #: NOT set ``reasoning``: the moderator is Haiku 4.5 by default, not a reasoning
 #: model, and adding it would change the payload for no measured gain.
 MODERATOR_RESPONSE_FORMAT: dict[str, object] = {"type": "json_object"}
+
+#: ADR-0096. Round 2's extra contract for a PEER critic: having read the panel,
+#: where does it now stand on its OWN answer?
+#:
+#: Four keys, and each earns its place. ``self_assessment`` is a closed set so
+#: the verdict machinery can compute from it rather than infer — which is what
+#: ADR-0063 removed the "positions moved" table for not doing. ``rationale``
+#: exists because a closed-set label nobody can check is not evidence.
+#: ``sources`` is the anti-sycophancy mechanism: LLMs are documented to
+#: capitulate under social pressure, and requiring a citation makes folding cost
+#: something. ``revised_answer`` is what synthesis then reads, so the debate
+#: actually changes what the user is told.
+#:
+#: The instruction says "no source" explicitly rather than allowing an empty
+#: list to mean two things. An unsourced position must be VISIBLE as unsourced —
+#: this record buys L1 (a source was cited), never L3 (the source supports the
+#: claim). Nothing here opens a URL.
+PEER_CONVERGENCE_INSTRUCTION = (
+    "\n\nThe same JSON object must also carry these four keys:\n"
+    '  "self_assessment": exactly one of "held_agreement" (you agreed with the '
+    'panel and still do), "held_solution" (you differ from the panel and are '
+    'keeping your position), "amended" (you are keeping your answer with '
+    'corrections), "changed" (you now believe a different answer is correct).\n'
+    '  "rationale": a string. WHY you landed there, in your own words.\n'
+    '  "sources": an array of source strings that support your position. If you '
+    "have none, use an empty array and say so in the rationale — do not invent "
+    "one, and do not cite a source you were not shown.\n"
+    '  "revised_answer": a string. What you now believe the correct answer to '
+    "the user's question is, in full. If nothing changed, restate your answer "
+    "so it can stand on its own.\n"
+    "Holding your position is a legitimate outcome and is not a failure. Change "
+    "your position only because the EVIDENCE moved you, never because other "
+    "models disagreed with you."
+)
 
 
 class DebateRoundStatus(StrEnum):
@@ -278,6 +370,36 @@ CRITIQUE_SHAPES: frozenset[str] = frozenset({CRITIQUE_SHAPE_MODERATOR, CRITIQUE_
 PEER_PANEL_STANCE_AUTHOR = "peer-panel/strict-majority"
 
 
+#: What a critic reports about ITS OWN answer after reading the others.
+#: ADR-0096, and a CLOSED set for the same reason :data:`DEBATE_MODES` is one:
+#: a fifth value reaching the browser would fall through every comparison
+#: silently, and this one gates a user-visible claim about whether the panel
+#: converged.
+#:
+#: The four are deliberately not a scale. ``held_solution`` is NOT a weaker
+#: ``changed`` — a model that holds a minority position AND cites evidence is
+#: the single most valuable signal this product can produce, because it is the
+#: case a one-model tool cannot reach. Ranking them would bury it.
+SELF_ASSESSMENT_HELD_AGREEMENT = "held_agreement"
+SELF_ASSESSMENT_HELD_SOLUTION = "held_solution"
+SELF_ASSESSMENT_AMENDED = "amended"
+SELF_ASSESSMENT_CHANGED = "changed"
+SELF_ASSESSMENTS: frozenset[str] = frozenset(
+    {
+        SELF_ASSESSMENT_HELD_AGREEMENT,
+        SELF_ASSESSMENT_HELD_SOLUTION,
+        SELF_ASSESSMENT_AMENDED,
+        SELF_ASSESSMENT_CHANGED,
+    }
+)
+
+#: How many cited sources a critic may carry, and how long each may be. Bounds
+#: exist because these strings are provider-controlled and are persisted; the
+#: count matches ``_MAX_SOURCES_PER_ANSWER`` so a critic can cite everything it
+#: was shown and nothing more.
+_MAX_CRITIC_SOURCES = 6
+
+
 class SlotCritique(BaseModel):
     """One answer model's critique of the other slots, inside one round."""
 
@@ -296,6 +418,45 @@ class SlotCritique(BaseModel):
     #: This critic's own structured reading, when it gave one. Required so the
     #: peer shape has a producer for ``panel_stance`` at all.
     stance: PanelStance | None = None
+    #: ADR-0096. What this critic says about ITS OWN answer, having read the
+    #: others — one of :data:`SELF_ASSESSMENTS`, or ``None``.
+    #:
+    #: ``None`` is the normal value in ROUND 1, which is cross-examination: the
+    #: model has read the others but has not yet been asked to settle. Round 2
+    #: is the convergence step and is where this is asked for. It is also
+    #: ``None`` whenever the reply did not parse, because an unstated position
+    #: must never be guessed at.
+    self_assessment: str | None = None
+    #: WHY, in the critic's own words. Without it a closed-set verdict is a
+    #: label nobody can check — and the difference between evidence and herding
+    #: lives entirely in this field.
+    #:
+    #: NOT named ``rationale``. ``tests/unit/test_evaluation_projection_has_no_judge.py``
+    #: bans that key at ANY depth of the served response, because the Layer-B
+    #: JUDGE's rationale is free text written ABOUT provider prose and "there
+    #: must be no path, present or future, by which it reaches a client". This
+    #: field is a different thing — a critic's own words about its OWN answer,
+    #: which the product owner asked to be shown — but the guard is a bare-name
+    #: ban, and a bare-name ban is stronger and simpler than a path-aware one.
+    #: Renaming this costs nothing; weakening that guard to admit one exception
+    #: would cost the guarantee. The provider-facing JSON key stays
+    #: ``"rationale"`` because that is the natural word to ask a model for; only
+    #: our served schema differs.
+    position_rationale: str = ""
+    #: The sources this critic cites FOR ITS POSITION. ADR-0096 makes evidence
+    #: the currency: a change of position that cites nothing is visible as
+    #: exactly that, which is the anti-sycophancy mechanism. Bounded because
+    #: these are provider-controlled strings that get persisted.
+    #:
+    #: L1 ONLY, and the field name must not outgrow that: these are cited, not
+    #: resolved and not verified. Nothing here fetches a URL or checks that the
+    #: page says what the critic claims.
+    cited_sources: tuple[str, ...] = ()
+    #: What this critic now believes the correct answer to be, after reading
+    #: the panel. ROUND 2 only. This is what synthesis reads as its primary
+    #: input (ADR-0096), so that the answer a user reads reflects the panel
+    #: AFTER it read itself — a debate that cannot change the output is theatre.
+    revised_answer: str = ""
 
 
 class DebateOutput(BaseModel):
@@ -385,8 +546,16 @@ def debate_system_prompt_max_chars(*, peer: bool) -> int:
     # ``slot_number`` changes the directive's length by one digit at most, and
     # the panel is 1..4, so this max is over the whole reachable set.
     return longest + max(
-        len(DebateOrchestrationService._peer_critic_directive(slot_number=slot))
+        len(
+            DebateOrchestrationService._peer_critic_directive(
+                slot_number=slot, round_number=round_number
+            )
+        )
         for slot in range(1, EXPECTED_SLOT_COUNT + 1)
+        # BOTH rounds: round 2 carries the convergence contract and is the
+        # longer of the two, so a max over round 1 alone would under-price the
+        # call that actually costs the most.
+        for round_number in (1, 2)
     )
 
 
@@ -480,6 +649,76 @@ def _looks_like_machine_output(text: str) -> bool:
     if _ENVELOPE_SIGNATURE.search(text):
         return True
     return _WRAPPER_PREFIX.sub("", text).startswith(("{", "["))
+
+
+@dataclass(frozen=True, slots=True)
+class PeerConvergence:
+    """A round-2 critic's report on its OWN answer (ADR-0096).
+
+    Every field defaults to the "said nothing" reading. A reply that omits the
+    contract, or mangles it, yields this object unchanged rather than a guess —
+    the same posture ``parse_moderator_output`` takes for the stance, and for
+    the same reason: an unstated position must never be invented, because this
+    one feeds the answer the user reads.
+    """
+
+    self_assessment: str | None = None
+    rationale: str = ""
+    sources: tuple[str, ...] = ()
+    revised_answer: str = ""
+
+
+def parse_peer_convergence(raw: str | None) -> PeerConvergence:
+    """Read the four convergence keys out of a round-2 critic's reply.
+
+    Deliberately SEPARATE from :func:`parse_moderator_output` rather than folded
+    into it. That function is shared with the moderator shape, which is never
+    asked these questions and must not start half-answering them; and it is
+    covered by a large existing suite whose contract is a 2-tuple. One function,
+    two callers, two different contracts is how a shared parser starts lying to
+    one of them.
+
+    STRICT, like its sibling: no fence stripping, no repair, no "find the JSON".
+    An unrecognised ``self_assessment`` is dropped rather than coerced to the
+    nearest member — this value gates a user-visible claim about whether the
+    panel converged, and a coerced verdict is a fabricated one.
+
+    ``sources`` is bounded and stringified defensively: it arrives from a
+    provider, is persisted, and reaches a prompt.
+    """
+    if not raw:
+        return PeerConvergence()
+    try:
+        payload = json.loads(raw)
+    except (ValueError, RecursionError):
+        return PeerConvergence()
+    if not isinstance(payload, dict):
+        return PeerConvergence()
+
+    assessment = payload.get("self_assessment")
+    if not isinstance(assessment, str) or assessment not in SELF_ASSESSMENTS:
+        assessment = None
+
+    rationale = payload.get("rationale")
+    rationale = rationale if isinstance(rationale, str) else ""
+
+    revised = payload.get("revised_answer")
+    revised = revised if isinstance(revised, str) else ""
+
+    raw_sources = payload.get("sources")
+    sources: tuple[str, ...] = ()
+    if isinstance(raw_sources, list):
+        sources = tuple(
+            _one_line(item)[:MAX_SOURCE_URL_LEN]
+            for item in raw_sources[:_MAX_CRITIC_SOURCES]
+            if isinstance(item, str) and is_visible(item)
+        )
+    return PeerConvergence(
+        self_assessment=assessment,
+        rationale=rationale,
+        sources=sources,
+        revised_answer=revised,
+    )
 
 
 def parse_moderator_output(
@@ -1124,19 +1363,32 @@ class DebateOrchestrationService:
         ]
 
     @staticmethod
-    def _peer_critic_directive(*, slot_number: int) -> str:
+    def _peer_critic_directive(*, slot_number: int, round_number: int) -> str:
         """The one thing a critic is told that the moderator is not.
+
+        ADR-0096 rewrote this. It used to end "Do not defend or restate your own
+        answer", which was meant to stop a model burning its budget re-arguing
+        itself — and which forbade the one behaviour that makes a debate a
+        debate. A model that may not reconsider its own position cannot
+        converge, so the panel could only ever catalogue disagreement.
 
         Goes in the SYSTEM prompt, i.e. the trusted half. The evidence block
         stays fenced and untrusted exactly as it is for the moderator; this
         sentence is ours, so fencing it would put our own instruction inside a
         block whose rule tells the model to ignore instructions.
         """
-        return (
+        base = (
             f"\n\nYou are the model that wrote Slot {slot_number}'s answer. "
-            "Critique the OTHER slots' answers against the lens above. Do not "
-            "defend or restate your own answer."
+            "Apply the lens above to the OTHER answers AND to your own. Do not "
+            "simply restate your answer; assess it."
         )
+        if round_number == 1:
+            return base
+        # ROUND 2 ONLY — the convergence contract (ADR-0096). Asked here rather
+        # than in the shared system prompt because only a model that WROTE an
+        # answer can report whether it still stands by it; the moderator shape
+        # has no such model and must not be asked.
+        return base + PEER_CONVERGENCE_INSTRUCTION
 
     def _build_peer_round(
         self,
@@ -1190,7 +1442,9 @@ class DebateOrchestrationService:
                 model_id=critic.model_id,
                 openrouter_key=openrouter_key,
                 system_prompt=system_prompt
-                + self._peer_critic_directive(slot_number=critic.slot_number),
+                + self._peer_critic_directive(
+                    slot_number=critic.slot_number, round_number=round_number
+                ),
                 user_prompt=self._debate_user_prompt(
                     query_text=query_text,
                     initial_answers=initial_answers,
@@ -1262,6 +1516,11 @@ class DebateOrchestrationService:
                 critique_text=templated,
                 focus_areas=list(FOCUS_AREAS),
             )
+        # ADR-0096: round 2 also carries the convergence contract. Parsed from
+        # the SAME reply — one call, one envelope — so this costs no extra
+        # dispatch. Round 1 is cross-examination and is not asked, so its
+        # fields stay at the "said nothing" default rather than being invented.
+        convergence = parse_peer_convergence(text) if round_number == 2 else PeerConvergence()
         return SlotCritique(
             critic_slot_number=critic.slot_number,
             critic_model_id=critic.model_id,
@@ -1269,6 +1528,10 @@ class DebateOrchestrationService:
             focus_areas=list(FOCUS_AREAS),
             critique_mode=DEBATE_MODE_LIVE,
             stance=stance,
+            self_assessment=convergence.self_assessment,
+            position_rationale=convergence.rationale,
+            cited_sources=convergence.sources,
+            revised_answer=convergence.revised_answer,
         )
 
     def _peer_fallback_notice(self, *, slot_number: int, round_number: int) -> str:
@@ -1542,6 +1805,29 @@ class DebateOrchestrationService:
             lines.append(
                 f"- Slot {answer.slot_number} — {label} ({answer.status.value}): {excerpt}"
             )
+            # ADR-0096. THE SOURCES, which this prompt did not carry until now.
+            #
+            # Round 1's system prompt has always asked for "specific points of
+            # weak or missing source support" while the evidence block showed
+            # NO sources — ``grep -c sources`` over this function returned 0.
+            # A critic could only infer source quality from prose, so the lens
+            # the round is named after was decorative. The synthesis prompt has
+            # carried this line all along; the debate prompt is the one that
+            # needed it, because the debate is where sourcing is judged.
+            #
+            # Flattened through the SHARED helper (title AND url — they share a
+            # line, so flattening one leaves the line forgeable through the
+            # other) and capped at three per answer, matching synthesis exactly.
+            # Inside the fence: these are provider-controlled strings.
+            source_line = ", ".join(
+                f"{flatten_for_prompt(source.title, max_chars=_MAX_SOURCE_TITLE_LEN)}"
+                f" ({flatten_for_prompt(source.url, max_chars=MAX_SOURCE_URL_LEN)})"
+                for source in (answer.sources or [])[:_MAX_SOURCES_PER_ANSWER]
+            )
+            # An answer with NO sources says so explicitly rather than omitting
+            # the line. Silence reads as "not shown"; this reads as "none", and
+            # under ADR-0096 an unsourced claim must be visible, not absent.
+            lines.append(f"    sources: {source_line}" if source_line else "    sources: none")
         if prior_round is not None:
             lines.append("")
             lines.append("Round 1 critique:")

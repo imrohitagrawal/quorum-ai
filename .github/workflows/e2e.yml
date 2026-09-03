@@ -201,6 +201,7 @@ jobs:
           tests/invariants/landing-cta-reachable.spec.ts
           tests/invariants/result-debate.spec.ts
           tests/invariants/critique-cost-rows.spec.ts
+          tests/invariants/peer-critique-copy.spec.ts
           --project=chromium
           --retries=0
 
@@ -290,7 +291,14 @@ jobs:
         # (AGENTS.md rule 13) -- reported "259 passed (4.6m)" on 2026-09-03.
         # The arithmetic happens to agree this time; it was still measured,
         # because every note above records an arithmetic guess that did not.
-        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 259 --lane "invariants lane"
+        #
+        # 259 -> 263 with peer-critique-copy.spec.ts (ADR-0096, four tests).
+        # MEASURED, not added: the lane run exactly as this step runs it, plus
+        # the two rate-limit overrides a LOCAL run needs (AGENTS.md rule 13),
+        # reported "263 passed (6.1m)" on 2026-09-03 — on a CLEANED `.data`,
+        # because the durable per-IP mint cap accumulates across local runs and
+        # a poisoned database presents as ~30 unrelated timeouts.
+        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 263 --lane "invariants lane"
 
       - name: Clear the previous lane's JUnit report
         run: rm -f e2e/results.xml

@@ -1595,7 +1595,13 @@
 
   const LIVE_ROUND_PLACEHOLDER_BODY = {
     running:
-      "The moderator model is critiquing the four answers for this round. The round-level critique appears here once it completes.",
+      // Deliberately does NOT name the moderator. This placeholder renders
+      // while a round is still running, which is BEFORE the response carries a
+      // `critique_shape` to read — so it cannot know which shape produced it,
+      // and naming the moderator is a claim it is not in a position to make.
+      // Under #290's peer shape no moderator call happens at all. The wording
+      // below is true under both shapes.
+      "The panel is critiquing the four answers for this round. The round-level critique appears here once it completes.",
     pending: "This round has not started yet.",
     failed: "This round did not complete.",
     skipped: "This round was skipped.",
@@ -4571,12 +4577,29 @@
     // summary per round; under #290's peer shape they do. A heading is a claim,
     // and this one deliberately makes neither.
     head.appendChild(mkEl("span", "result-debate-title", "The debate rounds"));
+    // SHAPE-AWARE, because the same sentence is true under one shape and FALSE
+    // under the other, and both now ship. Under the moderator shape the backend
+    // really does record one critique per round with no per-model attribution.
+    // Under #290's peer shape it records `slot_critiques` — one entry per
+    // eligible critic — and the receipt itemises a `(critique)` charge PER
+    // MODEL. Telling a reader "Quorum does not record a per-model exchange"
+    // directly above four per-model critique charges is a false statement about
+    // their own money, which is why this cannot be one fixed string.
+    //
+    // Read off the ROUNDS, not off a config flag the browser cannot see: the
+    // server stamps `critique_shape` on every round, so the caption describes
+    // what THIS run actually did rather than what the deployment is set to.
+    const isPeer = rounds.some((r) => r && r.critique_shape === "peer");
     head.appendChild(
       mkEl(
         "span",
         "result-debate-caption",
-        "One critique per round, covering all four answers together — " +
-          "Quorum does not record a per-model, line-by-line exchange.",
+        isPeer
+          ? "Each answer model critiqued the others, in both rounds. The card " +
+              "shows the round's combined critique; the per-model detail is " +
+              "recorded and itemised on the receipt."
+          : "One critique per round, covering all four answers together — " +
+              "Quorum does not record a per-model, line-by-line exchange.",
       ),
     );
     container.appendChild(head);
@@ -4764,6 +4787,20 @@
   // therefore does not show it. The transcript still does: that is pre-existing
   // behaviour on a drill-down the reader chose to open, and changing it is a
   // separate concern.
+  // The four values `SlotCritique.self_assessment` can hold (ADR-0096), in the
+  // model's own terms. NOT a scale: "Held its position" is not a weaker
+  // "Changed" — a model holding against the panel WITH sources is the single
+  // most valuable signal here, because it is the case a one-model tool cannot
+  // reach. An unknown value falls through to itself rather than being mapped to
+  // the nearest label, so a fifth value shows as itself instead of silently
+  // reading as one of these four.
+  const SELF_ASSESSMENT_LABELS = {
+    held_agreement: "Agreed, and still does",
+    held_solution: "Held its position",
+    amended: "Amended its answer",
+    changed: "Changed its answer",
+  };
+
   function buildTranscriptRound(round, { showFocus = true } = {}) {
     const card = mkEl("article", "transcript-round");
     const head = mkEl("div", "transcript-round-head");
@@ -4805,6 +4842,88 @@
     const text = String(round.critique_text || "").trim();
     setProse(body, text, "This round did not produce a critique summary.");
     card.appendChild(body);
+
+    // ADR-0096: the PER-CRITIC detail, in full.
+    //
+    // `critique_text` above is a DIGEST, and a lossy one: each critic's share
+    // is `SYNTHESIS_DEBATE_EXCERPT_MAX_CHARS / n` characters, so at four
+    // critics 75% of every critique is cut, and `_one_line` flattens what
+    // survives. That bound exists because a PROMPT has a token budget — it
+    // governs what we send to round 2 and to synthesis. A browser has no token
+    // budget, and applying a prompt bound to a display was a conflation.
+    //
+    // `slot_critiques[].critique_text` is the FULL text, untruncated. Until now
+    // it was recorded and rendered nowhere, while the receipt itemised a paid
+    // `(critique)` row per critic — the user was charged per model for detail
+    // the interface did not show.
+    const critiques = Array.isArray(round.slot_critiques) ? round.slot_critiques : [];
+    if (critiques.length) {
+      const list = mkEl("div", "transcript-critics");
+      for (const critique of critiques) {
+        if (!critique) continue;
+        const item = mkEl("div", "transcript-critic");
+        const criticHead = mkEl("div", "transcript-critic-head");
+        criticHead.appendChild(
+          mkEl(
+            "span",
+            "transcript-critic-slot",
+            `Slot ${critique.critic_slot_number} — ${critique.critic_model_id || "unknown model"}`,
+          ),
+        );
+        // PER CRITIC, not per round. A round carries one `debate_mode`, so a
+        // mixed round cannot say WHICH critic's words are Quorum's own. Same
+        // fail-closed rule as the round marker above.
+        if (critique.critique_mode !== "live") {
+          criticHead.appendChild(
+            mkEl(
+              "span",
+              "transcript-round-templated",
+              "Written by Quorum, not by a model",
+            ),
+          );
+        }
+        // Where this critic stands on ITS OWN answer, when round 2 asked.
+        // Rendered as the model's own words, never re-worded: "held_solution"
+        // is a model declining to move, and softening that into "agreed" would
+        // erase the one signal a single-model tool cannot produce.
+        if (critique.self_assessment) {
+          criticHead.appendChild(
+            mkEl(
+              "span",
+              "transcript-critic-stance",
+              SELF_ASSESSMENT_LABELS[critique.self_assessment] || critique.self_assessment,
+            ),
+          );
+        }
+        item.appendChild(criticHead);
+
+        const criticBody = mkEl("div", "transcript-critic-body");
+        setProse(criticBody, String(critique.critique_text || "").trim(), "");
+        item.appendChild(criticBody);
+
+        if (critique.position_rationale) {
+          const why = mkEl("div", "transcript-critic-rationale");
+          setProse(why, String(critique.position_rationale).trim(), "");
+          item.appendChild(why);
+        }
+        // The sources this critic cited FOR ITS POSITION. Rendered as plain
+        // text, never as links: these are provider-supplied strings that have
+        // been CITED, not resolved and not verified — nothing in this product
+        // opens them. A clickable link would imply a check we did not make.
+        const cited = Array.isArray(critique.cited_sources) ? critique.cited_sources : [];
+        if (cited.length) {
+          item.appendChild(
+            mkEl(
+              "div",
+              "transcript-critic-sources",
+              `Cited: ${cited.join("  ·  ")}`,
+            ),
+          );
+        }
+        list.appendChild(item);
+      }
+      card.appendChild(list);
+    }
     return card;
   }
 
@@ -4822,6 +4941,23 @@
     // textarea (a rehydrated run holds unrelated in-progress text).
     const heading = el("transcript-heading");
     if (heading) heading.textContent = state.liveQueryText || "The debate";
+
+    // The debate caption is STATIC in workspace.html, and its shipped text
+    // ("Quorum does not record a per-model, line-by-line transcript") is false
+    // under #290's peer shape — where `slot_critiques` is exactly that record
+    // and the receipt itemises a `(critique)` charge per model. The template is
+    // server-rendered once and cannot branch, so the correction happens here,
+    // at the only point that knows what THIS run did.
+    //
+    // Keyed on the rounds, not on a config flag: a rehydrated run from before
+    // the flag was enabled must still describe itself honestly.
+    const transcriptCaption = document.querySelector(".transcript-debate-caption");
+    if (transcriptCaption && debate.some((r) => r && r.critique_shape === "peer")) {
+      transcriptCaption.textContent =
+        "Each answer model critiqued the others, in both rounds. Below is the " +
+        "round-level critique; the per-model detail is recorded and itemised " +
+        "on the receipt.";
+    }
 
     // Meta line: round count + model count + optional debate-stage ESTIMATE.
     const metaEl = el("transcript-meta");

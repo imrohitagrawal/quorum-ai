@@ -558,6 +558,23 @@ export const goldenRespWithCritiqueRows = () => {
 };
 
 /**
+ * A completed run whose debate rounds carry #290's PEER shape.
+ *
+ * A DEDICATED builder (AGENTS.md 13d): `goldenCompletedResp()` feeds the
+ * blocking visual-snapshot lane, so a new shape must not be folded into it.
+ *
+ * Only `critique_shape` is set. That is deliberate — it is the single field
+ * every user-visible caption keys on, and setting nothing else keeps the
+ * fixture honest about what is being tested: the COPY, not the rendering of
+ * `slot_critiques` (which no surface displays today).
+ */
+export const goldenRespWithPeerDebate = () => {
+  const resp = goldenCompletedResp() as Record<string, any>;
+  for (const round of resp.result.debate_outputs) round.critique_shape = "peer";
+  return resp;
+};
+
+/**
  * A completed run whose DEBATE fell back to Quorum's own template while the
  * ANSWERS stayed live — `debate_mode: "fallback"` on every round.
  *

@@ -164,6 +164,21 @@ def test_the_slot_critique_schema_is_published_and_additive() -> None:
         "focus_areas",
         "critique_mode",
         "stance",
+        # ADR-0096's convergence contract. All four carry defaults, so they stay
+        # out of `required` and a moderator-shaped round still serialises.
+        #
+        # `position_rationale`, NOT `rationale`:
+        # `test_evaluation_projection_has_no_judge.py` bans that key at ANY
+        # depth of the served response, because a JUDGE's rationale is free text
+        # about provider prose and must never reach a client. This is a
+        # different thing — a critic's words about its own answer — but the ban
+        # is a bare-name one, and a bare-name ban is stronger than a path-aware
+        # one. Renaming cost nothing; excepting the guard would have cost the
+        # guarantee.
+        "self_assessment",
+        "position_rationale",
+        "cited_sources",
+        "revised_answer",
     }
     assert critique["required"] == [
         "critic_slot_number",
