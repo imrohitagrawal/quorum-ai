@@ -84,23 +84,69 @@ MUTATIONS: list[tuple[str, str, str, str]] = [
     (
         "06 prose credits web search for Quorum placeholders",
         "synth",
-        "                and any(source.provider is ProviderPath.WEB_SEARCH"
-        " for source in answer.sources)",
-        "                and answer.sources",
+        "        and any(source.provider is ProviderPath.WEB_SEARCH for source in answer.sources)",
+        "        and answer.sources",
     ),
     # --- the UI -------------------------------------------------------------
     (
         "07 stub badge keys on is_fallback again",
         "app",
-        "    return s.isFallback === true && !REAL_SOURCE_PROVIDERS.has(s.provider);",
-        "    return s.isFallback === true;",
+        "    return fallback && !REAL_SOURCE_PROVIDERS.has(s.provider);",
+        "    return fallback;",
     ),
     (
         "08 fail-safe dropped: unknown provider laundered as real",
         "app",
-        "    if (STUB_SOURCE_PROVIDERS.has(s.provider)) return true;\n"
-        "    return s.isFallback === true && !REAL_SOURCE_PROVIDERS.has(s.provider);",
-        "    if (STUB_SOURCE_PROVIDERS.has(s.provider)) return true;\n    return false;",
+        "    if (STUB_SOURCE_PROVIDERS.has(s.provider)) return true;",
+        "    if (false) return true;",
+    ),
+    (
+        "10 chip row stops calling the shared predicate",
+        "app",
+        "          const isStub = isStubSource(s);",
+        "          const isStub = STUB_SOURCE_PROVIDERS.has(s.provider) || s.isFallback === true;",
+    ),
+    (
+        "11 export stops calling the shared predicate",
+        "app",
+        "        if (isStubSource(s)) {",
+        "        if (s && (STUB_SOURCE_PROVIDERS.has(s.provider) || s.isFallback === true)) {",
+    ),
+    (
+        "12 transcript list stops calling the shared predicate",
+        "app",
+        "        if (isStubSource(source)) {",
+        "        if (STUB_SOURCE_PROVIDERS.has(source.provider)) {",
+    ),
+    (
+        "13 predicate reads only one wire casing",
+        "app",
+        "    const fallback = s.isFallback === true || s.is_fallback === true;",
+        "    const fallback = s.isFallback === true;",
+    ),
+    (
+        "14 retrieved page left bare (no origin tag)",
+        "app",
+        '  const RETRIEVED_SOURCE_TAG_TEXT = "web search";',
+        '  const RETRIEVED_SOURCE_TAG_TEXT = "";',
+    ),
+    (
+        "15 export drops the origin qualifier",
+        "app",
+        '        const origin = isRetrievedSource(s) ? " — via web search" : "";',
+        '        const origin = "";',
+    ),
+    (
+        "16 live synthesis directive never added",
+        "synth",
+        "        if retrieved_count:",
+        "        if False:",
+    ),
+    (
+        "17 retrieved count credits fabricated answers",
+        "synth",
+        "        and model_was_invoked(answer)\n",
+        "",
     ),
     # --- the judge disclosure ----------------------------------------------
     (

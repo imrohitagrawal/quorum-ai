@@ -3104,10 +3104,14 @@
         // bare "example.com/article" would export as a dead relative link that
         // still reads as a citation.
         const href = safeHttpUrl(url);
+        // U1: same reason as the chip tag — a retrieved page is real, but it is
+        // not the model's own citation and does not count toward the coverage
+        // figure printed elsewhere in this export.
+        const origin = isRetrievedSource(s) ? " — via web search" : "";
         push(
           href
-            ? `${i + 1}. [${title}](<${href}>)`
-            : `${i + 1}. ${title} (link withheld — unsupported URL scheme)`,
+            ? `${i + 1}. [${title}](<${href}>)${origin}`
+            : `${i + 1}. ${title} (link withheld — unsupported URL scheme)${origin}`,
         );
       });
       push("");
@@ -3200,9 +3204,16 @@
           url,
           provider: s && s.provider ? String(s.provider) : "",
           // `is_fallback` too: the trust card EXCLUDES these from "N sources
-          // cited" and citation coverage counts only primary sources, so a
-          // chip row or export presenting them as ordinary citations shows a
-          // source count the trust card contradicts.
+          // cited" and citation coverage counts only primary sources.
+          //
+          // ADR-0098 split that population in two. A Quorum-authored
+          // placeholder is still badged and unlinked. A page a real web search
+          // returned is now a working link — but it is STILL excluded from the
+          // count, so it carries the neutral "web search" origin tag instead.
+          // Without that tag it would render identically to a model-cited
+          // source directly beneath a card reading "0 sources cited", which is
+          // the contradiction this comment originally warned about, reappearing
+          // from the other side.
           isFallback: Boolean(s && s.is_fallback),
         });
       }
@@ -3344,6 +3355,14 @@
                 "result-source-stub-tag",
                 STUB_SOURCE_TAG_TEXT[s.provider] || (s.isFallback ? "fallback stub" : "simulated"),
               ),
+            );
+          }
+          // U1: a retrieved page carries a neutral origin tag — never the
+          // stub badge, which asserts "not a real source".
+          if (!isStub && isRetrievedSource(s)) {
+            chip.dataset.origin = "web_search";
+            chip.appendChild(
+              mkEl("span", "result-source-origin-tag", RETRIEVED_SOURCE_TAG_TEXT),
             );
           }
           if (i >= COLLAPSED_SOURCE_COUNT) chip.hidden = true;
@@ -5186,7 +5205,26 @@
   function isStubSource(s) {
     if (!s) return false;
     if (STUB_SOURCE_PROVIDERS.has(s.provider)) return true;
-    return s.isFallback === true && !REAL_SOURCE_PROVIDERS.has(s.provider);
+    // BOTH wire shapes on purpose. The chip row and the Markdown export get the
+    // camelCase projection from `collectResultSources`; `renderSourceList` gets
+    // the RAW snake_case server object. Reading only one silently evaluates
+    // `undefined === true` on the other surface and drops the fail-safe clause
+    // below with no test noticing — which is exactly how this predicate would
+    // have regressed when it was shared with the third surface.
+    const fallback = s.isFallback === true || s.is_fallback === true;
+    return fallback && !REAL_SOURCE_PROVIDERS.has(s.provider);
+  }
+
+  // U1. A retrieved page is a REAL source, but it is not the model's OWN
+  // citation, and the trust card deliberately still counts it as zero
+  // (ADR-0098 Decision 2). Without a mark, four retrieved chips render
+  // indistinguishable from model-cited ones directly beneath a card reading
+  // "0 sources cited" — so the fix for "not a real source" would have replaced
+  // one contradiction with another. This is the truthful middle: say where the
+  // source came from, claim nothing about who cited it.
+  const RETRIEVED_SOURCE_TAG_TEXT = "web search";
+  function isRetrievedSource(s) {
+    return !!s && s.provider === "web_search";
   }
 
   function renderStubSource(source) {
@@ -5210,14 +5248,24 @@
     list.className = "source-list";
     if (sources && sources.length) {
       for (const source of sources) {
-        if (STUB_SOURCE_PROVIDERS.has(source.provider)) {
+        // ADR-0098: the SHARED predicate, so this third surface cannot drift
+        // from the chip row and the export. It receives raw snake_case objects,
+        // which `isStubSource` reads deliberately.
+        if (isStubSource(source)) {
           list.appendChild(renderStubSource(source));
           continue;
         }
         const li = document.createElement("li");
         const maybeLink = createSafeLink(source.title, source.url);
         li.appendChild(maybeLink);
-        if (source.is_fallback) {
+        if (isRetrievedSource(source)) {
+          // ADR-0098: real page, real link, neutral origin. Badging this
+          // "fallback" is the same falsehood the chip row was fixed for.
+          const badge = document.createElement("span");
+          badge.className = "badge badge-origin";
+          badge.textContent = RETRIEVED_SOURCE_TAG_TEXT;
+          li.append(" ", badge);
+        } else if (source.is_fallback) {
           li.classList.add("source-fallback");
           const badge = document.createElement("span");
           badge.className = "badge badge-fallback";

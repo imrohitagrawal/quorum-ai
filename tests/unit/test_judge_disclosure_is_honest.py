@@ -23,8 +23,11 @@ WHAT TURNS EACH TEST RED is stated on the test.
 
 from __future__ import annotations
 
+import re
 from decimal import Decimal
 from pathlib import Path
+
+from tests.code_text import code_without_comments
 
 from product_app.evaluation import build_judge_evidence
 from product_app.providers import (
@@ -39,9 +42,6 @@ APP_JS = Path(__file__).resolve().parents[2] / "src" / "product_app" / "static" 
 
 #: The false sentence. Its presence anywhere in the served bundle is the defect.
 FALSE_CLAIM = "Citation support was checked by an independent judge model"
-
-#: The page body the judge must be shown to be unable to see.
-SECRET_BODY = "PAGE-CONTENT-THE-JUDGE-NEVER-SEES"
 
 
 def _answer_with_source() -> InitialModelAnswer:
@@ -78,28 +78,37 @@ def _answer_with_source() -> InitialModelAnswer:
 
 
 def test_the_judge_never_receives_the_cited_pages_content() -> None:
-    """The fact that makes the old copy false, asserted rather than argued.
+    """The fact that makes the old copy false, asserted STRUCTURALLY.
 
-    RED if the evidence builder ever starts inlining page bodies — at which
-    point the stronger claim would become true and this file should be
-    revisited rather than deleted."""
+    The first version asserted ``SECRET_BODY not in blob`` for a constant that
+    was never injected anywhere — true for every possible implementation,
+    including one that inlines whole page bodies. Two reviewers demonstrated it
+    surviving exactly the mutation its docstring claimed would kill it.
+
+    So assert the shape instead: the evidence line for a source is EXACTLY
+    ``[i] title :: url``, and ``SourceReference`` has no field that could carry
+    page content. RED the day either changes — which is the day the stronger
+    copy would become sayable."""
+    source = _answer_with_source()
     evidence = build_judge_evidence(
         query_text="Does the evidence support the proposal?",
-        initial_answers=[_answer_with_source()],
+        initial_answers=[source],
         final_synthesis=None,
     )
-    blob = "\n".join(evidence.source_lines)
 
-    # POSITIVE PARTNER (rule 7): the block is not empty, and it really does
-    # carry the title and the URL — so "no content" is a measured absence, not
-    # a vacuous one over nothing.
-    assert evidence.source_lines, "precondition: the judge got a source list at all"
-    assert "A real page" in blob, "precondition: titles do reach the judge"
-    assert "https://real.example/doc" in blob, "precondition: URLs do reach the judge"
+    # POSITIVE PARTNER (rule 7): the block is not empty, and the title and URL
+    # really do reach the judge — so "no content" is a measured absence rather
+    # than a vacuous one over nothing.
+    assert evidence.source_lines == ("[1] A real page :: https://real.example/doc",), (
+        f"the judge's source line is title+URL and nothing else: {evidence.source_lines!r}"
+    )
 
-    assert SECRET_BODY not in blob, "the judge must not be receiving page content"
-    assert len(blob) < 200, (
-        f"the source block is title+URL sized; a page body would dwarf it: {len(blob)} chars"
+    # The structural reason the copy is true: there is no content field to send.
+    assert set(InitialModelAnswer.model_fields) >= {"sources"}
+    assert set(SourceReference.model_fields) == {"title", "url", "provider", "is_fallback"}, (
+        "SourceReference gained a field — if it can now carry page content, the "
+        "verified disclosure may need to change with it: "
+        f"{sorted(SourceReference.model_fields)}"
     )
 
 
@@ -108,31 +117,52 @@ def test_the_judge_never_receives_the_cited_pages_content() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_the_verified_disclosure_no_longer_claims_support_was_checked() -> None:
-    """RED before the fix: ``app.js`` shipped the sentence verbatim.
+def _verified_disclosure_literal() -> str:
+    """The string the browser actually assigns, not "somewhere in app.js".
 
-    Read from the file the server actually serves, so a fix that edited a
-    comment or a doc instead of the constant does not green this."""
-    source = APP_JS.read_text(encoding="utf-8")
-    assert FALSE_CLAIM not in source, (
-        "app.js still tells the user the judge checked citation SUPPORT, which "
-        "it cannot do — it never receives the cited pages"
+    A reviewer defeated the first version of this file by moving the honest
+    caveat into a COMMENT and restoring the false claim in the constant: all
+    four tests passed while the shipped UI told the user the judge had
+    "verified this answer's citation support". A whole-file substring check
+    cannot tell code from the prose that explains it — rule 8, inside the gate
+    written to enforce honesty."""
+    code = code_without_comments(APP_JS)
+    match = re.search(r'const TRUST_DISCLOSURE_VERIFIED\s*=\s*\n?\s*"([^"]+)";', code)
+    assert match is not None, "the TRUST_DISCLOSURE_VERIFIED constant is gone or reshaped"
+    return match.group(1)
+
+
+def test_the_verified_disclosure_no_longer_claims_support_was_checked() -> None:
+    """RED before the fix: the constant read "Citation support was checked by
+    an independent judge model", which the judge cannot do — it never receives
+    the cited pages, only their titles and URLs."""
+    copy = _verified_disclosure_literal()
+    assert FALSE_CLAIM not in copy, (
+        f"the verified disclosure claims the judge checked citation SUPPORT: {copy!r}"
+    )
+    assert "support" not in copy.lower(), (
+        f"the disclosure claims support-checking in some other wording: {copy!r}"
     )
 
 
-def test_the_verified_disclosure_says_the_pages_were_not_retrieved() -> None:
+def test_the_verified_disclosure_states_what_was_and_was_not_done() -> None:
     """The replacement must be honest, not merely quieter. RED if the false
-    sentence were deleted and nothing truthful put in its place."""
-    source = APP_JS.read_text(encoding="utf-8")
-    assert "were not retrieved" in source, (
-        "the verified disclosure must state that the cited pages were not fetched"
+    sentence were deleted and nothing truthful put in its place, and RED if the
+    caveat is demoted to a comment while the constant overclaims again."""
+    copy = _verified_disclosure_literal()
+    assert copy.endswith("The cited pages themselves were not retrieved."), (
+        f"the disclosure must state that the cited pages were not fetched: {copy!r}"
+    )
+    assert "against its source list" in copy, (
+        f"the disclosure must say what WAS checked — grounding against the "
+        f"listed sources, which is the judge's real capability: {copy!r}"
     )
 
 
 def test_the_unverified_disclosure_is_untouched() -> None:
     """POSITIVE PARTNER: the OTHER branch's copy was already true (ADR-0020) and
     must survive this change. RED if a fix rewrote both disclosures."""
-    source = APP_JS.read_text(encoding="utf-8")
-    assert ("Not verified — these are automated structural checks, not a fact-check.") in source, (
+    code = code_without_comments(APP_JS)
+    assert ("Not verified — these are automated structural checks, not a fact-check.") in code, (
         "the standing unverified disclosure must be unchanged"
     )

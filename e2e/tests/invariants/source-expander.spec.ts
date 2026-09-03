@@ -107,7 +107,8 @@ test.describe("F-19 — the rest of the cited sources are reachable", () => {
     page,
   }) => {
     // MEASURED DEFECT. With live execution on, a model that answers with NO
-    // citations gets real pages attached by web search (providers.py:589).
+    // citations gets real pages attached by web search (the _tavily_search
+    // supplement inside produce_initial_answer's live-answer arm).
     // Those arrived as provider "fallback_search" / is_fallback true — byte
     // identical to the example.test placeholder Quorum writes itself — so the
     // chip row badged a real Reuters URL "fallback stub" and refused to link
@@ -148,6 +149,13 @@ test.describe("F-19 — the rest of the cited sources are reachable", () => {
     ).toBe("A");
     await expect(retrieved.first()).toHaveAttribute("href", "https://reuters.example/a1");
     await expect(retrieved.first().locator(".result-source-stub-tag")).toHaveCount(0);
+    // ...but MARKED, not left bare. Un-badging without marking would render it
+    // identically to a model-cited source, directly beneath a trust card that
+    // (by ADR-0098 Decision 2) still reads "0 sources cited" — one
+    // contradiction swapped for another.
+    await expect(retrieved.first().locator(".result-source-origin-tag")).toHaveText(
+      /web search/i
+    );
 
     const placeholder = row.locator(".result-source-chip", {
       hasText: "Fallback search evidence",

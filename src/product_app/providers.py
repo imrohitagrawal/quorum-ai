@@ -1929,8 +1929,10 @@ class ProviderExecutionService:
         """Run a real web search via the Tavily API.
 
         POSTs the user query to Tavily's ``/search`` endpoint and maps the
-        returned ``results[]`` into ``FALLBACK_SEARCH`` / ``is_fallback=True``
-        ``SourceReference``s. Every result URL is passed through
+        returned ``results[]`` into ``WEB_SEARCH`` / ``is_fallback=True``
+        ``SourceReference``s — ADR-0098: a page a real search returned is not
+        the ``example.test`` placeholder, and must not be shown as one. Every
+        result URL is passed through
         :func:`_sanitize_source_url` (http(s) scheme + host denylist), so a
         malicious or malformed result cannot smuggle a ``javascript:`` or
         metadata-service URL into the response. Returns ``[]`` — never
@@ -3252,10 +3254,10 @@ _MAX_SOURCE_TITLE_LEN = 300
 
 
 def _parse_tavily_results(payload: object) -> list[SourceReference]:
-    """Map a parsed Tavily ``/search`` response into fallback sources.
+    """Map a parsed Tavily ``/search`` response into retrieved sources.
 
     Reads the top-level ``results`` array; each result contributes one
-    ``FALLBACK_SEARCH`` / ``is_fallback=True`` ``SourceReference`` whose URL
+    ``WEB_SEARCH`` / ``is_fallback=True`` ``SourceReference`` whose URL
     survives :func:`_sanitize_source_url`. Malformed entries (non-dict,
     missing/blocked URL) are skipped rather than fatal, and duplicate URLs
     are de-duplicated so the same host cited twice appears once. A missing

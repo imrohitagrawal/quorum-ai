@@ -1,7 +1,8 @@
 """A really-retrieved web page must be distinguishable from a Quorum placeholder.
 
 MEASURED DEFECT (2026-09-04). With live execution ON, a live model that answers
-with no citation annotations triggers a REAL web search (``providers.py:589``)
+with no citation annotations triggers a REAL web search (the ``_tavily_search``
+call inside ``produce_initial_answer``'s live-answer arm)
 whose results are attached to that live answer. Those results were emitted as
 ``provider=FALLBACK_SEARCH``/``is_fallback=True`` — byte-identical on the wire to
 the ``example.test`` placeholder Quorum writes itself. The UI therefore could not
@@ -17,7 +18,7 @@ Probe output before the fix, four live answers with four real pages attached::
 WHAT TURNS EACH TEST RED is stated on the test.
 
 DELIBERATELY NOT CHANGED — the coverage arithmetic. ``is_fallback`` keeps its
-documented meaning ("not the model's OWN citation", providers.py:584-586) and a
+documented meaning ("not the model's OWN citation") and a
 retrieved page still does not count toward ``citation_coverage``. See ADR-0098.
 ``test_a_retrieved_source_still_does_not_count_as_a_model_citation`` is the gate
 that keeps that decision from being reversed by accident.
@@ -30,6 +31,7 @@ from unittest.mock import patch
 from uuid import uuid4
 
 import pytest
+from tests.code_text import code_without_comments
 
 from product_app.config import settings
 from product_app.model_slots import validate_model_slots
@@ -180,7 +182,8 @@ def test_the_retrieved_source_is_still_flagged_not_the_models_own(
 def test_the_retrieved_source_rides_a_genuinely_live_answer(live_execution_on: None) -> None:
     """The reachability premise this whole file rests on, asserted rather than
     assumed: the supplement path attaches to a LIVE answer, not a fallback one.
-    RED if the guard at providers.py:642 ever stops returning first, which would
+    RED if ``produce_initial_answer``'s live-execution guard ever stops returning
+    a FAILED slot before the ``use_fallback`` branch, which would
     mean these sources ride simulated text instead."""
     answer = _live_answer_with_retrieved_sources(2)
     assert answer.provider_path is ProviderPath.OPENROUTER_SEARCH
@@ -201,33 +204,82 @@ def test_the_retrieved_source_rides_a_genuinely_live_answer(live_execution_on: N
 APP_JS = Path(__file__).resolve().parents[2] / "src" / "product_app" / "static" / "app.js"
 
 
-def test_the_stub_badge_does_not_key_on_the_is_fallback_flag_alone() -> None:
-    """RED if the predicate reverts to ``s.isFallback === true``.
+def test_both_source_surfaces_actually_CALL_the_shared_predicate() -> None:
+    """RED if either call site is reverted to the pre-fix inline predicate.
 
-    That flag is True for a really-retrieved page too — deliberately, so the
-    coverage metric does not move — so keying the "not a real source" badge on
-    it is precisely the defect ADR-0098 fixes."""
-    source = APP_JS.read_text(encoding="utf-8")
-    assert "REAL_SOURCE_PROVIDERS" in source, (
-        "the browser must carry an explicit set of providers whose sources are real"
+    The first version of this file asserted only the TEXT of ``isStubSource``.
+    A reviewer measured the hole: revert both call sites, leave the helper
+    defined as dead code, and all five assertions still passed while a real
+    Reuters URL was badged "fallback stub, not a real source" again. Pinning a
+    helper's body proves nothing about whether anything calls it.
+
+    Read over COMMENT-STRIPPED code (rule 8), so the comments this change added
+    — which name the predicate repeatedly — cannot green it."""
+    code = code_without_comments(APP_JS)
+
+    assert code.count("isStubSource(") == 4, (
+        "expected one definition and three call sites (chip row, Markdown "
+        f"export, transcript list); found {code.count('isStubSource(')}"
     )
-    assert '"web_search"' in source, "web_search must be recognised as a real source provider"
-    assert "s.isFallback === true && !REAL_SOURCE_PROVIDERS.has(s.provider)" in source, (
-        "the stub predicate must exclude the known-real providers, not fire on is_fallback alone"
+    assert "if (isStubSource(s)) {" in code, "the Markdown export must use the predicate"
+    assert "const isStub = isStubSource(s);" in code, "the chip row must use the predicate"
+    assert "if (isStubSource(source)) {" in code, "the transcript list must use the predicate"
+    assert "STUB_SOURCE_PROVIDERS.has(s.provider) || s.isFallback === true" not in code, (
+        "the pre-fix inline predicate is back at a call site"
     )
 
 
-def test_the_stub_predicate_still_fails_safe_on_an_unknown_provider() -> None:
-    """POSITIVE PARTNER, and RED if the second clause is dropped entirely.
+def test_the_shared_predicate_excludes_the_known_real_providers() -> None:
+    """RED if ``REAL_SOURCE_PROVIDERS`` stops covering the retrieved path.
 
-    Deleting it would make an UNRECOGNISED provider carrying ``is_fallback``
-    render as a real citation — a future source path could launder itself into
+    ``is_fallback`` is True for a really-retrieved page too — deliberately, so
+    the coverage metric does not move — so keying the "not a real source" badge
+    on it is precisely the defect ADR-0098 fixes."""
+    code = code_without_comments(APP_JS)
+    assert '"web_search"' in code, "web_search must be a recognised real-source provider"
+    assert "!REAL_SOURCE_PROVIDERS.has(s.provider)" in code, (
+        "the predicate must exclude the known-real providers, not fire on is_fallback alone"
+    )
+
+
+def test_the_shared_predicate_still_fails_safe_on_an_unknown_provider() -> None:
+    """POSITIVE PARTNER, and RED if the fail-safe clause is dropped.
+
+    Deleting it would render an UNRECOGNISED provider carrying ``is_fallback``
+    as a real citation — a future source path could launder itself into
     evidence by omission, which is the #247 failure mode."""
-    source = APP_JS.read_text(encoding="utf-8")
-    assert "s.isFallback === true &&" in source, (
+    code = code_without_comments(APP_JS)
+    assert "if (STUB_SOURCE_PROVIDERS.has(s.provider)) return true;" in code, (
+        "the Quorum-authored stub providers must still be caught by provider"
+    )
+    assert "return fallback && !REAL_SOURCE_PROVIDERS.has(s.provider);" in code, (
         "the fail-safe clause is gone: an unknown provider with is_fallback "
         "would now be presented as a real source"
     )
-    assert "if (STUB_SOURCE_PROVIDERS.has(s.provider)) return true;" in source, (
-        "the Quorum-authored stub providers must still be caught by provider"
+
+
+def test_the_predicate_reads_both_wire_shapes() -> None:
+    """RED if the predicate reads only one casing.
+
+    The chip row and export pass a camelCase projection; the transcript list
+    passes the RAW snake_case server object. Reading one silently evaluates
+    ``undefined === true`` on the other surface and drops the fail-safe clause
+    with no test noticing."""
+    code = code_without_comments(APP_JS)
+    assert "s.isFallback === true || s.is_fallback === true" in code, (
+        "the shared predicate must accept both the camelCase projection and the "
+        "raw snake_case server object"
     )
+
+
+def test_a_retrieved_page_is_marked_as_retrieved_not_left_bare() -> None:
+    """RED if the neutral origin tag is dropped.
+
+    Un-badging a retrieved page without marking it replaces one contradiction
+    with another: four real chips render indistinguishable from model-cited
+    ones directly beneath a trust card that still reads "0 sources cited",
+    because ADR-0098 Decision 2 deliberately freezes that count."""
+    code = code_without_comments(APP_JS)
+    assert 'RETRIEVED_SOURCE_TAG_TEXT = "web search"' in code
+    assert "result-source-origin-tag" in code, "the chip must carry the origin tag"
+    assert '" — via web search"' in code, "the export must say where the page came from"

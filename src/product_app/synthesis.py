@@ -56,6 +56,7 @@ from product_app.providers import (
     ProviderPath,
     TokenUsage,
     calculate_citation_coverage,
+    model_was_invoked,
     provider_execution_service,
 )
 from product_app.safety import (
@@ -382,6 +383,37 @@ class SynthesisResult:
     #: call succeeded but the provider omitted the usage object. The cost layer
     #: reads this to measure the synthesis stage's real cost.
     live_call_usages: list[TokenUsage | None] = field(default_factory=list)
+
+
+def count_answers_with_retrieved_sources(
+    initial_answers: list[InitialModelAnswer],
+) -> int:
+    """Answers that came back carrying a page a REAL web search returned.
+
+    ADR-0098. Defined ONCE because two consumers need it — the templated
+    ``source_support`` sentence and the LIVE synthesis directive — and two
+    matchers built from one idea drift. That is the same argument
+    ``providers.NOT_INVOKED_PATHS`` makes for itself.
+
+    Three conditions, each load-bearing:
+
+    * ``answer_count`` — shares the denominator with ``citation_coverage`` and
+      the "N of M responding models" prose, so a failed slot is excluded from
+      both terms rather than one.
+    * ``model_was_invoked`` — with a Tavily key configured and live execution
+      OFF, ``_fallback_sources`` attaches REAL retrieved pages to a SIMULATED
+      answer. Counting those credits web search for text no model produced.
+    * ``WEB_SEARCH`` specifically, never "has any sources at all" — the
+      ``example.test`` placeholders are sources too, and counting them made a
+      keyless demo run announce "4 of 4 had references attached by web search".
+    """
+    return sum(
+        1
+        for answer in initial_answers
+        if answer.citation_coverage.answer_count
+        and model_was_invoked(answer)
+        and any(source.provider is ProviderPath.WEB_SEARCH for source in answer.sources)
+    )
 
 
 class SynthesisOrchestrationService:
@@ -720,6 +752,26 @@ class SynthesisOrchestrationService:
             "carried at least one primary source.",
             f"Failed model count: {failed_count}.",
         ]
+        # ADR-0098. WITHOUT THIS THE FIX NEVER REACHES PRODUCTION. The corrected
+        # sentence built further down is assigned to ``base``, and ``base`` is
+        # used ONLY when the live section call returns nothing. With live
+        # execution on — the configuration the defect was measured in — this
+        # section is written by the model from these directives, which said
+        # "carried at least one primary source" and nothing about retrieved
+        # pages. So the model was being asked to describe source support while
+        # being told a 0% figure, with four real pages listed in the block
+        # below and no word for what they were.
+        retrieved_count = count_answers_with_retrieved_sources(initial_answers)
+        if retrieved_count:
+            directives.append(
+                f"{retrieved_count} of those answers cited no source of their own; a "
+                "web search run by this product supplied the references listed for "
+                "them. Those references are real pages and may be described as such, "
+                "but they are NOT the model's own citations and are deliberately "
+                "excluded from the source-coverage figure above. Do not describe "
+                "them as sources the model cited, and do not report the run as "
+                "having no sources."
+            )
 
         # ADR-0096. The panel's REVISED positions, keyed by slot number.
         #
@@ -1089,7 +1141,8 @@ class SynthesisOrchestrationService:
             # ADR-0098. "cited == 0" means no model cited its OWN sources. It
             # does NOT mean the run has no evidence: a live answer with no
             # inline citations gets real pages attached by web search
-            # (providers.py:589), and those are shown to the user as chips, fed
+            # (``produce_initial_answer``'s ``_tavily_search`` supplement), and
+            # those are shown to the user as chips, fed
             # to the debate and fed to the synthesis. Saying "no visible source
             # references" while four of them are on screen is false, and it was
             # measured saying exactly that.
@@ -1107,12 +1160,14 @@ class SynthesisOrchestrationService:
             # sentence being replaced, and
             # test_prose_does_not_credit_web_search_for_quorum_placeholders is
             # the gate that now catches it.
-            retrieved = sum(
-                1
-                for answer in initial_answers
-                if answer.citation_coverage.answer_count
-                and any(source.provider is ProviderPath.WEB_SEARCH for source in answer.sources)
-            )
+            #
+            # ``model_was_invoked`` as well: with a Tavily key configured and
+            # live execution OFF, ``_fallback_sources`` attaches REAL retrieved
+            # pages to a SIMULATED answer. Counting those would credit web
+            # search for text no model produced — the #247 laundering shape,
+            # one layer along. Demo-reachable rather than production-reachable,
+            # and closed here rather than left to be discovered.
+            retrieved = count_answers_with_retrieved_sources(initial_answers)
             if retrieved:
                 base = (
                     f"No model cited its own sources. {retrieved} of {total} responding "

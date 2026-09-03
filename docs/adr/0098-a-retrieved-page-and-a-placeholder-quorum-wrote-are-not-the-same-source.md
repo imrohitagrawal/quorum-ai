@@ -21,7 +21,7 @@ going red on a first draft that said "Supersedes nothing".)
 
 | Meaning read off the flag | Read by | Correct for a Tavily result? |
 |---|---|---|
-| "not the model's OWN citation" | `citation_coverage` numerator (`providers.py:759`) | yes |
+| "not the model's OWN citation" | `citation_coverage` numerator (`_completed_answer`'s `primary_source_count`) | yes |
 | "a Quorum-authored `example.test` placeholder" | the UI stub badge (`app.js:3323`) | **no** |
 | "not a real source" | the Markdown export (`app.js:3097-3098`) | **no** |
 
@@ -69,9 +69,12 @@ _fallback_sources: called 0x      _tavily_search: called 1x
 provider_path    : openrouter_search      fallback_used: False
 ```
 
-The guard at `providers.py:642` returns a FAILED slot before the fallback branch
-whenever live execution is on, and the comment at `:672` says so. The reachable
-site is the SUPPLEMENT at `providers.py:589`, which attaches search results to a
+The `if self._live_execution_enabled(...): return self._failed_answer(...)` guard
+in `produce_initial_answer` returns a FAILED slot before the `use_fallback`
+branch whenever live execution is on, and that branch's own comment says so
+(*"with live execution ON this whole branch is unreachable"*). The reachable
+site is the SUPPLEMENT — the `_tavily_search` call inside the
+`live_response.answer_text` arm — which attaches search results to a
 GENUINELY LIVE answer. That makes the defect worse than reported, not better:
 it lands on real model answers, not demo ones.
 
@@ -88,13 +91,40 @@ NOT move.** A retrieved page is still not the model's own citation, still
 `is_fallback=True`, and still does not raise `citation_coverage`. The verdict
 band is therefore unchanged by this ADR, and no re-measurement is required.
 
-**3. The UI and the export key off the provider path, not off `is_fallback`.**
-A `web_search` source is clickable and labelled honestly. `local_simulation` and
-`fallback_search` keep the stub badge and stay non-clickable.
+**3. All THREE source surfaces share one predicate, keyed on the provider path
+rather than on `is_fallback`.** `isStubSource` is used by the chip row, the
+Markdown export and the transcript model-card list. `local_simulation` and
+`fallback_search` keep the stub badge and stay non-clickable; a `web_search`
+source is a working link.
 
-**4. The prose stops claiming zero when sources are on screen.** The
-`source_support` section distinguishes "no model cited its own sources" from
+The predicate reads BOTH wire shapes (`isFallback` and `is_fallback`) on
+purpose: the first two surfaces receive a camelCase projection and the third
+receives the raw server object, so a single-casing predicate would silently
+evaluate `undefined === true` on one surface and drop its fail-safe clause with
+nothing failing. A review round caught exactly that as a latent trap.
+
+**3a. A retrieved page is MARKED, not merely un-badged.** It carries a neutral
+`web search` origin tag (chip and transcript) and `— via web search` in the
+export. Without it, removing the false "not a real source" badge would have
+replaced one contradiction with another: four retrieved chips rendering
+identically to model-cited ones directly beneath a trust card that, by
+Decision 2, still reads *"0 sources cited"*. Two independent reviewers
+converged on this; the truthful middle is to say where the page came from and
+claim nothing about who cited it.
+
+**4. The prose stops claiming zero when sources are on screen — on BOTH paths.**
+The `source_support` section distinguishes "no model cited its own sources" from
 "there is no evidence here".
+
+This needed two edits, not one, and the first draft shipped only the first.
+`base` — the templated sentence — is used ONLY when the live synthesis call
+returns nothing. With live execution on, which is the configuration the defect
+was measured in, that section is written by the model from `directives`, which
+said *"Source coverage: 0% … carried at least one primary source"* and nothing
+about retrieved pages. A directive naming the retrieved count and the
+distinction is therefore added alongside the templated sentence, and the count
+itself lives in ONE helper (`count_answers_with_retrieved_sources`) that both
+consumers call, because two matchers built from one idea drift.
 
 **5. `WEB_SEARCH` joins `NOT_INVOKED_PATHS`, not `INVOKED_PATHS`.** Unreachable
 today, but it is the fail-safe reading: a web search returning a page is not a
@@ -129,6 +159,23 @@ claim a model spoke.
   Quorum read it. ADR-0098 does not make the product L2.
 
 ## What this does NOT fix
+- **The run summary still says "Roughly N% of those answers carried at least one
+  visible source reference."** This ADR quotes that sentence as *the*
+  contradiction — the sources are visibly on screen — and does not change it.
+  It sits in the consensus/divided summary builders, not in `source_support`,
+  and rewording a headline the verdict band leans on is a separate concern with
+  its own blast radius. Recorded here rather than fixed quietly, because an ADR
+  that names a falsehood and silently leaves it is worse than one that never
+  named it.
+- **The `<80%` coverage rule still fires.** Because Decision 2 deliberately
+  freezes the arithmetic, `target_met` is still `False` on a run whose evidence
+  was entirely retrieved, so `_RECOMMENDATION_PROMPT` rule 3 still steers the
+  recommendation toward *"pause for human review"*. Measured byte-identical
+  before and after this change. A reader of the commit could otherwise conclude
+  that pressure was removed; it was not.
+- **Whether retrieved evidence SHOULD raise the trust band.** Left open
+  deliberately, for data from the live window rather than a blind decision.
+
 
 - The judge still never sees page CONTENT — it receives `[i] title :: url` only
   (`evaluation.py:1729-1732`). The disclosure copy is corrected in this same PR;
