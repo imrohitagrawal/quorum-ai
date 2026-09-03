@@ -256,6 +256,21 @@ _DEFAULT_PRICE_PER_1K_OUTPUT = max(
 #: token count (the industry ~4-chars/token rule of thumb).
 CHARS_PER_TOKEN = Decimal(4)
 
+#: The visible label on the ``kind="synthesis"`` receipt row.
+#:
+#: ONE constant, read by both the estimate path and the measured path, because
+#: ``app.js`` pairs an estimate row to its actual row and two spellings render
+#: two unpaired half-rows.
+#:
+#: Renamed from ``"Debate + synthesis"`` by #290 / ADR-0093 decision 4. That
+#: name was right while one moderator wrote both debate rounds; under a
+#: fully-eligible peer run no moderator call is made, so the row holds NO
+#: debate spend and the name is not merely stale but false. The #16 relabel is
+#: the precedent in the opposite direction — ``"Synthesis writer"`` was renamed
+#: BECAUSE it hid what the row contained; keeping ``"Debate + synthesis"`` on a
+#: row with no debate in it is that defect mirrored.
+WRITER_ROW_DISPLAY_NAME = "Synthesis"
+
 #: Section count in the Layer-B judge's evidence bundle. A LITERAL, pinned
 #: against ``evaluation.build_judge_evidence``, which hard-codes exactly five
 #: sections (consensus, disagreement, source_support, uncertainty,
@@ -1516,7 +1531,7 @@ class CostEstimationService:
             for name, usd in zip(stage_names, stage_usd, strict=True)
         ]
 
-        # --- by_model: 4 initial-answer rows + a debate+synthesis row ----
+        # --- by_model: 4 initial-answer rows + the writer row ------------
         # Each of the four rows is its slot's own initial-answer cost. The
         # fifth row is the debate (×2) + synthesis orchestration, which runs
         # on the dedicated inner-call models, not the four slots — so it is
@@ -1530,7 +1545,7 @@ class CostEstimationService:
                 openrouter_model_catalog_service.lookup_short_name(slot.model_id) or slot.model_id
             )
             raw_model.append(("model", slot.model_id, display_name, initial_i))
-        raw_model.append(("synthesis", "synthesis", "Debate + synthesis", inner_call_cost))
+        raw_model.append(("synthesis", "synthesis", WRITER_ROW_DISPLAY_NAME, inner_call_cost))
         # ADR-0064. The judge is not one of the four slots and it does not run
         # on the debate/synthesis writer models either, so folding it into the
         # writer row would label spend on a THIRD model as synthesis spend.
@@ -1665,8 +1680,36 @@ class CostEstimationService:
         # Same prefix for debate (system) and synthesis (user).
         context_input_tokens = context_tokens
         upstream_answers_tokens = Decimal(4) * init_output_tokens
+        # #290 / ADR-0095. The debate call's SYSTEM prompt, priced from its real
+        # length rather than the flat ``cost_system_prompt_tokens = 350`` the
+        # other stages use.
+        #
+        # Adversarial review measured the gap: `ROUND_ONE_SYSTEM_PROMPT` is
+        # 442.75 tokens and the peer directive adds 36.75 more to every critic
+        # call, so the worst case is 479.5 against 350 priced. With the
+        # moderator that shortfall is paid twice; under peer critique it is paid
+        # EIGHT times at four models' prices, and the result was a demonstrated
+        # ceiling breach — a mix quoted at $0.2496 whose worst real spend is
+        # $0.251788, waved through at REQUIRE_CONFIRMATION and able to bill past
+        # the $0.25 hard limit.
+        #
+        # ONLY under the flag, deliberately. The moderator path's 350 is a
+        # PRE-EXISTING approximation worth at most $0.000466, and correcting it
+        # would move every figure in ADR-0094's measured 715-mix sweep — which
+        # the owner is holding as the basis for the money constants. Correcting
+        # the boundary this feature owns, and filing the rest, is the smaller
+        # responsible change. Local import: ``debate`` imports ``costs``, so the
+        # module-level edge is a cycle; same precedent as ``judge_configured``.
+        if settings.peer_critique_enabled:
+            from product_app.debate import debate_system_prompt_max_chars
+
+            debate_system_tokens = (
+                Decimal(debate_system_prompt_max_chars(peer=True)) / CHARS_PER_TOKEN
+            )
+        else:
+            debate_system_tokens = system_tokens
         debate_prompt_tokens = (
-            system_tokens + query_tokens + upstream_answers_tokens + context_input_tokens
+            debate_system_tokens + query_tokens + upstream_answers_tokens + context_input_tokens
             # Round 2's prompt also carries round 1's critique in full
             # (``debate._debate_user_prompt`` appends ``prior_round``, sliced
             # nowhere), so debate input is NOT the same for both rounds. Without
@@ -1689,9 +1732,54 @@ class CostEstimationService:
         )
         # Both rounds share the same token model (the invariant the UI and the
         # breakdown tests rely on: ``by_stage`` round_1 == round_2).
-        debate_round_cost = _cost(
+        #
+        # #290 / ADR-0095. Under peer critique the round is not one moderator
+        # call but ONE CALL PER ELIGIBLE CRITIC, each on that slot's own model
+        # and each capped at the same ``debate_output_tokens``. Pricing the
+        # moderator alone would falsify ``_estimate_bound_usd``'s own docstring
+        # — "a true ceiling ... can only ever over-protect, never wave through a
+        # run that then bills more" — in the UNSAFE direction, by up to the
+        # slot count.
+        #
+        # Every slot is priced, not the eligible ones, because eligibility is
+        # not knowable before the run: a ceiling must assume the worst case,
+        # and the worst case is that all four slots complete and critique.
+        # Both rounds still cost the same, so the equal-rounds invariant holds
+        # under either shape.
+        moderator_round_cost = _cost(
             settings.debate_model_id, debate_prompt_tokens, debate_output_tokens
         )
+        if settings.peer_critique_enabled:
+            peer_round_cost = sum(
+                (
+                    _cost(slot.model_id, debate_prompt_tokens, debate_output_tokens)
+                    for slot in model_slots
+                ),
+                Decimal("0"),
+            )
+            # MAX, not the peer figure alone. The moderator is REACHABLE with
+            # the flag on: ``debate._build_peer_round`` returns ``None`` when no
+            # slot is eligible — four slots that all fell back to local
+            # simulation, the degraded case this product has a banner for — and
+            # ``run_debate_rounds`` then bills two MODERATOR calls. Replacing
+            # the moderator's price with the critics' made the "ceiling"
+            # LOWER than a shape the run can still take.
+            #
+            # MEASURED by sweeping the pre-fix tree, not inherited: the bound
+            # FELL on 522 of 3,640 legal mixes (13 catalog ids, combinations
+            # with replacement x search on/off), largest drop
+            # ``$0.0853 -> $0.0532``. Turning a feature on must never lower the
+            # figure the guardrail evaluates.
+            #
+            # Two reviewers first reported this as ``$0.0967 -> $0.0740`` and
+            # ``$0.0953 -> $0.0652``, and an earlier version of this comment
+            # repeated both AS MEASURED. Neither reproduces — a third sweep
+            # could not find either pair at any query length. The defect was
+            # real and larger than the quoted figures; the figures were
+            # inherited and unchecked, which is rule 11 exactly.
+            debate_round_cost = max(peer_round_cost, moderator_round_cost)
+        else:
+            debate_round_cost = moderator_round_cost
         synthesis_prompt_tokens = (
             system_tokens
             + query_tokens
@@ -1730,11 +1818,36 @@ class CostEstimationService:
         # Bound-only keeps the ceiling EXACT and leaves both displayed
         # contracts (round_1 == round_2, and both partitions reconciling)
         # untouched.
-        prior_critique_input_cost = (
-            _cost(settings.debate_model_id, debate_output_tokens, Decimal(0))
-            if price_round_two_prior_critique
-            else Decimal(0)
-        )
+        # Under peer critique round 2's prior-round critique is not read once
+        # by one moderator — it is read by EVERY critic, each at its own input
+        # price (``debate._build_peer_round`` passes the same ``prior_round``
+        # to all of them). Charging it once at the moderator's rate under-prices
+        # the normal, all-eligible peer path, not an edge case. MEASURED on this
+        # tree, against a price list the test owns so the figure cannot drift
+        # with the catalog: ``$1.7801`` with the per-critic term against
+        # ``$1.7181`` without, a shortfall of ``$0.0620``
+        # (``test_round_twos_prior_critique_is_priced_for_every_critic``).
+        # An earlier version of this comment quoted "$0.0645 ... against a bound
+        # of $1.01" from a reviewer's own mix, unchecked and unreproducible.
+        # Same ``max`` reasoning as the round cost above — the moderator shape
+        # stays reachable, so its price stays in the worst case.
+        if not price_round_two_prior_critique:
+            prior_critique_input_cost = Decimal(0)
+        elif settings.peer_critique_enabled:
+            prior_critique_input_cost = max(
+                sum(
+                    (
+                        _cost(slot.model_id, debate_output_tokens, Decimal(0))
+                        for slot in model_slots
+                    ),
+                    Decimal("0"),
+                ),
+                _cost(settings.debate_model_id, debate_output_tokens, Decimal(0)),
+            )
+        else:
+            prior_critique_input_cost = _cost(
+                settings.debate_model_id, debate_output_tokens, Decimal(0)
+            )
         # Issue #265: the Layer-B judge is a FIFTH billable call, and until this
         # term existed ``max_cost_usd`` priced only four stages while a fired
         # judge's cost WAS added to ``actual_cost_usd``. So ``actual > max`` —
@@ -2160,6 +2273,7 @@ def build_measured_breakdown(
     debate_by_round: dict[int, Decimal],
     synthesis_cost: Decimal,
     judge: tuple[str, Decimal] | None = None,
+    critique_by_model: list[tuple[str, str, Decimal]] | None = None,
 ) -> CostBreakdown:
     """Assemble a measured :class:`CostBreakdown` that re-sums to the total.
 
@@ -2172,6 +2286,18 @@ def build_measured_breakdown(
       money was actually spent on.
     * ``synthesis_cost`` — summed measured cost of the live synthesis section
       calls.
+    * ``critique_by_model`` — ``(model_id, display_name, measured_cost)`` per
+      PEER CRITIC (#290 / ADR-0093 decision 3), or ``None``/empty under the
+      moderator shape. This parameter is why decision 2's "the usage tuple does
+      not widen" is not the whole story: ``debate_by_round`` is round-keyed, so
+      it structurally cannot express a per-critic figure even though the loop
+      that fills it knew the model.
+
+      The cost carried here is ALSO inside ``debate_by_round`` — deliberately.
+      The two partitions describe one total from two angles: ``by_stage`` keeps
+      critique under the round it was spent in, ``by_model`` splits it per
+      critic. It is subtracted from the writer row rather than added to the
+      grand total, so nothing is double-counted.
     * ``judge`` — ``(model_id, measured_cost)`` for a Layer-B judge call that
       fired AND reported usage (issue #110), or ``None`` when no judge fired
       for this run. A PRESENT-but-``None``-usage judge call must never reach
@@ -2179,14 +2305,21 @@ def build_measured_breakdown(
       to ``estimated`` first, so a possibly-billed, unpriced call is never
       silently absent from a ``"measured"`` total.
 
-    Debate + synthesis are attributed to a single ``"Debate + synthesis"``
-    ``by_model`` row because they use the dedicated debate/synthesis writer
-    models, not the four slot models. (issue #16 relabel: the old
-    ``"Synthesis writer"`` name hid that this line also folds in the two
-    debate rounds — which are the bulk of the inner-call cost.) The judge, when
-    present, gets its OWN ``by_model``/``by_stage`` row (``kind="judge"``) —
-    folding it into the writer row would mislabel spend on a different model as
-    synthesis spend. Both partitions
+    The writer row is named ``"Synthesis"`` (#290 / ADR-0093 decision 4). It
+    used to read ``"Debate + synthesis"``, which was right while one moderator
+    wrote both rounds; under a fully-eligible peer run no moderator call is
+    made at all, so that row holds NO debate spend and the old name is not
+    merely stale but false. The #16 relabel is the precedent in the opposite
+    direction — ``"Synthesis writer"`` was renamed BECAUSE it hid what the row
+    contained.
+
+    The judge, when present, gets its OWN ``by_model``/``by_stage`` row
+    (``kind="judge"``) — folding it into the writer row would mislabel spend on
+    a different model as synthesis spend. Each peer critic likewise gets its own
+    ``kind="critique"`` row, LAST, after the judge: slot rows stay at indices
+    0-3 and the writer row at index 4, which ``costs.py`` records as deliberate
+    defence in depth and which ``tests/integration/test_cost_gate_js.py`` pins
+    on the index shared with the JavaScript consumer. Both partitions
     are reconciled to the quantized grand total with the same rule as the estimate,
     so every line is ``>= 0`` and the lines sum to the total exactly (the UI's
     reconciliation invariant).
@@ -2213,14 +2346,48 @@ def build_measured_breakdown(
         for (name, _), usd in zip(raw_stage, stage_usd, strict=True)
     ]
 
-    writer_cost = debate_total + synthesis_cost
+    critique_lines = list(critique_by_model or ())
+    critique_total = sum((cost for _, _, cost in critique_lines), Decimal("0"))
+    # The critics' share comes OUT of the writer row, not on top of the total.
+    # ``debate_total`` already contains it (``by_stage`` keeps critique under
+    # the round it was spent in), so adding the critique rows without this
+    # subtraction would count the same dollars twice — a partition that still
+    # reconciles, against a total that is itself too large.
+    #
+    # An over-large critique total is INCOHERENT input, not a number to clamp:
+    # critique spend is a SUBSET of debate spend, the same dollars seen from the
+    # other partition, and both are accumulated in one loop over one snapshot.
+    # Raising is also the SAFE direction by construction — ``_actual_cost``
+    # catches ``ValueError`` and demotes the whole run to ``estimated``.
+    #
+    # This was a ``max(Decimal("0"), ...)`` clamp until review pointed out what
+    # a clamp buys: if the two ever disagreed, ``raw_model`` would sum to more
+    # than ``total`` and ``_reconcile_usd_lines`` would silently squeeze every
+    # line to fit — a receipt that still reconciles, still says "measured", and
+    # is wrong on every row. The test that claimed to pin the clamp was passing
+    # on a pydantic ``ValidationError`` from a negative row, which is a
+    # different failure with the same exception base.
+    if critique_total > debate_total:
+        raise ValueError(
+            f"critique spend {critique_total} exceeds debate spend {debate_total}; "
+            "critique is a subset of debate and the two cannot disagree"
+        )
+    writer_cost = debate_total - critique_total + synthesis_cost
     raw_model: list[tuple[str, str, Decimal, str]] = [
         (mid, name, cost, "model") for mid, name, cost in per_model_initial
     ]
-    raw_model.append(("synthesis", "Debate + synthesis", writer_cost, "synthesis"))
+    raw_model.append(("synthesis", WRITER_ROW_DISPLAY_NAME, writer_cost, "synthesis"))
     if judge is not None:
         judge_model_id, _cost = judge
         raw_model.append((judge_model_id, "Layer-B judge", judge_cost, "judge"))
+    # LAST, after the judge (ADR-0093 decision 3). ``model_id`` is the critic's
+    # own, which keeps the composite key ``"{kind} {model_id}"`` unique even
+    # when the moderator, the judge and a slot are all the same model — a
+    # configuration that ships by default. ``app.js`` resolves that key with
+    # ``.find()`` (first match wins) and de-duplicates with a ``Set``, so a
+    # collision renders one figure twice and loses the other.
+    for critique_model_id, critique_name, critique_cost in critique_lines:
+        raw_model.append((critique_model_id, critique_name, critique_cost, "critique"))
     model_usd = CostEstimationService._reconcile_usd_lines(
         [cost for _, _, cost, _ in raw_model], total
     )

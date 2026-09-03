@@ -273,7 +273,7 @@ const BY_MODEL = [
   { model_id: "anthropic/claude-haiku-4.5", display_name: "Claude Haiku 4.5", usd: "0.062", kind: "model" },
   { model_id: "google/gemini-2.5-flash", display_name: "Gemini 2.5 Flash", usd: "0.031", kind: "model" },
   { model_id: "nvidia/nemotron-3-nano-30b-a3b", display_name: "Nemotron 3 Nano", usd: "0.039", kind: "model" },
-  { model_id: "synthesis", display_name: "Debate + synthesis", usd: "0.024", kind: "synthesis" },
+  { model_id: "synthesis", display_name: "Synthesis", usd: "0.024", kind: "synthesis" },
 ];
 const BY_STAGE = [
   { stage: "initial_answers", usd: "0.120" },
@@ -513,6 +513,47 @@ export const goldenRespWithProviderText = (
   const resp = goldenCompletedResp() as Record<string, any>;
   if (surface === "block") resp.result.final_synthesis.recommendation = text;
   else resp.result.final_synthesis.high_stakes_notice = text;
+  return resp;
+};
+
+/**
+ * A completed run whose receipt carries #290's per-critic `kind: "critique"`
+ * rows — four of them, after the writer row and the judge row.
+ *
+ * A DEDICATED builder, not a change to `BY_MODEL` (AGENTS.md 13d): that array
+ * feeds `goldenCompletedResp()`, which the blocking visual-snapshot lane
+ * screenshots full-page against Linux baselines that can only be seeded in CI.
+ *
+ * WHY IT EXISTS: ADR-0093 flagged this render as UNVERIFIED in as many words.
+ * `app.js`'s cost-gate mapper reads `row.kind === "synthesis" ? "Synthesis" :
+ * row.display_name`, so a `kind: "critique"` row falls through to
+ * `display_name` — which was READ, not EXECUTED. The receipt column pairs rows
+ * on the composite key `"{kind} {model_id}"` and de-duplicates the backfill
+ * with a Set, so a critique row sharing a pair with its slot row would render
+ * one figure twice and lose the other.
+ *
+ * The critique rows deliberately REUSE the slot models' ids. That is the case
+ * that matters: a slot appears once as `model <id>` and once as
+ * `critique <id>`, and only the `kind` half keeps the two apart.
+ */
+export const goldenRespWithCritiqueRows = () => {
+  const resp = goldenCompletedResp() as Record<string, any>;
+  const critiqueRows = BY_MODEL.filter((row) => row.kind === "model").map((row) => ({
+    model_id: row.model_id,
+    display_name: `${row.display_name} (critique)`,
+    usd: "0.003",
+    kind: "critique",
+  }));
+  const withCritique = {
+    by_model: [...BY_MODEL, ...critiqueRows],
+    by_stage: BY_STAGE,
+    total: "0.202",
+  };
+  // The ACTUAL breakdown is where critique rows live: they are emitted on the
+  // measured path only. The estimate cannot know which slots will be eligible,
+  // and a row for a call that may not happen is a claim (ADR-0095).
+  resp.actual_breakdown = withCritique;
+  resp.actual_cost_usd = "0.202";
   return resp;
 };
 

@@ -634,7 +634,9 @@ def test_evaluate_run_defaults_the_query_text_and_attaches_the_verdict(
     class _RecordingJudge:
         verifies_support = False
 
-        def evaluate(self, evidence: JudgeEvidence) -> EvalJudgeVerdict | None:
+        def evaluate(
+            self, evidence: JudgeEvidence, *, query_run_id: str | None = None
+        ) -> EvalJudgeVerdict | None:
             captured.append(evidence)
             return EvalJudgeVerdict(**VALID_VERDICT)
 
@@ -657,14 +659,18 @@ def test_only_a_real_verifying_judge_unlocks_the_numeric_score() -> None:
     class _VerifyingJudge:
         verifies_support = True
 
-        def evaluate(self, evidence: JudgeEvidence) -> EvalJudgeVerdict | None:
+        def evaluate(
+            self, evidence: JudgeEvidence, *, query_run_id: str | None = None
+        ) -> EvalJudgeVerdict | None:
             del evidence
             return EvalJudgeVerdict(**VALID_VERDICT)
 
     class _VerifyingButSilentJudge:
         verifies_support = True
 
-        def evaluate(self, evidence: JudgeEvidence) -> EvalJudgeVerdict | None:
+        def evaluate(
+            self, evidence: JudgeEvidence, *, query_run_id: str | None = None
+        ) -> EvalJudgeVerdict | None:
             del evidence
             return None
 
@@ -724,7 +730,9 @@ def test_evaluate_run_hands_the_synthesis_to_the_judge_as_evidence() -> None:
     class _RecordingJudge:
         verifies_support = False
 
-        def evaluate(self, evidence: JudgeEvidence) -> EvalJudgeVerdict | None:
+        def evaluate(
+            self, evidence: JudgeEvidence, *, query_run_id: str | None = None
+        ) -> EvalJudgeVerdict | None:
             captured.append(evidence)
             return None
 

@@ -36,6 +36,7 @@ from collections import Counter
 from typing import Literal
 
 from product_app.debate import (
+    CRITIQUE_SHAPE_PEER,
     DEBATE_MODE_LIVE,
     DebateOutput,
     ModelAlignment,
@@ -114,6 +115,47 @@ def _scored_slot_numbers(initial_answers: list[InitialModelAnswer]) -> set[int]:
     return {a.slot_number for a in initial_answers if counts_as_evidence(a)}
 
 
+def _stance_is_admissible(output: DebateOutput) -> bool:
+    """May this round's ``panel_stance`` be read as evidence?
+
+    Two shapes, two different guards, and conflating them cost this branch a
+    CRITICAL fail-open that adversarial review caught — one WORSE than the
+    defect whose fix introduced it.
+
+    **Moderator shape: gate on ``debate_mode``.** #185's rule. One model wrote
+    the round, so "were these words a moderator's?" is the whole question, and a
+    templated round's stance is this product reading its own template.
+
+    **Peer shape: gate on the stance EXISTING.** The templated guard already ran,
+    per critic, inside ``debate._derive_peer_stance``: templated critics are
+    excluded from the numerator and still counted in the denominator, so a
+    surviving stance is already a strict majority of LIVE critics over the
+    ELIGIBLE panel. Re-applying a round-level ``debate_mode`` gate on top of that
+    does not add safety — it DESTROYS evidence that has already been filtered.
+
+    Why that is fail-OPEN and not merely lossy, measured: ``debate_mode`` under
+    the peer shape is ``all(critics live)``, so ONE blank critic — a 400 on
+    ``response_format``, a torn body, an unusable envelope — flipped the round to
+    ``fallback``. The round's correct, majority-derived stance, showing a panel
+    SPLIT 2-2, was then discarded, and ``compute_consensus_strength`` fell
+    through to ``_has_strong_overlap`` — the 4-gram vocabulary heuristic whose
+    own comment records that it "said 'strong' on a panel split down the
+    middle". A run that read ``divided`` with four usable critics read
+    ``strong`` with three. Losing a critic must never raise the verdict.
+
+    The root cause is that ``debate_mode`` does two jobs: authorship disclosure
+    for ``app.js`` (where ALL is right — a digest with one templated row
+    contains this product's words) and evidence admissibility here (where ALL is
+    wrong). The safety direction is not the same for both, so they cannot share
+    one predicate. This function is the split.
+    """
+    if output.panel_stance is None:
+        return False
+    if output.critique_shape == CRITIQUE_SHAPE_PEER:
+        return True
+    return output.debate_mode == DEBATE_MODE_LIVE
+
+
 def _usable_stance(
     initial_answers: list[InitialModelAnswer],
     debate_outputs: list[DebateOutput],
@@ -168,11 +210,7 @@ def _usable_stance(
     scored = _scored_slot_numbers(initial_answers)
     if not scored:
         return None
-    live_rounds = [
-        output
-        for output in debate_outputs
-        if output.debate_mode == DEBATE_MODE_LIVE and output.panel_stance is not None
-    ]
+    live_rounds = [output for output in debate_outputs if _stance_is_admissible(output)]
     if not live_rounds:
         return None
     latest = max(live_rounds, key=lambda output: output.round_number)
@@ -657,21 +695,88 @@ def _debate_signals_convergence(debate_outputs: list[DebateOutput]) -> bool:
     on words this product wrote about itself.
     """
     for round_output in debate_outputs:
+        # ADR-0093 decision 1a. Under the peer shape this is a DECIDER reading
+        # per-critic evidence, never the pooled digest — see
+        # :func:`_peer_round_signals_convergence` for what the digest would
+        # cost here.
+        if round_output.critique_shape == CRITIQUE_SHAPE_PEER:
+            if _peer_round_signals_convergence(round_output):
+                return True
+            continue
         if round_output.debate_mode != DEBATE_MODE_LIVE:
             continue
         critique = (round_output.critique_text or "").lower()
         if not critique:
             continue
-        for keyword in _CONVERGE_KEYWORDS:
-            if keyword in critique:
-                # Reject simple negations like "did not converge".
-                # We check a 12-char window around the keyword and
-                # refuse to match if "not" / "no " appears within
-                # 3 words before.
-                if _keyword_negated(critique, keyword):
-                    continue
-                return True
+        if _text_signals_convergence(critique):
+            return True
     return False
+
+
+def _text_signals_convergence(critique: str) -> bool:
+    """Does one already-lowercased critique report convergence?
+
+    Extracted verbatim from the loop above when the peer shape gave it a second
+    caller. One matcher, not two: a copy would drift, and the two callers must
+    agree about what a keyword means or the peer and moderator shapes would
+    answer the same words differently.
+    """
+    for keyword in _CONVERGE_KEYWORDS:
+        if keyword in critique:
+            # Reject simple negations like "did not converge".
+            # We check a 12-char window around the keyword and
+            # refuse to match if "not" / "no " appears within
+            # 3 words before.
+            if _keyword_negated(critique, keyword):
+                continue
+            return True
+    return False
+
+
+def _peer_round_signals_convergence(round_output: DebateOutput) -> bool:
+    """Did a STRICT MAJORITY of this round's LIVE critics report convergence?
+
+    Two rules, and the design turns on both.
+
+    **Per-critic, never the digest.** ``critique_text`` under the peer shape is
+    a pooled digest of up to four critics. Scanning it would let ANY ONE of
+    them flip the whole panel to ``"strong"`` — a roughly 4x fail-open widening
+    of a user-visible trust claim, reached with no code change at all. The bar
+    is ADR-0075's, already this product's rule for a panel-level reading: a
+    strict majority of the panel that was read.
+
+    **Live critics only in the NUMERATOR.** #185 put this guard on the round
+    because a templated critique is this product's own words and reading a
+    verdict off them is the product agreeing with itself. Under the peer shape
+    a round with three live critics and one templated one carries a SINGLE
+    round-level ``debate_mode``, so the round-level guard would admit the
+    template — which is why ``SlotCritique.critique_mode`` exists and why the
+    filter is here rather than one level up.
+
+    **The DENOMINATOR is ``eligible_critic_count``, not the critics we heard
+    from.** This is the correction adversarial review forced, and taking it from
+    ``slot_critiques`` was fail-open in a way nobody would guess: it made a
+    CANCEL make the product more confident. Measured, on identical model
+    opinions — four critics split 2-2 read ``weak``; the same run with a cancel
+    landing after the first two read ``strong``, because the two dissenters were
+    never asked and the threshold fell from 3 to 2. A critic that was cancelled,
+    refused, or answered nothing is a critic that did NOT signal convergence. It
+    does not get to leave the denominator.
+
+    A zero denominator returns ``False``: ``x >= 0 // 2 + 1`` is ``x >= 1``, so
+    it would make a SINGLE voice unanimous — rule 7's negative-check-over-
+    nothing, in the fail-open direction.
+    """
+    eligible = round_output.eligible_critic_count
+    if eligible <= 0:
+        return False
+    converging = sum(
+        1
+        for critique in round_output.slot_critiques
+        if critique.critique_mode == DEBATE_MODE_LIVE
+        and _text_signals_convergence((critique.critique_text or "").lower())
+    )
+    return converging >= eligible // 2 + 1
 
 
 def _keyword_negated(haystack: str, keyword: str) -> bool:

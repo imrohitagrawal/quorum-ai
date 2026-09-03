@@ -18,7 +18,12 @@ import pytest
 
 from product_app import query_runs as qr
 from product_app.costs import CostEstimate, CostThresholdAction
-from product_app.debate import DebateOutput, DebateRoundStatus
+from product_app.debate import (
+    CRITIQUE_SHAPE_PEER,
+    DEBATE_MODE_LIVE,
+    DebateOutput,
+    DebateRoundStatus,
+)
 from product_app.model_slots import ModelSlot
 from product_app.providers import (
     CitationCoverage,
@@ -113,6 +118,7 @@ def _run(
     model_ids: list[str] | None = None,
     debate_stage: StageBillingState = StageBillingState.RECORDED,
     synthesis_stage: StageBillingState = StageBillingState.RECORDED,
+    debate_outputs: list[DebateOutput] | None = None,
 ) -> SimpleNamespace:
     """A run shaped exactly as ``_actual_cost`` reads it.
 
@@ -131,6 +137,11 @@ def _run(
     return SimpleNamespace(
         query_run_id=uuid4(),
         cost_estimate=estimate,
+        # #290 / ADR-0093 decision 3. ``BillingSnapshot`` now copies which
+        # rounds ran the PEER shape, under the same lock as the usage list, so
+        # a run stand-in has to carry the field. Empty by default: these cases
+        # drive the MODERATOR shape, which is what ships.
+        debate_outputs=debate_outputs if debate_outputs is not None else [],
         model_slots=slots,
         initial_answers=initial_answers,
         debate_call_usages=debate_call_usages,
@@ -598,3 +609,91 @@ def test_end_to_end_repository_wiring_populates_usages_and_measures() -> None:
 def test_cost_source_field_defaults_to_estimated() -> None:
     field = QueryRunResultResponse.model_fields["cost_source"]
     assert field.default == "estimated"
+
+
+# --- #290: critique spend leaves the writer row ------------------------------
+
+
+def _peer_round(round_number: int) -> DebateOutput:
+    return DebateOutput(
+        round_number=round_number,
+        focus_areas=["disagreement"],
+        critique_text="Slot 1: ...",
+        status=DebateRoundStatus.COMPLETED,
+        debate_mode=DEBATE_MODE_LIVE,
+        critique_shape=CRITIQUE_SHAPE_PEER,
+    )
+
+
+def test_a_peer_round_prices_each_critic_into_its_own_receipt_row() -> None:
+    """RED WHEN: `_actual_cost` stops splitting peer usages out per critic.
+
+    This test exists because MUTATION FOUND ITS ABSENCE. Deleting the
+    ``if round_number in peer_rounds`` branch left every direct test of
+    ``build_measured_breakdown`` green -- they call the builder with critique
+    lines already computed, so none of them exercises the WIRE that computes
+    them. The builder was well tested and its only caller was not.
+
+    Drives the real ``_actual_cost``: four critics, each usage stamped with its
+    own model id, on two peer-shaped rounds.
+    """
+    est = _estimate("0.0400")
+    usages: list[tuple[int, TokenUsage | None]] = [
+        (
+            round_number,
+            _usage().model_copy(update={"model_id": model_id}),
+        )
+        for round_number in (1, 2)
+        for model_id in DEFAULT_MODEL_IDS
+    ]
+    run = _run(
+        initial_answers=_fully_live_answers(),
+        debate_call_usages=usages,
+        synthesis_call_usages=[_usage()],
+        estimate=est,
+        debate_outputs=[_peer_round(1), _peer_round(2)],
+    )
+    _total, breakdown, source = _actual_cost(run)  # type: ignore[arg-type]
+    assert source == "measured"
+    assert breakdown is not None
+    critique_rows = [line for line in breakdown.by_model if line.kind == "critique"]
+    assert [line.model_id for line in critique_rows] == sorted(DEFAULT_MODEL_IDS), (
+        f"expected one critique row per critic, got {[line.model_id for line in critique_rows]}"
+    )
+    assert all(line.usd > 0 for line in critique_rows), (
+        "a critique row priced at zero is a row that carries no evidence"
+    )
+    assert all("(critique)" in line.display_name for line in critique_rows)
+    keys = [f"{line.kind} {line.model_id}" for line in breakdown.by_model]
+    assert len(keys) == len(set(keys)), f"duplicate composite key in {keys}"
+    assert sum(line.usd for line in breakdown.by_model) == breakdown.total
+
+
+def test_a_moderator_round_emits_no_critique_row() -> None:
+    """RED WHEN: every debate usage is split out regardless of the shape.
+
+    The POSITIVE PARTNER (rule 7) for the test above: with the moderator shape
+    -- what ships -- the debate spend stays in the writer row and the receipt
+    is what it was. Same usages, same stamps; only the ROUND SHAPE differs, so
+    this isolates the discriminator rather than the pricing.
+    """
+    est = _estimate("0.0400")
+    usages: list[tuple[int, TokenUsage | None]] = [
+        (
+            round_number,
+            _usage().model_copy(update={"model_id": model_id}),
+        )
+        for round_number in (1, 2)
+        for model_id in DEFAULT_MODEL_IDS
+    ]
+    run = _run(
+        initial_answers=_fully_live_answers(),
+        debate_call_usages=usages,
+        synthesis_call_usages=[_usage()],
+        estimate=est,
+        debate_outputs=[],
+    )
+    _total, breakdown, source = _actual_cost(run)  # type: ignore[arg-type]
+    assert source == "measured"
+    assert breakdown is not None
+    assert [line.kind for line in breakdown.by_model if line.kind == "critique"] == []

@@ -47,6 +47,7 @@ from product_app.debate import (
 from product_app.feedback_store import record_event as _record_feedback_event
 from product_app.providers import (
     _MAX_SOURCE_TITLE_LEN,
+    CallTelemetryLabels,
     CitationCoverage,
     InitialAnswerStatus,
     InitialModelAnswer,
@@ -73,6 +74,7 @@ from product_app.synthesis_length import (
     truncate_recommendation,
     truncate_section,
 )
+from product_app.telemetry_sink import TELEMETRY_STAGE_SYNTHESIS
 from product_app.untrusted_text import UNTRUSTED_DATA_SYSTEM_RULE, fence
 from product_app.visible_text import is_visible
 
@@ -476,6 +478,18 @@ class SynthesisOrchestrationService:
         # raises instead of returning None) is logged as a
         # failed step and the templated fallback is returned
         # instead of letting the whole synthesis raise.
+        # ADR-0093 decision 5. All five sections land on ONE receipt line (the
+        # ``by_stage`` name ``"synthesis"``) and none of them belongs to an
+        # answer slot, so one label object serves the whole fan-out. Passed
+        # explicitly into every future rather than read from a context
+        # variable: ``_synthesis_section_pool`` is a ``ThreadPoolExecutor``,
+        # which does not carry ``contextvars`` into its workers, so a
+        # context-variable correlator would empty itself on exactly the
+        # fan-out it exists to disentangle.
+        telemetry_labels = CallTelemetryLabels(
+            query_run_id=str(query_run_id),
+            stage=TELEMETRY_STAGE_SYNTHESIS,
+        )
         consensus_future = _submit_section(
             "Consensus",
             self._build_consensus,
@@ -486,6 +500,7 @@ class SynthesisOrchestrationService:
             user_prompt=user_prompt,
             context=context,
             should_stop=should_stop,
+            telemetry_labels=telemetry_labels,
         )
         disagreement_future = _submit_section(
             "Disagreement",
@@ -496,6 +511,7 @@ class SynthesisOrchestrationService:
             user_prompt=user_prompt,
             context=context,
             should_stop=should_stop,
+            telemetry_labels=telemetry_labels,
         )
         source_future = _submit_section(
             "Source support",
@@ -505,6 +521,7 @@ class SynthesisOrchestrationService:
             user_prompt=user_prompt,
             context=context,
             should_stop=should_stop,
+            telemetry_labels=telemetry_labels,
         )
         uncertainty_future = _submit_section(
             "Uncertainty",
@@ -515,6 +532,7 @@ class SynthesisOrchestrationService:
             user_prompt=user_prompt,
             context=context,
             should_stop=should_stop,
+            telemetry_labels=telemetry_labels,
         )
         recommendation_future = _submit_section(
             "Recommendation",
@@ -526,6 +544,7 @@ class SynthesisOrchestrationService:
             user_prompt=user_prompt,
             context=context,
             should_stop=should_stop,
+            telemetry_labels=telemetry_labels,
         )
 
         # PR-2 Item 3: per-section failure isolation. The
@@ -802,6 +821,7 @@ class SynthesisOrchestrationService:
         user_prompt: str,
         context: dict[str, Any] | None = None,
         should_stop: Callable[[], bool] | None = None,
+        telemetry_labels: CallTelemetryLabels | None = None,
     ) -> tuple[str, str | None, LiveProviderResult | None]:
         successful = [
             answer for answer in initial_answers if answer.status is InitialAnswerStatus.COMPLETED
@@ -891,6 +911,7 @@ class SynthesisOrchestrationService:
             user_prompt=user_prompt,
             context=context,
             should_stop=should_stop,
+            telemetry_labels=telemetry_labels,
         )
         # F-06: ``live`` is non-None whenever the call MAY HAVE BEEN BILLED,
         # even if its output was unusable — a request the provider refused
@@ -916,6 +937,7 @@ class SynthesisOrchestrationService:
         user_prompt: str,
         context: dict[str, Any] | None = None,
         should_stop: Callable[[], bool] | None = None,
+        telemetry_labels: CallTelemetryLabels | None = None,
     ) -> tuple[str, str | None, LiveProviderResult | None]:
         fallback_paths = {answer.provider_path for answer in initial_answers}
         # #247: no model was asked, so there is nothing to disagree. Tested
@@ -975,6 +997,7 @@ class SynthesisOrchestrationService:
             user_prompt=user_prompt,
             context=context,
             should_stop=should_stop,
+            telemetry_labels=telemetry_labels,
         )
         # F-06: ``live`` is non-None whenever the call MAY HAVE BEEN BILLED,
         # even if its output was unusable — a request the provider refused
@@ -999,6 +1022,7 @@ class SynthesisOrchestrationService:
         user_prompt: str,
         context: dict[str, Any] | None = None,
         should_stop: Callable[[], bool] | None = None,
+        telemetry_labels: CallTelemetryLabels | None = None,
     ) -> tuple[str, str | None, LiveProviderResult | None]:
         # WP-C review A1/A4: this prose sits directly under the "Source support"
         # tile that renders ``sourced_answer_ratio``. It MUST use the same
@@ -1044,6 +1068,7 @@ class SynthesisOrchestrationService:
             # reached its system prompt while every run paid for it.
             context=context,
             should_stop=should_stop,
+            telemetry_labels=telemetry_labels,
         )
         # F-06: ``live`` is non-None whenever the call MAY HAVE BEEN BILLED,
         # even if its output was unusable — a request the provider refused
@@ -1069,6 +1094,7 @@ class SynthesisOrchestrationService:
         user_prompt: str,
         context: dict[str, Any] | None = None,
         should_stop: Callable[[], bool] | None = None,
+        telemetry_labels: CallTelemetryLabels | None = None,
     ) -> tuple[str, str | None, LiveProviderResult | None]:
         failed = sum(1 for answer in initial_answers if answer.status is InitialAnswerStatus.FAILED)
         if failed:
@@ -1097,6 +1123,7 @@ class SynthesisOrchestrationService:
             user_prompt=user_prompt,
             context=context,
             should_stop=should_stop,
+            telemetry_labels=telemetry_labels,
         )
         # F-06: ``live`` is non-None whenever the call MAY HAVE BEEN BILLED,
         # even if its output was unusable — a request the provider refused
@@ -1123,6 +1150,7 @@ class SynthesisOrchestrationService:
         user_prompt: str,
         context: dict[str, Any] | None = None,
         should_stop: Callable[[], bool] | None = None,
+        telemetry_labels: CallTelemetryLabels | None = None,
     ) -> tuple[str, str | None, LiveProviderResult | None]:
         target_met = coverage.target_met
         if target_met and failed_count == 0:
@@ -1155,6 +1183,7 @@ class SynthesisOrchestrationService:
             user_prompt=user_prompt,
             context=context,
             should_stop=should_stop,
+            telemetry_labels=telemetry_labels,
         )
         # F-06: see the other section builders — blank text means a call that
         # may have been billed came back unusable, not that no call was made.
@@ -1171,6 +1200,7 @@ class SynthesisOrchestrationService:
         user_prompt: str,
         context: dict[str, Any] | None = None,
         should_stop: Callable[[], bool] | None = None,
+        telemetry_labels: CallTelemetryLabels | None = None,
     ) -> LiveProviderResult | None:
         # Same operator-opt-in guard as in ``debate._call_debate_model``:
         # if live execution is disabled, return ``None`` and let the
@@ -1201,6 +1231,7 @@ class SynthesisOrchestrationService:
             user_prompt=user_prompt,
             max_tokens=SYNTHESIS_SECTION_MAX_TOKENS,
             context=context,
+            telemetry_labels=telemetry_labels,
         )
 
     def _synthesis_fallback_notice(self, section_label: str) -> str:

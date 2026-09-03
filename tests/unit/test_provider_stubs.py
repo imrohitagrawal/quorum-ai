@@ -192,7 +192,11 @@ def test_provider_stub_returns_openrouter_path_when_live_response_succeeds(
     captured = []
 
     def fake_live(
-        *, openrouter_key: str, query_text: str, model_slot: ModelSlot
+        *,
+        openrouter_key: str,
+        query_text: str,
+        model_slot: ModelSlot,
+        telemetry_labels: object = None,
     ) -> "_FakeLiveResult":
         captured.append((model_slot.slot_number, query_text))
         return _FakeLiveResult(
@@ -245,7 +249,11 @@ def test_provider_stub_relaxes_sources_gate_when_live_text_present_without_citat
     )
 
     def fake_live(
-        *, openrouter_key: str, query_text: str, model_slot: ModelSlot
+        *,
+        openrouter_key: str,
+        query_text: str,
+        model_slot: ModelSlot,
+        telemetry_labels: object = None,
     ) -> "_FakeLiveResult":
         return _FakeLiveResult(answer_text="answer only, no citations", sources=[])
 
@@ -608,7 +616,11 @@ def test_per_slot_search_off_response_records_search_disabled_notice(
     )
 
     def fake_live(
-        *, openrouter_key: str, query_text: str, model_slot: ModelSlot
+        *,
+        openrouter_key: str,
+        query_text: str,
+        model_slot: ModelSlot,
+        telemetry_labels: object = None,
     ) -> "_FakeLiveResult":
         # Bare-id POST returns text but no annotations (the realistic
         # case for a search-disabled slot — the model answers from

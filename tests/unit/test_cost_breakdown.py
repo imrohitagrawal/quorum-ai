@@ -27,6 +27,7 @@ from product_app.catalog_fetcher import _FALLBACK_CATALOG, openrouter_catalog_fe
 from product_app.costs import (
     COST_DISPLAY_QUANTUM,
     HARD_LIMIT_USD,
+    WRITER_ROW_DISPLAY_NAME,
     CostBreakdown,
     CostLineByModel,
     CostLineByStage,
@@ -124,13 +125,13 @@ def test_breakdown_shape_and_reconciliation(query_text: str, model_ids: list[str
     breakdown = estimate.breakdown
     assert isinstance(breakdown, CostBreakdown)
 
-    # by_model: 4 model rows + a 5th "Debate + synthesis" pseudo-row that is
+    # by_model: 4 model rows + a 5th "Synthesis" pseudo-row that is
     # tagged with ``kind="synthesis"`` (not identified by the magic id).
     assert len(breakdown.by_model) == 5
     assert [line.kind for line in breakdown.by_model[:4]] == ["model"] * 4
     assert breakdown.by_model[-1].kind == "synthesis"
     assert breakdown.by_model[-1].model_id == "synthesis"
-    assert breakdown.by_model[-1].display_name == "Debate + synthesis"
+    assert breakdown.by_model[-1].display_name == WRITER_ROW_DISPLAY_NAME
     assert [line.model_id for line in breakdown.by_model[:4]] == model_ids
 
     # by_stage: the four named stages, in the progress vocabulary, in order.

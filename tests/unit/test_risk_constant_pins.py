@@ -266,6 +266,18 @@ BUCKET_B_PIN_BEHAVIOUR = {
         "integration/test_ledger_live_versus_simulated.py::"
         "TestSimulatedRunsLeaveTheGlobalMeterAlone"
     ),
+    "costs.WRITER_ROW_DISPLAY_NAME": (
+        "the visible label on the kind=='synthesis' receipt row (#290 / "
+        "ADR-0093 decision 4). A BEHAVIOUR pin, not a literal one: the string "
+        "itself is cosmetic, but what must hold is that the estimate row and "
+        "its measured counterpart carry the SAME label -- app.js pairs them on "
+        "the composite key and renders display_name as the entire visible "
+        "label, so two spellings render two unpaired half-rows on a money "
+        "surface. Asserted by tests/unit/test_critique_cost_rows.py::"
+        "test_a_critique_row_never_carries_a_bare_short_name and tests/"
+        "integration/test_cost_gate_js.py::"
+        "test_the_javascript_writer_label_matches_the_server_constant"
+    ),
     "costs._RING_CHARGE_EVENT_TYPES": (
         "the in-process ring's mirror of _ACCOUNT_CHARGE_EVENTS. A literal pin "
         "would not catch the failure that matters, which is the two per-account "

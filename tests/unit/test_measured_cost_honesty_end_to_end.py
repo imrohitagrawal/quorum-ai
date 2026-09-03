@@ -196,6 +196,11 @@ def _run(
     """
     return SimpleNamespace(
         query_run_id=uuid4(),
+        # #290 / ADR-0093 decision 3. ``BillingSnapshot`` now copies which
+        # rounds ran the PEER shape, under the same lock as the usage list, so
+        # a run stand-in has to carry the field. Empty here: these cases drive
+        # the MODERATOR shape, which is what ships by default.
+        debate_outputs=[],
         cost_estimate=CostEstimate(
             estimated_cost_usd=Decimal("0.0200"),
             threshold_action=CostThresholdAction.ALLOW,

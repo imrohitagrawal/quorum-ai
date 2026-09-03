@@ -108,15 +108,25 @@ These requirements cover Release 1 MVP for the public AI cross-validation workfl
 - Trigger: Initial model answers are available or recoverable partial results exist.
 - Behavior: The system runs two critique/debate rounds where selected models evaluate disagreement, weak support, and missing reasoning in the other model answers.
 - Outcome: The workflow exposes material contradictions and quality gaps before final synthesis.
-- Implementation status: **PARTIALLY MET.** Two critique rounds run, but they are
-  performed by a single separate moderator model (`settings.debate_model_id`),
-  not by the four answer models evaluating each other. The four answer models are
-  called once each, in parallel, and never read each other's answers
-  (`query_runs.py` initial-answer fan-out; `debate.py` `_call_debate_model` is the
-  only debate dispatch site). The Behavior line above is retained as the
-  requirement rather than rewritten to match the build; peer critique between the
-  four models is the follow-on work. Public copy was corrected to describe the
-  moderator design in the same change that added this line.
+- Implementation status: **BUILT, NOT YET ENABLED** (#290, ADR-0093, ADR-0095).
+  The mechanism the Behavior line describes now exists: under
+  `settings.peer_critique_enabled` each ELIGIBLE answer slot writes its own
+  critique of the others in both rounds, billed to its own model, with a
+  `kind="critique"` receipt row per critic.
+
+  It ships with that setting **false**, so the RUNNING behaviour is still the
+  moderator shape: two critique rounds performed by a single separate model
+  (`settings.debate_model_id`), with the four answer models called once each and
+  never reading each other. Enabling it is a money decision, not a feature
+  toggle — the fail-safe cost bound rises with it, because a peer run makes two
+  debate calls per eligible critic rather than two in total — so it waits on the
+  owner-authorised live window that measures #290's real cost (ADR-0094).
+
+  The Behavior line above was retained as the requirement rather than rewritten
+  to match the build, through the whole period this was unmet. It is met by the
+  code today and will be met by the DEPLOYMENT when the flag is turned on; this
+  status line says which, deliberately, because "built" and "running" are not
+  the same claim.
 - Source: `docs/01-product-brief.md`, `docs/115-release-scope.md`, `docs/13-open-questions.md`.
 - Owner: Product owner.
 - Priority: Must.

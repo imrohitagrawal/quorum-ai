@@ -320,7 +320,7 @@ def _force_live(monkeypatch: pytest.MonkeyPatch, sources: list[SourceReference])
     monkeypatch.setattr(
         provider_stub_service,
         "_live_openrouter_response",
-        lambda *, openrouter_key, query_text, model_slot: LiveProviderResult(
+        lambda *, openrouter_key, query_text, model_slot, telemetry_labels=None: LiveProviderResult(
             answer_text=f"live answer for slot {model_slot.slot_number}", sources=sources
         ),
     )

@@ -160,8 +160,74 @@ TELEMETRY_FIELD_NAMES: frozenset[str] = frozenset(
         # ADR-0084 -- lines that were neither a comment nor a field we know.
         # Any at all means content was on the wire that we could not read.
         "unrecognised_lines",
+        # ADR-0093 decision 5 (#290) -- the correlator. Before these, a token
+        # row could be grouped only by file order plus ``model_id``, which is
+        # guesswork the moment two runs overlap. Peer critique turns one debate
+        # call per run into eight, from four models that ALSO appear as
+        # answerers, so every one of those rows was unattributable.
+        #
+        # An IDENTIFIER, not content: ``query_run_id`` is the run's UUID, which
+        # is already carried on every provider/debate event recorder record and
+        # in the API response. It says nothing about what was asked.
+        "query_run_id",
+        # Which receipt line this call's money lands on. The value is one of
+        # :data:`TELEMETRY_STAGES` and is the ``by_stage`` name VERBATIM, so a
+        # row joins a receipt line by string equality with no derivation.
+        # ``debate_round_1`` / ``debate_round_2`` carry the round, which is why
+        # there is no separate ``round`` field: two sources for one fact is how
+        # they come to disagree.
+        "stage",
+        # Which answer slot this call belongs to: the answerer on the initial
+        # stage, the CRITIC on a peer-critique debate call. Absent on a call
+        # that belongs to no slot (the moderator, synthesis, the judge).
+        "slot_number",
+        # ADR-0093 decision 5. How the provider says it stopped, collapsed to
+        # the bounded label :func:`providers._finish_reason_label` produces --
+        # never the upstream's raw string, which is content of unbounded
+        # length. The #290 probe measured SEVEN OF EIGHT critique calls
+        # returning ``"length"``: full price for a clipped critique, on a
+        # receipt that looks perfectly healthy. No cost row can carry that.
+        "finish_reason",
     }
 )
+
+#: Every value the ``stage`` field may hold.
+#:
+#: These are the ``CostBreakdown.by_stage`` names verbatim, and
+#: ``test_the_stage_labels_are_exactly_the_receipt_stage_names``
+#: (``tests/unit/test_telemetry_correlator.py``) DRIVES
+#: ``build_measured_breakdown`` to compare the two rather than retyping
+#: the list, because the whole value of the field is that the join needs no
+#: derivation. A second spelling for one stage is how such a join silently
+#: returns nothing.
+TELEMETRY_STAGE_INITIAL_ANSWERS = "initial_answers"
+TELEMETRY_STAGE_DEBATE_ROUND_1 = "debate_round_1"
+TELEMETRY_STAGE_DEBATE_ROUND_2 = "debate_round_2"
+TELEMETRY_STAGE_SYNTHESIS = "synthesis"
+TELEMETRY_STAGE_JUDGE = "judge"
+TELEMETRY_STAGES: frozenset[str] = frozenset(
+    {
+        TELEMETRY_STAGE_INITIAL_ANSWERS,
+        TELEMETRY_STAGE_DEBATE_ROUND_1,
+        TELEMETRY_STAGE_DEBATE_ROUND_2,
+        TELEMETRY_STAGE_SYNTHESIS,
+        TELEMETRY_STAGE_JUDGE,
+    }
+)
+
+
+def debate_round_stage(round_number: int) -> str:
+    """The ``stage`` label for a debate round, built the one way.
+
+    ``f"debate_round_{n}"`` written at each call site is two spellings waiting
+    to happen; this is the single producer, and it refuses a round number the
+    receipt has no line for rather than inventing ``debate_round_3``.
+    """
+    stage = f"debate_round_{round_number}"
+    if stage not in TELEMETRY_STAGES:
+        raise ValueError(f"no receipt stage exists for debate round {round_number!r}")
+    return stage
+
 
 #: 1 MiB × 4 backups = a 5 MiB ceiling for the rare billing stream, and
 #: 4 MiB × 4 = 20 MiB for the ~12-per-run token stream. Sized against the
