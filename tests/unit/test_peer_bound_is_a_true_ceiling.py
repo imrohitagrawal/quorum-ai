@@ -118,7 +118,10 @@ def test_the_bound_prices_one_call_per_slot_not_one_per_round(
     # ABOVE `4 x moderator`, and that gap is the fix for a demonstrated ceiling
     # breach, not slack. Both figures MEASURED 2026-09-03; literals on both
     # sides (rule 7a).
-    assert (moderator, peer) == (Decimal("0.0052"), Decimal("0.0213"))
+    # RE-MEASURED after ADR-0096 grew both system prompts (0.0213 -> 0.0230).
+    # The peer figure moves and the moderator one does not, which is itself the
+    # point: ADR-0096's convergence contract is asked of PEER critics only.
+    assert (moderator, peer) == (Decimal("0.0052"), Decimal("0.0230"))
     assert peer > moderator * 4, (
         f"debate_round_1 is {peer} under peer critique against {moderator} under "
         f"the moderator on an identical four-slot panel; four critics are not priced"
@@ -311,8 +314,13 @@ def test_round_twos_prior_critique_is_priced_for_every_critic(
     Both figures MEASURED on 2026-09-03 against that fixed list, the second by
     reverting the per-critic branch and re-running:
 
-        with the per-critic term:      max_cost_usd = $1.7801
-        charged once at the moderator: max_cost_usd = $1.7181   (-$0.0620)
+        with the per-critic term:      max_cost_usd = $1.8086
+        charged once at the moderator: max_cost_usd = $1.7466   (-$0.0620)
+
+    Both re-measured after ADR-0096 grew the prompts. The SHORTFALL is
+    unchanged at $0.0620 — it is a function of the round-2 critique cap, not of
+    the system prompt — which is the sanity check that the re-measure moved the
+    right thing.
 
     Reproduce the second by replacing ``elif settings.peer_critique_enabled:``
     in ``costs._cost_components``'s ``prior_critique_input_cost`` with
@@ -332,9 +340,9 @@ def test_round_twos_prior_critique_is_priced_for_every_critic(
     with monkeypatch.context() as mp:
         mp.setattr(config.settings, "peer_critique_enabled", True)
         bound = _max_cost(cost_estimation_service.estimate(query_text=_QUERY, model_slots=slots))
-    assert bound == Decimal("1.7801"), (
+    assert bound == Decimal("1.8086"), (
         f"the fail-safe bound on the fixed price list is {bound}; charging round "
-        "2's prior critique once at the moderator's rate gives $1.7181, which "
+        "2's prior critique once at the moderator's rate gives $1.7466, which "
         "under-prices by $0.0620 the input every critic actually pays"
     )
 
@@ -369,16 +377,22 @@ def test_the_peer_branch_prices_the_system_prompt_it_actually_sends(
     # LITERALS on both sides (rule 7a): 479.5 measured, 350 the shipped flat
     # price. Asserting `peer_tokens > flat` alone would stay green if the
     # prompt shrank below 350 for an unrelated reason.
-    assert peer_tokens == Decimal("479.5")
+    # RE-MEASURED after ADR-0096. Both prompts were reframed around evidence
+    # and convergence, and round 2 gained the self-assessment contract, so the
+    # worst-case peer prompt went 479.5 -> 923.75 tokens against a flat 350.
+    # The gap this branch closes therefore nearly QUADRUPLED with the design
+    # change — and closed automatically, because the bound reads the prompt's
+    # real length instead of a number somebody has to remember to update.
+    assert peer_tokens == Decimal("923.75")
     assert flat == Decimal(350)
-    assert peer_tokens - flat == Decimal("129.5"), (
+    assert peer_tokens - flat == Decimal("573.75"), (
         "the per-call shortfall the peer branch exists to stop pricing away"
     )
     # The MODERATOR shape is deliberately NOT corrected — see the comment in
     # `_cost_components`. Its own prompt is still longer than the flat price,
     # and that pre-existing gap is filed, not fixed here.
     moderator_tokens = Decimal(debate_system_prompt_max_chars(peer=False)) / CHARS_PER_TOKEN
-    assert moderator_tokens == Decimal("442.75")
+    assert moderator_tokens == Decimal("647.25")
     assert moderator_tokens > flat, (
         "the pre-existing moderator shortfall this change deliberately leaves alone"
     )

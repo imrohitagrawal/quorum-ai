@@ -1518,6 +1518,25 @@ components:
           anyOf:
           - $ref: '#/components/schemas/PanelStance'
           - type: 'null'
+        self_assessment:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Self Assessment
+        position_rationale:
+          type: string
+          title: Position Rationale
+          default: ''
+        cited_sources:
+          items:
+            type: string
+          type: array
+          title: Cited Sources
+          default: []
+        revised_answer:
+          type: string
+          title: Revised Answer
+          default: ''
       type: object
       required:
       - critic_slot_number

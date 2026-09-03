@@ -592,18 +592,19 @@ this file. But when you touch the workspace UI (`src/product_app/static/app.js`,
   ordered lists, blockquotes, long multi-paragraph answers, an empty-citation
   slot — and look at it as a user would (screenshot at 1440px).
 - **The below-the-line gate is `e2e/tests/invariants/`** — driven in CI by
-  `.github/workflows/e2e.yml`. That directory holds **19** specs, not the
+  `.github/workflows/e2e.yml`. That directory holds **20** specs, not the
   three described below: `answer-completeness`, `critique-cost-rows`,
   `export-and-expanders`,
-  `landing-cta-reachable`, `markdown-corpus`, `provider-notice-coverage`,
+  `landing-cta-reachable`, `markdown-corpus`, `peer-critique-copy`,
+  `provider-notice-coverage`,
   `readiness-banner`, `readiness-no-flash`, `real-integration-smoke`,
   `rendering-invariants`, `result-debate`, `session-trail`, `source-expander`,
   `source-support-denominator`, `theme-toggle`, `trust-score-invariants`,
-  `trust-score-visual`, `verdict-band`, `visual-snapshots`. All 19 are named in
-  a `playwright test` command in `e2e.yml` — 16 in the first blocking lane,
+  `trust-score-visual`, `verdict-band`, `visual-snapshots`. All 20 are named in
+  a `playwright test` command in `e2e.yml` — 17 in the first blocking lane,
   `real-integration-smoke` in the second, and `trust-score-visual` +
   `visual-snapshots` in the visual-baseline lane. Three are detailed below
-  because they have contracts worth stating; the other sixteen bind just as
+  because they have contracts worth stating; the other seventeen bind just as
   hard. Enumerate the directory rather than trusting this list.
   **This count said "twelve" until 2026-08-04**, and the error is instructive:
   the FIRST blocking lane runs exactly 12 invariant specs, so a number that was

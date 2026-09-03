@@ -48,6 +48,44 @@ UNTRUSTED_DATA_SYSTEM_RULE = (
 )
 
 
+#: Every character a prompt READER may treat as a line break. Wider than
+#: ``\n``: a provider-controlled string that survives with any of these intact
+#: can forge a row on a line-oriented prompt, and ``debate.py``'s ``_one_line``
+#: docstring records four of them being measured doing exactly that.
+LINE_BREAKING_CHARS = "\n\r\v\f\x1c\x1d\x1e\x85\u2028\u2029"
+
+
+#: How much of a source URL reaches a prompt. Lives here, next to the helper
+#: that applies it, so the DEBATE and SYNTHESIS prompts cap identically — two
+#: prompts showing the same source at two lengths is a difference nobody
+#: intended and nobody would notice.
+MAX_SOURCE_URL_LEN = 500
+
+
+def flatten_for_prompt(value: str, *, max_chars: int) -> str:
+    """Make a provider-controlled string safe to inline on one prompt line.
+
+    Applied to BOTH a source title and its URL. They render on the same line,
+    so flattening only one leaves the line forgeable through the other — which
+    is exactly the gap the first version of this helper had.
+
+    Belt and braces with ``providers._sanitize_source_url``, which rejects a URL
+    carrying any whitespace or control character at the producer. This is the
+    consumer-side half: it holds even for a ``SourceReference`` constructed by
+    some future path that skips that sanitizer.
+
+    LIVES HERE, not in ``synthesis``, because ADR-0096 gives the DEBATE prompt
+    sources too and ``debate`` cannot import ``synthesis`` (``synthesis``
+    imports ``debate``). One implementation, two callers — a copy would drift,
+    and the two prompts must agree about what is safe to inline or the weaker
+    one becomes the way in.
+    """
+    flattened = value or ""
+    for ch in LINE_BREAKING_CHARS:
+        flattened = flattened.replace(ch, " ")
+    return flattened[:max_chars]
+
+
 def neutralize_delimiters(text: str) -> str:
     """Stop untrusted prose from forging an end-of-evidence delimiter.
 

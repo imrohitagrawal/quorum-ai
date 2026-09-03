@@ -36,6 +36,7 @@ from pydantic import BaseModel
 from product_app.config import settings
 from product_app.costs import CHARS_PER_TOKEN
 from product_app.debate import (
+    DEBATE_MODE_LIVE,
     DEBATE_ROUND_MAX_TOKENS,
     AgreementSummary,
     DebateOutput,
@@ -75,7 +76,13 @@ from product_app.synthesis_length import (
     truncate_section,
 )
 from product_app.telemetry_sink import TELEMETRY_STAGE_SYNTHESIS
-from product_app.untrusted_text import UNTRUSTED_DATA_SYSTEM_RULE, fence
+from product_app.untrusted_text import (
+    LINE_BREAKING_CHARS,
+    MAX_SOURCE_URL_LEN,
+    UNTRUSTED_DATA_SYSTEM_RULE,
+    fence,
+    flatten_for_prompt,
+)
 from product_app.visible_text import is_visible
 
 #: PR6/#8/#15: templated-section provenance is now carried STRUCTURALLY by
@@ -223,30 +230,16 @@ def _section_prompt(instruction: str) -> str:
 
 #: Longest source URL inlined into a prompt. Bounds a hostile URL's ability to
 #: blow the char budget the rest of the prompt is sized against.
-_MAX_SOURCE_URL_LEN = 500
+_MAX_SOURCE_URL_LEN = MAX_SOURCE_URL_LEN
 
 #: Line separators a hostile string can use to forge its own prompt line.
 #: ``\n``/``\r`` are the obvious ones; U+2028/U+2029/U+0085 are line breaks to
 #: many renderers and tokenizers, and ``\v``/``\f`` end a line in others.
-_LINE_BREAKING_CHARS = "\n\r\v\f\x1c\x1d\x1e\x85\u2028\u2029"
-
-
-def _flatten_for_prompt(value: str, *, max_chars: int) -> str:
-    """Make a provider-controlled string safe to inline on one prompt line.
-
-    Applied to BOTH the source title and the source URL. They render on the
-    same line, so flattening only one leaves the line forgeable through the
-    other — which is exactly the gap the first version of this helper had.
-
-    Belt and braces with ``providers._sanitize_source_url``, which now rejects
-    a URL carrying any whitespace or control character at the producer. This
-    is the consumer-side half: it holds even for a ``SourceReference``
-    constructed by some future path that skips that sanitizer.
-    """
-    flattened = value or ""
-    for ch in _LINE_BREAKING_CHARS:
-        flattened = flattened.replace(ch, " ")
-    return flattened[:max_chars]
+#: Moved to ``untrusted_text`` by ADR-0096 so the DEBATE prompt can use the
+#: same one; re-exported here under the private names this module's callers
+#: already use, so the move is not also a rename.
+_LINE_BREAKING_CHARS = LINE_BREAKING_CHARS
+_flatten_for_prompt = flatten_for_prompt
 
 
 _CONSENSUS_PROMPT = _section_prompt(
@@ -728,6 +721,28 @@ class SynthesisOrchestrationService:
             f"Failed model count: {failed_count}.",
         ]
 
+        # ADR-0096. The panel's REVISED positions, keyed by slot number.
+        #
+        # Derived HERE from ``debate_outputs`` rather than taken as a parameter:
+        # this builder already receives the rounds, and a second argument
+        # carrying the same fact is a second source for it.
+        #
+        # Only LIVE critics count. A templated critique is this product's own
+        # words, and letting one overwrite a model's answer would put Quorum's
+        # text into the user's answer under a model's name — the authorship
+        # claim #185 and ADR-0093 both exist to prevent.
+        #
+        # Iterated in ROUND ORDER so a later round's settled position supersedes
+        # an earlier one. Only round 2 is asked today; the ordering keeps that
+        # correct if a third round is ever added.
+        revised_answers: dict[int, str] = {}
+        for debate_round in sorted(debate_outputs, key=lambda r: r.round_number):
+            for critique in debate_round.slot_critiques:
+                if critique.critique_mode == DEBATE_MODE_LIVE and is_visible(
+                    critique.revised_answer
+                ):
+                    revised_answers[critique.critic_slot_number] = critique.revised_answer
+
         # Untrusted from here down.
         lines: list[str] = []
         # WP-G2 (F-10): the follow-up context. ``prior_question`` already
@@ -766,11 +781,21 @@ class SynthesisOrchestrationService:
             # Workstream-2 bumped this 250 -> 600; WP-D (F-08) takes it to the
             # full answer. Even 600 chars left the disagreement section quoting
             # from a fragment, which is the same defect at a larger size.
-            excerpt = (
-                (answer.answer_text or "")
-                .strip()
-                .replace("\n", " ")[:SYNTHESIS_ANSWER_EXCERPT_MAX_CHARS]
-            )
+            # ADR-0096: the REVISED answer, when the panel produced one.
+            #
+            # Round 2's peer critics are asked what they now believe the correct
+            # answer to be, having read the others. Synthesis reads THAT as its
+            # primary input, so the answer a user is given reflects the panel
+            # after it read itself. Without this the debate cannot change the
+            # output, and a debate that cannot change the output is theatre.
+            #
+            # Falls back to the ORIGINAL whenever there is no revision — the
+            # moderator shape, round 2 skipped, a critic that did not answer, a
+            # reply that did not parse. Never a blank: an empty revised_answer
+            # must not silently erase a model's contribution.
+            revised = revised_answers.get(answer.slot_number, "")
+            source_text = revised if is_visible(revised) else (answer.answer_text or "")
+            excerpt = source_text.strip().replace("\n", " ")[:SYNTHESIS_ANSWER_EXCERPT_MAX_CHARS]
             # Source titles are provider-controlled (`:online` annotations, and
             # the title of whatever page a web search returned), so they get the
             # SAME treatment as every other untrusted value here: newlines
@@ -792,6 +817,17 @@ class SynthesisOrchestrationService:
             lines.append(f"- {label} ({answer.status.value}): {excerpt}")
             if sources_str:
                 lines.append(f"    sources: {sources_str}")
+        if revised_answers:
+            # Say so IN THE PROMPT. The synthesiser is being handed post-debate
+            # positions and must know that, or it will describe them as the
+            # models' opening answers — which is the "how positions moved"
+            # honesty defect (ADR-0063) reappearing one layer down.
+            lines.append("")
+            lines.append(
+                "Note: the answers above are the models' REVISED positions, "
+                "stated after each read the others' answers and sources. "
+                "Where a model did not revise, its original answer is shown."
+            )
         if debate_outputs:
             lines.append("")
             lines.append("Debate rounds (round 1 then round 2 critique):")

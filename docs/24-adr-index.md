@@ -99,6 +99,7 @@ ways, so the record shows what was believed on a date and what replaced it.
 | [ADR-0093](adr/0093-a-peer-critique-nests-inside-its-round-and-a-critics-spend-gets-its-own-row.md) | A peer critique nests inside its round, renderers read the digest, deciders read the critics | Architecture | Accepted — 2026-09-01 |
 | [ADR-0094](adr/0094-the-post-290-money-constants-are-pre-computed-and-wait-for-the-feature.md) | The post-#290 money constants are pre-computed, and deliberately wait for the feature | Architecture | Accepted — 2026-09-03 |
 | [ADR-0095](adr/0095-peer-critique-ships-behind-a-flag-because-the-fail-safe-bound-must-follow-it.md) | Peer critique ships behind a flag, because the fail-safe bound has to move with it | Architecture | Accepted — 2026-09-03 |
+| [ADR-0096](adr/0096-the-debate-is-evidence-led-convergence-not-a-disagreement-inventory.md) | The debate is evidence-led convergence, not a disagreement inventory | Architecture | Accepted — 2026-09-03 |
 
 **This index was itself stale** until 2026-07-30: ADR-0002 had existed since
 2026-07-19 and was never listed here. A hand-maintained index is a derived fact

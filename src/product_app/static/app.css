@@ -3796,6 +3796,78 @@ a.result-source-chip:hover { border-color: var(--info); color: var(--info); }
   color: var(--body);
 }
 
+/* ADR-0096: the per-critic detail under each round card.
+   Indented and rule-marked so a reader can see at a glance that these are
+   FOUR separate voices, not one continuous summary - which is exactly the
+   distinction the round-level digest above cannot make. */
+.transcript-critics {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--line);
+}
+
+.transcript-critic {
+  padding-left: var(--space-3);
+  border-left: 2px solid var(--line);
+}
+
+.transcript-critic-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
+.transcript-critic-slot {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  color: var(--muted);
+}
+
+/* Deliberately NOT colour-coded by value. "Held its position" must not read as
+   a warning and "Changed its answer" must not read as a success - the product
+   has no basis for saying which is better, and a colour would say so. */
+.transcript-critic-stance {
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--line);
+  color: var(--muted);
+}
+
+.transcript-critic-body {
+  margin: 0;
+  font-size: 0.85rem;
+  line-height: 1.6;
+  color: var(--body);
+}
+
+.transcript-critic-rationale {
+  margin-top: var(--space-2);
+  font-size: 0.82rem;
+  line-height: 1.55;
+  color: var(--muted);
+}
+
+/* Plain text, never a link: these URLs were CITED, not resolved and not
+   verified. A clickable affordance would imply a check this product does not
+   make. `overflow-wrap` because a long URL must not push the card sideways. */
+.transcript-critic-sources {
+  margin-top: var(--space-2);
+  font-size: 0.75rem;
+  line-height: 1.5;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
 .transcript-empty {
   margin: 0;
   font-size: 0.82rem;

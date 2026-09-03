@@ -215,6 +215,10 @@ class TestSynthesisPrompt:
         class _FakeRound:
             round_number: int
             critique_text: str
+            # ADR-0096: the prompt builder derives the panel's REVISED answers
+            # from the rounds, so a round stand-in carries the field. Empty
+            # here — this test is about FENCING the round-level critique.
+            slot_critiques: tuple[object, ...] = ()
 
         prompt = synthesis_stub_service._user_prompt(
             initial_answers=[],

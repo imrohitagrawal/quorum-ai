@@ -71,7 +71,17 @@ kill_timeout = "5s"
   # posts is typed "Bot" and refused. There is deliberately still no maximum
   # window length: #357 ran ~3 days and issue #105 needs ~7, so no number
   # separates them; "is anybody still watching" does.
-  OPENROUTER_LIVE_EXECUTION_ENABLED = "false"
+  OPENROUTER_LIVE_EXECUTION_ENABLED = "true"
+  # #290 / ADR-0093 / ADR-0095 / ADR-0096. Each ELIGIBLE answer slot critiques
+  # the others in both rounds, and in round 2 reports where it now stands on
+  # its OWN answer with rationale and sources.
+  #
+  # ON ONLY INSIDE THE DECLARED WINDOW ABOVE. This is a MONEY switch, not a
+  # feature toggle: a peer run makes two debate calls PER ELIGIBLE CRITIC (up
+  # to eight, not two), so `_estimate_bound_usd` rises with it and more catalog
+  # mixes need a confirmation click. It flips back with
+  # OPENROUTER_LIVE_EXECUTION_ENABLED via `make close-window`.
+  PEER_CRITIQUE_ENABLED = "true"
   # issue #27: keep the feedback-event SQLite trail on the persistent volume
   # (mounted at /data below), NOT the ephemeral rootfs default (.data/…) which
   # is wiped on every deploy — that erased the self-improving-loop history.

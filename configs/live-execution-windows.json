@@ -140,6 +140,15 @@
       "opened_at": "2026-09-01T19:57:00Z",
       "expires_at": "2026-09-01T21:07:22.649275Z",
       "reaffirm_issue": 268
+    },
+    {
+      "owner": "imrohitagrawal",
+      "reason": "#290 peer critique + ADR-0096 evidence-led convergence, measured live. Three things only a real run can settle: what eight critique calls actually cost (W3/ADR-0094 is blocked on it); whether DEBATE_ROUND_MAX_TOKENS=2000 still fits now that round 2 returns a critique AND a revised answer (read finish_reason='length' in telemetry-tokens.jsonl); and whether OpenRouter's :online annotations carry passage CONTENT, which decides whether L2.5 source-checking is possible without new fetches.",
+      "mode": "time_boxed",
+      "judge": true,
+      "opened_at": "2026-09-03T07:51:25Z",
+      "expires_at": "2026-09-08T07:51:25Z",
+      "reaffirm_issue": 290
     }
   ]
 }
