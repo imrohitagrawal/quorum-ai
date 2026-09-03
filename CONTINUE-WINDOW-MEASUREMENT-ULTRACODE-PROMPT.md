@@ -18,15 +18,16 @@ file — prefer this one and say so.
 
 ## THE ORDER IS AN OWNER DECISION, NOT A SUGGESTION
 
-Recorded 2026-09-03. The session proposed a ranking, the owner replied
-*"I will go ahead with your recommendation."* So the sequence below is decided:
+Recorded 2026-09-03, then REVISED the same day when the owner opened the running
+product and found it describing a product that no longer exists. The revised
+sequence:
 
-1. **Item 1 — the clipped-critique defect.** First. No spend, no further
-   approval needed.
-2. **Item 2 Phase 0 — the harvest harness.** Hermetic, `$0`. Built and validated
-   against SIMULATED runs BEFORE any money is spent.
-3. **Item 2 Phases 1-2 — the paid runs.** Authorised (see the budget note
-   below).
+0. **Item 0 — the UI tells users things that are FALSE.** First, and it is three
+   separate PRs. Added after the owner observed it live. See below.
+1. **Item 1 — the clipped-critique defect.** No spend, no further approval.
+2. **Item 2 Phase 0 — the harvest harness.** Hermetic, `$0`. Validated against
+   SIMULATED runs BEFORE any money is spent.
+3. **Item 2 Phases 1-2 — the paid runs.** Authorised (budget note below).
 4. **Item 3 — W3**, but verify the deferral premise first.
 5. **Item 4 — the gate gaps.**
 
@@ -137,7 +138,134 @@ fetch's retry budget during an outage), performance, and **no human has read the
 
 ---
 
-## ITEM 1 — THE CLIPPED-CRITIQUE DEFECT. Do this first.
+## ITEM 0 — THE UI TELLS USERS THINGS THAT ARE FALSE
+
+Found 2026-09-03 by the OWNER, opening the running product, after this session
+had turned peer critique on in production and shipped ADR-0096 without
+retiring the copy that described the old shape. Two read-only audit agents then
+swept ~130 claim-bearing strings; ~110 were true. These are the ones that are
+not. **Every `file:line` below was read from disk — but they are claims, and
+Rule Zero applies: re-verify before acting.**
+
+### THE STRUCTURAL PROBLEM — read this before touching a single string
+
+**Five test files ASSERT THE FALSE STATE and go RED when the bug is FIXED.**
+That is the anti-pattern `AGENTS.md` forbids in its own words — *"Never write a
+check that goes red when the bug is FIXED — that locks in the defect"* — and it
+is why nothing went red when the flag flipped at 07:51 that morning.
+
+| Gate | What it locks in |
+|---|---|
+| `e2e/tests/invariants/landing-cta-reachable.spec.ts` | pins the landing subhead BYTE-EXACT (`:209`), requires `"moderator model"` (`:213`, `:233`), requires `"planned, not yet built"` (`:274`), and **forbids 7 phrasings** of what the product now does (`:239-248`) — `"critique each other"`, `"revise its answer"`, … |
+| `tests/unit/test_ui_honesty.py` | asserts in prose that *"the four answer models … never read one another. Real peer critique is #290 and is NOT built"*; `BANNED_EXCHANGE_CLAIMS` bans `"peer critique"`, `"each other"`, `"one another"`. Its failure message tells the engineer a falsehood. |
+| `tests/integration/test_workspace_html_copy.py` | requires the FALSE caveat *"Templated by Quorum; no model generates this"* to be present, ×5 |
+| `e2e/tests/invariants/trust-score-invariants.spec.ts:57` | pins the false "citation support was checked" sentence verbatim |
+| `tests/integration/test_cost_gate_js.py:150` | pins `labels[4] == "Synthesis"` |
+
+**Each fix must invert its own pinning gate IN THE SAME COMMIT**, with a
+positive partner proving the OTHER shape still reads correctly — the pattern
+`e2e/tests/invariants/peer-critique-copy.spec.ts:77-85` already gets right.
+
+**ADR-0032 is still `Accepted` and is the decision that MANDATES the moderator
+copy.** ADR-0093/0095/0096 each explicitly decline to retire it. Rule 16d: the
+copy fix needs its own ADR superseding ADR-0032 (and ADR-0063's caption clause).
+
+### PR A — the false EVIDENCE claims. Highest value. Do this one first.
+
+**A1. `app.js:3891` — FALSE, and it gates the trust number.**
+> *"Citation support was **checked** by an independent judge model — an
+> automated review, not a human fact-check."*
+
+It unlocks the numeric trust score and its low/moderate/high band
+(`app.js:3988-4005`, gated on `trust.support_verified === true`). The judge is
+ON in production.
+
+Verified by command: the judge's evidence block is built at
+`evaluation.py:1729-1732` as `f"[{i}] {title} :: {url}"` — **titles and URLs
+only, no page content** — and **nothing in `src/` resolves a cited URL** (the
+only `urlopen` call sites are the model catalog, the key probe, the provider
+call, Tavily search and the feedback audit). So the judge is asked *"does the
+answer assert only what its cited evidence supports?"* (`evaluation.py:1762`)
+about evidence it has never seen.
+
+This is L3 wording on L1 data, which **ADR-0096 Decision 1 forbids in those
+words**: *"No UI copy may imply otherwise."* The product already owns the honest
+sentence and uses it on the other branch — `app.js:3885` and `app.js:3914`
+(*"citations were not verified against their sources"*), both TRUE.
+
+**A2. The source classification is INVERTED.**
+- a URL scraped out of the model's own prose (`providers.py:3465`,
+  `_INLINE_MARKDOWN_LINK_RE`) → `is_fallback=False` → clickable, **counted in
+  citation coverage** (`providers.py:759`), presented as a primary source
+- a real Tavily web-search result (`providers.py:3266`) → `is_fallback=True` →
+  badged `"fallback stub"` (`app.js:3345`), forced non-clickable
+  (`app.js:3323-3325`), exported as **`"fallback stub, not a real source"`**
+  (`app.js:3097-3098`)
+
+So a URL a model may have hallucinated counts toward the coverage percentage the
+verdict band leans on, and a genuinely retrieved page does not.
+
+**UNVERIFIED, and it decides whether A2's Tavily half is live or latent:**
+is `TAVILY_API_KEY` set in production? It is a Fly secret, absent from
+`fly.toml`, unreported on `/status`. Settling command:
+`fly secrets list -a quorum-ai | grep -i TAVILY`. **Ask the owner** — it needs
+their `fly` auth.
+
+### PR B — the MECHANISM copy. The landing page is the front door.
+
+| Where | String | Pinned? |
+|---|---|---|
+| `workspace.html:760` | *"A moderator model audits them over two rounds"* — no moderator runs | **YES, byte-exact, blocking lane** |
+| `workspace.html:840` | *"Peer critique between the four models is planned, not yet built"* — it is built, enabled and billed | **YES, blocking lane** |
+| `workspace.html:488-489` | *"Per-model debate detail is **not captured**."* — it IS captured and the user is billed a `(critique)` row per critic. **Visible on EVERY run** (`data-view="live-run"`) | **NO — free to fix. Start here.** |
+| `app.js:4598`, `:4957` | *"Each answer model critiqued the others, **in both rounds**."* — over-asserts; 3 reachable false states (skipped round 2 `debate.py:1052-1073`; per-round shape; `_eligible_critics` can leave one critic) | pin is `/critiqued the others/i` — a count-aware rewrite stays green. `eligible_critic_count` is already served (`openapi.yaml:620`) and read **nowhere** in `app.js` |
+| `app.js:3242` | *"from the four refined answers"* — unconditional; `revised_answers` comes only from live critics | no |
+| live-run card | `Focus: disagreement, weak_support, missing_reasoning` — `FOCUS_AREAS` (`debate.py:92`), a module constant stamped on BOTH rounds, now stale against ADR-0096's rewritten lenses. The result view already suppresses it (`app.js:4612`); the live view does not | no |
+
+**Also `app.js:5004`** — `"Panel divided"` is the bare `else` of `isConsensus`,
+so it fires on *undetermined* too (no debate, templated round, cancelled run,
+fully simulated). This is the #247 defect `mayClaimDisagreement` closed for the
+band and the export; the transcript chip never got the guard. Unpinned.
+
+**ADR-0096 Decision 5 has NO implementation:** an evidenced `held_solution` must
+prevent an unqualified consensus claim. Nothing does — a 3-of-4 majority paints
+the green band while the fourth critic's *"Held its position"* pill renders on
+the same page.
+
+### PR C — the MONEY attribution
+
+- **`costs.py:1541`/`:1548`** — the estimate's `Synthesis` row is
+  `2 × debate_round_cost + synthesis_cost`, and `debate_round_cost`
+  (`costs.py:1780`) is a **sum over all four slot models**. So on the approval
+  screen the row named `Synthesis` holds every critique dollar and the four slot
+  rows hold none. ADR-0093 decision 3 fixed this on the MEASURED path only.
+  ADR-0095:198-204 already records the gap and says the resolution is **an
+  estimate-side note in the UI, not a rename** — it explicitly rejects a
+  shape-dependent label.
+- **`app.js:4344`** — `"Cost by model · est → actual"` pairs those two
+  differently-shaped rows, so the receipt reads *"Synthesis $0.052 → $0.035"*,
+  which looks like a saving when the money merely moved.
+- **`workspace.html:286`** — *"may be 10–30% higher or lower"*. Contradicted by
+  this repo's own numbers: a live actual of `$0.0767` against a `$0.0329`
+  estimate (**+133%**), and ADR-0094 measuring 6 of 6 debate calls exceeding
+  priced output by 1.68x–4.40x. Unpinned.
+
+### NOT user-visible — do not "fix", DELETE
+
+`.panel.panel-section { display: none }` (`app.css:653-656`, unconditional)
+hides `#model-grid`, `#debate-output` and `#synthesis-output`. Four false
+moderator claims live in there (`app.js:5441`, `workspace.html:931`, `:939`,
+`:951`). Harmless today, a landmine if that panel is ever un-hidden. Delete the
+dead markup **and its pinning test** rather than rewording.
+
+### One correction for AGENTS.md while you are here
+
+`AGENTS.md:649` cites the degraded-banner condition at `app.js:2297`. At HEAD it
+is `app.js:2700-2701`. The quoted condition is right; the line number is stale.
+
+---
+
+## ITEM 1 — THE CLIPPED-CRITIQUE DEFECT
 
 **Claim (MEASURED, per ADR-0093):** the #290 probe found **seven of eight**
 critique calls returning `finish_reason: "length"` — the `2000`-token cap
