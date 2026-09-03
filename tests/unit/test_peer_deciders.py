@@ -51,7 +51,19 @@ from product_app.synthesis_consensus import (
     compute_consensus_strength,
 )
 
-_CONVERGED = "The panel has converged on one recommendation."
+#: The convergence sentence, with the KEYWORD IN CAPITALS.
+#:
+#: Deliberately not lowercase. `_peer_round_signals_convergence` lowercases the
+#: critique before scanning, and every test string in this file used to carry
+#: "converged" already lowercase — so deleting that `.lower()` call changed
+#: nothing any test could see. CI's mutation gate found it (three survivors in
+#: this one function) and it reproduced locally: with `.lower()` removed,
+#: 46 tests still passed.
+#:
+#: A model writes prose, and prose capitalises. "CONVERGED" here makes the
+#: normalisation load-bearing, which is what the production input actually
+#: requires of it.
+_CONVERGED = "The panel has CONVERGED on one recommendation."
 _DIVERGED = "The answers still pull in different directions on cost."
 
 
@@ -458,3 +470,41 @@ def test_a_peer_round_with_no_derived_stance_is_still_refused() -> None:
     no_stance = _peer_round([_critique(n, _DIVERGED) for n in (1, 2, 3, 4)])
     assert no_stance.panel_stance is None
     assert _usable_stance(_answers_that_split_two_two(), [no_stance]) is None
+
+
+def test_a_critique_that_is_blank_or_absent_signals_nothing() -> None:
+    """RED WHEN: the `or ""` guard is dropped from the critique read.
+
+    Found by CI's mutation gate alongside the casing gap above: removing the
+    guard left every test passing, because no test supplied an empty critique
+    to a LIVE critic. `SlotCritique.critique_text` is a plain `str` with no
+    `min_length`, so a live critic carrying an empty string is constructible
+    and reachable — and `"".lower()` is fine, which is exactly why the mutant
+    is invisible until a test drives that value.
+
+    Both directions are asserted: the blank critic must not count as a vote,
+    and its presence must not stop the others being counted.
+    """
+    # Three live critics converge, one live critic carries an empty critique.
+    # 3 of 4 is a strict majority, so the round still signals — the blank one
+    # simply does not vote.
+    with_blank = _peer_round(
+        [
+            _critique(1, _CONVERGED),
+            _critique(2, _CONVERGED),
+            _critique(3, _CONVERGED),
+            _critique(4, ""),
+        ]
+    )
+    assert _debate_signals_convergence([with_blank]) is True
+    # ... and a blank critic never supplies the vote that reaches the bar:
+    # 2 real convergences plus 2 blanks is 2 of 4, not a majority.
+    mostly_blank = _peer_round(
+        [
+            _critique(1, _CONVERGED),
+            _critique(2, _CONVERGED),
+            _critique(3, ""),
+            _critique(4, ""),
+        ]
+    )
+    assert _debate_signals_convergence([mostly_blank]) is False
