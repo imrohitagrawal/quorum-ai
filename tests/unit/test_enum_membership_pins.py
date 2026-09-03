@@ -185,7 +185,10 @@ ENUM_MEMBER_PINS: dict[str, frozenset[str]] = {
     ),
     "providers.InitialAnswerStatus": frozenset({"completed", "failed"}),
     "providers.ProviderPath": frozenset(
-        {"local_simulation", "openrouter_search", "fallback_search"}
+        # "web_search" added by ADR-0098: a page a REAL search returned, split
+        # out of "fallback_search" so it is distinguishable from the
+        # example.test placeholder this product writes for itself.
+        {"local_simulation", "openrouter_search", "fallback_search", "web_search"}
     ),
     "query_run_orchestration.QueryRunStatus": frozenset(
         {

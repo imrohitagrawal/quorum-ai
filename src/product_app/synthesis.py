@@ -1086,7 +1086,43 @@ class SynthesisOrchestrationService:
             # corrected elsewhere in this change: a call that may have been billed
             # must still be returned for recording, and ``synthesis_mode`` is
             # derived from whether the sections came back live.
-            base = "No model returned visible source references for this query."
+            # ADR-0098. "cited == 0" means no model cited its OWN sources. It
+            # does NOT mean the run has no evidence: a live answer with no
+            # inline citations gets real pages attached by web search
+            # (providers.py:589), and those are shown to the user as chips, fed
+            # to the debate and fed to the synthesis. Saying "no visible source
+            # references" while four of them are on screen is false, and it was
+            # measured saying exactly that.
+            #
+            # The COUNT is deliberately unchanged (a retrieved page is still not
+            # the model's own citation, so citation_coverage does not move) —
+            # only the sentence, which conflated "nobody cited anything" with
+            # "there is nothing here".
+            #
+            # Counted on the WEB_SEARCH path specifically, not on "has any
+            # sources at all". The first draft of this fix used the looser
+            # condition and made a fully simulated demo run announce "4 of 4
+            # had references attached by web search" — the example.test
+            # placeholders are sources too. That is a worse falsehood than the
+            # sentence being replaced, and
+            # test_prose_does_not_credit_web_search_for_quorum_placeholders is
+            # the gate that now catches it.
+            retrieved = sum(
+                1
+                for answer in initial_answers
+                if answer.citation_coverage.answer_count
+                and any(source.provider is ProviderPath.WEB_SEARCH for source in answer.sources)
+            )
+            if retrieved:
+                base = (
+                    f"No model cited its own sources. {retrieved} of {total} responding "
+                    f"model{'' if total == 1 else 's'} had references attached by web "
+                    "search instead; they are shown with the answers, but do not count "
+                    "toward the source coverage target, which measures the models' own "
+                    "citations."
+                )
+            else:
+                base = "No model returned visible source references for this query."
         else:
             base = (
                 f"{cited} of {total} responding model{'' if total == 1 else 's'} returned visible "

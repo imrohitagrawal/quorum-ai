@@ -3093,7 +3093,7 @@
         // anchors and badges them (`renderStubSource`); an export that turned
         // them into numbered citations would launder simulated placeholders
         // into a decision record.
-        if (s && (STUB_SOURCE_PROVIDERS.has(s.provider) || s.isFallback === true)) {
+        if (isStubSource(s)) {
           const tag = STUB_SOURCE_TAG_TEXT[s.provider] || (s.isFallback ? "fallback stub" : "simulated");
           push(`${i + 1}. ${title} — **${tag}, not a real source**`);
           return;
@@ -3320,7 +3320,7 @@
           // those anchors elsewhere for exactly that reason. F-19 made every
           // source reachable, so without this the expander hands the user a
           // row of dead links dressed as citations.
-          const isStub = STUB_SOURCE_PROVIDERS.has(s.provider) || s.isFallback === true;
+          const isStub = isStubSource(s);
           const safe = isStub ? null : safeHttpUrl(s.url);
           const chip = safe ? mkEl("a", "result-source-chip") : mkEl("span", "result-source-chip");
           if (isStub) chip.dataset.stub = "true";
@@ -3885,10 +3885,19 @@
   const TRUST_DISCLOSURE =
     "Not verified — these are automated structural checks, not a fact-check.";
   // P1 / FR-015: the VERIFIED disclosure — used ONLY when a REAL Layer-B judge
-  // confirmed citation support (trust.support_verified === true). Still honest:
-  // the judge is an automated model, not a human fact-check.
+  // returned a conforming verdict (trust.support_verified === true).
+  //
+  // ADR-0098. This said "Citation support was checked", which the judge cannot
+  // do. Its evidence block is built in evaluation.py as `[i] title :: url` —
+  // titles and URLs, no page content — and nothing in src/ resolves a cited
+  // URL. So it was asked whether the answer asserts only what its cited
+  // evidence supports, about evidence it had never seen: L3 wording on L1 data,
+  // which ADR-0096 Decision 1 forbids in those words.
+  //
+  // What the judge genuinely does check is GROUNDING — do the answer's citation
+  // markers point at the listed sources — and that is all this now claims.
   const TRUST_DISCLOSURE_VERIFIED =
-    "Citation support was checked by an independent judge model — an automated review, not a human fact-check.";
+    "An independent judge model checked this answer's citations against its source list — an automated review, not a human fact-check. The cited pages themselves were not retrieved.";
   // App-authored band labels for the verified treatment. Keys are the ONLY
   // bands the server can emit alongside a numeric score (build_trust_score);
   // anything else fails the verified guard and falls back to the unverified
@@ -5154,6 +5163,31 @@
     local_simulation: "simulated",
     fallback_search: "fallback stub",
   };
+  // ADR-0098. Providers whose sources are REAL pages: the model's own :online
+  // citations, and pages a real web search returned. Neither is a Quorum-side
+  // placeholder, so neither may be badged "not a real source" or stripped of
+  // its link.
+  //
+  // Neither means the page was FETCHED. Nothing in src/ resolves a cited URL;
+  // this says the URL came from a model or a search index, not from us.
+  const REAL_SOURCE_PROVIDERS = new Set(["openrouter_search", "web_search"]);
+
+  // The single stub predicate. Defined ONCE because the chip row and the
+  // Markdown export both need it and two copies drift — the same argument
+  // providers.py makes for NOT_INVOKED_PATHS.
+  //
+  // Note the shape: `isFallback` alone is NOT sufficient, because a real
+  // web-search result is legitimately `is_fallback: true` (it is not the
+  // MODEL's own citation, so it must not raise citation coverage) while still
+  // being a real page. Keying the badge on that flag is exactly the defect
+  // ADR-0098 fixes. The second clause keeps the FAIL-SAFE direction: an
+  // unrecognised provider carrying `isFallback` is still treated as a stub, so
+  // a future source path cannot launder itself into a citation by omission.
+  function isStubSource(s) {
+    if (!s) return false;
+    if (STUB_SOURCE_PROVIDERS.has(s.provider)) return true;
+    return s.isFallback === true && !REAL_SOURCE_PROVIDERS.has(s.provider);
+  }
 
   function renderStubSource(source) {
     const li = document.createElement("li");

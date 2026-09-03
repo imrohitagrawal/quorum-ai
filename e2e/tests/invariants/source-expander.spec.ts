@@ -103,6 +103,65 @@ test.describe("F-19 — the rest of the cited sources are reachable", () => {
     await expect(real).toHaveAttribute("href", "https://example.com/b");
   });
 
+  test("a really-retrieved page is a real citation, not a stub (ADR-0098)", async ({
+    page,
+  }) => {
+    // MEASURED DEFECT. With live execution on, a model that answers with NO
+    // citations gets real pages attached by web search (providers.py:589).
+    // Those arrived as provider "fallback_search" / is_fallback true — byte
+    // identical to the example.test placeholder Quorum writes itself — so the
+    // chip row badged a real Reuters URL "fallback stub" and refused to link
+    // it, and the export wrote "fallback stub, not a real source".
+    //
+    // RED before the fix: the chip is a SPAN with a stub tag.
+    const resp = goldenCompletedResp() as any;
+    resp.result.model_answers[0].sources = [
+      {
+        title: "Reuters investigation",
+        url: "https://reuters.example/a1",
+        provider: "web_search",
+        // Still true, and deliberately so: a retrieved page is not the MODEL's
+        // own citation, so it must not raise citation coverage. The badge must
+        // no longer key on this flag.
+        is_fallback: true,
+      },
+      {
+        // NEGATIVE PARTNER, same run: the Quorum-authored placeholder must
+        // STILL be treated as a stub. Without this, a fix that simply stopped
+        // badging everything would pass the assertions above.
+        title: "Fallback search evidence for slot 1",
+        url: "https://example.test/local-demo/fallback/1",
+        provider: "fallback_search",
+        is_fallback: true,
+      },
+    ];
+    await driveToResult(page, resp);
+    const row = page.locator(".result-synth-source-chips");
+    await expect(row).toBeVisible();
+
+    const retrieved = row.locator(".result-source-chip", { hasText: "Reuters investigation" });
+    await expect(retrieved).toHaveCount(1);
+    expect(
+      await retrieved.first().evaluate((el) => el.tagName),
+      "a page a real web search returned was rendered as a non-link stub — the " +
+        "user is denied the evidence the run actually has"
+    ).toBe("A");
+    await expect(retrieved.first()).toHaveAttribute("href", "https://reuters.example/a1");
+    await expect(retrieved.first().locator(".result-source-stub-tag")).toHaveCount(0);
+
+    const placeholder = row.locator(".result-source-chip", {
+      hasText: "Fallback search evidence",
+    });
+    await expect(placeholder).toHaveCount(1);
+    expect(
+      await placeholder.first().evaluate((el) => el.tagName),
+      "the Quorum-authored example.test placeholder must still not be a link"
+    ).toBe("SPAN");
+    await expect(placeholder.first().locator(".result-source-stub-tag")).toHaveText(
+      /fallback stub/i
+    );
+  });
+
   test("the expander is operable from the keyboard", async ({ page }) => {
     await driveToResult(page);
     const more = page.locator(".result-synth-source-chips button.result-source-more");

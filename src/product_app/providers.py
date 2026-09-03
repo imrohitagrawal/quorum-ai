@@ -106,6 +106,21 @@ class ProviderPath(StrEnum):
     LOCAL_SIMULATION = "local_simulation"
     OPENROUTER_SEARCH = "openrouter_search"
     FALLBACK_SEARCH = "fallback_search"
+    #: A page a REAL web search returned. ADR-0098.
+    #:
+    #: Split out of ``FALLBACK_SEARCH`` because that one value was carrying two
+    #: unrelated things: a page Tavily actually found, and the ``example.test``
+    #: placeholder this product writes for itself. They were byte-identical on
+    #: the wire, so the UI could not tell them apart and badged a real Reuters
+    #: URL "fallback stub, not a real source" while refusing to link it.
+    #:
+    #: This is a SOURCE path only — no answer is ever stamped with it, so the
+    #: "was this slot simulated?" checks that read ``answer.provider_path``
+    #: (debate.py, synthesis.py, app.js) are deliberately unaffected.
+    #:
+    #: It does NOT mean the page was fetched or read. Nothing in ``src/``
+    #: resolves a cited URL; a search engine reported the page exists.
+    WEB_SEARCH = "web_search"
 
 
 #: The provider paths on which NO model was ever sent the question. A COMPLETED
@@ -141,7 +156,19 @@ class ProviderPath(StrEnum):
 #: until #247; adversarial review caught this comment claiming "expressed ONCE"
 #: while a second and third copy sat in ``query_runs``. One definition, because
 #: two matchers built from one constant drift.
-NOT_INVOKED_PATHS = frozenset({ProviderPath.LOCAL_SIMULATION, ProviderPath.FALLBACK_SEARCH})
+#: ADR-0098 adds ``WEB_SEARCH``, which is a SOURCE path — no answer is ever
+#: stamped with it, so this classification is unreachable today. It is listed
+#: here rather than in ``INVOKED_PATHS`` because that is the FAIL-SAFE reading:
+#: if a future change ever did put it on an answer, "a web search returned a
+#: page" is not "a model was asked the question", and the honest default is the
+#: one that does not claim a model spoke.
+NOT_INVOKED_PATHS = frozenset(
+    {
+        ProviderPath.LOCAL_SIMULATION,
+        ProviderPath.FALLBACK_SEARCH,
+        ProviderPath.WEB_SEARCH,
+    }
+)
 
 #: The complement. Written out rather than derived so that
 #: ``test_every_provider_path_is_classified_as_invoked_or_not`` can prove the two
@@ -3262,7 +3289,11 @@ def _parse_tavily_results(payload: object) -> list[SourceReference]:
             SourceReference(
                 title=title[:_MAX_SOURCE_TITLE_LEN],
                 url=sanitized,
-                provider=ProviderPath.FALLBACK_SEARCH,
+                # ADR-0098: a page a real search returned is NOT the
+                # ``example.test`` placeholder, and must not be shown as one.
+                provider=ProviderPath.WEB_SEARCH,
+                # ...but it is still not the MODEL's own citation, so this flag
+                # stays True and ``citation_coverage`` is deliberately unmoved.
                 is_fallback=True,
             ),
         )
