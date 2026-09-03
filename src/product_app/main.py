@@ -1166,6 +1166,23 @@ def status_snapshot() -> dict[str, object]:
         # from the behaviour it reports — and it is true only when BOTH the
         # key and the model id are set, since a key alone runs no judge.
         "judge_enabled": judge_configured(),
+        # ADR-0097. Peer critique replaces 2 moderator debate calls with up to
+        # 8 critic calls at four models' prices, and until 2026-09-03 it was
+        # reported NOWHERE — not here, not on /ready or /metrics, and not to
+        # the posture watchdog that polls this endpoint every 30 minutes. That
+        # is the fault ADR-0013 named one subsystem over: a paid subsystem may
+        # not be enabled invisibly.
+        #
+        # Read straight from the setting that `debate._build_peer_round` gates
+        # on, following judge_enabled's rule: ONE predicate, two readers, so
+        # the operator-visible signal cannot drift from the behaviour that
+        # spends the money. State only — no model ids, no prices.
+        #
+        # Unlike judge_enabled this is NOT a claim about unmetered spend.
+        # Critique cost sits inside the run charge, so global_daily_spend_usd
+        # and the ceiling DO bind it; ADR-0097 records why that difference
+        # means peer critique needs no per-window declaration of its own.
+        "peer_critique_enabled": settings.peer_critique_enabled,
         "model_catalog_loaded": report.catalog_loaded,
         # W9. The default panel slot numbers whose model IS the configured
         # debate moderator, so a moderator grading its own answer is visible

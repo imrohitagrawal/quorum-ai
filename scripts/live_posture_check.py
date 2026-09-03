@@ -290,7 +290,7 @@ import sys
 import time
 import urllib.request
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 from pathlib import Path
 
@@ -984,7 +984,159 @@ def _judge_note(judge_states: Mapping[str, bool | None], *, live: bool) -> str:
     return note
 
 
+def _live_verdict(readiness_states: Mapping[str, str | None]) -> bool | None:
+    """Is live execution ON? ``True`` / ``False`` / ``None`` for "cannot tell".
+
+    ``None`` is the whole point. The first version of the wrapper computed this
+    as ``any(state != FLAG_OFF_STATE for state in readable.values())``, and
+    ``any(())`` is ``False`` — so ZERO readable hosts silently became "live
+    execution is off". Adversarial review drove it end to end: on the branch
+    whose own text is "refusing to report a money posture from a value that was
+    never read", the appended note went on to assert, positively, that live
+    execution was off. That is an ALERTING branch, and the workflow's issue
+    tells the operator to go and read that very line.
+
+    It is also the exact trap ``fetch_readiness_state`` documents for itself:
+    "NOT a default of ``offline_by_config``. A missing key means 'I could not
+    read it', and letting that fall through as the off-state would make this
+    check permanently, silently green."
+
+    The order below FAILS CLOSED: a host that positively reports a live state
+    settles the question ``True`` even if other hosts went unread, because one
+    host spending money is enough. Only when nothing contradicts "off" AND the
+    view is complete AND every state is in the vocabulary does this say
+    ``False``.
+    """
+    readable = {url: s for url, s in readiness_states.items() if s is not None}
+    if any(s != FLAG_OFF_STATE and s in KNOWN_READINESS_STATES for s in readable.values()):
+        return True
+    if not readable:
+        return None
+    if any(s not in KNOWN_READINESS_STATES for s in readable.values()):
+        # The core refuses to interpret these too — it returns UNKNOWN saying
+        # "a state this check has never heard of is not evidence that live
+        # execution is off". Saying less than the core does would be worse.
+        return None
+    if len(readable) != len(readiness_states):
+        # A partial view. Every host that ANSWERED says off, but an unread host
+        # could be live, and this note must not out-claim the core's own
+        # "taken over a partial view" hedge.
+        return None
+    return False
+
+
+def _peer_critique_note(peer_states: Mapping[str, bool | None], *, live: bool | None) -> str:
+    """One sentence naming what was read about peer critique — never a value not read.
+
+    ADR-0097. REPORTED, never alerted on its own. Peer critique replaces the 2
+    moderator debate calls with up to 8 critic calls at four models' prices, so
+    an operator reading a debate bill needs to know which shape produced it —
+    but its spend is inside the run charge and every critic call is gated on
+    live execution, so the live-window check already binds the money. Alerting
+    here would take the watchdog red on a correct, declared, attended posture,
+    which is how a watchdog gets muted.
+
+    Same refusal as ``_judge_note``: an unreadable state is reported as
+    unreadable, never as ``false``.
+
+    ``live`` exists because the first version of this function did not have it,
+    and adversarial review caught what that cost: on the flag-off posture — the
+    steady state, the line an operator sees every cycle — it asserted "the
+    debate leg therefore dispatches up to 8 critic calls" one sentence after
+    the run said "the money switch is off and no visitor can spend". Two
+    sentences on one line contradicting each other is worse than silence.
+
+    The wording is also HEDGED rather than absolute, for a second reason review
+    demonstrated: ``peer_critique_enabled`` is a state, not a promise. A run
+    whose slots all fell back to simulation has no eligible critic, so
+    ``_build_peer_round`` returns None and the MODERATOR shape runs with the
+    flag still true. Saying "dispatches" would be a behaviour claim the code
+    does not honour; "would dispatch, on runs that have eligible critics" is
+    what is actually true.
+    """
+    probed = len(peer_states)
+    if not probed:
+        return "peer_critique_enabled was not probed."
+    readable = [state for state in peer_states.values() if state is not None]
+    if not readable:
+        return f"peer_critique_enabled was unreadable on all {probed} /status host(s)."
+    # Fails closed across hosts exactly as the live posture and the judge do.
+    state = "true" if any(readable) else "false"
+    note = f"peer_critique_enabled={state} (read {len(readable)} of {probed} /status host(s))."
+    if state == "true" and live is None:
+        note += (
+            " Whether any of it can be dispatched is UNKNOWN on this line — the "
+            "readiness posture could not be established — so this reports the "
+            "flag and claims nothing about what is running."
+        )
+    elif state == "true" and not live:
+        note += (
+            " No critic call can be dispatched while live execution is off — "
+            "every one is gated on it — so this is REPORTED and not alerted, "
+            "because it reads like activity and an operator should know."
+        )
+    elif state == "true":
+        note += (
+            " On a run that has eligible critics the debate leg would dispatch "
+            "up to 8 critic calls instead of 2 moderator calls; a run with no "
+            "eligible critic falls back to the moderator shape with the flag "
+            "still true. That spend is inside the run charge, so "
+            "global_daily_spend_usd and the ceiling bind it (ADR-0097)."
+        )
+    return note
+
+
 def evaluate_posture(
+    *,
+    readiness_states: Mapping[str, str | None],
+    windows: Sequence[DeclaredWindow] | None,
+    now: dt.datetime,
+    judge_states: Mapping[str, bool | None] | None = None,
+    peer_states: Mapping[str, bool | None] | None = None,
+    reaffirmations: Mapping[int, list[Reaffirmation] | None] | None = None,
+) -> PostureResult:
+    """``_evaluate_posture_core``, with the peer-critique note on EVERY line.
+
+    ADR-0097. This wrapper exists because the first attempt appended the note
+    to ``judge_note`` instead, and adversarial review measured what that
+    actually did: ``judge_note`` is built AFTER three early returns and then
+    omitted from three more f-strings, so **6 of the 12 return sites carried
+    nothing** — including ``LIVE_JUDGE_UNDECLARED``, the alert about an
+    undeclared paid subsystem on a live money-spending posture, and the
+    unparseable-declaration branch. The comment above it claimed the exact
+    opposite ("EVERY posture line carries it"), and every test exercised one of
+    the six branches that happened to work.
+
+    Appending here rather than at each return is the point: a note added at 12
+    call sites is one a thirteenth return will silently miss. This is total by
+    construction, and ``test_every_posture_decision_names_peer_critique``
+    enumerates ``PostureDecision`` to keep it that way.
+
+    The judge's own three silent branches (:1206, :1216 and the early UNKNOWNs)
+    are PRE-EXISTING and deliberately not changed here — that is the judge's
+    contract, not this one's, and widening it would put a second concern in
+    this pull request.
+    """
+    result = _evaluate_posture_core(
+        readiness_states=readiness_states,
+        windows=windows,
+        now=now,
+        judge_states=judge_states,
+        reaffirmations=reaffirmations,
+    )
+    note = _peer_critique_note(
+        {} if peer_states is None else peer_states,
+        live=_live_verdict(readiness_states),
+    )
+    # Three core details end with no terminal punctuation, so a bare space made
+    # a run-on that swallowed the note into the previous clause — measured on
+    # ":refusing to report a money posture from a value that was never read".
+    detail = result.detail.rstrip()
+    separator = " " if detail.endswith((".", "!", "?")) else ". "
+    return replace(result, detail=f"{detail}{separator}{note}")
+
+
+def _evaluate_posture_core(
     *,
     readiness_states: Mapping[str, str | None],
     windows: Sequence[DeclaredWindow] | None,
@@ -1408,6 +1560,29 @@ def fetch_judge_enabled(url: str, *, attempts: int = _READY_ATTEMPTS) -> bool | 
     return None
 
 
+def fetch_peer_critique_enabled(url: str, *, attempts: int = _READY_ATTEMPTS) -> bool | None:
+    """Read ``peer_critique_enabled`` from ``/status``. None if it cannot be read.
+
+    A missing or non-boolean value is None, NEVER False — the same refusal
+    ``fetch_judge_enabled`` makes, and for the same reason: False would be a
+    claim that a paid subsystem is off, made from a value that was never read.
+
+    ADR-0097 / ADR-0013. Peer critique was invisible from outside the process
+    until 2026-09-03 while running in production.
+    """
+    payload = _fetch_json(url, attempts=attempts)
+    if payload is None:
+        return None
+    if not isinstance(payload, dict):
+        print(f"{url} returned JSON that is not an object: {type(payload).__name__}")
+        return None
+    value = payload.get("peer_critique_enabled")
+    if isinstance(value, bool):
+        return value
+    print(f"{url} has no usable peer_critique_enabled (got {value!r})")
+    return None
+
+
 def fetch_reaffirmations(
     url: str, *, now: dt.datetime, attempts: int = _READY_ATTEMPTS
 ) -> list[Reaffirmation] | None:
@@ -1515,6 +1690,13 @@ def main(argv: list[str] | None = None) -> int:
     for url, judge in judge_states.items():
         print(f"probed {url} -> judge_enabled={judge!r}")
 
+    # ADR-0097. Same hosts, same payload — /status is fetched again rather than
+    # once and shared, because that is what the judge probe already does and
+    # halving the reads is not worth diverging the two paths here.
+    peer_states = {url: fetch_peer_critique_enabled(url) for url in status_urls}
+    for url, peer in peer_states.items():
+        print(f"probed {url} -> peer_critique_enabled={peer!r}")
+
     windows_path = Path(args.windows_file)
     adr_dir = Path(args.adr_dir)
     print(f"declared windows read from {windows_path}; ADR citations resolved in {adr_dir}")
@@ -1545,6 +1727,7 @@ def main(argv: list[str] | None = None) -> int:
         windows=windows,
         now=now,
         judge_states=judge_states,
+        peer_states=peer_states,
         reaffirmations=reaffirmations,
     )
     print(f"decision={result.decision.value}")
