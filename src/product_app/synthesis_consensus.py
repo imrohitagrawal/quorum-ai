@@ -774,7 +774,16 @@ def _peer_round_signals_convergence(round_output: DebateOutput) -> bool:
         1
         for critique in round_output.slot_critiques
         if critique.critique_mode == DEBATE_MODE_LIVE
-        and _text_signals_convergence((critique.critique_text or "").lower())
+        # No ``or ""``. ``SlotCritique.critique_text`` is a REQUIRED ``str``, so
+        # pydantic refuses ``None`` at construction and the guard can never
+        # fire — an EQUIVALENT mutant, which CI's mutation gate reported as a
+        # survivor because no test can kill code that cannot change behaviour.
+        # The gate's own instruction for that case is to stop GENERATING the
+        # mutant rather than to record an exception for it, so the dead guard
+        # is deleted. (The moderator path one screen up still carries its own
+        # ``or ""`` against ``DebateOutput.critique_text``, which is equally
+        # required; that one is pre-existing and left alone here.)
+        and _text_signals_convergence(critique.critique_text.lower())
     )
     return converging >= eligible // 2 + 1
 
