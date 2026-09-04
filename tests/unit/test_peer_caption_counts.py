@@ -34,6 +34,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from tests.code_text import code_without_comments
+from tests.unit.test_ui_honesty import BANNED_EXCHANGE_CLAIMS
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 APP_JS = REPO_ROOT / "src" / "product_app" / "static" / "app.js"
@@ -89,7 +91,10 @@ def _run(harness: str, cases: list[Any]) -> list[Any]:
         harness
         + "\n\nconst cases = "
         + json.dumps(cases)
-        + ";\nconsole.log(JSON.stringify(cases.map(describePeerCritique)));\n"
+        # An explicit arrow, NOT `cases.map(describePeerCritique)`: `Array.map`
+        # passes (element, index, array), so the bare reference fed the array
+        # INDEX in as `detailClause` and appended " 1" to case 1's sentence.
+        + ";\nconsole.log(JSON.stringify(cases.map((c) => describePeerCritique(c))));\n"
     )
     result = subprocess.run(
         ["node", "-e", script], capture_output=True, text=True, timeout=30, check=True
@@ -177,3 +182,112 @@ def test_a_zero_eligible_count_never_renders_as_a_number(harness: str) -> None:
         [[_round(1, "peer", slot_critiques=_critiques(2, 2), eligible_critic_count=4)]],
     )
     assert numeric[0] == "2 of 4 answer models critiqued the others, in round 1."
+
+
+# --- the WIRE, not just the decision ----------------------------------------
+#
+# Review defeated the tests above by leaving `describePeerCritique` in place as
+# dead code and reverting BOTH call sites to the pre-ADR-0099 boolean: the
+# suite stayed green while every user-visible sentence went back to the
+# falsehood. A mutation proof on a function proves nothing about whether the
+# render path calls it.
+#
+# These read the SERVED source with comments stripped (`tests/code_text.py`),
+# because `app.js`'s comments around this code spell the call out in prose and
+# a raw substring scan would match the explanation instead of the code — the
+# trap rule 8 names.
+
+
+@pytest.fixture(scope="module")
+def app_js_code() -> str:
+    """`app.js` with its comments blanked, so a prose mention cannot satisfy a
+    structural assertion (AGENTS.md rule 8)."""
+    stripped = code_without_comments(APP_JS)
+    # POSITIVE PARTNER for the stripper itself: if it ever returned an empty or
+    # gutted file, every structural assertion below would pass vacuously.
+    assert len(stripped) > 100_000, (
+        f"comment-stripped app.js is only {len(stripped)} chars; the structural "
+        "checks below would be asserted over a corrupted file"
+    )
+    return stripped
+
+
+def test_both_debate_captions_are_rendered_from_the_helper(app_js_code: str) -> None:
+    """RED WHEN: either caption site goes back to an inline `critique_shape` test.
+
+    Mutation that reddens this: replace either call with
+    ``rounds.some((r) => r && r.critique_shape === "peer")`` and a fixed string.
+    """
+    calls = app_js_code.count("describePeerCritique(")
+    # 1 definition + 2 call sites (result view, transcript view).
+    assert calls == 3, f"expected 1 definition and 2 call sites, found {calls} occurrences"
+
+    # POSITIVE PARTNER: the old inline predicate is GONE from the render path.
+    # Without this the count above passes over code that calls the helper and
+    # then ignores it.
+    assert 'critique_shape === "peer"' in app_js_code, (
+        "the shape literal vanished entirely — the helper itself should still use it"
+    )
+    assert app_js_code.count('critique_shape === "peer"') == 1, (
+        'a second `critique_shape === "peer"` test exists outside the helper; '
+        "that is the inline predicate this change removed"
+    )
+
+
+def test_the_synthesis_attribution_is_rendered_from_the_helper(app_js_code: str) -> None:
+    """RED WHEN: the attribution goes back to a hard-coded string.
+
+    Mutation that reddens this: replace ``describeSynthesisInput(res || {})``
+    with the literal ``"from the four refined answers"``.
+    """
+    assert app_js_code.count("describeSynthesisInput(") == 2, (
+        "expected 1 definition and 1 call site for describeSynthesisInput"
+    )
+    assert "from the four refined answers" not in app_js_code, (
+        "the unconditional attribution is back as a literal outside the helper"
+    )
+
+
+def test_the_transcript_chip_reads_the_servers_panel_reading(app_js_code: str) -> None:
+    """RED WHEN: the chip returns to a two-way `isConsensus ? … : "Panel divided"`.
+
+    Mutation that reddens this: delete the `panelReading` lookup and inline
+    ``isConsensus ? "Consensus reached" : "Panel divided"``.
+    """
+    assert "panel_agreement" in app_js_code
+    assert '"Not determined"' in app_js_code, (
+        "the undetermined state's label is gone; the chip is back to two states"
+    )
+    # POSITIVE PARTNER: the green attribute is still decided by the shared gate
+    # and NOT by the new three-way label, so no new state can paint green.
+    assert 'dataset.consensus = isConsensus ? "true" : "false"' in app_js_code
+
+
+def test_the_helper_makes_no_banned_exchange_claim(app_js_code: str) -> None:
+    """RED WHEN: a directed-conversation claim appears in the caption helper.
+
+    Review demonstrated a real hole here: moving the caption OUT of the
+    ``mkEl(...)`` literal put it beyond ``test_ui_honesty``'s
+    ``_extract_mkel_literals``, so ``BANNED_EXCHANGE_CLAIMS`` stopped covering
+    the sentence the product actually serves. A caption reading "Each model
+    replied to the others' rebuttals in turn" — three banned phrases, false
+    under BOTH shapes — passed on this branch and FAILED on origin/main. This
+    restores the cover over the helper.
+
+    Mutation that reddens this: put "rebuttal", "replied" or "in turn" into any
+    string ``describePeerCritique`` returns.
+    """
+    helper = _extract_function(app_js_code, "describePeerCritique").lower()
+
+    # POSITIVE PARTNER (rule 7): the helper was actually located and carries the
+    # sentences, so the negatives below are not asserted over an empty slice.
+    assert "critiqued the others" in helper, (
+        "could not locate the caption text inside describePeerCritique; the "
+        "checks below would pass vacuously. Fix the extractor, do not delete this."
+    )
+
+    for banned in BANNED_EXCHANGE_CLAIMS:
+        assert banned not in helper, (
+            f"describePeerCritique emits {banned!r}, which claims one model "
+            "answered another model's message. No shape does that."
+        )

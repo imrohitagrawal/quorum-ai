@@ -45,7 +45,7 @@ Verified by command at 82cb5a6, not by reading:
 | `Focus: disagreement, weak_support, missing_reasoning` | `app.js` x3 | module constant on both rounds; false for round 2 since ADR-0096 |
 | "Panel divided" | `app.js` | bare `else` of `isConsensus`, so it fires on *undetermined* |
 
-### The four false states behind one sentence
+### The five false states behind one sentence
 
 1. round 2 can be skipped entirely (`_should_skip_round_two`);
 2. `critique_shape` is stamped PER ROUND, and the caption used `.some()`;
@@ -56,8 +56,18 @@ Verified by command at 82cb5a6, not by reading:
    "Each answer model critiqued the others" directly above rows the same view
    marks "Written by Quorum, not by a model".
 
-State 4 was missed by the handoff that commissioned this work, which listed
-three. It is the one that makes a dispatch count the wrong thing to read.
+5. **the shape and the outcome vary INDEPENDENTLY ACROSS ROUNDS.** A run whose
+   round 1 was fully live and round 2 fully templated is ordinary (a provider
+   5xx, a torn body, or a cancel landing between the rounds).
+
+State 4 was missed by the handoff, which listed three; it is the one that makes
+a dispatch count the wrong thing to read. **State 5 was missed by this record's
+own first implementation**, and adversarial review demonstrated it: that draft
+chose the "nothing came back" sentence with `.some()` while still scoping it
+"in both rounds", so a run with four live critiques in round 1 reported that
+none came back — the same defect class being fixed here, sign flipped. The
+shipped version scopes every claim to the rounds it is actually true of, which
+is why `scopeOf` takes a list rather than reading one outer variable.
 
 ## Decision
 

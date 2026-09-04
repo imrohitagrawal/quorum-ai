@@ -226,6 +226,41 @@ if SENTRY_DSN:
 _VENDOR_PREFIX = "/static/vendor"
 
 
+def _app_description(active_settings: Settings) -> str:
+    """The API's own front page, describing the shape THIS process will run.
+
+    SHAPE-AWARE, and it has to be. Review demonstrated the flat version was
+    false in the configuration it is most often served from: peer critique is
+    ``False`` by default (``config.py``, ``.env.example``), production sets it
+    true via ``fly.toml`` — and production serves ``/openapi.json`` as **404**
+    (``api_docs_enabled`` is LOCAL-only). So a description hard-coded to the
+    peer wording is read ONLY by deployments where it is wrong, which is the
+    same defect ADR-0099 exists to remove, one layer down.
+
+    This is the rule ``docs/10-functional-requirements.md`` states for the UI —
+    "copy describing the run must read the run's own shape rather than assume
+    either" — applied to the API's description. The setting is the closest
+    thing this builder has to a run.
+    """
+    if active_settings.peer_critique_enabled:
+        mechanism = (
+            "has them critique each other's answers and sources so each can revise its own, and "
+        )
+    else:
+        mechanism = "has a separate moderator model critique their answers, and "
+    return (
+        "Quorum-AI runs your question against four LLMs in parallel, "
+        f"{mechanism}"
+        "returns a single answer — written by a separate synthesis "
+        "model — with explicit "
+        "consensus, disagreement, source support, uncertainty, and "
+        "recommendation. Cost is shown before the run starts; nothing "
+        "executes without confirmation. Results are ephemeral. "
+        "Open the workspace UI at /ui; health and readiness live at "
+        "/health and /ready; the operator snapshot is at /status."
+    )
+
+
 def _openapi_url(active_settings: Settings) -> str | None:
     """Return the raw schema route (``/openapi.json``), gated by the docs flag.
 
@@ -328,18 +363,7 @@ def _build_fastapi(active_settings: Settings) -> FastAPI:
         lifespan=_lifespan,
         title=active_settings.app_name,
         version="0.2.0",
-        description=(
-            "Quorum-AI runs your question against four LLMs in parallel, "
-            "has them critique each other's answers and sources so each can "
-            "revise its own, and "
-            "returns a single answer — written by a separate synthesis "
-            "model — with explicit "
-            "consensus, disagreement, source support, uncertainty, and "
-            "recommendation. Cost is shown before the run starts; nothing "
-            "executes without confirmation. Results are ephemeral. "
-            "Open the workspace UI at /ui; health and readiness live at "
-            "/health and /ready; the operator snapshot is at /status."
-        ),
+        description=_app_description(active_settings),
         docs_url=None,
         redoc_url=None,
         openapi_url=_openapi_url(active_settings),

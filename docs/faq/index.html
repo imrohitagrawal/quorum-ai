@@ -573,7 +573,7 @@ pre code {
         <dt>Token</dt><dd>The unit LLMs bill on — roughly ¾ of an English word. Costs are quoted per 1,000 tokens.</dd>
         <dt>Repo</dt><dd>Short for <em>repository</em> — the project's file history on GitHub. URL: <code>github.com/imrohitagrawal/quorum-ai</code>.</dd>
         <dt>Synthesis</dt><dd>The final output section that combines all four model answers into consensus, disagreement, source support, uncertainty, and recommendation.</dd>
-        <dt>Debate round</dt><dd>One cycle in which each eligible answer model reads all four answers and their sources and writes its own critique. Round 1 is cross-examination; round 2 asks each model to converge, reporting whether it held, amended or changed its answer and why. Two rounds are run per query, and round 2 can be skipped if the run's debate budget is spent. When no slot is eligible, one separate moderator model writes both rounds instead.</dd>
+        <dt>Debate round</dt><dd>One cycle in which each eligible answer model reads all four answers and their sources and writes its own critique. Round 1 is cross-examination; round 2 asks each model to converge, reporting whether it held, amended or changed its answer and why. Two rounds are run per query, and round 2 can be skipped if the run's debate budget is spent. The shape is decided per round: if the feature is off, or no slot is eligible to critique, or the run is cancelled before the first critic is dispatched, one separate moderator model writes that round instead.</dd>
         <dt>Query run</dt><dd>A single execution of the full workflow: estimate → four initial answers → two debate rounds → synthesis. Identified by a <code>query_run_id</code>.</dd>
         <dt>Source</dt><dd>A web page or document that a model cites to support a claim. Shown next to the model's answer.</dd>
         <dt>FastAPI</dt><dd>A Python web framework used to build Quorum AI's backend. It generates API docs, validates input with Pydantic, and serves async endpoints.</dd>
@@ -802,7 +802,8 @@ pre code {
           <li><strong>ADR-0021</strong> — The judge must ask for output it can parse.</li>
           <li><strong>ADR-0029</strong> — The grounding score counts the citations the reader can see.</li>
           <li><strong>ADR-0030</strong> — A citation marker is compared in the shape the source store keeps — a terminal run is evaluated once.</li>
-          <li><strong>ADR-0032</strong> — The copy describes the moderator; the requirement keeps peer critique — corrects UI copy that overstated the debate design.</li>
+          <li><strong>ADR-0032</strong> — The copy describes the moderator; the requirement keeps peer critique — corrected UI copy that overstated the debate design while peer critique was unbuilt. <em>Decisions 1, 3 and 4 superseded by ADR-0099</em>, which retired that copy once peer critique shipped and was enabled.</li>
+          <li><strong>ADR-0099</strong> — The UI describes peer critique, because peer critique is what runs — retires the moderator copy across the landing page, the run views and the export.</li>
         </ul>
         <p style="margin:12px 0 4px;"><strong>Correctness and safety of scoring</strong></p>
         <ul style="margin:4px 0 8px 20px;">

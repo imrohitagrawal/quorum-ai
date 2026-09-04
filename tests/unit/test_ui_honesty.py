@@ -167,36 +167,54 @@ def test_cancel_button_hidden_when_no_run_in_progress() -> None:
 # requirement was pinning a falsehood onto the API's own front page.
 
 
-def test_api_description_describes_the_pipeline_that_actually_runs() -> None:
-    """RED IF: the OpenAPI description returns to naming a moderator model.
+def test_api_description_matches_the_shape_this_process_will_run() -> None:
+    """RED IF: the description stops branching on ``peer_critique_enabled``.
 
-    Mutation that reddens this: restore "has a separate moderator model
-    critique their answers," in the ``description=`` block of ``build_app`` in
-    ``src/product_app/main.py``.
+    BOTH branches are asserted, and that is the point. A flat string is wrong
+    in one configuration or the other, and review demonstrated which: peer
+    critique defaults to ``False`` (``config.py``, ``.env.example``) while
+    production sets it true — and production serves ``/openapi.json`` as 404
+    (``api_docs_enabled`` is LOCAL-only). A description hard-coded to the peer
+    wording is therefore read only by the deployments where it is FALSE.
+
+    Mutation that reddens this: delete the ``if
+    active_settings.peer_critique_enabled`` branch in ``_app_description`` and
+    return either wording unconditionally. One of the two halves below then
+    fails.
     """
-    description = app.openapi()["info"]["description"].lower()
+    from product_app.config import Settings
+    from product_app.main import _app_description
+
+    peer_on = _app_description(Settings(peer_critique_enabled=True)).lower()
+    peer_off = _app_description(Settings(peer_critique_enabled=False)).lower()
 
     # POSITIVE PARTNER FIRST (rule 7). Without these, every negative below is
-    # trivially true over an empty or missing description.
-    assert len(description) > 200, (
-        "description is missing or truncated; the negatives below would pass vacuously"
-    )
-    assert "critique each other's" in description
-    assert "synthesis model" in description
-
-    # RED IF: the moderator wording comes back. On a fully-eligible peer run no
-    # moderator call is made at all (``debate.py::_build_peer_round``), so the
-    # API's own front page would be describing a stage the run never executes.
-    for banned in (
-        "moderator model",
-        "separate moderator",
-        "has them debate",
-    ):
-        assert banned not in description, (
-            f"the served API description claims {banned!r}; peer critique is "
-            "enabled in production and no moderator call is made on an "
-            "eligible run (ADR-0096, ADR-0099)"
+    # trivially true over an empty or truncated description.
+    for text in (peer_on, peer_off):
+        assert len(text) > 200, (
+            "description is missing or truncated; the checks below would pass vacuously"
         )
+        assert "synthesis model" in text
+
+    # The two descriptions must actually DIFFER. Without this the whole test
+    # passes against a function that ignores its argument.
+    assert peer_on != peer_off
+
+    # With peer critique ON no moderator call is made at all
+    # (``debate.py::_build_peer_round``), so naming one describes a stage the
+    # run never executes.
+    assert "critique each other's" in peer_on
+    assert "moderator" not in peer_on
+
+    # With it OFF the moderator is exactly what runs, and claiming mutual
+    # critique would be the falsehood pointed the other way.
+    assert "moderator model" in peer_off
+    assert "critique each other" not in peer_off
+
+    # And the SERVED description is one of the two, not a third string that
+    # drifted: this is the wire, not just the decision.
+    served = app.openapi()["info"]["description"].lower()
+    assert served in (peer_on, peer_off)
 
 
 # --- the debate section's copy (ADR-0063) -----------------------------------
@@ -237,10 +255,17 @@ def test_api_description_describes_the_pipeline_that_actually_runs() -> None:
 #:
 #: ADR-0099 removed four entries that turned TRUE when #290 shipped and were
 #: holding the false copy in place: "each other", "one another",
-#: "read the other" and "peer critique". Removing them is not a loosening —
-#: `tests/unit/test_peer_caption_counts.py` is the positive partner: it drives
-#: `describePeerCritique` under Node and pins which sentence each round shape
-#: produces, so the peer wording cannot leak onto a moderator run.
+#: "read the other" and "peer critique".
+#:
+#: Removing them WAS a real loosening until review caught it, and the reason is
+#: worth keeping: the peer caption moved out of the `mkEl(...)` literal into
+#: `describePeerCritique`, so `_extract_mkel_literals` below stopped seeing the
+#: sentence the product actually serves. A caption reading "Each model replied
+#: to the others' rebuttals in turn" — three banned phrases, false under BOTH
+#: shapes — passed here and failed on the pre-change tree.
+#: `tests/unit/test_peer_caption_counts.py::test_the_helper_makes_no_banned_exchange_claim`
+#: imports this tuple and applies it to the helper's own literals, which is what
+#: restores the cover.
 BANNED_EXCHANGE_CLAIMS = (
     "rebuttal",
     "replied",
