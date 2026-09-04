@@ -224,9 +224,17 @@ def test_all_three_source_surfaces_actually_CALL_the_shared_predicate() -> None:
     assert "if (isStubSource(s)) {" in code, "the Markdown export must use the predicate"
     assert "const isStub = isStubSource(s);" in code, "the chip row must use the predicate"
     assert "if (isStubSource(source)) {" in code, "the transcript list must use the predicate"
-    assert "STUB_SOURCE_PROVIDERS.has(s.provider) || s.isFallback === true" not in code, (
-        "the pre-fix inline predicate is back at a call site"
-    )
+    # Both operand orders: a reviewer defeated the single-order ban by simply
+    # swapping them. Substring bans are weak by nature — the executing gate for
+    # the two VISIBLE surfaces is source-expander.spec.ts; this is the fast
+    # second line, not the load-bearing one.
+    for order in (
+        "STUB_SOURCE_PROVIDERS.has(s.provider) || s.isFallback === true",
+        "s.isFallback === true || STUB_SOURCE_PROVIDERS.has(s.provider)",
+        "source.is_fallback || STUB_SOURCE_PROVIDERS.has(source.provider)",
+        "STUB_SOURCE_PROVIDERS.has(source.provider) || source.is_fallback",
+    ):
+        assert order not in code, f"the pre-fix inline predicate is back: {order}"
 
 
 def test_the_shared_predicate_excludes_the_known_real_providers() -> None:
@@ -292,23 +300,40 @@ def test_a_retrieved_page_is_marked_as_retrieved_not_left_bare() -> None:
     )
 
 
-def test_the_transcript_surface_is_pinned_by_text_because_nobody_can_see_it() -> None:
-    """Why this surface gets a text pin and not an e2e gate.
+def test_no_css_rule_makes_the_hidden_transcript_panel_visible() -> None:
+    """Why this surface gets a text pin and not an executing gate.
 
-    ``renderSourceList`` writes into ``#model-grid``, which sits inside
-    ``<section class="panel panel-section">`` — hidden unconditionally by
-    ``app.css``'s ``.panel.panel-section { display: none }``. MEASURED in a real
-    browser: ``#model-grid`` present, ``isVisible: false``, computed
-    ``display: none``; four ``.source-list`` elements, all ``isVisible: false``.
+    ``renderSourceList`` writes into ``#model-grid``, inside
+    ``<section class="panel panel-section">``, hidden unconditionally by
+    ``.panel.panel-section { display: none }``. MEASURED in a real browser:
+    ``#model-grid`` present, ``isVisible: false``, computed ``display: none``;
+    four ``.source-list`` elements, all invisible. An e2e gate there would drive
+    markup no user can reach, so the pins above are the proportionate remedy.
 
-    So a reviewer's finding that this surface has no EXECUTING gate is correct
-    and deliberately not addressed with one: an e2e test would be driving
-    markup no user can reach, and the remedy should match the surface's reach.
-    The text pins above are the proportionate gate. RED if the panel is ever
-    un-hidden, at which point the surface earns a real one."""
+    An earlier version of this test pinned only the ``display: none`` rule TEXT
+    and claimed it would "go red if the panel is ever un-hidden". A reviewer
+    refuted that in one line: appending
+    ``[data-active-view="transcript"] .panel.panel-section { display: flex; }``
+    out-specifies it (0-3-0 over 0-2-0), makes the surface visible, and leaves
+    the pinned text untouched. So this now checks for ANY later rule that
+    re-displays the panel, not just that the hiding rule still exists.
+
+    RED if the panel becomes reachable — at which point it earns a real gate."""
     css = (APP_JS.parent / "app.css").read_text(encoding="utf-8")
     assert ".panel.panel-section {\n  display: none;\n}" in css, (
-        "the transcript panel is no longer unconditionally hidden — this "
-        "surface is now user-visible and needs an executing e2e gate, not a "
-        "text pin"
+        "the rule hiding the transcript panel is gone"
+    )
+    # POSITIVE PARTNER: the ban below is only meaningful if the selector really
+    # appears in this file at all.
+    assert css.count("panel-section") >= 2, "precondition: the selector is present"
+
+    offenders = [
+        line.strip()
+        for line in css.splitlines()
+        if "panel-section" in line and "display" in line and "display: none" not in line
+    ]
+    assert not offenders, (
+        "a CSS rule re-displays the transcript panel, so it is now user-visible "
+        "and needs an executing e2e gate rather than the text pins above: "
+        f"{offenders}"
     )

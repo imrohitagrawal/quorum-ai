@@ -140,9 +140,17 @@ def _verified_disclosure_literal() -> str:
     match. See ``tests/unit/test_code_text_strips_js_comments.py``.
     """
     code = code_without_comments(APP_JS)
-    match = re.search(r'const TRUST_DISCLOSURE_VERIFIED\s*=\s*\n?\s*"([^"]+)";', code)
-    assert match is not None, "the TRUST_DISCLOSURE_VERIFIED constant is gone or reshaped"
-    return match.group(1)
+    matches = re.findall(r'const TRUST_DISCLOSURE_VERIFIED\s*=\s*\n?\s*"([^"]+)";', code)
+    # EXACTLY ONE, never the first. A reviewer defeated the ``search`` version
+    # by putting an honest decoy in a TEMPLATE LITERAL — comment-stripping does
+    # not (and must not) touch string contents, so "first match wins" just moved
+    # the decoy one channel over and shipped a false constant behind it.
+    assert len(matches) == 1, (
+        f"expected exactly one TRUST_DISCLOSURE_VERIFIED assignment; found "
+        f"{len(matches)}. A second one — even inside a string — means this "
+        f"test can be pointed at a decoy: {matches}"
+    )
+    return str(matches[0])
 
 
 def test_the_verified_disclosure_is_exactly_the_approved_copy() -> None:

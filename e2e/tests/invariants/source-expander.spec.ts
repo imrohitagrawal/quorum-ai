@@ -134,6 +134,11 @@ test.describe("F-19 — the rest of the cited sources are reachable", () => {
     //
     // RED before the fix: the chip is a SPAN with a stub tag.
     const resp = goldenCompletedResp() as any;
+    // A LIVE-SHAPED run. `_fallback_sources` returns EITHER real search results
+    // OR the example.test placeholder, never both, and live-vs-demo is
+    // run-global — so a retrieved page and a placeholder cannot share a slot,
+    // and on a live run the placeholder cannot appear at all. The placeholder
+    // gets its own demo-shaped fixture in the test below.
     resp.result.model_answers[0].sources = [
       {
         title: "Reuters investigation",
@@ -142,15 +147,6 @@ test.describe("F-19 — the rest of the cited sources are reachable", () => {
         // Still true, and deliberately so: a retrieved page is not the MODEL's
         // own citation, so it must not raise citation coverage. The badge must
         // no longer key on this flag.
-        is_fallback: true,
-      },
-      {
-        // NEGATIVE PARTNER, same run: the Quorum-authored placeholder must
-        // STILL be treated as a stub. Without this, a fix that simply stopped
-        // badging everything would pass the assertions above.
-        title: "Fallback search evidence for slot 1",
-        url: "https://example.test/local-demo/fallback/1",
-        provider: "fallback_search",
         is_fallback: true,
       },
     ];
@@ -175,6 +171,27 @@ test.describe("F-19 — the rest of the cited sources are reachable", () => {
       /web search/i
     );
 
+  });
+
+  test("a Quorum placeholder is still a stub, in its own demo-shaped run (ADR-0098)", async ({
+    page,
+  }) => {
+    // NEGATIVE PARTNER for the test above, in a SEPARATE run because the two
+    // shapes cannot co-occur: a placeholder only exists with live execution
+    // off, where no web_search source can be produced.
+    const resp = goldenCompletedResp() as any;
+    resp.result.model_answers[0].sources = [
+      {
+        title: "Fallback search evidence for slot 1",
+        url: "https://example.test/local-demo/fallback/1",
+        provider: "fallback_search",
+        is_fallback: true,
+      },
+    ];
+    await driveToResult(page, resp);
+    const row = page.locator(".result-synth-source-chips");
+    await expect(row).toBeVisible();
+
     const placeholder = row.locator(".result-source-chip", {
       hasText: "Fallback search evidence",
     });
@@ -186,6 +203,7 @@ test.describe("F-19 — the rest of the cited sources are reachable", () => {
     await expect(placeholder.first().locator(".result-source-stub-tag")).toHaveText(
       /fallback stub/i
     );
+    await expect(placeholder.first().locator(".result-source-origin-tag")).toHaveCount(0);
   });
 
   // THE EXPORT. A user-visible surface the chip-row assertions do not reach:

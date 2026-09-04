@@ -156,6 +156,20 @@ MUTATIONS: list[tuple[str, str, str, str]] = [
     ),
     # --- the judge disclosure ----------------------------------------------
     (
+        "20 live note reports the total instead of the real count",
+        "synth",
+        'f"{user_prompt}\\n\\n{retrieved} of the answers cited no source of their own; "',
+        'f"{user_prompt}\\n\\n{len(initial_answers)} of the answers cited no source '
+        'of their own; "',
+    ),
+    (
+        "21 counter drops the answer_count guard",
+        "synth",
+        "        if answer.citation_coverage.answer_count\n"
+        "        and any(source.provider is ProviderPath.WEB_SEARCH for source in answer.sources)",
+        "        if any(source.provider is ProviderPath.WEB_SEARCH for source in answer.sources)",
+    ),
+    (
         "09 the false 'support was checked' claim returns",
         "app",
         "    \"An independent judge model checked this answer's citations against its "
@@ -218,6 +232,14 @@ def main() -> int:
             if not killed or clean.returncode != 0:
                 failures += 1
 
+    # FLOOR FIRST (rule 7). Printing "3 killed / 3" and only then refusing
+    # leaves a number in the log that reads like a result; a reviewer caught
+    # exactly that ordering. Refuse before any score is emitted.
+    if len(MUTATIONS) < 15:
+        print(f"FLOOR FAILED: only {len(MUTATIONS)} mutations declared; expected >= 15.")
+        print("No score is reported: a partial mutation set is not a measurement.")
+        return 2
+
     text_pins = sum(1 for _, key, _, _ in MUTATIONS if key == "app")
     print(f"\n{len(MUTATIONS) - failures} killed / {len(MUTATIONS)}")
     print(
@@ -228,11 +250,6 @@ def main() -> int:
         "different but behaviourally identical code, so read this number as "
         "'the pins are wired', never as 'the UI is correct'."
     )
-    # FLOOR (rule 7): a negative result over nothing is trivially clean. An
-    # empty or truncated MUTATIONS list must fail loudly, not report 0/0.
-    if len(MUTATIONS) < 15:
-        print(f"FLOOR FAILED: only {len(MUTATIONS)} mutations declared; expected >= 15.")
-        return 2
     return 1 if failures else 0
 
 

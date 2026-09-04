@@ -298,7 +298,7 @@ jobs:
         # reported "263 passed (6.1m)" on 2026-09-03 — on a CLEANED `.data`,
         # because the durable per-IP mint cap accumulates across local runs and
         # a poisoned database presents as ~30 unrelated timeouts.
-        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 263 --lane "invariants lane"
+        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 267 --lane "invariants lane"
 
       - name: Clear the previous lane's JUnit report
         run: rm -f e2e/results.xml

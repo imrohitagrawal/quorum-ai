@@ -501,3 +501,53 @@ def test_an_invoked_answer_with_a_quorum_stub_is_not_web_search_evidence() -> No
     # count, so the zero above is the provider check working.
     invoked_with_page = _answer(provider_path=ProviderPath.OPENROUTER_SEARCH, sources=_retrieved(1))
     assert count_answers_with_retrieved_sources([invoked_with_page]) == 1
+
+
+def test_the_live_note_reports_a_real_fraction_not_the_total(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """RED if the live note's count is hardcoded or reads the total.
+
+    Rule 7a, on the artefact that actually reaches production. The sibling test
+    drives ``attach=[True] * 4``, where numerator == denominator — so replacing
+    ``retrieved`` with ``len(initial_answers)`` or the literal ``4`` survived
+    it, and a mutation proof caught that. This drives TWO of four so the two
+    terms are constrained independently."""
+    monkeypatch.setattr(settings, "openrouter_live_execution_enabled", True)
+    answers = _live_answers(attach=[True, True, False, False], monkeypatch=monkeypatch)
+
+    noted = _with_retrieved_note("BASE PROMPT", answers)
+    assert "2 of the answers cited no source of their own" in noted, (
+        f"the note must carry the REAL count, not the total: {noted!r}"
+    )
+    assert "4 of the answers" not in noted
+
+
+def test_a_failed_slot_is_in_neither_term_of_the_note(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """RED if the ``answer_count`` guard is dropped from the counter.
+
+    A mutation proof found that deleting it survived the whole suite. A slot
+    that produced no text is not an answer, and must not be counted as one that
+    'cited no source of its own'."""
+    retrieved = _retrieved(1)
+    completed = _answer(provider_path=ProviderPath.OPENROUTER_SEARCH, sources=retrieved)
+    failed = completed.model_copy(
+        update={
+            "status": InitialAnswerStatus.FAILED,
+            "citation_coverage": CitationCoverage(
+                answer_count=0,
+                sourced_answer_count=0,
+                sourced_answer_ratio=Decimal("0.00"),
+                target_met=False,
+            ),
+        }
+    )
+    assert failed.sources, "precondition: the failed slot still carries the sources"
+
+    assert count_answers_with_retrieved_sources([failed]) == 0, (
+        "a slot that produced no text was counted as an answer"
+    )
+    # POSITIVE PARTNER: the identical shape that DID produce text still counts.
+    assert count_answers_with_retrieved_sources([completed]) == 1

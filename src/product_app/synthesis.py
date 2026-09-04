@@ -1178,9 +1178,10 @@ class SynthesisOrchestrationService:
             if retrieved:
                 base = (
                     f"No model cited its own sources. {retrieved} of {total} "
-                    f"answer{'' if total == 1 else 's'} on this run carry references "
-                    "from a web search this product ran instead; they are shown with "
-                    "the answers, but do not count toward the source coverage target, "
+                    f"answer{'' if total == 1 else 's'} on this run "
+                    f"{'carries' if retrieved == 1 else 'carry'} references from a "
+                    "web search this product ran instead; they are shown with the "
+                    "answers, but do not count toward the source coverage target, "
                     "which measures the models' own citations."
                 )
             else:
