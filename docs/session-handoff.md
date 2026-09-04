@@ -1,7 +1,7 @@
 # Session Handoff
 
 ## Date/time
-2026-08-28T02:15:48+05:30
+2026-09-04T21:10:33+05:30
 
 ## Open work
 `docs/65-open-work.md` — the source of truth for what is open, what blocks what,
@@ -11,32 +11,32 @@ line further down this file is the factory router's view of the lifecycle, not a
 work status.
 
 ## Latest narrative handoff
-`docs/analysis/2026-08-27-session-handoff.md` — read this for full context before editing. **(1 day old** — if a newer session ran since then and its narrative handoff was archived without a replacement being written, this may be stale; check `docs/archive/` for a newer one.)
+`docs/analysis/2026-09-04-session-handoff.md` — read this for full context before editing. (today)
 
 This file is a mechanical snapshot (branch/git-status/skill-route/live state) —
 regenerated fresh every `make handoff`. The narrative above (what happened,
 what's next, the traps) lives in the dated doc it points to, not here.
 
 ## Current branch/worktree
-docs/w0-open-work-board
+main
 
 ## Live state (measured fresh by this run, not hand-carried)
 Run `make handoff` again for current numbers instead of trusting this file
 once it ages -- every value below is read from git/gh/`/status` at
 generation time, per #134.
 
-- **`origin/main` tip:** `e115d92ac070`
-- **Last commit touching `src/`:** `8b2ffdac8e6b`
-- **Production vs. last `src/` commit:** unavailable: could not reach https://quorum-ai.fly.dev/status (last src/ commit is 8b2ffda)
-- **pytest collected (no execution):** 3829
-- **e2e lane spec counts:** invariants: 18, ops: 2, degraded: 1
-- **Open issues:** 7
+- **`origin/main` tip:** `82cb5a654a50`
+- **Last commit touching `src/`:** `82cb5a654a50`
+- **Production vs. last `src/` commit:** unavailable: could not reach https://quorum-ai.fly.dev/status (last src/ commit is 82cb5a6)
+- **pytest collected (no execution):** 4276
+- **e2e lane spec counts:** invariants: 20, ops: 2, degraded: 1
+- **Open issues:** 3
 - **Changed-lines coverage:** not computed here -- `make diff-cover` shares
   coverage data with every pytest-invoking target and races with them if run
   concurrently (AGENTS.md rule 15), so this file does not run it. Run
   `make quality && make diff-cover DIFF_BASE=origin/main` for a current number.
 - **Remote branches not merged into `origin/main`:**
-- `docs/w0-open-work-board`
+- None (every remote branch merges into `main`)
 
 ## Current phase
 Operate, learn, and improve
@@ -93,12 +93,14 @@ Operate, learn, and improve
 
 ## Git status
 ```text
-clean
+M CONTINUE-WINDOW-MEASUREMENT-ULTRACODE-PROMPT.md
+?? docs/analysis/2026-09-04-session-handoff.md
 ```
 
 ## Diff stat
 ```text
-no unstaged diff
+CONTINUE-WINDOW-MEASUREMENT-ULTRACODE-PROMPT.md | 28 ++++++++++++++++++++++---
+ 1 file changed, 25 insertions(+), 3 deletions(-)
 ```
 
 ## Completed in this session
