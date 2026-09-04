@@ -22,8 +22,13 @@ Recorded 2026-09-03, then REVISED the same day when the owner opened the running
 product and found it describing a product that no longer exists. The revised
 sequence:
 
-0. **Item 0 — the UI tells users things that are FALSE.** First, and it is three
-   separate PRs. Added after the owner observed it live. See below.
+0. **Item 0 — the UI tells users things that are FALSE.** Three PRs.
+   **PR A is DONE (merged 2026-09-04, ADR-0098, live).** PR B and PR C remain.
+   The owner has since agreed an ordering for everything after them — see
+   `docs/analysis/2026-09-04-session-handoff.md` "The agreed plan, in order".
+   In short: PR B, PR C, file the judge-source-access issue, Phase 0 harvester
+   at $0, ONE validation run (which also settles Route A vs B for giving the
+   judge real source access), build that, then the three varied runs.
 1. **Item 1 — the clipped-critique defect.** No spend, no further approval.
 2. **Item 2 Phase 0 — the harvest harness.** Hermetic, `$0`. Validated against
    SIMULATED runs BEFORE any money is spent.
@@ -112,7 +117,16 @@ own — measured on 2026-09-03, on PR #433:
 
 ---
 
-## VERIFIED STATE AS OF 2026-09-03 ~14:20 UTC
+## VERIFIED STATE AS OF 2026-09-03 ~14:20 UTC — NOW STALE
+
+**The table below is from 2026-09-03 and its first two rows are WRONG now.**
+`main` is `82cb5a6` and production serves it (verified 2026-09-04). The window
+has been re-affirmed **twice**; the second was posted by an agent with the
+owner's explicit in-session authority, so "a human account must post it" now
+means "an account GitHub types as `User`", which is what was used.
+`e2e/node_modules` has been restored. For current state read
+`docs/analysis/2026-09-04-session-handoff.md`. Everything else in the table
+still held when last checked.
 
 Each line names how it was verified. Re-run these first; they are cheap.
 
@@ -170,7 +184,24 @@ positive partner proving the OTHER shape still reads correctly — the pattern
 copy.** ADR-0093/0095/0096 each explicitly decline to retire it. Rule 16d: the
 copy fix needs its own ADR superseding ADR-0032 (and ADR-0063's caption clause).
 
-### PR A — the false EVIDENCE claims. Highest value. Do this one first.
+### PR A — DONE. Merged 2026-09-04 as `82cb5a6` (ADR-0098), live in production.
+
+**DO NOT REBUILD THIS.** Verified: Deploy job `success`, `/status.build_sha` ==
+`82cb5a6...`, and the served `app.js` carries the fix. Both A1 and A2 are fixed.
+
+One premise below is FALSE and is left in place so the correction is visible:
+A2 names `_fallback_sources` as the reachable web-search path and says not to
+re-ask. MEASURED with a call-counting probe, live execution ON:
+`_fallback_sources` **0 calls**, `_tavily_search` **1**. The live-execution
+guard in `produce_initial_answer` returns a FAILED slot first. The reachable
+site is the SUPPLEMENT, which attaches to genuinely LIVE answers — so the
+defect was worse-placed than described, not better.
+
+The coverage arithmetic was deliberately NOT changed; see ADR-0098 Decision 2.
+
+Read `docs/analysis/2026-09-04-session-handoff.md` before starting anything.
+
+### PR A, as originally written (historical)
 
 **A1. `app.js:3891` — FALSE, and it gates the trust number.**
 > *"Citation support was **checked** by an independent judge model — an
