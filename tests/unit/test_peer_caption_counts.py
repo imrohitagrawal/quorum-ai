@@ -103,6 +103,38 @@ def _run(harness: str, cases: list[Any]) -> list[Any]:
     return decoded
 
 
+@pytest.fixture(scope="module")
+def harness_synth() -> str:
+    source = APP_JS.read_text(encoding="utf-8")
+    assert "function describeSynthesisInput(" in source
+    assert "function hasVisibleText(" in source
+    # `describeSynthesisInput` calls `hasVisibleText`, which closes over
+    # INVISIBLE_OUTLIERS, so all three must be lifted together or the function
+    # throws under Node and every case below "fails" for the wrong reason.
+    outliers = 'const INVISIBLE_OUTLIERS = new Set(["\\u3164", "\\u2800"]);'
+    return (
+        outliers
+        + "\n"
+        + _extract_function(source, "hasVisibleText")
+        + "\n"
+        + _extract_function(source, "describeSynthesisInput")
+    )
+
+
+def _run_synth(harness: str, cases: list[Any]) -> list[Any]:
+    script = (
+        harness
+        + "\n\nconst cases = "
+        + json.dumps(cases)
+        + ";\nconsole.log(JSON.stringify(cases.map((c) => describeSynthesisInput(c))));\n"
+    )
+    result = subprocess.run(
+        ["node", "-e", script], capture_output=True, text=True, timeout=30, check=True
+    )
+    decoded: list[Any] = json.loads(result.stdout)
+    return decoded
+
+
 def _critiques(live: int, fallback: int = 0) -> list[dict[str, str]]:
     return [{"critique_mode": "live"} for _ in range(live)] + [
         {"critique_mode": "fallback"} for _ in range(fallback)
@@ -152,6 +184,108 @@ def test_the_caption_reports_what_actually_happened(harness: str) -> None:
     # what the pre-ADR-0099 implementation returned and what a regression to it
     # would restore.
     assert len({s for s in got if s}) == 5
+
+
+def test_a_claim_is_scoped_to_the_rounds_it_is_true_of(harness: str) -> None:
+    """RED WHEN: the sentence is scoped with every peer round rather than the
+    rounds whose critics actually answered.
+
+    THE DEFECT THIS PINS, found by adversarial review in the first version of
+    ADR-0099's own fix: the "nothing came back" branch fired on `.some()` while
+    the scope still said "in both rounds", so a run whose round 1 was fully live
+    and round 2 fully templated reported that NO critique came back in both
+    rounds — erasing four real critiques directly above a card the same view
+    leaves unmarked because its `debate_mode` is "live".
+
+    Mutation that reddens this: `scopeOf(answered)` -> `scopeOf(peer)` on the
+    "Each answer model critiqued the others" branch. Proved by
+    `scripts/proofs/mechanism_copy_mutations.py` mutation 06, which SURVIVED
+    until this test existed.
+    """
+    full = {"slot_critiques": _critiques(4), "eligible_critic_count": 4}
+    none_live = {"slot_critiques": _critiques(0, 4), "eligible_critic_count": 4}
+    partial = {"slot_critiques": _critiques(3, 1), "eligible_critic_count": 4}
+
+    cases = [
+        # round 1 answered, round 2 entirely templated -> round 1 only.
+        [_round(1, "peer", **full), _round(2, "peer", **none_live)],
+        # the mirror: only round 2 answered.
+        [_round(1, "peer", **none_live), _round(2, "peer", **full)],
+        # the cancel shape: round 2 dispatched one critic, which fell back.
+        [
+            _round(1, "peer", **full),
+            _round(2, "peer", slot_critiques=_critiques(0, 1), eligible_critic_count=4),
+        ],
+        # both answered but with DIFFERENT counts -> no count may be asserted,
+        # and the scope is still both rounds because both did answer.
+        [_round(1, "peer", **partial), _round(2, "peer", **full)],
+    ]
+    got = _run(harness, cases)
+
+    assert got[0] == "Each answer model critiqued the others, in round 1."
+    assert got[1] == "Each answer model critiqued the others, in round 2."
+    assert got[2] == "Each answer model critiqued the others, in round 1."
+    assert got[3] == "The answer models critiqued the others, in both rounds."
+
+    # None of these may claim BOTH rounds while one round produced nothing —
+    # the exact sentence the pre-fix version emitted.
+    for sentence in got[:3]:
+        assert "in both rounds" not in sentence
+        assert "No answer model" not in sentence
+
+
+def test_an_invisible_revised_answer_is_not_a_revision(harness_synth: str) -> None:
+    """RED WHEN: `hasVisibleText` is replaced by `String(x).trim()`.
+
+    `synthesis.py` gates on `visible_text.is_visible`, which treats text whose
+    every character is whitespace or Unicode Cf/Cc as invisible. `.trim()` does
+    not: three zero-width spaces are truthy in JS and INVISIBLE to Python, so
+    synthesis fed the ORIGINAL answer while the UI credited the debate for a
+    revision that was never used.
+
+    Mutation that reddens this: mutation 08 in
+    `scripts/proofs/mechanism_copy_mutations.py`, which SURVIVED until this
+    test existed.
+    """
+    zero_width = "\u200b\u200b\u200b"
+    cases = [
+        # Four live critiques whose revised answers are invisible.
+        {
+            "model_answers": [1, 2, 3, 4],
+            "debate_outputs": [
+                {
+                    "slot_critiques": [
+                        {
+                            "critic_slot_number": i,
+                            "critique_mode": "live",
+                            "revised_answer": zero_width,
+                        }
+                        for i in range(1, 5)
+                    ]
+                }
+            ],
+        },
+        # POSITIVE PARTNER: real text on the same shape DOES count, so the
+        # assertion above is not passing because nothing ever counts.
+        {
+            "model_answers": [1, 2, 3, 4],
+            "debate_outputs": [
+                {
+                    "slot_critiques": [
+                        {
+                            "critic_slot_number": i,
+                            "critique_mode": "live",
+                            "revised_answer": "a real revision",
+                        }
+                        for i in range(1, 5)
+                    ]
+                }
+            ],
+        },
+    ]
+    got = _run_synth(harness_synth, cases)
+    assert got[0] == "from the four opening answers"
+    assert got[1] == "from the four refined answers"
 
 
 def test_a_zero_eligible_count_never_renders_as_a_number(harness: str) -> None:
