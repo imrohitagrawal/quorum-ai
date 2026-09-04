@@ -255,6 +255,12 @@ jobs:
         # headroom to delete both and stay green. MEASURED, not computed: the
         # 17-spec lane run exactly as the step above runs it reported
         # "269 passed (9.6m)".
+        # 269 -> 271 (ADR-0100): critique-cost-rows.spec.ts gains the pair that
+        # drives the estimate-attribution note — present with critique rows,
+        # ABSENT on a moderator run. Same rule as every raise above: measured by
+        # running the 17-spec lane exactly as the step above runs it, which
+        # reported "271 passed (7.1m)", never computed from the previous
+        # number.
         #
         # 196 -> 233 with markdown-corpus.spec.ts (37 tests: the whole #257
         # failure corpus driven through a real browser, the `html: false` XSS
@@ -305,7 +311,7 @@ jobs:
         # reported "263 passed (6.1m)" on 2026-09-03 — on a CLEANED `.data`,
         # because the durable per-IP mint cap accumulates across local runs and
         # a poisoned database presents as ~30 unrelated timeouts.
-        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 269 --lane "invariants lane"
+        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 271 --lane "invariants lane"
 
       - name: Clear the previous lane's JUnit report
         run: rm -f e2e/results.xml
