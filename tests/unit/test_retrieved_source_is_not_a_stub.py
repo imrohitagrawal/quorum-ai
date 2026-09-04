@@ -204,7 +204,7 @@ def test_the_retrieved_source_rides_a_genuinely_live_answer(live_execution_on: N
 APP_JS = Path(__file__).resolve().parents[2] / "src" / "product_app" / "static" / "app.js"
 
 
-def test_both_source_surfaces_actually_CALL_the_shared_predicate() -> None:
+def test_all_three_source_surfaces_actually_CALL_the_shared_predicate() -> None:
     """RED if either call site is reverted to the pre-fix inline predicate.
 
     The first version of this file asserted only the TEXT of ``isStubSource``.
@@ -283,3 +283,32 @@ def test_a_retrieved_page_is_marked_as_retrieved_not_left_bare() -> None:
     assert 'RETRIEVED_SOURCE_TAG_TEXT = "web search"' in code
     assert "result-source-origin-tag" in code, "the chip must carry the origin tag"
     assert '" — via web search"' in code, "the export must say where the page came from"
+    assert '"badge badge-origin"' in code, (
+        "the transcript list must mark a retrieved page too, not badge it 'fallback'"
+    )
+    assert code.count("isRetrievedSource(") == 4, (
+        "expected one definition and three uses (chip row, export, transcript); "
+        f"found {code.count('isRetrievedSource(')}"
+    )
+
+
+def test_the_transcript_surface_is_pinned_by_text_because_nobody_can_see_it() -> None:
+    """Why this surface gets a text pin and not an e2e gate.
+
+    ``renderSourceList`` writes into ``#model-grid``, which sits inside
+    ``<section class="panel panel-section">`` — hidden unconditionally by
+    ``app.css``'s ``.panel.panel-section { display: none }``. MEASURED in a real
+    browser: ``#model-grid`` present, ``isVisible: false``, computed
+    ``display: none``; four ``.source-list`` elements, all ``isVisible: false``.
+
+    So a reviewer's finding that this surface has no EXECUTING gate is correct
+    and deliberately not addressed with one: an e2e test would be driving
+    markup no user can reach, and the remedy should match the surface's reach.
+    The text pins above are the proportionate gate. RED if the panel is ever
+    un-hidden, at which point the surface earns a real one."""
+    css = (APP_JS.parent / "app.css").read_text(encoding="utf-8")
+    assert ".panel.panel-section {\n  display: none;\n}" in css, (
+        "the transcript panel is no longer unconditionally hidden — this "
+        "surface is now user-visible and needs an executing e2e gate, not a "
+        "text pin"
+    )

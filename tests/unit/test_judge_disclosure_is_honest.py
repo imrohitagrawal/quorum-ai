@@ -117,45 +117,72 @@ def test_the_judge_never_receives_the_cited_pages_content() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _verified_disclosure_literal() -> str:
-    """The string the browser actually assigns, not "somewhere in app.js".
+#: The copy the product is APPROVED to show when a judge verdict unlocks the
+#: numeric trust score. Pinned by exact equality, not by keyword rules: a
+#: reviewer defeated a `"support" not in copy` blocklist with wording that
+#: never says "support" while claiming the judge "read each cited page's claims
+#: and confirmed the answer is backed by them". A blocklist cannot police a
+#: claim; only the reviewed sentence can.
+APPROVED_VERIFIED_DISCLOSURE = (
+    "An independent judge model checked this answer's citations against its "
+    "source list — an automated review, not a human fact-check. The cited "
+    "pages themselves were not retrieved."
+)
 
-    A reviewer defeated the first version of this file by moving the honest
-    caveat into a COMMENT and restoring the false claim in the constant: all
-    four tests passed while the shipped UI told the user the judge had
-    "verified this answer's citation support". A whole-file substring check
-    cannot tell code from the prose that explains it — rule 8, inside the gate
-    written to enforce honesty."""
+
+def _verified_disclosure_literal() -> str:
+    """The string the browser actually assigns.
+
+    Read over COMMENT-STRIPPED code. That mattered: until the ``.js`` branch was
+    added to ``code_without_comments`` this returned raw text, and a reviewer
+    passed all four tests by putting an honest decoy in a ``//`` comment above a
+    constant carrying the verbatim false claim — ``re.search`` takes the first
+    match. See ``tests/unit/test_code_text_strips_js_comments.py``.
+    """
     code = code_without_comments(APP_JS)
     match = re.search(r'const TRUST_DISCLOSURE_VERIFIED\s*=\s*\n?\s*"([^"]+)";', code)
     assert match is not None, "the TRUST_DISCLOSURE_VERIFIED constant is gone or reshaped"
     return match.group(1)
 
 
-def test_the_verified_disclosure_no_longer_claims_support_was_checked() -> None:
-    """RED before the fix: the constant read "Citation support was checked by
-    an independent judge model", which the judge cannot do — it never receives
-    the cited pages, only their titles and URLs."""
-    copy = _verified_disclosure_literal()
-    assert FALSE_CLAIM not in copy, (
-        f"the verified disclosure claims the judge checked citation SUPPORT: {copy!r}"
-    )
-    assert "support" not in copy.lower(), (
-        f"the disclosure claims support-checking in some other wording: {copy!r}"
+def test_the_verified_disclosure_is_exactly_the_approved_copy() -> None:
+    """RED on ANY edit to the shipped sentence, honest or not.
+
+    Exact equality is deliberate. Every weaker formulation tried here was
+    defeated: a substring ban was satisfied by rewording, and an ``endswith``
+    pin let the first half say anything. Changing this copy should be a
+    deliberate, reviewed edit to BOTH the constant and this constant."""
+    assert _verified_disclosure_literal() == APPROVED_VERIFIED_DISCLOSURE
+
+
+def test_the_false_claim_appears_nowhere_in_the_served_bundle() -> None:
+    """RED if the false claim returns ANYWHERE in app.js, under any name.
+
+    This assertion existed, was dropped in a rewrite, and a reviewer showed the
+    cost: declaring ``const TRUST_TOOLTIP_VERIFIED = "Citation support was
+    checked by an independent judge model.";`` elsewhere in the file passed
+    every remaining test. A whole-file check is the only one that catches a
+    SECOND copy, so it stands alongside the exact-equality pin rather than
+    being replaced by it.
+
+    Read raw, not comment-stripped: the sentence must not survive even in a
+    comment, because a commented-out claim is the decoy a later edit uncomments.
+    """
+    assert FALSE_CLAIM not in APP_JS.read_text(encoding="utf-8"), (
+        "the judge-checked-support claim is back somewhere in app.js"
     )
 
 
-def test_the_verified_disclosure_states_what_was_and_was_not_done() -> None:
-    """The replacement must be honest, not merely quieter. RED if the false
-    sentence were deleted and nothing truthful put in its place, and RED if the
-    caveat is demoted to a comment while the constant overclaims again."""
-    copy = _verified_disclosure_literal()
-    assert copy.endswith("The cited pages themselves were not retrieved."), (
-        f"the disclosure must state that the cited pages were not fetched: {copy!r}"
-    )
-    assert "against its source list" in copy, (
-        f"the disclosure must say what WAS checked — grounding against the "
-        f"listed sources, which is the judge's real capability: {copy!r}"
+def test_the_render_site_uses_the_constant_and_does_not_inline_copy() -> None:
+    """RED if the disclosure is hardcoded at the render site.
+
+    A reviewer left the constant honest and wrote the false sentence directly
+    into the ``mkEl`` call — every constant-focused test passed. Pinning the
+    text without pinning its USE is the exact vacuity this file was rewritten
+    to escape, reintroduced one level along."""
+    code = code_without_comments(APP_JS)
+    assert 'mkEl("p", "result-trust-score-disclosure", TRUST_DISCLOSURE_VERIFIED)' in code, (
+        "the verified disclosure must be rendered FROM the constant, not inlined"
     )
 
 

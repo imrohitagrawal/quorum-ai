@@ -38,7 +38,11 @@ from product_app.providers import (
     provider_event_recorder,
     provider_execution_service,
 )
-from product_app.synthesis import count_answers_with_retrieved_sources, synthesis_stub_service
+from product_app.synthesis import (
+    _with_retrieved_note,
+    count_answers_with_retrieved_sources,
+    synthesis_stub_service,
+)
 
 MODEL_IDS = [
     "openai/gpt-4o-mini",
@@ -164,7 +168,7 @@ def test_prose_does_not_claim_zero_sources_while_sources_exist(
     # CARDINALITY (rule 6b). Without this, hardcoding the count wrong survives:
     # a reviewer mutated the builder to `retrieved = 1` against a truth of 4 and
     # 209 tests passed. A fraction is exactly the accounting shape rule 6b names.
-    assert "4 of 4 responding models" in support, (
+    assert "4 of 4 answers on this run" in support, (
         f"the prose must report the REAL count, not a shape: {support!r}"
     )
 
@@ -292,7 +296,7 @@ def test_the_prose_count_is_a_real_fraction_not_the_total(
     )
     fs = result.final_synthesis
     assert fs is not None
-    assert "2 of 4 responding models" in fs.source_support, (
+    assert "2 of 4 answers on this run" in fs.source_support, (
         f"the numerator must count retrieved answers, not the total: {fs.source_support!r}"
     )
 
@@ -308,48 +312,114 @@ def test_the_prose_count_is_a_real_fraction_not_the_total(
 def test_the_live_synthesis_prompt_names_the_retrieved_sources(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """RED without the directive: the model writing the "Source support"
-    section is told "Source coverage: 0% … carried at least one primary source"
-    and nothing about the retrieved pages listed right below it, so the honest
+    """RED without the note: the model writing the "Source support" section is
+    told "Source coverage: 0% ... carried at least one primary source" and
+    nothing about the retrieved pages listed right below it, so the honest
     sentence never reaches a live run."""
     monkeypatch.setattr(settings, "openrouter_live_execution_enabled", True)
     answers = _live_answers(attach=[True, True, True, True], monkeypatch=monkeypatch)
 
-    prompt = synthesis_stub_service._user_prompt(
+    noted = _with_retrieved_note("BASE PROMPT", answers)
+
+    assert "web search this product ran supplied the references" in noted, (
+        f"the note must name the retrieved sources: {noted!r}"
+    )
+    assert "4 of the answers cited no source of their own" in noted, (
+        "the note must carry the real count (rule 6b)"
+    )
+    assert "NOT the models' own citations" in noted, (
+        "the note must preserve the distinction the coverage metric makes"
+    )
+
+
+def test_the_retrieved_note_reaches_ONLY_the_source_support_section(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """RED if the note is appended to the shared ``directives`` block again.
+
+    ``_user_prompt`` is built once and passed to all five sections. The note
+    ends "do not describe the run as having no sources at all"; a reviewer
+    found an earlier version of it landing in the RECOMMENDATION prompt, beside
+    the safety rule that steers "pause for human review" when coverage is under
+    80%. Scope, not wording, is what keeps it out of there."""
+    monkeypatch.setattr(settings, "openrouter_live_execution_enabled", True)
+    answers = _live_answers(attach=[True, True, True, True], monkeypatch=monkeypatch)
+
+    shared = synthesis_stub_service._user_prompt(
         initial_answers=answers,
         debate_outputs=[],
         failed_count=0,
         coverage_ratio=Decimal("0.00"),
     )
-
-    assert "web search run by this product supplied the references" in prompt, (
-        f"the live directive must name the retrieved sources: {prompt[:600]!r}"
+    assert "web search this product ran supplied" not in shared, (
+        "the retrieved-sources note leaked into the SHARED prompt, so it now "
+        f"reaches consensus, disagreement, uncertainty and recommendation: {shared[:400]!r}"
     )
-    assert "4 of those answers cited no source of their own" in prompt, (
-        "the directive must carry the real count (rule 6b)"
-    )
-    assert "NOT the model's own citations" in prompt, (
-        "the directive must preserve the distinction the coverage metric makes"
-    )
+    # POSITIVE PARTNER: it must still be there once scoped.
+    assert "web search this product ran supplied" in _with_retrieved_note(shared, answers)
 
 
-def test_the_live_directive_is_absent_when_nothing_was_retrieved(
+def test_the_note_is_absent_when_nothing_was_retrieved(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """POSITIVE PARTNER (rule 7): the directive must not be a constant. RED if
-    it were appended unconditionally, which would tell the model a web search
-    supplied references on a run where none ran."""
+    """POSITIVE PARTNER (rule 7): the note must not be a constant.
+
+    RED if the ``if not retrieved`` early return is removed — which would tell
+    the synthesis model a web search supplied references on a run where none
+    ran. The first version of this test asserted absence from the SHARED
+    prompt, which went vacuous the moment the note was scoped out of it; a
+    mutation proof caught that. It now drives the helper itself."""
     monkeypatch.setattr(settings, "openrouter_live_execution_enabled", True)
     answers = _live_answers(attach=[False, False, False, False], monkeypatch=monkeypatch)
 
-    prompt = synthesis_stub_service._user_prompt(
-        initial_answers=answers,
-        debate_outputs=[],
-        failed_count=0,
-        coverage_ratio=Decimal("0.00"),
+    noted = _with_retrieved_note("BASE PROMPT", answers)
+    assert noted == "BASE PROMPT", f"claimed a web search on a run that had none: {noted!r}"
+
+
+def test_the_source_support_section_really_receives_the_note(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """RED if the call site stops passing ``_with_retrieved_note``.
+
+    A mutation proof showed the previous tests pinned the HELPER and never its
+    USE: deleting ``_with_retrieved_note(...)`` from the call site left every
+    one of them green. This captures the prompt the section is actually handed,
+    which is the only thing that reaches a model."""
+    monkeypatch.setattr(settings, "openrouter_live_execution_enabled", True)
+    answers = _live_answers(attach=[True, True, True, True], monkeypatch=monkeypatch)
+    debate = debate_stub_service.run_debate_rounds(
+        account_id=uuid4(), query_run_id=uuid4(), query_text=QUERY, initial_answers=answers
     )
-    assert "web search run by this product" not in prompt, (
-        f"claimed a web search on a run that had none: {prompt[:600]!r}"
+
+    seen: list[tuple[str, str]] = []
+
+    def spy(*, system_prompt: str, user_prompt: str, **kw: object) -> None:
+        seen.append((system_prompt, user_prompt))
+        return None
+
+    monkeypatch.setattr(synthesis_stub_service, "_call_synthesis_model", spy)
+    synthesis_stub_service.produce_final_synthesis(
+        account_id=uuid4(),
+        query_run_id=uuid4(),
+        query_text=QUERY,
+        initial_answers=answers,
+        debate_outputs=debate.debate_outputs,
+    )
+
+    assert seen, "precondition: the synthesis sections were dispatched"
+    support = [u for sysp, u in seen if "list the sources it cited" in sysp]
+    assert support, "precondition: the Source-support section was among them"
+    assert "web search this product ran supplied" in support[0], (
+        "the Source-support section was handed a prompt with no word for the "
+        "retrieved pages listed in it"
+    )
+
+    # NEGATIVE PARTNER, same run: every OTHER section must NOT get it.
+    others = [u for sysp, u in seen if "list the sources it cited" not in sysp]
+    assert others, "precondition: other sections were dispatched too"
+    assert not any("web search this product ran supplied" in u for u in others), (
+        "the note leaked into another section's prompt — including the "
+        "Recommendation, which carries the pause-for-human-review rule"
     )
 
 
@@ -375,36 +445,31 @@ def _answer(*, provider_path: ProviderPath, sources: list[SourceReference]) -> I
     )
 
 
-def test_a_simulated_answer_never_credits_web_search() -> None:
-    """RED without the ``model_was_invoked`` guard in the shared counter.
+def test_a_simulated_answer_is_counted_but_never_called_a_responding_model() -> None:
+    """The design decision a guard got wrong, pinned so it is not re-added.
 
-    With a Tavily key configured and live execution OFF, ``_fallback_sources``
-    attaches REAL retrieved pages to a SIMULATED answer. Counting those credits
-    a web search for text no model produced — the #247 laundering shape one
-    layer along. Demo-reachable rather than production-reachable, and this is
-    the gate that keeps it closed.
+    With a Tavily key and live execution OFF, real retrieved pages attach to a
+    SIMULATED answer. A ``model_was_invoked`` guard was added here to stop
+    "crediting" them, and measurably made things worse: the chip row and the
+    transcript still showed the linked "web search" pages while the prose,
+    counting zero, said "No model returned visible source references" — the
+    contradiction ADR-0098 exists to remove, recreated by its own fix.
 
-    Driven on the helper directly rather than through the forced-fallback
-    trigger, because that trigger is environment-gated and produced a SKIP —
-    and a skipped test measures nothing."""
+    The objection was about the SENTENCE's subject, not the count. So the count
+    describes exactly what the surfaces render, and the sentence says "answers
+    on this run" rather than "responding models".
+
+    RED if a ``model_was_invoked`` condition is put back into the counter."""
     retrieved = _retrieved(1)
-    assert retrieved and retrieved[0].provider is ProviderPath.WEB_SEARCH, (
-        "precondition: the source really is a retrieved page"
-    )
-
     simulated = _answer(provider_path=ProviderPath.FALLBACK_SEARCH, sources=retrieved)
-    assert count_answers_with_retrieved_sources([simulated]) == 0, (
-        "a simulated answer was credited with a web-search reference; the text "
-        "under it was written by Quorum, not a model"
-    )
 
-    # POSITIVE PARTNER (rule 7): the SAME source on an INVOKED answer does
-    # count — so the zero above is the guard working, not the counter being
-    # broken for everything.
-    live = _answer(provider_path=ProviderPath.OPENROUTER_SEARCH, sources=retrieved)
-    assert count_answers_with_retrieved_sources([live]) == 1, (
-        "a retrieved page on a genuinely live answer must still be counted"
+    assert count_answers_with_retrieved_sources([simulated]) == 1, (
+        "the count must match what the chip row and transcript render, or prose "
+        "and pixels disagree by construction"
     )
+    # ...and the wording must not claim a model responded.
+    note = _with_retrieved_note("BASE", [simulated])
+    assert "responding model" not in note
 
 
 def test_an_invoked_answer_with_a_quorum_stub_is_not_web_search_evidence() -> None:

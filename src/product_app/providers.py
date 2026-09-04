@@ -3396,8 +3396,10 @@ def _sanitize_source_url(url: str) -> str | None:
     # A URL is a single token. One carrying a line break — or any other
     # whitespace/control character — is not a URL, it is a payload: inlined
     # into a prompt it forges its own line, and TWO downstream consumers
-    # inline sources this way: the synthesis prompt (``synthesis.py:763-764``)
-    # and the judge's evidence block (``evaluation.py:1714-1715``).
+    # inline sources this way: the synthesis prompt (``_user_prompt``'s source
+    # block) and the judge's evidence block (``build_judge_evidence``'s
+    # ``source_lines``). Symbols, not line numbers: ADR-0098's own diff moved
+    # both of these and stale-ed the numbers that used to be here.
     # This said "every downstream consumer (debate, synthesis, the evaluation
     # judge)" until 2026-08-10; ``grep -c "\.url" src/product_app/debate.py``
     # prints 0 — debate only counts ``answer.sources``, it never inlines one.

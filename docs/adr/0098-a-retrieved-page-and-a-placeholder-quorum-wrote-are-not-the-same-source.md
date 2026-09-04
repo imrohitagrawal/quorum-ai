@@ -22,8 +22,8 @@ going red on a first draft that said "Supersedes nothing".)
 | Meaning read off the flag | Read by | Correct for a Tavily result? |
 |---|---|---|
 | "not the model's OWN citation" | `citation_coverage` numerator (`_completed_answer`'s `primary_source_count`) | yes |
-| "a Quorum-authored `example.test` placeholder" | the UI stub badge (`app.js:3323`) | **no** |
-| "not a real source" | the Markdown export (`app.js:3097-3098`) | **no** |
+| "a Quorum-authored `example.test` placeholder" | the UI stub badge (`isStubSource`, chip row) | **no** |
+| "not a real source" | the Markdown export (`buildRunMarkdown`'s Sources block) | **no** |
 
 Two source shapes were byte-identical on the wire — `provider="fallback_search"`,
 `is_fallback=true`:
@@ -121,15 +121,65 @@ This needed two edits, not one, and the first draft shipped only the first.
 returns nothing. With live execution on, which is the configuration the defect
 was measured in, that section is written by the model from `directives`, which
 said *"Source coverage: 0% … carried at least one primary source"* and nothing
-about retrieved pages. A directive naming the retrieved count and the
+about retrieved pages. A note naming the retrieved count and the
 distinction is therefore added alongside the templated sentence, and the count
 itself lives in ONE helper (`count_answers_with_retrieved_sources`) that both
 consumers call, because two matchers built from one idea drift.
+
+The note is scoped to the Source-support section (`_with_retrieved_note`), NOT
+appended to the shared `directives` block. `_user_prompt` is built once and
+handed to all five sections; a first attempt put the note there, and a reviewer
+found it landing in the RECOMMENDATION prompt — beside the rule that steers
+"pause for human review" when coverage is under 80%. The note ends "do not
+describe the run as having no sources at all", which is not a sentence to place
+next to a safety posture.
 
 **5. `WEB_SEARCH` joins `NOT_INVOKED_PATHS`, not `INVOKED_PATHS`.** Unreachable
 today, but it is the fail-safe reading: a web search returning a page is not a
 model being asked a question, and the honest default is the one that does not
 claim a model spoke.
+
+## A decision reversed inside review, and why
+
+**A `model_was_invoked` guard was added to the retrieved-count, then removed.**
+
+A reviewer objected that with a Tavily key and live execution OFF, real
+retrieved pages attach to a SIMULATED answer, so counting them credits a web
+search for text no model produced. The guard was added. A later reviewer
+measured what it did: the chip row and the transcript still rendered four
+linked "web search" pages while the prose, now counting zero, said *"No model
+returned visible source references for this query."* That is verbatim the
+contradiction this ADR exists to remove, recreated by its own fix.
+
+The objection was about the SENTENCE's subject, not the count. It said
+"responding models", which is false of a simulated run. The sentence now says
+"answers on this run" — true on both paths — so the count can describe exactly
+what the surfaces render.
+
+**The rule this yields, and the reason it is written down:** the count and the
+three rendering surfaces are one decision, not four. Guarding one of them alone
+makes prose and pixels disagree by construction. Two consecutive review rounds
+produced defects here precisely because each finding was patched where it was
+reported rather than at the shared decision.
+
+## What is gated, and what deliberately is not
+
+The three surfaces do not carry equal weight, and their gates should not either:
+
+| Surface | User-visible? | Gate |
+|---|---|---|
+| Chip row | yes | blocking e2e (`source-expander.spec.ts`) |
+| Markdown export | yes | blocking e2e, added this round |
+| Transcript list (`renderSourceList`) | **no** | text pin only |
+
+The transcript list writes into `#model-grid`, inside
+`<section class="panel panel-section">`, which `app.css` hides unconditionally
+with `display: none`. MEASURED in a real browser: `#model-grid` present,
+`isVisible: false`, computed `display: none`; four `.source-list` elements, all
+`isVisible: false`. A reviewer correctly reported that surface has no executing
+gate; it is deliberately not given one, because an e2e test there would drive
+markup no user can reach. `test_the_transcript_surface_is_pinned_by_text_because_nobody_can_see_it`
+goes red if that panel is ever un-hidden, at which point it earns a real gate.
 
 ## Rejected alternatives
 

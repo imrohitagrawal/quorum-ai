@@ -14,6 +14,24 @@
 import { test, expect } from "@playwright/test";
 import { driveToResult, goldenCompletedResp } from "../../fixtures/golden-run";
 
+// Read the Blob the export writes, without touching the filesystem — same
+// technique as export-and-expanders.spec.ts.
+async function exportedMarkdown(page: import("@playwright/test").Page): Promise<string> {
+  await page.evaluate(() => {
+    const w = window as unknown as { __exported?: Promise<string> };
+    const real = URL.createObjectURL.bind(URL);
+    URL.createObjectURL = (blob: Blob) => {
+      w.__exported = blob.text();
+      return real(blob);
+    };
+  });
+  await page.locator("#result-export").click();
+  return page.evaluate(() => {
+    const w = window as unknown as { __exported?: Promise<string> };
+    return w.__exported ?? Promise.resolve("");
+  });
+}
+
 test.describe("F-19 — the rest of the cited sources are reachable", () => {
   test.skip(({ browserName }) => browserName !== "chromium", "chromium-only gate");
 
@@ -168,6 +186,67 @@ test.describe("F-19 — the rest of the cited sources are reachable", () => {
     await expect(placeholder.first().locator(".result-source-stub-tag")).toHaveText(
       /fallback stub/i
     );
+  });
+
+  // THE EXPORT. A user-visible surface the chip-row assertions do not reach:
+  // a reviewer reverted it and 742 tests plus the blocking lane stayed green
+  // while a real Reuters page exported as "not a real source". This is the
+  // executing gate for it.
+  test("the export marks a retrieved page as real, and a stub as a stub (ADR-0098)", async ({
+    page,
+  }) => {
+    const resp = goldenCompletedResp() as any;
+    // LIVE-SHAPED: with live execution on, no example.test stub can exist
+    // (a live call that yields nothing FAILS the slot), so this run carries
+    // only real pages.
+    resp.result.model_answers[0].sources = [
+      {
+        title: "Reuters investigation",
+        url: "https://reuters.example/a1",
+        provider: "web_search",
+        is_fallback: true,
+      },
+    ];
+    await driveToResult(page, resp);
+    const md = await exportedMarkdown(page);
+
+    expect(md, "the export must carry the retrieved page as a real citation").toContain(
+      "[Reuters investigation](<https://reuters.example/a1>)"
+    );
+    expect(md, "and must say where it came from, since it is not the model's own citation")
+      .toContain("via web search");
+    expect(
+      md.includes("Reuters investigation — **fallback stub, not a real source**"),
+      "a really-retrieved page must never be exported as 'not a real source'"
+    ).toBe(false);
+  });
+
+  test("the export still refuses to launder a Quorum placeholder (ADR-0098)", async ({
+    page,
+  }) => {
+    // NEGATIVE PARTNER, in its own DEMO-shaped run: a placeholder only exists
+    // when live execution is off, so it gets its own fixture rather than being
+    // mixed into the live one above, which the server can never emit.
+    const resp = goldenCompletedResp() as any;
+    resp.result.model_answers[0].sources = [
+      {
+        title: "Local demo evidence for slot 1",
+        url: "https://example.test/local-demo/1",
+        provider: "local_simulation",
+        is_fallback: true,
+      },
+    ];
+    await driveToResult(page, resp);
+    const md = await exportedMarkdown(page);
+
+    expect(md, "a Quorum-authored placeholder must still be marked").toContain(
+      "not a real source"
+    );
+    expect(
+      md.includes("(<https://example.test/local-demo/1>)"),
+      "a placeholder must never export as a working citation link"
+    ).toBe(false);
+    expect(md.includes("via web search"), "and must not claim a web search ran").toBe(false);
   });
 
   test("the expander is operable from the keyboard", async ({ page }) => {

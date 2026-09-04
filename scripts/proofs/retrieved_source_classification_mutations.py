@@ -137,16 +137,22 @@ MUTATIONS: list[tuple[str, str, str, str]] = [
         '        const origin = "";',
     ),
     (
-        "16 live synthesis directive never added",
-        "synth",
-        "        if retrieved_count:",
-        "        if False:",
+        "17 transcript badges a real page 'fallback'",
+        "app",
+        "        if (isRetrievedSource(source)) {",
+        "        if (false) {",
     ),
     (
-        "17 retrieved count credits fabricated answers",
+        "18 the live section loses its retrieved-sources note",
         "synth",
-        "        and model_was_invoked(answer)\n",
-        "",
+        "            user_prompt=_with_retrieved_note(user_prompt, initial_answers),",
+        "            user_prompt=user_prompt,",
+    ),
+    (
+        "19 the note is claimed on a run that had no web search",
+        "synth",
+        "    if not retrieved:\n        return user_prompt",
+        "    if False:\n        return user_prompt",
     ),
     # --- the judge disclosure ----------------------------------------------
     (
@@ -212,7 +218,21 @@ def main() -> int:
             if not killed or clean.returncode != 0:
                 failures += 1
 
+    text_pins = sum(1 for _, key, _, _ in MUTATIONS if key == "app")
     print(f"\n{len(MUTATIONS) - failures} killed / {len(MUTATIONS)}")
+    print(
+        f"HOW MUCH THIS PROVES: {text_pins} of {len(MUTATIONS)} are app.js edits killed "
+        "by Python string assertions, not by executing JavaScript. Rendering behaviour "
+        "is proved by the blocking e2e lane (source-expander.spec.ts), not here. A "
+        "reviewer defeated an earlier version of these same pins with textually "
+        "different but behaviourally identical code, so read this number as "
+        "'the pins are wired', never as 'the UI is correct'."
+    )
+    # FLOOR (rule 7): a negative result over nothing is trivially clean. An
+    # empty or truncated MUTATIONS list must fail loudly, not report 0/0.
+    if len(MUTATIONS) < 15:
+        print(f"FLOOR FAILED: only {len(MUTATIONS)} mutations declared; expected >= 15.")
+        return 2
     return 1 if failures else 0
 
 

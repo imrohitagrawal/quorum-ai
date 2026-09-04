@@ -47,11 +47,22 @@ def code_without_comments(path: Path) -> str:
     rather than disappearing — so a failure message can still quote a line
     number that matches the real file.
 
-    Python files are tokenized. Anything else is treated as line-oriented and
-    only ``#`` comments are removed, which covers Makefiles and YAML. A file
-    that cannot be tokenized (a syntax error mid-edit) falls back to the same
-    line-oriented handling rather than raising, because a guard test reporting
-    "your file does not parse" is less useful than it reporting what it found.
+    Python files are tokenized. ``.js``/``.ts``/``.mjs``/``.css`` get C-style
+    (``//`` and ``/* */``) blanking. Anything else is treated as line-oriented
+    and only ``#`` comments are removed, which covers Makefiles and YAML. A
+    file that cannot be tokenized (a syntax error mid-edit) falls back to the
+    same line-oriented handling rather than raising, because a guard test
+    reporting "your file does not parse" is less useful than it reporting what
+    it found.
+
+    THE ``.js`` BRANCH EXISTS BECAUSE ITS ABSENCE WAS A LIVE HOLE. Until
+    2026-09-04 every suffix except ``.py`` fell through to ``#``-stripping, so
+    calling this on ``app.js`` returned text still containing **2883** ``//``
+    comments. Three guard tests were written believing they read
+    comment-stripped JavaScript; a reviewer defeated two of them by putting a
+    decoy in a ``//`` comment, restoring the false UI copy the tests existed to
+    forbid, and watching them pass. See
+    ``tests/unit/test_code_text_strips_js_comments.py``.
     """
     text = path.read_text(encoding="utf-8")
     if path.suffix == ".py":
@@ -59,6 +70,8 @@ def code_without_comments(path: Path) -> str:
             return _blank_python(text)
         except (tokenize.TokenError, IndentationError, SyntaxError):
             pass
+    if path.suffix in _C_STYLE_SUFFIXES:
+        return _blank_c_style_comments(text)
     return _blank_hash_comments(text)
 
 
@@ -146,3 +159,77 @@ def _is_docstring(tokens: list[tokenize.TokenInfo], index: int) -> bool:
             continue
         return False
     return True  # first token in the file
+
+
+#: Suffixes whose comments are ``//`` and ``/* */`` rather than ``#``.
+_C_STYLE_SUFFIXES = frozenset({".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".css"})
+
+
+def _blank_c_style_comments(text: str) -> str:
+    """Blank ``//`` and ``/* */`` comments, preserving every line and column.
+
+    String literals, template literals and REGEX literals are left intact. The
+    regex case is not decoration: ``app.js`` contains ``/^https?:\\/\\//``, and a
+    stripper that mistook it for a comment would silently delete real code and
+    make a guard test assert against text the browser never runs. Verified by
+    ``node --check`` on the blanked output.
+    """
+    out = list(text)
+    i, n = 0, len(text)
+    prev = ""
+
+    def blank(a: int, b: int) -> None:
+        for k in range(a, b):
+            if out[k] != "\n":
+                out[k] = " "
+
+    while i < n:
+        c = text[i]
+        if c == "/" and i + 1 < n and text[i + 1] == "/":
+            j = text.find("\n", i)
+            j = n if j == -1 else j
+            blank(i, j)
+            i = j
+            continue
+        if c == "/" and i + 1 < n and text[i + 1] == "*":
+            j = text.find("*/", i + 2)
+            j = n if j == -1 else j + 2
+            blank(i, j)
+            i = j
+            continue
+        if c in "\"'`":
+            quote, j = c, i + 1
+            while j < n:
+                if text[j] == "\\":
+                    j += 2
+                    continue
+                if text[j] == quote:
+                    j += 1
+                    break
+                j += 1
+            i, prev = j, "val"
+            continue
+        if c == "/" and prev in ("", "op"):
+            j, in_class, ok = i + 1, False, False
+            while j < n:
+                ch = text[j]
+                if ch == "\\":
+                    j += 2
+                    continue
+                if ch == "\n":
+                    break
+                if ch == "[":
+                    in_class = True
+                elif ch == "]":
+                    in_class = False
+                elif ch == "/" and not in_class:
+                    ok, j = True, j + 1
+                    break
+                j += 1
+            if ok:
+                i, prev = j, "val"
+                continue
+        if not c.isspace():
+            prev = "op" if c in "([{,;=:?!&|+-*%<>~^" else "val"
+        i += 1
+    return "".join(out)
