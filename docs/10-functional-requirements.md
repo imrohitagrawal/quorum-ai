@@ -108,19 +108,26 @@ These requirements cover Release 1 MVP for the public AI cross-validation workfl
 - Trigger: Initial model answers are available or recoverable partial results exist.
 - Behavior: The system runs two critique/debate rounds where selected models evaluate disagreement, weak support, and missing reasoning in the other model answers.
 - Outcome: The workflow exposes material contradictions and quality gaps before final synthesis.
-- Implementation status: **BUILT, NOT YET ENABLED** (#290, ADR-0093, ADR-0095).
+- Implementation status: **BUILT AND ENABLED** (#290, ADR-0093, ADR-0095,
+  ADR-0096; enabled in production 2026-09-03, `fly.toml` sets
+  `PEER_CRITIQUE_ENABLED = "true"`).
   The mechanism the Behavior line describes now exists: under
   `settings.peer_critique_enabled` each ELIGIBLE answer slot writes its own
   critique of the others in both rounds, billed to its own model, with a
   `kind="critique"` receipt row per critic.
 
-  It ships with that setting **false**, so the RUNNING behaviour is still the
-  moderator shape: two critique rounds performed by a single separate model
-  (`settings.debate_model_id`), with the four answer models called once each and
-  never reading each other. Enabling it is a money decision, not a feature
-  toggle — the fail-safe cost bound rises with it, because a peer run makes two
-  debate calls per eligible critic rather than two in total — so it waits on the
-  owner-authorised live window that measures #290's real cost (ADR-0094).
+  The CODE default is still `false` (`config.py`, `.env.example`), so a local
+  run and the whole test suite take the moderator shape unless the flag is set.
+  PRODUCTION sets it true, and has since 2026-09-03. Enabling it was a money
+  decision, not a feature toggle — the fail-safe cost bound rises with it,
+  because a peer run makes two debate calls per eligible critic rather than two
+  in total.
+
+  The moderator shape remains REACHABLE in production, not merely a default:
+  `_build_peer_round` falls back to it when no slot is eligible, or when a
+  cancel lands before the first dispatch. Copy describing the run must therefore
+  read the run's own `critique_shape` rather than assume either shape
+  (ADR-0099).
 
   The Behavior line above was retained as the requirement rather than rewritten
   to match the build, through the whole period this was unmet. It is met by the

@@ -248,6 +248,13 @@ jobs:
         # above warns about: nine tests could then be deleted and this stays
         # green. Measured 2026-08-04, lane run exactly as this step runs it:
         # 196 passed.
+        # 267 -> 269 (ADR-0099): peer-critique-copy.spec.ts gains two specs that
+        # drive the COUNTED caption in a browser — "3 of 4 answer models
+        # critiqued the others" and the all-templated case. Raised in the same
+        # PR that adds them, because leaving it at 267 banks exactly the
+        # headroom to delete both and stay green. MEASURED, not computed: the
+        # 17-spec lane run exactly as the step above runs it reported
+        # "269 passed (9.6m)".
         #
         # 196 -> 233 with markdown-corpus.spec.ts (37 tests: the whole #257
         # failure corpus driven through a real browser, the `html: false` XSS
@@ -298,7 +305,7 @@ jobs:
         # reported "263 passed (6.1m)" on 2026-09-03 — on a CLEANED `.data`,
         # because the durable per-IP mint cap accumulates across local runs and
         # a poisoned database presents as ~30 unrelated timeouts.
-        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 267 --lane "invariants lane"
+        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 269 --lane "invariants lane"
 
       - name: Clear the previous lane's JUnit report
         run: rm -f e2e/results.xml

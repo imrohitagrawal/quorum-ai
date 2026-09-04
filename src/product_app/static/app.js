@@ -1787,15 +1787,15 @@
     const pill = document.createElement("span");
     pill.className = "live-round-pill";
     pill.textContent = `Round ${round.round_number}`;
-    const focus = document.createElement("span");
-    focus.className = "live-round-focus";
-    focus.textContent = `Focus: ${
-      (round.focus_areas || []).join(", ") || "general critique"
-    }`;
+    // NO `Focus:` line. ADR-0099: `focus_areas` is the module constant
+    // FOCUS_AREAS, stamped identically on both rounds, so under a "Round N"
+    // header it read as an observation about THIS round. ADR-0096 then made
+    // round 2 the convergence step while the constant still says
+    // "disagreement", so it was false as well as redundant.
     const stateEl = document.createElement("span");
     stateEl.className = "live-round-state";
     stateEl.textContent = "complete";
-    header.append(pill, focus, stateEl);
+    header.append(pill, stateEl);
     const body = document.createElement("div");
     body.className = "live-round-body";
     setProse(body, round.critique_text);
@@ -2629,6 +2629,97 @@
     return !ctx.isConsensus && !ctx.noLiveAnswers && !knownFull;
   }
 
+  // HOW MANY MODELS ACTUALLY CRITIQUED, in the words the reader gets.
+  //
+  // Until ADR-0099 both debate captions said "Each answer model critiqued the
+  // others, in both rounds" whenever ANY round carried
+  // `critique_shape === "peer"`. Four reachable states made that false, and the
+  // last one is the reason this reads `critique_mode` rather than a count of
+  // dispatches:
+  //
+  //   1. round 2 can be skipped entirely (`debate.py::_should_skip_round_two`),
+  //      so there may be one round, not two;
+  //   2. the shape is stamped PER ROUND, so round 1 can be peer and round 2 the
+  //      moderator — `.some()` called that "both rounds";
+  //   3. only ELIGIBLE slots critique (COMPLETED and actually invoked), so the
+  //      count is 0-4, not always 4;
+  //   4. a critic that returns nothing usable still yields a `SlotCritique`,
+  //      with Quorum's template as its text and `critique_mode` left at
+  //      "fallback" (`debate.py`). The round is still shaped "peer". So a run
+  //      where every critic fell back rendered "Each answer model critiqued the
+  //      others" directly above rows this same view marks "Written by Quorum,
+  //      not by a model".
+  //
+  // Returns null when no round used the peer shape, so the caller keeps the
+  // moderator wording.
+  // `detailClause` is the site-specific sentence about WHERE the per-model
+  // detail can be found. It is appended only on branches where a critic's own
+  // words actually came back: review pointed out that on the all-templated
+  // path the receipt carries ZERO `(critique)` rows (`live_call_usages` is
+  // only appended when a live result exists), so promising the reader an
+  // itemised charge there is a false claim about their money — the same class
+  // of defect this whole record exists to remove.
+  function describePeerCritique(rounds, detailClause) {
+    const withDetail = (sentence) => (detailClause ? `${sentence} ${detailClause}` : sentence);
+    const all = Array.isArray(rounds) ? rounds.filter(Boolean) : [];
+    const peer = all.filter((r) => r.critique_shape === "peer");
+    if (peer.length === 0) return null;
+
+    // Scope a claim to the rounds it is actually true of. Passing the WHOLE
+    // peer list here was a defect found in review: the "nothing came back"
+    // branch fired on `.some()` while `where` still said "in both rounds", so a
+    // run whose round 1 was fully live and round 2 fully templated reported
+    // that NO critique came back, in both rounds — erasing four real critiques
+    // directly above a card the same view leaves unmarked because its
+    // `debate_mode` is "live". Same defect class as the one being fixed, with
+    // the sign flipped.
+    const scopeOf = (rounds) => {
+      if (rounds.length >= 2 && rounds.length === all.length) return ", in both rounds";
+      if (rounds.length === 1 && Number.isFinite(Number(rounds[0].round_number))) {
+        return `, in round ${Number(rounds[0].round_number)}`;
+      }
+      return "";
+    };
+
+    const perRound = peer.map((round) => {
+      const critiques = Array.isArray(round.slot_critiques) ? round.slot_critiques : [];
+      const eligible = Number(round.eligible_critic_count);
+      return {
+        known: critiques.length > 0,
+        live: critiques.filter((c) => c && c.critique_mode === "live").length,
+        eligible:
+          Number.isFinite(eligible) && eligible > 0 ? eligible : critiques.length,
+      };
+    });
+
+    // UNKNOWN. A run rehydrated from before #290 carries no `slot_critiques`,
+    // and `eligible_critic_count` DEFAULTS TO 0 — so a numeric branch here
+    // would render "0 of 4 answer models critiqued" beside however many
+    // `(critique)` charges the receipt lists. That is a worse falsehood than
+    // the sentence being replaced, so state the shape and assert no count.
+    if (!perRound.every((r) => r.known)) {
+      return withDetail(`The answer models critiqued the others${scopeOf(peer)}.`);
+    }
+
+    // Only the rounds where a critic's OWN words came back may be claimed.
+    const answered = peer.filter((_r, i) => perRound[i].live > 0);
+    if (answered.length === 0) {
+      // No `withDetail`: nothing was billed, so nothing is itemised.
+      return `No answer model's own critique came back${scopeOf(peer)} — the round text below is Quorum's own.`;
+    }
+    const answeredFacts = perRound.filter((r) => r.live > 0);
+    const { live, eligible } = answeredFacts[0];
+    if (!answeredFacts.every((r) => r.live === live && r.eligible === eligible)) {
+      return withDetail(`The answer models critiqued the others${scopeOf(answered)}.`);
+    }
+    if (live >= eligible) {
+      return withDetail(`Each answer model critiqued the others${scopeOf(answered)}.`);
+    }
+    return withDetail(
+      `${live} of ${eligible} answer models critiqued the others${scopeOf(answered)}.`,
+    );
+  }
+
   // WHAT THE TALLY MEASURES, in the words the reader gets.
   //
   // ``agreement.aligned`` answers "is this model's opening position represented
@@ -3147,8 +3238,12 @@
       for (const r of rounds) {
         if (!r) continue;
         push(`### Round ${r.round_number}`, "");
-        const focus = Array.isArray(r.focus_areas) ? r.focus_areas.filter(Boolean) : [];
-        if (focus.length) push(`*Focus: ${focus.join(", ")}*`, "");
+        // NO `Focus:` line (ADR-0099). `focus_areas` is the module constant
+        // FOCUS_AREAS, identical on both rounds, and false for round 2 since
+        // ADR-0096 made that round the convergence step. The export is the copy
+        // the user KEEPS, so a stale claim here outlives the screen it came
+        // from — this was the third and least visible of its three render
+        // sites.
         if (r.critique_text) push(mdUntrustedBlock(String(r.critique_text).trim()), "");
       }
     }
@@ -3225,6 +3320,63 @@
   // numbered source chips. Every value is a real backend value from
   // ``final_synthesis`` / the model answers; when the backend produced nothing
   // the card stays hidden rather than inventing content.
+  // The JS twin of `visible_text.is_visible`. `String(x).trim()` is NOT the
+  // same predicate: review demonstrated that a `revised_answer` of three
+  // zero-width spaces is truthy after `.trim()` in JS but INVISIBLE to Python,
+  // so `synthesis.py` fell back to the original answer while the UI credited
+  // the debate for it. `visible_text`'s own docstring says every provider-text
+  // emptiness site must share one predicate precisely so they cannot disagree;
+  // this is that site on the browser side.
+  //
+  // Mirrors the Python: not visible when every character is whitespace or in
+  // Unicode categories Cf/Cc, plus the two outliers it lists by hand.
+  const INVISIBLE_OUTLIERS = new Set(["\u3164", "\u2800"]);
+  function hasVisibleText(text) {
+    if (!text) return false;
+    for (const ch of String(text)) {
+      if (/\s/.test(ch)) continue;
+      if (INVISIBLE_OUTLIERS.has(ch)) continue;
+      // \p{Cf} = format, \p{Cc} = control. Both are `unicodedata.category`
+      // values the Python treats as invisible.
+      if (/\p{Cf}|\p{Cc}/u.test(ch)) continue;
+      return true;
+    }
+    return false;
+  }
+
+  // WHICH ANSWERS THE SYNTHESIS ACTUALLY READ.
+  //
+  // ADR-0096 decision 4 made the REVISED answers synthesis's primary input, and
+  // this attribution was hard-coded to "from the four refined answers" on every
+  // run. It is false whenever nothing was revised: under the moderator shape,
+  // on a run where round 2 was skipped, and on one where every critic fell back
+  // to Quorum's template. `synthesis.py` then feeds the ORIGINAL answer.
+  //
+  // The rule below is `synthesis.py`'s own, restated once: a slot counts as
+  // refined when its critique came back live AND carried a visible
+  // `revised_answer`. Anything looser would credit the debate for text it did
+  // not produce.
+  function describeSynthesisInput(res) {
+    const answers = Array.isArray(res && res.model_answers) ? res.model_answers : [];
+    const rounds = Array.isArray(res && res.debate_outputs) ? res.debate_outputs : [];
+    const refined = new Set();
+    for (const round of rounds) {
+      for (const c of Array.isArray(round && round.slot_critiques) ? round.slot_critiques : []) {
+        if (c && c.critique_mode === "live" && hasVisibleText(c.revised_answer)) {
+          refined.add(c.critic_slot_number);
+        }
+      }
+    }
+    const total = answers.length;
+    const n = refined.size;
+    const count = (k) => (k === 4 ? "four" : String(k));
+    const plural = (k) => (k === 1 ? "answer" : "answers");
+    if (total === 0) return "from the model answers";
+    if (n === 0) return `from the ${count(total)} opening ${plural(total)}`;
+    if (n >= total) return `from the ${count(total)} refined ${plural(total)}`;
+    return `from ${n} refined and ${total - n} opening ${plural(total - n)}`;
+  }
+
   function renderResultSynthesis(fs, res) {
     const host = el("result-synthesis");
     if (!host) return;
@@ -3250,7 +3402,7 @@
       mkEl(
         "span",
         "result-synthesis-attr",
-        "from the four refined answers",
+        describeSynthesisInput(res || {}),
       ),
     );
 
@@ -4617,17 +4769,18 @@
     // Read off the ROUNDS, not off a config flag the browser cannot see: the
     // server stamps `critique_shape` on every round, so the caption describes
     // what THIS run actually did rather than what the deployment is set to.
-    const isPeer = rounds.some((r) => r && r.critique_shape === "peer");
+    const peerSentence = describePeerCritique(
+      rounds,
+      "The card shows the round's combined critique; the per-model detail is " +
+        "recorded and itemised on the receipt.",
+    );
     head.appendChild(
       mkEl(
         "span",
         "result-debate-caption",
-        isPeer
-          ? "Each answer model critiqued the others, in both rounds. The card " +
-              "shows the round's combined critique; the per-model detail is " +
-              "recorded and itemised on the receipt."
-          : "One critique per round, covering all four answers together — " +
-              "Quorum does not record a per-model, line-by-line exchange.",
+        peerSentence ||
+          "One critique per round, covering all four answers together — " +
+            "Quorum does not record a per-model, line-by-line exchange.",
       ),
     );
     container.appendChild(head);
@@ -4808,13 +4961,19 @@
   // `showFocus` exists because `focus_areas` is NOT per-round data. The backend
   // passes the module constant `FOCUS_AREAS`
   // ("disagreement, weak_support, missing_reasoning") to BOTH rounds
-  // (`debate.py:320` and `:387`), so the line is byte-identical on every card of
-  // every run. Under a "Round 1"/"Round 2" header it reads as "this round
-  // focused on X" — a constant dressed as an observation, which is the exact
-  // defect the position table was removed for (ADR-0063). The result view
-  // therefore does not show it. The transcript still does: that is pre-existing
-  // behaviour on a drill-down the reader chose to open, and changing it is a
-  // separate concern.
+  // (`debate.py:1025`/`:1033` for round 1, `:1142`/`:1150` for round 2 — the
+  // line numbers here said `:320` and `:387`, which point at unrelated code),
+  // so the line is byte-identical on every card of every run. Under a
+  // "Round 1"/"Round 2" header it reads as "this round focused on X" — a
+  // constant dressed as an observation, the exact defect the position table was
+  // removed for (ADR-0063).
+  //
+  // ADR-0099 FLIPPED THE DEFAULT to false. It used to be true, showing the line
+  // on the transcript, justified as "pre-existing behaviour on a drill-down the
+  // reader chose to open". ADR-0096 ended that: round 2 is now the CONVERGENCE
+  // step, so a constant reading "disagreement" is false there and not merely
+  // redundant. The parameter is kept rather than deleted so a future per-round
+  // `focus_areas` — real data — has somewhere to turn back on.
   // The four values `SlotCritique.self_assessment` can hold (ADR-0096), in the
   // model's own terms. NOT a scale: "Held its position" is not a weaker
   // "Changed" — a model holding against the panel WITH sources is the single
@@ -4829,7 +4988,7 @@
     changed: "Changed its answer",
   };
 
-  function buildTranscriptRound(round, { showFocus = true } = {}) {
+  function buildTranscriptRound(round, { showFocus = false } = {}) {
     const card = mkEl("article", "transcript-round");
     const head = mkEl("div", "transcript-round-head");
     head.appendChild(
@@ -4980,11 +5139,13 @@
     // Keyed on the rounds, not on a config flag: a rehydrated run from before
     // the flag was enabled must still describe itself honestly.
     const transcriptCaption = document.querySelector(".transcript-debate-caption");
-    if (transcriptCaption && debate.some((r) => r && r.critique_shape === "peer")) {
-      transcriptCaption.textContent =
-        "Each answer model critiqued the others, in both rounds. Below is the " +
-        "round-level critique; the per-model detail is recorded and itemised " +
-        "on the receipt.";
+    const transcriptPeerSentence = describePeerCritique(
+      debate,
+      "Below is the round-level critique; the per-model detail is recorded and " +
+        "itemised on the receipt.",
+    );
+    if (transcriptCaption && transcriptPeerSentence) {
+      transcriptCaption.textContent = transcriptPeerSentence;
     }
 
     // Meta line: round count + model count + optional debate-stage ESTIMATE.
@@ -5021,16 +5182,35 @@
 
     // Status chip — GREEN only on real consensus (avoids the banned "converged"
     // wording; "Consensus reached" is the sanctioned green status word).
+    //
+    // ADR-0099: the chip used to be a two-way `isConsensus ? … : "Panel
+    // divided"`, so EVERY non-consensus run asserted the panel disagreed —
+    // including runs where nobody read the panel at all. `isConsensusResult`
+    // names those states in its own comment: no debate, a templated round, a
+    // cancelled run, an unparseable reply. #247 fixed exactly this for the
+    // verdict band, the Copy summary and the Markdown export via
+    // `mayClaimDisagreement`; the transcript chip was the one holdout.
+    //
+    // `panel_agreement` is the server's own reading for the SPLIT vs
+    // UNDETERMINED distinction; the AGREED state still comes from
+    // `isConsensusResult`, not from this field. `data-consensus` stays strictly
+    // under `isConsensusResult` — it is the only thing CSS paints green
+    // (`app.css`: `.transcript-status[data-consensus="true"]`), and that gate
+    // is a conjunction of every AC-019 condition, not this one field.
     const statusEl = el("transcript-status");
     if (statusEl) {
       statusEl.textContent = "";
       statusEl.dataset.consensus = isConsensus ? "true" : "false";
       const dot = mkEl("span", "transcript-status-dot");
       dot.setAttribute("aria-hidden", "true");
-      statusEl.append(
-        dot,
-        mkEl("span", null, isConsensus ? "Consensus reached" : "Panel divided"),
+      const panelReading = String(
+        (result && result.result && result.result.agreement &&
+          result.result.agreement.panel_agreement) || "undetermined",
       );
+      let chipText = "Not determined";
+      if (isConsensus) chipText = "Consensus reached";
+      else if (panelReading === "split") chipText = "Panel divided";
+      statusEl.append(dot, mkEl("span", null, chipText));
     }
 
     // Opening positions — REAL per-model data.

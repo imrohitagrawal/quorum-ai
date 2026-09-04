@@ -495,7 +495,7 @@ pre code {
     <div class="qa-block">
       <div class="qa-question" onclick="toggleQA(this)"><span class="q-mark">?</span> What is Quorum AI?</div>
       <div class="qa-answer">
-        <p>Quorum AI is a research-synthesis tool. You type one question, it runs that question against four large language models (LLMs) in parallel, has a separate moderator model critique those answers across two debate rounds, and produces a single answer split into five sections: <strong>consensus</strong> (what all models agree on), <strong>disagreement</strong> (where they diverge), <strong>source support</strong> (what backs each claim), <strong>uncertainty</strong> (what is not settled), and <strong>recommendation</strong> (a practical takeaway).</p>
+        <p>Quorum AI is a research-synthesis tool. You type one question, it runs that question against four large language models (LLMs) in parallel, has the four models critique each other's answers and sources across two debate rounds, each free to revise its own answer, and produces a single answer split into five sections: <strong>consensus</strong> (what all models agree on), <strong>disagreement</strong> (where they diverge), <strong>source support</strong> (what backs each claim), <strong>uncertainty</strong> (what is not settled), and <strong>recommendation</strong> (a practical takeaway).</p>
         <p>A <strong>repo</strong> (short for <em>repository</em>) is a project's complete file history stored on GitHub — think of it as a version-controlled folder that every collaborator can read and contribute to. The Quorum AI repo is at <code>github.com/imrohitagrawal/quorum-ai</code>.</p>
         <p>The product is designed for decision support, not for automated decisions. The output is meant to help you think more clearly, not to replace your judgment on high-stakes matters like medical, legal, or financial questions.</p>
         <span class="honesty built">● Built</span>
@@ -518,7 +518,7 @@ pre code {
         <span class="honesty built">● Built</span>
         <div class="example project">
           <div class="example-label">In your project</div>
-          <p>The four model slots (<code>model_slots.py</code>) are the constant source of truth. Each slot selects a different vendor — OpenAI, Anthropic, Google, or NVIDIA — so a single run covers four independent training runs and four independent safety fine-tuning passes. The debate module (<code>debate.py</code>) then asks a separate moderator model to critique all four answers, which catches the "all models confidently saying the same wrong thing" failure mode.</p>
+          <p>The four model slots (<code>model_slots.py</code>) are the constant source of truth. Each slot selects a different vendor — OpenAI, Anthropic, Google, or NVIDIA — so a single run covers four independent training runs and four independent safety fine-tuning passes. The debate module (<code>debate.py</code>) then asks each eligible model to critique all four answers against their sources — including its own — which catches the "all models confidently saying the same wrong thing" failure mode, because a shared assumption has to survive three other vendors looking for it.</p>
         </div>
         <div class="example real-life">
           <div class="example-label">Picture it in real life</div>
@@ -530,7 +530,7 @@ pre code {
     <div class="qa-block">
       <div class="qa-question" onclick="toggleQA(this)"><span class="q-mark">?</span> How does the AI design work? Why four models?</div>
       <div class="qa-answer">
-        <p>The four models are selected from four different vendors by design. Different vendors train on different data, apply different safety fine-tuning, and have different failure modes. Running one model per vendor gives you four independent perspectives on the same question. Two debate rounds are then used to surface the disagreements: a separate moderator call reads all four answers and writes a critique, then refines it in a second round. Note the moderator is a distinct <em>role</em>, not a fifth vendor — by default it runs on <code>anthropic/claude-haiku-4.5</code>, the same model id as slot 2. By default the four answer models are each called once and do not read each other. Peer critique between them — each answer model critiquing the other three, in both rounds — is BUILT as of #290, and ships behind <code>PEER_CRITIQUE_ENABLED</code>, which defaults to false: turning it on raises the fail-safe cost bound, so it is a money decision that waits on a measured live run (ADR-0093, ADR-0095).</p>
+        <p>The four models are selected from four different vendors by design. Different vendors train on different data, apply different safety fine-tuning, and have different failure modes. Running one model per vendor gives you four independent perspectives on the same question. Two debate rounds then push the panel toward what is actually correct: in round 1 each eligible model critiques all four answers and their sources, and in round 2 each reports whether it held, amended or changed its position, with its reasoning and sources. If no slot is eligible to critique, one separate moderator model writes both rounds instead — a distinct <em>role</em>, not a fifth vendor, running by default on <code>anthropic/claude-haiku-4.5</code>, the same model id as slot 2. Peer critique between the four answer models — each critiquing the others, in both rounds — is BUILT (#290) and has been ENABLED IN PRODUCTION since 2026-09-03. The <code>PEER_CRITIQUE_ENABLED</code> flag still defaults to false in the code, so a local checkout and the test suite take the moderator shape unless it is set; production sets it true. Turning it on raised the fail-safe cost bound, which is why it was a money decision and not a feature toggle (ADR-0093, ADR-0095, ADR-0096).</p>
         <p>A <strong>model</strong> is a specific AI system identified by a string like <code>openai/gpt-4o-mini</code>. The string has two parts: the <em>vendor</em> (who trained and hosts it) and the <em>version</em> (which training run). A <strong>token</strong> is the unit LLMs bill on — roughly ¾ of a word for English text. Providers charge per 1,000 tokens of input and output.</p>
         <p>An <strong>API key</strong> is a secret string that authenticates your application to an external service (like ). In Quorum AI, the operator's API keys are stored server-side in Fly secrets — they never leave the server boundary and never appear in browser code, logs, or error responses.</p>
         <span class="honesty built">● Built</span>
@@ -573,7 +573,7 @@ pre code {
         <dt>Token</dt><dd>The unit LLMs bill on — roughly ¾ of an English word. Costs are quoted per 1,000 tokens.</dd>
         <dt>Repo</dt><dd>Short for <em>repository</em> — the project's file history on GitHub. URL: <code>github.com/imrohitagrawal/quorum-ai</code>.</dd>
         <dt>Synthesis</dt><dd>The final output section that combines all four model answers into consensus, disagreement, source support, uncertainty, and recommendation.</dd>
-        <dt>Debate round</dt><dd>One cycle where a separate moderator model reads all four answers and writes a critique. Two rounds are run per query.</dd>
+        <dt>Debate round</dt><dd>One cycle in which each eligible answer model reads all four answers and their sources and writes its own critique. Round 1 is cross-examination; round 2 asks each model to converge, reporting whether it held, amended or changed its answer and why. Two rounds are run per query, and round 2 can be skipped if the run's debate budget is spent. The shape is decided per round: if the feature is off, or no slot is eligible to critique, or the run is cancelled before the first critic is dispatched, one separate moderator model writes that round instead.</dd>
         <dt>Query run</dt><dd>A single execution of the full workflow: estimate → four initial answers → two debate rounds → synthesis. Identified by a <code>query_run_id</code>.</dd>
         <dt>Source</dt><dd>A web page or document that a model cites to support a claim. Shown next to the model's answer.</dd>
         <dt>FastAPI</dt><dd>A Python web framework used to build Quorum AI's backend. It generates API docs, validates input with Pydantic, and serves async endpoints.</dd>
@@ -756,8 +756,8 @@ pre code {
         <p>The query workflow has seven stages:</p>
         <ol style="margin:8px 0 8px 20px;">
           <li><strong>Initial answers</strong> — four models called in parallel, each with optional web search. Each call is bounded by a per-call timeout (default 8 seconds) and a hard 2000-token output cap.</li>
-          <li><strong>Debate round 1</strong> — a separate moderator model reads all four initial answers and writes a critique focused on disagreement, weak support, and missing reasoning.</li>
-          <li><strong>Debate round 2</strong> — the same moderator refines that critique, focusing on the strongest residual disagreements. The four answer models are not called again.</li>
+          <li><strong>Debate round 1</strong> — each eligible answer model reads all four initial answers <em>and their cited sources</em> and writes its own critique: where the panel agrees and whether that agreement is evidenced, where it differs, and what another model got right or wrong.</li>
+          <li><strong>Debate round 2</strong> — each model sees round 1's critiques and reports where it now stands: held, amended or changed, with its reasoning, its sources, and a revised answer. The synthesis reads those revised answers as its primary input (ADR-0096).</li>
           <li><strong>Synthesis</strong> — five independent calls (one per section: consensus, disagreement, source support, uncertainty, recommendation), each re-sending the full context.</li>
         </ol>
         <p>The full pipeline has a 180-second hard wall-clock deadline. If it expires, the run terminal state is <code>timed_out</code> and every completed stage's output is returned with a visible missing-step explanation. A run that partially completed is never presented as fully successful.</p>
@@ -769,7 +769,7 @@ pre code {
         </div>
         <div class="example real-life">
           <div class="example-label">Picture it in real life</div>
-          <p>A panel discussion at a conference: four experts give their takes (initial answers), then each responds to the others' points (debate round 1), then they refine their positions (debate round 2), and a moderator writes up "here is what the panel agreed on, here is where they clashed, here is the evidence, and here is what you should do next." The moderator is the synthesis step; the 180-second timer is the conference room booking.</p>
+          <p>A panel discussion at a conference: four experts give their takes (initial answers), then each critiques the others' points and their evidence (debate round 1), then each says whether it is holding or moving, and why, with sources (debate round 2), and a rapporteur writes up "here is what the panel agreed on, here is where they clashed, here is the evidence, and here is what you should do next." That rapporteur is the synthesis step; the 180-second timer is the conference room booking.</p>
         </div>
       </div>
     </div>
@@ -802,7 +802,8 @@ pre code {
           <li><strong>ADR-0021</strong> — The judge must ask for output it can parse.</li>
           <li><strong>ADR-0029</strong> — The grounding score counts the citations the reader can see.</li>
           <li><strong>ADR-0030</strong> — A citation marker is compared in the shape the source store keeps — a terminal run is evaluated once.</li>
-          <li><strong>ADR-0032</strong> — The copy describes the moderator; the requirement keeps peer critique — corrects UI copy that overstated the debate design.</li>
+          <li><strong>ADR-0032</strong> — The copy describes the moderator; the requirement keeps peer critique — corrected UI copy that overstated the debate design while peer critique was unbuilt. <em>Decisions 1, 3 and 4 superseded by ADR-0099</em>, which retired that copy once peer critique shipped and was enabled.</li>
+          <li><strong>ADR-0099</strong> — The UI describes peer critique, because peer critique is what runs — retires the moderator copy across the landing page, the run views and the export.</li>
         </ul>
         <p style="margin:12px 0 4px;"><strong>Correctness and safety of scoring</strong></p>
         <ul style="margin:4px 0 8px 20px;">

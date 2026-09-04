@@ -5,6 +5,7 @@ import {
   goldenCompletedResp,
   goldenRespWithPeerDebate,
   SLOTS,
+  goldenRespWithPeerCritiques,
 } from "../../fixtures/golden-run";
 
 /**
@@ -94,6 +95,37 @@ test.describe("#290 peer-critique copy", () => {
     await expect(caption).toBeVisible();
     await expect(caption).not.toHaveText(DENIAL);
     await expect(caption).toContainText(/critiqued the others/i);
+  });
+
+  test("the caption reports how many critics ANSWERED, not how many were asked", async ({
+    page,
+  }) => {
+    // THE WIRE, in a browser. Review defeated the unit tests by reverting both
+    // call sites and leaving the helper as dead code; the structural gate in
+    // tests/unit/test_peer_caption_counts.py closes that, and this proves the
+    // number actually reaches the DOM.
+    //
+    // RED WHEN: the caption goes back to a fixed sentence, or counts dispatched
+    // critics instead of `critique_mode === "live"` ones. With 3 of 4 live it
+    // would then read "Each answer model critiqued the others".
+    await driveWith(page, goldenRespWithPeerCritiques(3, 4));
+    const caption = page.locator(".result-debate-caption");
+    await expect(caption).toBeVisible();
+    await expect(caption).toContainText("3 of 4 answer models critiqued the others");
+  });
+
+  test("a peer run whose critics ALL fell back does not claim they critiqued", async ({
+    page,
+  }) => {
+    // POSITIVE PARTNER to the count above, and the state the pre-ADR-0099
+    // caption got most wrong: the round is still shaped "peer", so the old
+    // sentence claimed every model critiqued while every critique on the page
+    // is Quorum's own template.
+    await driveWith(page, goldenRespWithPeerCritiques(0, 4));
+    const caption = page.locator(".result-debate-caption");
+    await expect(caption).toBeVisible();
+    await expect(caption).toContainText(/no answer model's own critique came back/i);
+    await expect(caption).not.toContainText(/critiqued the others/i);
   });
 
   test("no surface names the moderator as the critic", async ({ page }) => {

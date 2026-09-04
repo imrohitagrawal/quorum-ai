@@ -486,7 +486,8 @@
                 </div>
                 <p class="live-debate-caption muted">
                   Round-level critiques appear here as each debate round completes.
-                  Per-model debate detail is not captured.
+                  When the models critique each other, each one's own critique is
+                  recorded and itemised on the receipt.
                 </p>
                 <div id="live-debate" class="live-debate"></div>
               </div>
@@ -587,10 +588,15 @@
 
               <!-- The panel's actual reasoning, on the page the run lands on.
                    Populated by ``renderResultDebate`` from ``debate_outputs``.
-                   ROUND-LEVEL only: the backend records ONE ``critique_text``
-                   per round with NO per-model attribution, so this renders one
-                   card per round and says so in its caption. It must never grow
-                   per-model exchange cards — that is #290, which is not built.
+                   ROUND-LEVEL cards, per round. Under the MODERATOR shape the
+                   backend records ONE ``critique_text`` per round with no
+                   per-model attribution. Under the PEER shape (#290, shipped
+                   and enabled in production since 2026-09-03) it also records
+                   ``slot_critiques`` — one entry per eligible critic — and the
+                   receipt itemises a ``(critique)`` charge per model. The
+                   caption reads the run's own ``critique_shape`` and says which
+                   happened (ADR-0099); this comment claimed #290 "is not built"
+                   until then, while the feature was live.
                    Each card also discloses whether a MODEL wrote that round
                    (``debate_mode == "live"``) or Quorum's own template did.
 
@@ -757,7 +763,7 @@
             <div class="landing-hero">
               <p class="landing-eyebrow">Four AI models · two debate rounds · one sourced answer</p>
               <h1 id="landing-heading" class="landing-h1" tabindex="-1">Ask once. Let four minds argue it out.</h1>
-              <p class="landing-subhead">Four frontier AI models answer. A moderator model audits them over two rounds. A synthesis model writes the one answer &mdash; where they agree, where they don't, and exactly what to trust.</p>
+              <p class="landing-subhead">Four frontier AI models answer. They critique each other's answers and sources, and each can revise its own. A synthesis model writes the one answer &mdash; where they agree, where they don't, and exactly what to trust.</p>
             </div>
 
             <div class="landing-runbar">
@@ -837,7 +843,7 @@
                 <span class="landing-disclaimer-dot landing-disclaimer-dot-neutral" aria-hidden="true"></span>Results vanish when you leave
               </span>
               <span class="landing-disclaimer">
-                <span class="landing-disclaimer-dot landing-disclaimer-dot-neutral" aria-hidden="true"></span>Peer critique between the four models is planned, not yet built
+                <span class="landing-disclaimer-dot landing-disclaimer-dot-neutral" aria-hidden="true"></span>Sources are cited, but aren't checked against their pages
               </span>
             </div>
             </div>

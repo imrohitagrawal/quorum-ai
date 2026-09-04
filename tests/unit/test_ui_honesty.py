@@ -160,37 +160,61 @@ def test_cancel_button_hidden_when_no_run_in_progress() -> None:
 # to see is over an empty denominator"). This is the pinned literal assertion
 # that blind spot calls for.
 #
-# The four answer models are called once each and never read each other; one
-# separate moderator call (`settings.debate_model_id`) reads all four. See
-# ADR-0032 and issue #290.
+# ADR-0099 inverted this. It used to read "the four answer models are called
+# once each and never read each other; one separate moderator call reads all
+# four", and the test below REQUIRED the served description to say "moderator
+# model". #290 shipped and was enabled in production on 2026-09-03, so that
+# requirement was pinning a falsehood onto the API's own front page.
 
 
-def test_api_description_does_not_claim_the_models_debate_each_other() -> None:
-    """RED IF: the OpenAPI description returns to claiming mutual critique.
+def test_api_description_matches_the_shape_this_process_will_run() -> None:
+    """RED IF: the description stops branching on ``peer_critique_enabled``.
 
-    Mutation that reddens this: restore "has them debate," in the
-    ``description=`` block of ``build_app`` in ``src/product_app/main.py``.
+    BOTH branches are asserted, and that is the point. A flat string is wrong
+    in one configuration or the other, and review demonstrated which: peer
+    critique defaults to ``False`` (``config.py``, ``.env.example``) while
+    production sets it true — and production serves ``/openapi.json`` as 404
+    (``api_docs_enabled`` is LOCAL-only). A description hard-coded to the peer
+    wording is therefore read only by the deployments where it is FALSE.
+
+    Mutation that reddens this: delete the ``if
+    active_settings.peer_critique_enabled`` branch in ``_app_description`` and
+    return either wording unconditionally. One of the two halves below then
+    fails.
     """
-    description = app.openapi()["info"]["description"].lower()
+    from product_app.config import Settings
+    from product_app.main import _app_description
+
+    peer_on = _app_description(Settings(peer_critique_enabled=True)).lower()
+    peer_off = _app_description(Settings(peer_critique_enabled=False)).lower()
 
     # POSITIVE PARTNER FIRST (rule 7). Without these, every negative below is
-    # trivially true over an empty or missing description.
-    assert len(description) > 200, (
-        "description is missing or truncated; the negatives below would pass vacuously"
-    )
-    assert "moderator model" in description
-    assert "synthesis model" in description
-
-    for banned in (
-        "has them debate",
-        "critique each other",
-        "critique one another",
-        "debate each other",
-    ):
-        assert banned not in description, (
-            f"the served API description claims {banned!r}; the four answer "
-            "models are called once each and never read each other (ADR-0032)"
+    # trivially true over an empty or truncated description.
+    for text in (peer_on, peer_off):
+        assert len(text) > 200, (
+            "description is missing or truncated; the checks below would pass vacuously"
         )
+        assert "synthesis model" in text
+
+    # The two descriptions must actually DIFFER. Without this the whole test
+    # passes against a function that ignores its argument.
+    assert peer_on != peer_off
+
+    # With peer critique ON no moderator call is made at all
+    # (``debate.py::_build_peer_round``), so naming one describes a stage the
+    # run never executes.
+    assert "critique each other's" in peer_on
+    assert "moderator" not in peer_on
+
+    # With it OFF the moderator is exactly what runs, and claiming mutual
+    # critique would be the falsehood pointed the other way.
+    assert "moderator model" in peer_off
+    assert "critique each other" not in peer_off
+
+    # And the SERVED description is one of the two, not a third string that
+    # drifted: this is the wire, not just the decision.
+    served = app.openapi()["info"]["description"].lower()
+    assert served in (peer_on, peer_off)
 
 
 # --- the debate section's copy (ADR-0063) -----------------------------------
@@ -200,10 +224,20 @@ def test_api_description_does_not_claim_the_models_debate_each_other() -> None:
 # was previously rendered only into `.panel.panel-section`, which app.css hides
 # with `display: none` on every view.
 #
-# The honesty rule it must not break: the four answer models are called ONCE
-# EACH, IN PARALLEL, and never read one another. Real peer critique is #290 and
-# is NOT built. The backend records ONE `critique_text` per round with NO
-# per-model attribution.
+# The honesty rule it must not break, REWRITTEN by ADR-0099. It used to read
+# "the four answer models are called ONCE EACH, IN PARALLEL, and never read one
+# another. Real peer critique is #290 and is NOT built." That was true when it
+# was written and FALSE from 2026-09-03, when `PEER_CRITIQUE_ENABLED` went true
+# in production: #290 shipped (ADR-0093/0095/0096), each eligible slot writes
+# its own critique of the others, and `slot_critiques` carries the per-model
+# attribution the sentence above says does not exist.
+#
+# What is STILL true, and is what this list now guards: no model ever addresses
+# or answers a NAMED other model. Each critic is called once per round and, in
+# round 2, is shown a DIGEST of round 1 (`debate.py` passes `prior_round`) —
+# never another critic's message as a message. So copy claiming a rebuttal, a
+# reply, or a back-and-forth remains false under BOTH shapes, while copy saying
+# the models critique each other is now simply accurate.
 #
 # WHY THIS SCANS STRING LITERALS AND NOT THE FILE. `app.js`'s comments around
 # this code deliberately spell out the banned phrases in order to explain the
@@ -214,12 +248,25 @@ def test_api_description_does_not_claim_the_models_debate_each_other() -> None:
 # not JavaScript `//` ones. So this locates the specific `mkEl(...)` copy sites
 # and reads their literal arguments.
 
-#: Phrases that assert the four models exchanged views with each other.
-#: Lowercased; matched against the debate section's user-facing copy only.
+#: Phrases that assert a DIRECTED, conversational exchange — one model
+#: answering another model's message. False under both the moderator and the
+#: peer shape, because a critic is called once per round and never sees another
+#: critic's reply as a message addressed to it.
+#:
+#: ADR-0099 removed four entries that turned TRUE when #290 shipped and were
+#: holding the false copy in place: "each other", "one another",
+#: "read the other" and "peer critique".
+#:
+#: Removing them WAS a real loosening until review caught it, and the reason is
+#: worth keeping: the peer caption moved out of the `mkEl(...)` literal into
+#: `describePeerCritique`, so `_extract_mkel_literals` below stopped seeing the
+#: sentence the product actually serves. A caption reading "Each model replied
+#: to the others' rebuttals in turn" — three banned phrases, false under BOTH
+#: shapes — passed here and failed on the pre-change tree.
+#: `tests/unit/test_peer_caption_counts.py::test_the_helper_makes_no_banned_exchange_claim`
+#: imports this tuple and applies it to the helper's own literals, which is what
+#: restores the cover.
 BANNED_EXCHANGE_CLAIMS = (
-    "each other",
-    "one another",
-    "read the other",
     "rebuttal",
     "replied",
     "reply to",
@@ -227,7 +274,6 @@ BANNED_EXCHANGE_CLAIMS = (
     "in turn",
     "back and forth",
     "argued with",
-    "peer critique",
 )
 
 #: Copy sites in the debate section, by the class name passed to ``mkEl``.
@@ -336,9 +382,11 @@ def test_the_debate_section_copy_does_not_claim_the_models_answered_each_other()
         lowered = copy.lower()
         for banned in BANNED_EXCHANGE_CLAIMS:
             assert banned not in lowered, (
-                f"{class_name} says {banned!r} — the four answer models are "
-                "called once each and never read each other (#290 is not built, "
-                "ADR-0032, ADR-0063). Copy was: {copy!r}".format(copy=copy)
+                f"{class_name} says {banned!r}, which claims one model answered "
+                "another model's message. No shape does that: each critic is "
+                "called once per round and round 2 is shown a DIGEST of round 1, "
+                "never a directed reply (ADR-0096, ADR-0099). "
+                "Copy was: {copy!r}".format(copy=copy)
             )
 
 

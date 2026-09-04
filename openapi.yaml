@@ -940,9 +940,13 @@ components:
 
         critiquing each other, each with its own reading of the panel) adds authors
 
-        without reshaping anything here. Today there is exactly one author per round
+        without reshaping anything here. That design paid off: #290 SHIPPED, and
 
-        — the configured moderator — and this field says so explicitly instead of
+        under the peer shape there is one author PER ELIGIBLE CRITIC per round. The
+
+        moderator shape still reaches this record with exactly one author, so the
+
+        field says which explicitly instead of
 
         leaving it implied by there being nowhere else it could have come from.
 
@@ -999,11 +1003,19 @@ components:
         synopsis and how it relates to the final synthesis.
 
 
-        All movement here is INFERRED (the debate is round-scoped, no per-model
+        All movement here is INFERRED: ``after_round_1`` and ``final`` describe
 
-        transcript): ``after_round_1`` and ``final`` describe opening-vs-final
+        opening-vs-final alignment, never an observed mid-debate action. The
 
-        alignment, never an observed mid-debate action.'
+        parenthetical here used to read "the debate is round-scoped, no per-model
+
+        transcript", which stopped being true when #290 shipped ``slot_critiques``
+
+        and ADR-0096 added ``self_assessment``. The inference is still an inference,
+
+        but the reason is now that NOTHING HERE READS those records — ADR-0096
+
+        records restoring the observed movement as its own package.'
     ProviderPath:
       type: string
       enum:

@@ -298,23 +298,43 @@ test.describe("the result view carries the panel's reasoning", () => {
     ).toHaveCount(ROUNDS_IN_FIXTURE);
   });
 
-  // RED IF: the constant `focus_areas` line is put back on the result view.
-  // `debate.py` passes the module constant FOCUS_AREAS to BOTH rounds, so the
+  // RED IF: the constant `focus_areas` line comes back on EITHER view.
+  //
+  // `debate.py` passes the module constant FOCUS_AREAS
+  // ("disagreement, weak_support, missing_reasoning") to BOTH rounds, so the
   // line is byte-identical on every card of every run; under a "Round N" header
-  // it reads as per-round metadata. That is the same "constant dressed as an
-  // observation" defect this change removed the position table for.
-  test("the constant focus line is not promoted onto the result view", async ({
+  // it reads as per-round metadata. That is the "constant dressed as an
+  // observation" defect the position table was removed for (ADR-0063).
+  //
+  // ADR-0099 EXTENDED this from the result view to the transcript. The previous
+  // version of this test asserted the transcript still SHOWED the line, calling
+  // it "a placement decision, not a deletion". That reasoning expired with
+  // ADR-0096: round 2 is now the CONVERGENCE step ("The aim now is to CONVERGE
+  // on what is correct... not to restate the disagreement", ROUND_TWO_SYSTEM_-
+  // PROMPT), while FOCUS_AREAS still stamps "disagreement" on it. The line
+  // stopped being merely redundant and became FALSE for round 2, so the gate
+  // that required it had to invert.
+  test("the constant focus line is on neither the result view nor the transcript", async ({
     page,
   }) => {
     await driveToResult(page);
-    // Positive partner: the cards rendered, so the absence below is meaningful.
+    // POSITIVE PARTNER: the cards rendered AND are visible, so the absence
+    // below is meaningful. `toBeVisible` rather than only a count, because
+    // `check-negative-assertions.mjs` reads `toHaveCount(IDENT)` as "other" —
+    // `isPositiveNumber` wants a literal — so a count against the imported
+    // ROUNDS_IN_FIXTURE does not discharge the partner requirement.
+    await expect(page.locator("#result-debate .transcript-round").first()).toBeVisible();
     await expect(page.locator("#result-debate .transcript-round")).toHaveCount(ROUNDS_IN_FIXTURE);
     await expect(page.locator("#result-debate .transcript-round-focus")).toHaveCount(0);
-    // ...and the transcript, a drill-down the reader chose to open, still has it:
-    // this is a placement decision, not a deletion, and the partner proves the
-    // selector is not simply wrong.
+
     await page.locator("#result-transcript-link").click();
-    await expect(page.locator("#transcript-rounds .transcript-round-focus").first()).toBeVisible();
+    // POSITIVE PARTNER AGAIN, on the second view: without it the count-0 below
+    // passes over a transcript that never rendered a single round.
+    await expect(page.locator("#transcript-rounds .transcript-round").first()).toBeVisible();
+    await expect(
+      page.locator("#transcript-rounds .transcript-round"),
+    ).toHaveCount(ROUNDS_IN_FIXTURE);
+    await expect(page.locator("#transcript-rounds .transcript-round-focus")).toHaveCount(0);
   });
 
   // RED IF: `.result-debate` carries an author `display` that beats the UA

@@ -102,6 +102,7 @@ ways, so the record shows what was believed on a date and what replaced it.
 | [ADR-0096](adr/0096-the-debate-is-evidence-led-convergence-not-a-disagreement-inventory.md) | The debate is evidence-led convergence, not a disagreement inventory | Architecture | Accepted — 2026-09-03 |
 | [ADR-0097](adr/0097-peer-critique-is-reported-not-declared.md) | Peer critique is REPORTED, not declared | Architecture | Accepted — 2026-09-03 (follow-on to the #290 live window; issue #290) |
 | [ADR-0098](adr/0098-a-retrieved-page-and-a-placeholder-quorum-wrote-are-not-the-same-source.md) | A retrieved page and a placeholder Quorum wrote are not the same source | Architecture | Accepted — 2026-09-04 |
+| [ADR-0099](adr/0099-the-ui-describes-peer-critique-because-peer-critique-is-what-runs.md) | The UI describes peer critique, because peer critique is what runs | Architecture | Accepted - 2026-09-04 |
 
 **This index was itself stale** until 2026-07-30: ADR-0002 had existed since
 2026-07-19 and was never listed here. A hand-maintained index is a derived fact

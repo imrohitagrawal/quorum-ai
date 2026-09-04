@@ -646,7 +646,10 @@ this file. But when you touch the workspace UI (`src/product_app/static/app.js`,
     or the run deadline expired). Such a slot is counted in neither `live_count`
     nor `local_count`, so a run with three live answers and one missing showed no
     banner at all while the headline read "3 of 4 models aligned". The condition
-    is now `localCount > 0 || failedCount > 0` (`app.js:2297`, where
+    is now `localCount > 0 || failedCount > 0` (in `app.js`; grep the condition
+    rather than a line number — this citation said `:2297` while the code sat at
+    `:2700`, and a single edit above it moved that to `:2766` in the same
+    session that corrected it, where
     `failedCount` is the slots that produced nothing) — equivalent to
     `live_count < slot_count` **whenever `live + local <= slot_count`**, which is
     all the server can emit. So the sentence above is true as written *now*, and

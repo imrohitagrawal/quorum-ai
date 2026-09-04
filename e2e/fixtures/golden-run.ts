@@ -575,6 +575,34 @@ export const goldenRespWithPeerDebate = () => {
 };
 
 /**
+ * A peer run that also carries the PER-CRITIC record the caption counts.
+ *
+ * A second DEDICATED builder (AGENTS.md 13d), and it exists because review
+ * demonstrated a gap: `goldenRespWithPeerDebate` sets only `critique_shape`, so
+ * every e2e assertion landed in `describePeerCritique`'s UNKNOWN branch and the
+ * counting logic — the whole point of ADR-0099 — was exercised in no browser.
+ *
+ * `live` critics out of `eligible`, per round. The default (3 of 4, both
+ * rounds) is the shape the numeric branch renders for, so the spec proves a
+ * real number reaches the DOM rather than the hedged fallback sentence.
+ */
+export const goldenRespWithPeerCritiques = (live = 3, eligible = 4) => {
+  const resp = goldenCompletedResp() as Record<string, any>;
+  for (const round of resp.result.debate_outputs) {
+    round.critique_shape = "peer";
+    round.eligible_critic_count = eligible;
+    round.slot_critiques = Array.from({ length: eligible }, (_v, i) => ({
+      critic_slot_number: i + 1,
+      critic_model_id: `vendor/model-${i + 1}`,
+      critique_text: `Slot ${i + 1} critique.`,
+      focus_areas: [],
+      critique_mode: i < live ? "live" : "fallback",
+    }));
+  }
+  return resp;
+};
+
+/**
  * A completed run whose DEBATE fell back to Quorum's own template while the
  * ANSWERS stayed live — `debate_mode: "fallback"` on every round.
  *
