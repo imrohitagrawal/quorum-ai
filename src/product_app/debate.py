@@ -322,8 +322,10 @@ class PanelStance(BaseModel):
     ``author_model_id`` is carried per record rather than assumed, and consumers
     read a LIST of rounds rather than a single object, so #290 (four models
     critiquing each other, each with its own reading of the panel) adds authors
-    without reshaping anything here. Today there is exactly one author per round
-    — the configured moderator — and this field says so explicitly instead of
+    without reshaping anything here. That design paid off: #290 SHIPPED, and
+    under the peer shape there is one author PER ELIGIBLE CRITIC per round. The
+    moderator shape still reaches this record with exactly one author, so the
+    field says which explicitly instead of
     leaving it implied by there being nowhere else it could have come from.
 
     A stance is only ever evidence when its round is LIVE. A templated round's
@@ -2097,9 +2099,13 @@ class PositionMovement(BaseModel):
     """One row of the "how positions moved" table — a single model's opening
     synopsis and how it relates to the final synthesis.
 
-    All movement here is INFERRED (the debate is round-scoped, no per-model
-    transcript): ``after_round_1`` and ``final`` describe opening-vs-final
-    alignment, never an observed mid-debate action.
+    All movement here is INFERRED: ``after_round_1`` and ``final`` describe
+    opening-vs-final alignment, never an observed mid-debate action. The
+    parenthetical here used to read "the debate is round-scoped, no per-model
+    transcript", which stopped being true when #290 shipped ``slot_critiques``
+    and ADR-0096 added ``self_assessment``. The inference is still an inference,
+    but the reason is now that NOTHING HERE READS those records — ADR-0096
+    records restoring the observed movement as its own package.
     """
 
     slot_number: int = Field(ge=1, le=4)

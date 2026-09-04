@@ -2,7 +2,7 @@
 
 > One question. Four models. One answer you can verify.
 
-Quorum-AI runs your question against four LLMs in parallel, has a separate moderator model critique their answers, and returns a single answer — written by a separate synthesis model — with explicit consensus, disagreement, source support, uncertainty, and recommendation. Every finished run is also evaluated for a **trust score**, though on the default configuration (judge off) that score is always suppressed — see "Known limitations" below. Cost is estimated before execution; higher-cost runs require confirmation. Results are ephemeral, with an export button as the way to keep one.
+Quorum-AI runs your question against four LLMs in parallel, has them critique each other's answers and sources so each can revise its own, and returns a single answer — written by a separate synthesis model — with explicit consensus, disagreement, source support, uncertainty, and recommendation. Every finished run is also evaluated for a **trust score**, though on the default configuration (judge off) that score is always suppressed — see "Known limitations" below. Cost is estimated before execution; higher-cost runs require confirmation. Results are ephemeral, with an export button as the way to keep one.
 
 **Known limitations, up front:**
 - **No accounts, no login, no identity check.** Each browser gets an anonymous session (an opaque token, validated server-side) tied to a randomly generated `account_id` — there's no username, password, or registration to bypass. Minting a *new* session is IP-rate-limited; using an existing one to run queries is rate-limited per `account_id`, not per IP.

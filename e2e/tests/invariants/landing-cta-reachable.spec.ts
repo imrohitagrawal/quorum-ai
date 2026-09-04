@@ -166,10 +166,17 @@ test.describe("landing CTA is reachable on a phone (#222)", () => {
 /**
  * ADR-0032: the landing must describe the pipeline the code actually runs.
  *
- * Until 2026-08-11 the subhead said Quorum "has them critique each other
- * twice". It does not. The four slot models are called once each, in
- * parallel, and never read each other's answers; one separate moderator model
- * (`settings.debate_model_id`) reads all four and writes the critique, twice.
+ * ADR-0099 INVERTED this gate. Until 2026-09-04 the assertions below required
+ * the subhead to name a "moderator model" and banned every phrasing of models
+ * critiquing each other — correct while #290 was unbuilt, and FALSE from the
+ * moment `PEER_CRITIQUE_ENABLED` went true in production on 2026-09-03. The
+ * gate then held the falsehood in place: the copy could not be corrected
+ * without this file going red, which is the anti-pattern AGENTS.md forbids in
+ * its own words ("Never write a check that goes red when the bug is FIXED").
+ *
+ * The direction is now reversed. Under `settings.peer_critique_enabled` each
+ * ELIGIBLE answer slot critiques the others and may revise its own answer
+ * (`debate.py:_build_peer_round`); NO moderator call is made on such a run.
  *
  * These assertions live in THIS file rather than a new spec on purpose:
  * adding a file to `e2e/tests/invariants/` moves the count AGENTS.md pins
@@ -189,9 +196,9 @@ test.describe("landing CTA is reachable on a phone (#222)", () => {
  * That is the point — this is a claim about the system, not decoration.
  */
 const EXPECTED_SUBHEAD =
-  "Four frontier AI models answer. A moderator model audits them over two rounds. " +
-  "A synthesis model writes the one answer — where they agree, where they don't, " +
-  "and exactly what to trust.";
+  "Four frontier AI models answer. They critique each other's answers and " +
+  "sources, and each can revise its own. A synthesis model writes the one " +
+  "answer — where they agree, where they don't, and exactly what to trust.";
 
 test.describe("landing copy describes the real pipeline (ADR-0032)", () => {
   test("the subhead is exactly the approved sentence", async ({ page }) => {
@@ -210,11 +217,14 @@ test.describe("landing copy describes the real pipeline (ADR-0032)", () => {
 
     // Belt and braces on the two claims that matter, so a failure message
     // says WHICH property broke rather than just diffing a long string.
-    expect(actual.toLowerCase()).toContain("moderator model");
+    // RED IF: the subhead reverts to naming a moderator, which no longer runs
+    // on a peer run, or drops the synthesis stage.
+    expect(actual.toLowerCase()).toContain("critique each other's");
     expect(actual.toLowerCase()).toContain("synthesis model");
+    expect(actual.toLowerCase()).not.toContain("moderator");
   });
 
-  test("no landing surface claims the four answer models critique each other", async ({
+  test("no landing surface claims a moderator model audits the answers", async ({
     page,
   }) => {
     await stubReadinessLive(page);
@@ -230,26 +240,26 @@ test.describe("landing copy describes the real pipeline (ADR-0032)", () => {
     // the per-IP mint cap unraised, /ui serves a 429 page and this locator is
     // empty. That is exactly how a vacuous pass would look.
     expect(text.length).toBeGreaterThan(400);
-    expect(text).toContain("moderator model");
+    expect(text).toContain("critique each other's");
 
-    // RED IF: these specific phrasings return. NOT a completeness claim — the
-    // subhead test above is what actually pins the wording. The h1 "Let four
-    // minds argue it out" is deliberately retained (ADR-0032 §5), so "argue"
-    // is not among these.
+    // RED IF: any moderator phrasing returns to the landing view. ADR-0099:
+    // under the peer shape no moderator call is made at all, so a landing that
+    // names one describes a pipeline the run does not execute. NOT a
+    // completeness claim — the subhead test above is what pins the wording.
+    // The h1 "Let four minds argue it out" is deliberately retained
+    // (ADR-0032 §5, unchanged by ADR-0099), so "argue" is not among these.
     for (const banned of [
-      "critique each other",
-      "critique one another",
-      "critique the others",
-      "reads the others",
-      "review one another",
-      "revise its answer",
-      "exchanging critiques",
+      "moderator",
+      "audits them",
+      "a separate model reads",
+      "planned, not yet built",
+      "not yet built",
     ]) {
       expect(text).not.toContain(banned);
     }
   });
 
-  test("the roadmap chip keeps peer critique in the future tense", async ({
+  test("the disclaimer row names a REAL current limit, not a stale roadmap", async ({
     page,
   }) => {
     await stubReadinessLive(page);
@@ -265,12 +275,19 @@ test.describe("landing copy describes the real pipeline (ADR-0032)", () => {
     // vanishing.
     expect(text).toContain("decision support");
 
-    // RED IF: the chip is dropped, or reworded into the present tense so it
-    // reads as a shipped feature — the exact defect ADR-0032 exists to fix.
-    // "planned, not yet built" rather than "in development": issue #290 is
-    // filed, but nothing is being built yet, and review caught the stronger
-    // wording as an unbacked claim.
-    expect(text).toContain("peer critique");
-    expect(text).toContain("planned, not yet built");
+    // RED IF: the stale roadmap chip returns. ADR-0099: peer critique SHIPPED
+    // (#290, ADR-0093/0095/0096) and has been enabled in production since
+    // 2026-09-03, so a chip calling it unbuilt is false — and this assertion
+    // used to REQUIRE that falsehood.
+    expect(text).not.toContain("planned, not yet built");
+    expect(text).not.toContain("not yet built");
+
+    // POSITIVE PARTNER for the two negatives above: the slot still carries a
+    // truthful current limit rather than being quietly emptied. ADR-0096
+    // decision 1 buys L1 only — a source is CITED; that it resolves (L2) or
+    // supports the claim (L3) is not attempted — and says in those words that
+    // no UI copy may imply otherwise.
+    expect(text).toContain("cited");
+    expect(text).toContain("aren't checked against their pages");
   });
 });
