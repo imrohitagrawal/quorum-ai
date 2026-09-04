@@ -67,7 +67,13 @@ def _tavily_body(results: list[dict[str, Any]]) -> bytes:
 # ---------------------------------------------------------------------------
 
 
-def test_parse_tavily_results_maps_results_to_fallback_sources() -> None:
+def test_parse_tavily_results_maps_results_to_web_search_sources() -> None:
+    """ADR-0098. RED before the fix: these carried ``FALLBACK_SEARCH``, the same
+    provider as the ``example.test`` placeholder Quorum writes itself, so the UI
+    badged a really-retrieved page "fallback stub, not a real source".
+
+    ``is_fallback`` stays True on purpose — a retrieved page is still not the
+    MODEL's own citation, and ``citation_coverage`` deliberately does not move."""
     refs = _parse_tavily_results(
         {
             "results": [
@@ -78,7 +84,7 @@ def test_parse_tavily_results_maps_results_to_fallback_sources() -> None:
     )
     assert [r.url for r in refs] == ["https://a.example/x", "https://b.example/y"]
     assert [r.title for r in refs] == ["First", "Second"]
-    assert all(r.provider == ProviderPath.FALLBACK_SEARCH for r in refs)
+    assert all(r.provider == ProviderPath.WEB_SEARCH for r in refs)
     assert all(r.is_fallback for r in refs)
 
 
@@ -179,7 +185,11 @@ def test_fallback_sources_uses_real_search_when_key_present(
     assert captured["auth"] == "Bearer tvly-test"
     assert captured["body"]["query"] == "compare vector databases"
     assert [s.url for s in sources] == ["https://real.example/doc"]
-    assert sources[0].provider == ProviderPath.FALLBACK_SEARCH
+    # ADR-0098: a real search result is WEB_SEARCH, not the placeholder's path.
+    assert sources[0].provider == ProviderPath.WEB_SEARCH
+    assert sources[0].is_fallback is True, (
+        "still not the model's own citation — the coverage metric must not move"
+    )
     assert sources[0].is_fallback
 
 

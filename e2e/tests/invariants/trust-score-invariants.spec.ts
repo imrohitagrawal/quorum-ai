@@ -53,8 +53,10 @@ const DISCLOSURE =
   "Not verified — these are automated structural checks, not a fact-check.";
 
 // P1 / FR-015 — the VERIFIED disclosure literal (must match app.js exactly).
+// ADR-0098: this pinned "Citation support was checked ...", a claim the judge
+// cannot make — it never receives the cited pages, only their titles and URLs.
 const VERIFIED_DISCLOSURE =
-  "Citation support was checked by an independent judge model — an automated review, not a human fact-check.";
+  "An independent judge model checked this answer's citations against its source list — an automated review, not a human fact-check. The cited pages themselves were not retrieved.";
 
 const VIEWPORTS = [375, 768, 1440] as const;
 const THEMES = ["light", "dark"] as const;

@@ -47,11 +47,22 @@ def code_without_comments(path: Path) -> str:
     rather than disappearing — so a failure message can still quote a line
     number that matches the real file.
 
-    Python files are tokenized. Anything else is treated as line-oriented and
-    only ``#`` comments are removed, which covers Makefiles and YAML. A file
-    that cannot be tokenized (a syntax error mid-edit) falls back to the same
-    line-oriented handling rather than raising, because a guard test reporting
-    "your file does not parse" is less useful than it reporting what it found.
+    Python files are tokenized. ``.js``/``.ts``/``.mjs``/``.css`` get C-style
+    (``//`` and ``/* */``) blanking. Anything else is treated as line-oriented
+    and only ``#`` comments are removed, which covers Makefiles and YAML. A
+    file that cannot be tokenized (a syntax error mid-edit) falls back to the
+    same line-oriented handling rather than raising, because a guard test
+    reporting "your file does not parse" is less useful than it reporting what
+    it found.
+
+    THE ``.js`` BRANCH EXISTS BECAUSE ITS ABSENCE WAS A LIVE HOLE. Until
+    2026-09-04 every suffix except ``.py`` fell through to ``#``-stripping, so
+    calling this on ``app.js`` returned text still containing **2883** ``//``
+    comments. Three guard tests were written believing they read
+    comment-stripped JavaScript; a reviewer defeated two of them by putting a
+    decoy in a ``//`` comment, restoring the false UI copy the tests existed to
+    forbid, and watching them pass. See
+    ``tests/unit/test_code_text_strips_js_comments.py``.
     """
     text = path.read_text(encoding="utf-8")
     if path.suffix == ".py":
@@ -59,6 +70,10 @@ def code_without_comments(path: Path) -> str:
             return _blank_python(text)
         except (tokenize.TokenError, IndentationError, SyntaxError):
             pass
+    if path.suffix in _C_STYLE_SUFFIXES:
+        return _blank_c_style_comments(text)
+    if path.suffix in _BLOCK_ONLY_SUFFIXES:
+        return _blank_block_comments(text)
     return _blank_hash_comments(text)
 
 
@@ -146,3 +161,168 @@ def _is_docstring(tokens: list[tokenize.TokenInfo], index: int) -> bool:
             continue
         return False
     return True  # first token in the file
+
+
+#: Suffixes handled by the JavaScript scanner below.
+#:
+#: ``.css`` is DELIBERATELY ABSENT: ``//`` is not a comment in CSS, and treating
+#: it as one destroyed 94% of ``vendor/swagger-ui.css`` in testing — a base64
+#: data URI and any unquoted ``url(https://…)`` both contain ``//``. CSS gets
+#: the ``/* */``-only handler instead. ``.ts``/``.tsx``/``.jsx`` are absent too:
+#: JSX text like ``don't`` opens a false string literal and leaks the comments
+#: after it, and no such file exists here to justify the complexity.
+_C_STYLE_SUFFIXES = frozenset({".js", ".mjs", ".cjs"})
+
+#: Suffixes with ``/* */`` block comments and no line comments.
+_BLOCK_ONLY_SUFFIXES = frozenset({".css"})
+
+#: Keywords after which a ``/`` begins a REGEX, not a division.
+#:
+#: Without these the scanner read ``return /^https?:\/\//.test(u)`` as code,
+#: and the ``\/\/`` inside the unrecognised regex opened a "line comment" that
+#: blanked the rest of the line. That is the very regex this module's docstring
+#: cites as the reason regex handling exists — it worked after ``(`` and broke
+#: after ``return``. On a minified bundle the same desync ran to end-of-file.
+_REGEX_PRECEDING_KEYWORDS = frozenset(
+    {
+        "return",
+        "typeof",
+        "instanceof",
+        "in",
+        "of",
+        "new",
+        "delete",
+        "void",
+        "throw",
+        "case",
+        "do",
+        "else",
+        "yield",
+        "await",
+    }
+)
+
+
+def _blank_block_comments(text: str) -> str:
+    """Blank ``/* */`` only. For CSS, which has no line comments."""
+    out = list(text)
+    i, n = 0, len(text)
+    while i < n:
+        if text[i] == "/" and i + 1 < n and text[i + 1] == "*":
+            j = text.find("*/", i + 2)
+            j = n if j == -1 else j + 2
+            for k in range(i, j):
+                if out[k] != "\n":
+                    out[k] = " "
+            i = j
+            continue
+        i += 1
+    return "".join(out)
+
+
+#: A line longer than this means the file is minified. Measured: hand-written
+#: ``app.js`` peaks at 510 characters over 9047 lines; ``swagger-ui-bundle.js``
+#: is 814,435 characters over 3 lines.
+_MINIFIED_LINE_THRESHOLD = 2000
+
+
+def _blank_c_style_comments(text: str) -> str:
+    """Blank ``//`` and ``/* */`` comments, preserving every line and column.
+
+    String literals, template literals and REGEX literals are left intact.
+
+    WHAT THIS IS NOT: a JavaScript parser. It is a scanner sized for the
+    hand-written sources this repo's guard tests read. It is NOT safe on
+    minified bundles — regex-vs-division cannot be resolved by lookback alone,
+    and one wrong call desyncs the rest of the file. ``vendor/`` is never passed
+    to it, and ``test_the_stripper_never_corrupts_a_repo_javascript_file``
+    executes ``node --check`` over every non-vendor ``.js`` before and after, so
+    a corrupting change fails loudly rather than silently making the guard tests
+    that depend on it assert against text the browser never runs.
+    """
+    # REFUSE rather than corrupt. Regex-vs-division cannot be resolved by
+    # lookback, and on minified code one wrong call desyncs to end-of-file: this
+    # scanner blanked 46% of ``swagger-ui-bundle.js``. A caller that silently
+    # got half a file back would then run NEGATIVE assertions over the wreckage
+    # and see them all pass. Nothing passes a bundle to this today; if something
+    # ever does, it gets an exception naming the reason, not a clean-looking lie.
+    if any(len(line) > _MINIFIED_LINE_THRESHOLD for line in text.splitlines()):
+        raise ValueError(
+            "code_without_comments: this file looks minified (a line longer than "
+            f"{_MINIFIED_LINE_THRESHOLD} chars). The scanner is not a JavaScript "
+            "parser and cannot resolve regex-vs-division on minified code — it "
+            "would return a corrupted result that makes negative assertions "
+            "vacuous. Read the file directly, or parse it properly."
+        )
+
+    out = list(text)
+    i, n = 0, len(text)
+    prev = ""  # "op" -> a '/' here starts a regex; "val" -> it is division.
+    word = ""
+
+    def blank(a: int, b: int) -> None:
+        for k in range(a, b):
+            if out[k] != "\n":
+                out[k] = " "
+
+    while i < n:
+        c = text[i]
+
+        if c == "/" and i + 1 < n and text[i + 1] == "/":
+            j = text.find("\n", i)
+            j = n if j == -1 else j
+            blank(i, j)
+            i, word, prev = j, "", prev
+            continue
+        if c == "/" and i + 1 < n and text[i + 1] == "*":
+            j = text.find("*/", i + 2)
+            j = n if j == -1 else j + 2
+            blank(i, j)
+            i, word = j, ""
+            continue
+
+        if c in "\"'`":
+            quote, j = c, i + 1
+            while j < n:
+                if text[j] == "\\":
+                    j += 2
+                    continue
+                if text[j] == quote:
+                    j += 1
+                    break
+                j += 1
+            i, prev, word = j, "val", ""
+            continue
+
+        if c == "/" and prev == "op":
+            j, in_class, ok = i + 1, False, False
+            while j < n:
+                ch = text[j]
+                if ch == "\\":
+                    j += 2
+                    continue
+                if ch == "\n":
+                    break
+                if ch == "[":
+                    in_class = True
+                elif ch == "]":
+                    in_class = False
+                elif ch == "/" and not in_class:
+                    ok, j = True, j + 1
+                    break
+                j += 1
+            if ok:
+                i, prev, word = j, "val", ""
+                continue
+
+        # Track the identifier under the cursor so a KEYWORD can be recognised.
+        if c.isalnum() or c in "_$":
+            word += c
+            prev = "op" if word in _REGEX_PRECEDING_KEYWORDS else "val"
+        elif not c.isspace():
+            word = ""
+            prev = "op" if c in "([{,;=:?!&|+-*%<>~^" else "val"
+        else:
+            word = ""
+        i += 1
+    return "".join(out)

@@ -106,6 +106,21 @@ class ProviderPath(StrEnum):
     LOCAL_SIMULATION = "local_simulation"
     OPENROUTER_SEARCH = "openrouter_search"
     FALLBACK_SEARCH = "fallback_search"
+    #: A page a REAL web search returned. ADR-0098.
+    #:
+    #: Split out of ``FALLBACK_SEARCH`` because that one value was carrying two
+    #: unrelated things: a page Tavily actually found, and the ``example.test``
+    #: placeholder this product writes for itself. They were byte-identical on
+    #: the wire, so the UI could not tell them apart and badged a real Reuters
+    #: URL "fallback stub, not a real source" while refusing to link it.
+    #:
+    #: This is a SOURCE path only — no answer is ever stamped with it, so the
+    #: "was this slot simulated?" checks that read ``answer.provider_path``
+    #: (debate.py, synthesis.py, app.js) are deliberately unaffected.
+    #:
+    #: It does NOT mean the page was fetched or read. Nothing in ``src/``
+    #: resolves a cited URL; a search engine reported the page exists.
+    WEB_SEARCH = "web_search"
 
 
 #: The provider paths on which NO model was ever sent the question. A COMPLETED
@@ -141,7 +156,19 @@ class ProviderPath(StrEnum):
 #: until #247; adversarial review caught this comment claiming "expressed ONCE"
 #: while a second and third copy sat in ``query_runs``. One definition, because
 #: two matchers built from one constant drift.
-NOT_INVOKED_PATHS = frozenset({ProviderPath.LOCAL_SIMULATION, ProviderPath.FALLBACK_SEARCH})
+#: ADR-0098 adds ``WEB_SEARCH``, which is a SOURCE path — no answer is ever
+#: stamped with it, so this classification is unreachable today. It is listed
+#: here rather than in ``INVOKED_PATHS`` because that is the FAIL-SAFE reading:
+#: if a future change ever did put it on an answer, "a web search returned a
+#: page" is not "a model was asked the question", and the honest default is the
+#: one that does not claim a model spoke.
+NOT_INVOKED_PATHS = frozenset(
+    {
+        ProviderPath.LOCAL_SIMULATION,
+        ProviderPath.FALLBACK_SEARCH,
+        ProviderPath.WEB_SEARCH,
+    }
+)
 
 #: The complement. Written out rather than derived so that
 #: ``test_every_provider_path_is_classified_as_invoked_or_not`` can prove the two
@@ -1902,8 +1929,10 @@ class ProviderExecutionService:
         """Run a real web search via the Tavily API.
 
         POSTs the user query to Tavily's ``/search`` endpoint and maps the
-        returned ``results[]`` into ``FALLBACK_SEARCH`` / ``is_fallback=True``
-        ``SourceReference``s. Every result URL is passed through
+        returned ``results[]`` into ``WEB_SEARCH`` / ``is_fallback=True``
+        ``SourceReference``s — ADR-0098: a page a real search returned is not
+        the ``example.test`` placeholder, and must not be shown as one. Every
+        result URL is passed through
         :func:`_sanitize_source_url` (http(s) scheme + host denylist), so a
         malicious or malformed result cannot smuggle a ``javascript:`` or
         metadata-service URL into the response. Returns ``[]`` — never
@@ -3225,10 +3254,10 @@ _MAX_SOURCE_TITLE_LEN = 300
 
 
 def _parse_tavily_results(payload: object) -> list[SourceReference]:
-    """Map a parsed Tavily ``/search`` response into fallback sources.
+    """Map a parsed Tavily ``/search`` response into retrieved sources.
 
     Reads the top-level ``results`` array; each result contributes one
-    ``FALLBACK_SEARCH`` / ``is_fallback=True`` ``SourceReference`` whose URL
+    ``WEB_SEARCH`` / ``is_fallback=True`` ``SourceReference`` whose URL
     survives :func:`_sanitize_source_url`. Malformed entries (non-dict,
     missing/blocked URL) are skipped rather than fatal, and duplicate URLs
     are de-duplicated so the same host cited twice appears once. A missing
@@ -3262,7 +3291,11 @@ def _parse_tavily_results(payload: object) -> list[SourceReference]:
             SourceReference(
                 title=title[:_MAX_SOURCE_TITLE_LEN],
                 url=sanitized,
-                provider=ProviderPath.FALLBACK_SEARCH,
+                # ADR-0098: a page a real search returned is NOT the
+                # ``example.test`` placeholder, and must not be shown as one.
+                provider=ProviderPath.WEB_SEARCH,
+                # ...but it is still not the MODEL's own citation, so this flag
+                # stays True and ``citation_coverage`` is deliberately unmoved.
                 is_fallback=True,
             ),
         )
@@ -3363,8 +3396,10 @@ def _sanitize_source_url(url: str) -> str | None:
     # A URL is a single token. One carrying a line break — or any other
     # whitespace/control character — is not a URL, it is a payload: inlined
     # into a prompt it forges its own line, and TWO downstream consumers
-    # inline sources this way: the synthesis prompt (``synthesis.py:763-764``)
-    # and the judge's evidence block (``evaluation.py:1714-1715``).
+    # inline sources this way: the synthesis prompt (``_user_prompt``'s source
+    # block) and the judge's evidence block (``build_judge_evidence``'s
+    # ``source_lines``). Symbols, not line numbers: ADR-0098's own diff moved
+    # both of these and stale-ed the numbers that used to be here.
     # This said "every downstream consumer (debate, synthesis, the evaluation
     # judge)" until 2026-08-10; ``grep -c "\.url" src/product_app/debate.py``
     # prints 0 — debate only counts ``answer.sources``, it never inlines one.

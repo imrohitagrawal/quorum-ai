@@ -1010,6 +1010,7 @@ components:
       - local_simulation
       - openrouter_search
       - fallback_search
+      - web_search
       title: ProviderPath
     QueryRunCreateRequest:
       properties:

@@ -48,10 +48,10 @@ THE SECOND PAID SUBSYSTEM: the judge
       * The judge CANNOT spend while live execution is off. The run-path gate
         (``query_run_orchestration.py:2256-2278``) needs a COMPLETED answer whose
         ``provider_path`` is outside
-        ``NOT_INVOKED_PATHS = {LOCAL_SIMULATION, FALLBACK_SEARCH}``
-        (``providers.py:122``), and the only site producing one is inside
-        ``produce_initial_answer``'s ``_live_execution_enabled`` branch
-        (``providers.py:512,571``). Live off, every answer is LOCAL_SIMULATION.
+        ``providers.NOT_INVOKED_PATHS`` (= LOCAL_SIMULATION, FALLBACK_SEARCH, WEB_SEARCH)
+        and the only site producing one is inside ``produce_initial_answer``'s
+        ``_live_execution_enabled`` branch. Live off, every answer is
+        LOCAL_SIMULATION.
       * So the dangerous cell is live ON with the judge ON — and there the
         judge's GET-path spend reaches NO ledger at all (ADR-0013), so
         ``/status.global_daily_spend_usd`` UNDER-REPORTS by exactly that

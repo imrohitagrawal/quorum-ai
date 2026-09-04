@@ -3344,6 +3344,20 @@ html[data-theme="dark"] .landing-preview-caption {
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
+/* ADR-0098: the neutral ORIGIN tag. Deliberately not the warning colour used
+   by .result-source-stub-tag — this page is real evidence, it simply is not the
+   model's own citation and does not count toward the coverage figure. */
+.result-source-origin-tag {
+  margin-left: var(--space-2);
+  padding: 0 6px;
+  border-radius: var(--radius-pill);
+  background: var(--info-soft);
+  color: var(--info);
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
 a.result-source-chip:hover { border-color: var(--info); color: var(--info); }
 .result-source-num {
   display: inline-grid;
@@ -4469,6 +4483,8 @@ html[data-theme="dark"] .workflow-step[data-state="completed"] .workflow-step-nu
 }
 
 .badge-fallback { background: var(--warning-soft); color: var(--warning); }
+/* ADR-0098: a really-retrieved page, on the transcript model card. */
+.badge-origin { background: var(--info-soft); color: var(--info); }
 /* PR6/#8/#15: replaces the leaked "Heuristic fallback: " / "[Template] " text
    prefix. The provenance of the synthesis is UI chrome, not prose the user has
    to read past. */

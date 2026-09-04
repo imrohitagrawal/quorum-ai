@@ -384,6 +384,72 @@ class SynthesisResult:
     live_call_usages: list[TokenUsage | None] = field(default_factory=list)
 
 
+def _with_retrieved_note(user_prompt: str, initial_answers: list[InitialModelAnswer]) -> str:
+    """Append the retrieved-sources note for the Source-support section ONLY.
+
+    WITHOUT THIS THE FIX NEVER REACHES PRODUCTION. The corrected sentence built
+    in ``_build_source_support`` is assigned to ``base``, and ``base`` is used
+    only when the live section call returns nothing. With live execution on —
+    the configuration the defect was measured in — the model writes this
+    section from the prompt, which said "carried at least one primary source"
+    and nothing about retrieved pages.
+    """
+    retrieved = count_answers_with_retrieved_sources(initial_answers)
+    if not retrieved:
+        return user_prompt
+    return (
+        f"{user_prompt}\n\n{retrieved} of the answers cited no source of their own; "
+        "a web search this product ran supplied the references listed for them. "
+        "Those references are real pages and may be described as such, but they "
+        "are NOT the models' own citations and are deliberately excluded from the "
+        "source-coverage figure above. Do not describe them as sources a model "
+        "cited, and do not describe the run as having no sources at all."
+    )
+
+
+def count_answers_with_retrieved_sources(
+    initial_answers: list[InitialModelAnswer],
+) -> int:
+    """Answers that came back carrying a page a REAL web search returned.
+
+    ADR-0098. Defined ONCE because two consumers need it — the templated
+    ``source_support`` sentence and the LIVE synthesis directive — and two
+    matchers built from one idea drift. That is the same argument
+    ``providers.NOT_INVOKED_PATHS`` makes for itself.
+
+    Three conditions, each load-bearing:
+
+    * ``answer_count`` — shares the denominator with ``citation_coverage`` and
+      the "N of M responding models" prose, so a failed slot is excluded from
+      both terms rather than one.
+    * ``WEB_SEARCH`` specifically, never "has any sources at all" — the
+      ``example.test`` placeholders are sources too, and counting them made a
+      keyless demo run announce "4 of 4 had references attached by web search".
+
+    WHY THERE IS NO ``model_was_invoked`` CONDITION HERE, though one was tried:
+    with a Tavily key and live execution OFF, real retrieved pages are attached
+    to a SIMULATED answer, and a reviewer objected that counting those credits
+    web search for text no model produced. Guarding the COUNT was the wrong
+    lever and measurably made things worse: the chip row and the transcript
+    still showed four linked "web search" pages while the prose, now counting
+    zero, said *"No model returned visible source references for this query."*
+    That is verbatim the contradiction ADR-0098 exists to remove, recreated by
+    its own fix.
+
+    The objection was really about the SENTENCE's subject, not the count. It
+    said "responding models", which is false of a simulated run. The sentence
+    now says "answers on this run", which is true on both paths — so the count
+    can describe exactly what the surfaces render, and prose and pixels cannot
+    disagree by construction.
+    """
+    return sum(
+        1
+        for answer in initial_answers
+        if answer.citation_coverage.answer_count
+        and any(source.provider is ProviderPath.WEB_SEARCH for source in answer.sources)
+    )
+
+
 class SynthesisOrchestrationService:
     """Produces the final synthesis from the initial answers + debate output.
 
@@ -1086,7 +1152,40 @@ class SynthesisOrchestrationService:
             # corrected elsewhere in this change: a call that may have been billed
             # must still be returned for recording, and ``synthesis_mode`` is
             # derived from whether the sections came back live.
-            base = "No model returned visible source references for this query."
+            # ADR-0098. "cited == 0" means no model cited its OWN sources. It
+            # does NOT mean the run has no evidence: a live answer with no
+            # inline citations gets real pages attached by web search
+            # (``produce_initial_answer``'s ``_tavily_search`` supplement), and
+            # those are shown to the user as chips, fed
+            # to the debate and fed to the synthesis. Saying "no visible source
+            # references" while four of them are on screen is false, and it was
+            # measured saying exactly that.
+            #
+            # The COUNT is deliberately unchanged (a retrieved page is still not
+            # the model's own citation, so citation_coverage does not move) —
+            # only the sentence, which conflated "nobody cited anything" with
+            # "there is nothing here".
+            #
+            # Counted on the WEB_SEARCH path specifically, not on "has any
+            # sources at all". The first draft of this fix used the looser
+            # condition and made a fully simulated demo run announce "4 of 4
+            # had references attached by web search" — the example.test
+            # placeholders are sources too. That is a worse falsehood than the
+            # sentence being replaced, and
+            # test_prose_does_not_credit_web_search_for_quorum_placeholders is
+            # the gate that now catches it.
+            retrieved = count_answers_with_retrieved_sources(initial_answers)
+            if retrieved:
+                base = (
+                    f"No model cited its own sources. {retrieved} of {total} "
+                    f"answer{'' if total == 1 else 's'} on this run "
+                    f"{'carries' if retrieved == 1 else 'carry'} references from a "
+                    "web search this product ran instead; they are shown with the "
+                    "answers, but do not count toward the source coverage target, "
+                    "which measures the models' own citations."
+                )
+            else:
+                base = "No model returned visible source references for this query."
         else:
             base = (
                 f"{cited} of {total} responding model{'' if total == 1 else 's'} returned visible "
@@ -1098,7 +1197,14 @@ class SynthesisOrchestrationService:
         live = self._call_synthesis_model(
             openrouter_key=openrouter_key,
             system_prompt=_SOURCE_SUPPORT_PROMPT,
-            user_prompt=user_prompt,
+            # ADR-0098. Scoped to THIS section, not appended to the shared
+            # ``directives`` block. The shared user prompt reaches all five
+            # sections, and this sentence ends "do not report the run as having
+            # no sources" — landing that in the RECOMMENDATION prompt puts it
+            # beside the safety rule that steers "pause for human review" when
+            # coverage is under 80%. A reviewer found it there; nothing in the
+            # product needs it there.
+            user_prompt=_with_retrieved_note(user_prompt, initial_answers),
             # WP-G2 (F-10): this was the one section of five that accepted
             # ``context`` and then dropped it, so ``prior_question`` never
             # reached its system prompt while every run paid for it.

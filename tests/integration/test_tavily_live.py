@@ -31,7 +31,14 @@ def test_tavily_search_returns_real_sources() -> None:
 
     assert sources, "expected at least one real result from Tavily"
     for source in sources:
-        assert source.provider == ProviderPath.FALLBACK_SEARCH
+        # ADR-0098: a really-retrieved page carries WEB_SEARCH, not the
+        # example.test placeholder's path. This assertion said FALLBACK_SEARCH
+        # and, being skipif-guarded on TAVILY_API_KEY, would have stayed green
+        # in CI and failed on an operator's first live verification — reading
+        # as a Tavily regression rather than a stale pin.
+        assert source.provider == ProviderPath.WEB_SEARCH
+        # POSITIVE PARTNER: still not the MODEL's own citation, so the coverage
+        # metric is deliberately unmoved.
         assert source.is_fallback is True
         assert source.url.startswith(("http://", "https://"))
         assert source.title
