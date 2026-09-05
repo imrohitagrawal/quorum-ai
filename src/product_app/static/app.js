@@ -4428,6 +4428,17 @@
   // Populate the collapsed run-receipt panel. Idempotent: clears + resets to
   // collapsed on every call. Every nested field is guarded; the actual columns
   // null-guard ``actual_breakdown`` and never fabricate an actual figure.
+  // Did THIS run produce per-model critique charges? `kind === "critique"` is
+  // the wire-level marker `costs.py` stamps on a peer run's actual breakdown
+  // (ADR-0093 decision 5). Read off the actual rows rather than
+  // `critique_shape`, because the question the note answers is about the
+  // RECEIPT's shape, and a peer-shaped run whose critics all fell back is
+  // billed nothing and needs no note.
+  function hasItemisedCritiqueRows(actual) {
+    const rows = actual && Array.isArray(actual.by_model) ? actual.by_model : [];
+    return rows.some((line) => line && line.kind === "critique");
+  }
+
   function renderResultReceipt(result, res) {
     const receipt = el("result-receipt");
     if (!receipt) return;
@@ -4518,6 +4529,36 @@
     grid.appendChild(c1);
 
     // --- Col 2: Cost by model · est → actual -------------------------------
+    //
+    // ADR-0100. The est and actual columns here are DIFFERENTLY SHAPED under
+    // peer critique, and the reader cannot see why from the rows alone:
+    //
+    //   * the ESTIMATE prices both debate rounds inside the writer row
+    //     (`costs.py`: `inner_call_cost = 2 * debate_round_cost +
+    //     synthesis_cost`). Under the peer shape `debate_round_cost` is
+    //     `max(peer_round_cost, moderator_round_cost)`, where `peer_round_cost`
+    //     sums all four slot models — NOT an unconditional sum, which an
+    //     earlier version of this comment claimed: with cheap enough slots the
+    //     max picks the moderator instead. Whenever the peer figure wins, every
+    //     critique dollar sits in one row named "Synthesis" and the four
+    //     per-model rows carry none;
+    //   * the ACTUAL breakdown itemises a `kind="critique"` row per critic and
+    //     subtracts them from the writer row.
+    //
+    // Nothing is lost — EACH COLUMN re-sums to its own total
+    // (`_reconcile_usd_lines`), and `by_stage` attributes the debate rounds
+    // correctly on BOTH paths. Note the qualifier: the estimate total and the
+    // actual total are DIFFERENT numbers and the Total row shows both, so a
+    // note claiming "the totals agree" would be refuted by the row directly
+    // above it. Review caught exactly that in this change's first draft. But the pairing
+    // makes the Synthesis row read as a saving when the money merely moved,
+    // and the critique rows read as charges nobody estimated.
+    //
+    // ADR-0095 already decided the remedy and ruled out the alternatives: "the
+    // resolution would be an estimate-side note in the UI, not silence", and
+    // "a row for a call that may not happen is a claim, so the rows stay
+    // measured-path-only". So this explains the shape; it does not invent
+    // estimate-side critique rows, and it does not rename the row.
     const c2 = mkEl("div", "result-receipt-col result-receipt-col-div");
     c2.setAttribute("role", "group");
     c2.setAttribute("aria-label", "Cost by model, estimate to actual");
@@ -4588,6 +4629,23 @@
           { total: true },
         ),
       );
+      // Keyed on the run's OWN actual rows, not on a config flag the browser
+      // cannot see: the note is true exactly when this run produced per-model
+      // critique charges, and absent on a moderator run where it would be
+      // meaningless.
+      if (hasItemisedCritiqueRows(actual)) {
+        c2.appendChild(
+          mkEl(
+            "p",
+            "result-receipt-note",
+            "Before the run, the estimate prices every critique inside the " +
+              "Synthesis row. After it, each critique is billed to the model " +
+              "that wrote it. Each column still adds up to its own total — " +
+              "only the attribution moves, which is why the Synthesis row can " +
+              "look like a saving.",
+          ),
+        );
+      }
     } else {
       c2.appendChild(
         mkEl("p", "result-receipt-note", "Itemized cost breakdown is not available for this run."),

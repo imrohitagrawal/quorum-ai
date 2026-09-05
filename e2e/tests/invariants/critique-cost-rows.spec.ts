@@ -105,6 +105,66 @@ test.describe("#290 critique receipt rows", () => {
     expect(new Set(labels).size).toBe(labels.length);
   });
 
+  test("the receipt explains why the Synthesis row looks like a saving", async ({ page }) => {
+    // ADR-0100. Under peer critique the two columns are differently shaped: the
+    // ESTIMATE prices both debate rounds inside the writer row, while the
+    // ACTUAL breakdown itemises a critique row per critic and subtracts them
+    // from it. Nothing is lost — Total agrees — but the Synthesis pairing reads
+    // as a saving and the critique rows read as unestimated charges.
+    //
+    // RED WHEN: the note is dropped, or is rendered outside the by-model
+    // column where the confusing pairing actually is.
+    await driveWith(page, goldenRespWithCritiqueRows());
+    const toggle = page.locator("#result-details-toggle");
+    if (await toggle.count()) await toggle.click();
+    const col = page.locator('[aria-label="Cost by model, estimate to actual"]');
+    // POSITIVE PARTNER: the column rendered its rows, so the note assertion
+    // below is not made against an empty or unrendered receipt.
+    await expect(col.locator(".result-receipt-row")).toHaveCount(10);
+
+    // VISIBLE, not merely attached. `toHaveText`/`toHaveCount` both pass on a
+    // node inside a collapsed disclosure, so without this the gate cannot tell
+    // "rendered and readable" from "present but never shown".
+    const note = col.locator(".result-receipt-note");
+    await expect(note).toBeVisible();
+
+    // THE WHOLE SENTENCE, not a phrase. An unanchored substring match was
+    // defeated in review by a note that read "...the totals do NOT agree.
+    // Dispute this invoice. only the attribution moves" and stayed green.
+    await expect(note).toHaveText(
+      "Before the run, the estimate prices every critique inside the Synthesis " +
+        "row. After it, each critique is billed to the model that wrote it. " +
+        "Each column still adds up to its own total — only the attribution " +
+        "moves, which is why the Synthesis row can look like a saving.",
+    );
+
+    // AND THE RECEIPT MUST NOT REFUTE IT. The note says each column adds up to
+    // its own total; the fixture mirrors `costs.py`, which SUBTRACTS the
+    // critique rows from the writer row and holds the run total fixed. So the
+    // Synthesis row shrinks (the "saving") while Total is unchanged. A fixture
+    // that appended the rows and raised the total instead — as the first draft
+    // did — would put "the totals agree" directly under "0.19 → 0.202".
+    const rows = await col.locator(".result-receipt-row").allInnerTexts();
+    const total = rows.find((r) => r.startsWith("Total")) ?? "";
+    const figures = total.match(/\$[0-9.]+/g) ?? [];
+    expect(figures).toHaveLength(2);
+    expect(figures[0]).toBe(figures[1]);
+  });
+
+  test("a moderator run gets no attribution note, because nothing moved", async ({
+    page,
+  }) => {
+    // NEGATIVE PARTNER to the test above. The note is keyed on the run's own
+    // critique rows, not on a deployment flag, so a run billed no critique
+    // charges must not carry an explanation for charges it never had.
+    await driveWith(page, goldenCompletedResp());
+    const toggle = page.locator("#result-details-toggle");
+    if (await toggle.count()) await toggle.click();
+    const col = page.locator('[aria-label="Cost by model, estimate to actual"]');
+    await expect(col.locator(".result-receipt-row")).toHaveCount(6);
+    await expect(col.locator(".result-receipt-note")).toHaveCount(0);
+  });
+
   test("a run with no critique rows renders exactly what it rendered before", async ({ page }) => {
     // POSITIVE PARTNER (AGENTS.md rule 7). "No duplicate labels" and "four
     // critique rows" are both satisfiable by a build that renders nothing at
