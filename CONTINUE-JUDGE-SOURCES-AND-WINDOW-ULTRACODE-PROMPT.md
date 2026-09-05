@@ -1,4 +1,4 @@
-# CONTINUE — the clipped critique, then the window's three measurements
+# CONTINUE — the window's three measurements (the clipped critique is REFUTED)
 
 **Written 2026-09-05 by the session that shipped ADR-0099 and ADR-0100.**
 Executable procedure. Read `AGENTS.md` FIRST — it overrides everything here.
@@ -33,7 +33,7 @@ git fetch -q origin && git rev-list --left-right --count main...origin/main   # 
 curl -s https://quorum-ai.fly.dev/status | python3 -m json.tool
 uv run python scripts/live_posture_check.py > /tmp/p.log 2>&1; echo "EXIT=$?"; cat /tmp/p.log
 gh issue list --state open --limit 100
-ls docs/adr/ | tail -3            # next free ADR number; 0100 is TAKEN
+ls docs/adr/ | tail -3            # next free ADR number; 0101 is TAKEN
 ls e2e/tests/review/ 2>/dev/null  # non-empty => make quality is RED locally, not your diff
 ```
 
@@ -157,9 +157,12 @@ If you change it later:
 1. `_estimate_bound_usd` must remain the fail-safe bound;
    `tests/unit/test_peer_bound_is_a_true_ceiling.py` pins the arithmetic with
    literals on both sides.
-2. **A pinned number may be a PUBLISHED REQUIREMENT.** One bound is written into
-   21 files; the run deadline is NFR-001/AC-021 in six places including the
-   operator dashboard. `grep` the value before changing it.
+2. **A pinned number may be a PUBLISHED REQUIREMENT.** The judge-OFF bound and
+   the run deadline (NFR-001/AC-021) are each written into many files,
+   including the operator dashboard. **Do not trust a count here — derive it**,
+   because this one already drifted: it read "21 files", measured 2026-08-26,
+   and `grep -rl "0\.1043" --exclude-dir=.git . | wc -l` returned **26** on
+   2026-09-05. `grep` the value before changing it.
 3. A decision gets an ADR in the same PR (rule 16d); regenerate the index with
    `python3 scripts/generate_adr_index.py`, never by hand.
 

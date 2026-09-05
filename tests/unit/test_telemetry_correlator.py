@@ -19,10 +19,12 @@ Two consequences ADR-0093 recorded against the shipped list:
 
 ``finish_reason`` is the quality signal no cost row can carry: a clipped
 critique would be full price for truncated text on a receipt that looks
-healthy. That has NOT been measured on a critique. The #290 probe of
-2026-08-26 measured seven of eight calls returning ``"length"``, but they were
-the four ANSWER models on a prompt written to fill the cap, eight days before
-peer critique existed (``5aed777``, 2026-09-03); no critique call has ever run.
+healthy. That has NOT been measured on a critique (ADR-0101). The #290 probe
+of 2026-08-26 measured seven of eight calls returning ``"length"``, but they
+were the four ANSWER models on a prompt written to fill the cap, eight days
+before peer critique existed (``5aed777``, 2026-09-03). No critique call is
+recorded anywhere in this repo, and production had taken no live charge as of
+2026-09-05.
 """
 
 from __future__ import annotations

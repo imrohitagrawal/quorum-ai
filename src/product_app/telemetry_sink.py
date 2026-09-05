@@ -184,17 +184,19 @@ TELEMETRY_FIELD_NAMES: frozenset[str] = frozenset(
         # ADR-0093 decision 5. How the provider says it stopped, collapsed to
         # the bounded label :func:`providers._finish_reason_label` produces --
         # never the upstream's raw string, which is content of unbounded
-        # length. NOT YET MEASURED ON A CRITIQUE. The #290 probe of
-        # 2026-08-26 measured seven of eight calls returning ``"length"``,
-        # but those were the four ANSWER models on a prompt written to fill
-        # the cap, and peer critique did not exist until ``5aed777``
-        # (2026-09-03) -- eight days later. Production's
-        # ``last_live_charge_at`` predates that commit, so no critique call
-        # has ever run and nothing is being clipped in production today.
-        # What a real critique returns is what this field exists to settle:
-        # a clipped critique would be full price for truncated text, on a
-        # receipt that looks perfectly healthy, and no cost row can carry
-        # that.
+        # length. NOT YET MEASURED ON A CRITIQUE (ADR-0101). The #290 probe
+        # of 2026-08-26 measured seven of eight calls returning ``"length"``,
+        # but those were the four ANSWER models on a prompt written to FILL
+        # the cap -- filling it was the probe's method -- and peer critique
+        # did not exist until ``5aed777`` (2026-09-03), eight days later.
+        #
+        # DELIBERATELY NO CLAIM ABOUT PRODUCTION'S STATE HERE. A live window
+        # is open and the critique path is armed, so any such sentence is one
+        # paid run from false and no gate would notice; ADR-0101 carries the
+        # dated reading instead. What a real critique returns is what this
+        # field exists to settle: a clipped critique would be full price for
+        # truncated text, on a receipt that looks perfectly healthy, and no
+        # cost row can carry that.
         "finish_reason",
     }
 )

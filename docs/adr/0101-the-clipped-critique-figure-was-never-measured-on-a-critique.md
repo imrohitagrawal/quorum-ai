@@ -6,8 +6,12 @@ Accepted — 2026-09-05.
 
 Corrects a claim carried in `src/product_app/telemetry_sink.py` and
 `tests/unit/test_telemetry_correlator.py`. Narrows, but does not supersede,
-ADR-0093's `finish_reason` rationale — ADR-0093's own wording is accurate and
-is left untouched.
+ADR-0093's `finish_reason` rationale. ADR-0093 is **not false** — it says
+"calls", not "critique calls" — but it states no POPULATION, and it puts the
+figure in one sentence with a critique-shaped consequence. That pairing is the
+transcription channel this record closes. An accepted ADR is a record and is
+narrowed by a later one rather than rewritten, which is why 0093's text is left
+as it stands and this record carries the population.
 
 **Authorises nothing.** No `**Authorises:**` line; it may not be cited to
 sanction a live-execution posture, and it moves no money constant. It is in
@@ -43,15 +47,26 @@ The probe ran 2026-08-26, eight days earlier. No critique call was reachable.
 **3. No critique call has run since, either.** Production `/status` reports
 `last_live_charge_at = 2026-09-01T21:02:46Z` and `global_daily_spend_usd = 0`.
 `5aed777` was committed `2026-09-03 05:52:20 +0530` = `2026-09-03T00:22:20Z`,
-so the last paid run predates the feature by **27.3 hours**. The count of
-critique calls ever made, anywhere, is **zero**, and nothing is being clipped
-in production.
+so the last paid run predates the feature by **27.3 hours**.
 
-ADR-0093 said this correctly on both counts: line 327 reads *"seven of eight
-calls"* — no "critique" — and line 344 states plainly *"No critique call has
-ever run, so every per-model number this design would expose is UNVERIFIED."*
-The word was inserted downstream, in transcription, then hardened into a
-severity claim. This is the decay AGENTS.md rule 11 measures, reproduced inside
+**Stated at the width of the evidence:** no critique call is recorded anywhere
+in this repo, and production had taken no live charge as of 2026-09-05. Those
+are the two things measured. `/status` reads ONE deployment, so it cannot see a
+laptop run with the flag flipped and a personal key — though a simulated run
+dispatches nothing by construction (`debate.py:1701` returns `None` before any
+request when live execution is off). "Zero critique calls anywhere, ever" is an
+inference from an absence of records, not a measurement, and this record does
+not make it.
+
+ADR-0093 did not make the error: line 327 reads *"seven of eight calls"* — no
+"critique" — and line 344 states plainly *"No critique call has ever run, so
+every per-model number this design would expose is UNVERIFIED."* The word was
+inserted downstream, in transcription, then hardened into a severity claim.
+What 0093 does not do is name the population, and its line 327 continues
+*"full price for a truncated critique"* in the same breath — a correct figure
+next to a critique-shaped consequence, which is precisely what re-reads as a
+critique measurement. Being unfalsifiable-as-written is not the same as being
+hard to mis-transcribe. This is the decay AGENTS.md rule 11 measures, reproduced inside
 the paragraph documenting it.
 
 ## Decision
@@ -97,11 +112,13 @@ rationale together. `finish_reason` is a good field for the reason ADR-0093
 gave; the defect is the population attached to the number, not the number's
 relevance.
 
-**Correct it to "seven of eight calls" and stop.** That is ADR-0093's accurate
-wording, and it is accurate — but it survived transcription into a false claim
+**Correct it to "seven of eight calls" and stop.** That is ADR-0093's wording,
+and nothing in it is false — but it survived transcription into a false claim
 once already, because "the #290 probe" next to a critique-shaped consequence
 reads as a critique measurement. Naming the four answer models and the
-cap-filling prompt is what makes the re-derivation fail.
+cap-filling prompt is what makes the re-derivation fail. Not-false is a lower
+bar than not-mis-transcribable, and this defect cleared the first and not the
+second.
 
 **Raise the cap now and measure afterwards.** Rejected on this repo's own
 record: an unmeasured guardrail move is what ADR-0094 pre-computed constants to
