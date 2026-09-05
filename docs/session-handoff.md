@@ -1,7 +1,7 @@
 # Session Handoff
 
 ## Date/time
-2026-09-04T21:10:33+05:30
+2026-09-05T12:17:09+05:30
 
 ## Open work
 `docs/65-open-work.md` — the source of truth for what is open, what blocks what,
@@ -11,24 +11,24 @@ line further down this file is the factory router's view of the lifecycle, not a
 work status.
 
 ## Latest narrative handoff
-`docs/analysis/2026-09-04-session-handoff.md` — read this for full context before editing. (today)
+`docs/analysis/2026-09-05-session-handoff.md` — read this for full context before editing. (today)
 
 This file is a mechanical snapshot (branch/git-status/skill-route/live state) —
 regenerated fresh every `make handoff`. The narrative above (what happened,
 what's next, the traps) lives in the dated doc it points to, not here.
 
 ## Current branch/worktree
-main
+docs/session-handoff-0905
 
 ## Live state (measured fresh by this run, not hand-carried)
 Run `make handoff` again for current numbers instead of trusting this file
 once it ages -- every value below is read from git/gh/`/status` at
 generation time, per #134.
 
-- **`origin/main` tip:** `82cb5a654a50`
-- **Last commit touching `src/`:** `82cb5a654a50`
-- **Production vs. last `src/` commit:** unavailable: could not reach https://quorum-ai.fly.dev/status (last src/ commit is 82cb5a6)
-- **pytest collected (no execution):** 4276
+- **`origin/main` tip:** `50d4497a0257`
+- **Last commit touching `src/`:** `50d4497a0257`
+- **Production vs. last `src/` commit:** unavailable: could not reach https://quorum-ai.fly.dev/status (last src/ commit is 50d4497)
+- **pytest collected (no execution):** 4279
 - **e2e lane spec counts:** invariants: 20, ops: 2, degraded: 1
 - **Open issues:** 3
 - **Changed-lines coverage:** not computed here -- `make diff-cover` shares
@@ -93,14 +93,12 @@ Operate, learn, and improve
 
 ## Git status
 ```text
-M CONTINUE-WINDOW-MEASUREMENT-ULTRACODE-PROMPT.md
-?? docs/analysis/2026-09-04-session-handoff.md
+?? docs/analysis/2026-09-05-session-handoff.md
 ```
 
 ## Diff stat
 ```text
-CONTINUE-WINDOW-MEASUREMENT-ULTRACODE-PROMPT.md | 28 ++++++++++++++++++++++---
- 1 file changed, 25 insertions(+), 3 deletions(-)
+no unstaged diff
 ```
 
 ## Completed in this session
