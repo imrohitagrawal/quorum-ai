@@ -17,9 +17,12 @@ Two consequences ADR-0093 recorded against the shipped list:
 * #290 turns one debate call per run into **eight**, from four models that also
   appear as answerers — so every one of those rows was unattributable.
 
-``finish_reason`` is the quality signal no cost row can carry: the #290 probe
-measured seven of eight critique calls returning ``"length"``, i.e. full price
-for a clipped critique on a receipt that looks healthy.
+``finish_reason`` is the quality signal no cost row can carry: a clipped
+critique would be full price for truncated text on a receipt that looks
+healthy. That has NOT been measured on a critique. The #290 probe of
+2026-08-26 measured seven of eight calls returning ``"length"``, but they were
+the four ANSWER models on a prompt written to fill the cap, eight days before
+peer critique existed (``5aed777``, 2026-09-03); no critique call has ever run.
 """
 
 from __future__ import annotations
