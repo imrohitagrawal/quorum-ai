@@ -4535,14 +4535,22 @@
     //
     //   * the ESTIMATE prices both debate rounds inside the writer row
     //     (`costs.py`: `inner_call_cost = 2 * debate_round_cost +
-    //     synthesis_cost`), and under the peer shape `debate_round_cost` is a
-    //     sum over all four slot models. So every critique dollar sits in one
-    //     row named "Synthesis" and the four per-model rows carry none;
+    //     synthesis_cost`). Under the peer shape `debate_round_cost` is
+    //     `max(peer_round_cost, moderator_round_cost)`, where `peer_round_cost`
+    //     sums all four slot models — NOT an unconditional sum, which an
+    //     earlier version of this comment claimed: with cheap enough slots the
+    //     max picks the moderator instead. Whenever the peer figure wins, every
+    //     critique dollar sits in one row named "Synthesis" and the four
+    //     per-model rows carry none;
     //   * the ACTUAL breakdown itemises a `kind="critique"` row per critic and
     //     subtracts them from the writer row.
     //
-    // Nothing is lost — the Total row agrees in both columns, and `by_stage`
-    // attributes the debate rounds correctly on BOTH paths. But the pairing
+    // Nothing is lost — EACH COLUMN re-sums to its own total
+    // (`_reconcile_usd_lines`), and `by_stage` attributes the debate rounds
+    // correctly on BOTH paths. Note the qualifier: the estimate total and the
+    // actual total are DIFFERENT numbers and the Total row shows both, so a
+    // note claiming "the totals agree" would be refuted by the row directly
+    // above it. Review caught exactly that in this change's first draft. But the pairing
     // makes the Synthesis row read as a saving when the money merely moved,
     // and the critique rows read as charges nobody estimated.
     //
@@ -4632,8 +4640,9 @@
             "result-receipt-note",
             "Before the run, the estimate prices every critique inside the " +
               "Synthesis row. After it, each critique is billed to the model " +
-              "that wrote it. The totals agree — only the attribution moves, " +
-              "which is why the Synthesis row can look like a saving.",
+              "that wrote it. Each column still adds up to its own total — " +
+              "only the attribution moves, which is why the Synthesis row can " +
+              "look like a saving.",
           ),
         );
       }

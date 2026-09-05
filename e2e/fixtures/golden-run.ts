@@ -544,16 +544,33 @@ export const goldenRespWithCritiqueRows = () => {
     usd: "0.003",
     kind: "critique",
   }));
+  // MIRROR THE SERVER'S ARITHMETIC, do not invent a different one. `costs.py`
+  // computes `writer_cost = debate_total - critique_total + synthesis_cost`:
+  // it SUBTRACTS the critique rows from the writer row and holds the run total
+  // FIXED. An earlier version of this builder appended the four rows and
+  // raised the total 0.190 -> 0.202 instead, which inverted the effect: the
+  // Synthesis row rendered unchanged, so the very phenomenon a caption
+  // explains — the writer row shrinking while per-model charges appear — was
+  // ABSENT from the fixture that gates it, and the spec went green over a
+  // receipt demonstrating the opposite.
+  const critiqueTotal = 0.003 * critiqueRows.length;
   const withCritique = {
-    by_model: [...BY_MODEL, ...critiqueRows],
+    by_model: [
+      ...BY_MODEL.map((row) =>
+        row.kind === "synthesis"
+          ? { ...row, usd: (Number(row.usd) - critiqueTotal).toFixed(3) }
+          : row,
+      ),
+      ...critiqueRows,
+    ],
     by_stage: BY_STAGE,
-    total: "0.202",
+    total: "0.190",
   };
   // The ACTUAL breakdown is where critique rows live: they are emitted on the
   // measured path only. The estimate cannot know which slots will be eligible,
   // and a row for a call that may not happen is a claim (ADR-0095).
   resp.actual_breakdown = withCritique;
-  resp.actual_cost_usd = "0.202";
+  resp.actual_cost_usd = "0.190";
   return resp;
 };
 

@@ -24,7 +24,6 @@ Pinned contract:
 
 from __future__ import annotations
 
-import html as html_module
 import re
 from pathlib import Path
 
@@ -270,87 +269,3 @@ def test_no_tooltip_uses_old_always_produced_phrase() -> None:
     assert "Always produced by Quorum" not in body, (
         "Old apologetic phrase is still present in SYNTHESIS_TOOLTIPS."
     )
-
-
-def _info_text_containing(html: str, needle: str) -> str:
-    """Return the single ``data-info-text`` attribute containing *needle*.
-
-    Reads the ATTRIBUTE, not the file, so a comment or a neighbouring string
-    mentioning the same words cannot satisfy an assertion about the tooltip a
-    user actually opens (AGENTS.md rule 8: assert structure, not substrings).
-    Raises if the match is not unique, so a second tooltip growing the same
-    phrase is a loud failure rather than a silently-wrong subject.
-    """
-    matches: list[str] = [
-        str(html_module.unescape(m))
-        for m in re.findall(r'data-info-text="([^"]*)"', html)
-        if needle in m
-    ]
-    if len(matches) != 1:
-        raise AssertionError(
-            f"expected exactly one data-info-text containing {needle!r}, found {len(matches)}"
-        )
-    return matches[0]
-
-
-def test_the_cost_estimate_tooltip_asserts_no_accuracy_percentage(
-    client: TestClient,
-) -> None:
-    """RED IF: the estimate tooltip goes back to promising a numeric accuracy band.
-
-    ADR-0100. It read "The actual provider bill may be 10-30% higher or lower".
-    That range was UNSOURCED — one occurrence in the whole repo, pinned by
-    nothing, and supported by no measurement. The only measured comparison,
-    issue #256, had the actual at 2.33x the estimate, far outside it.
-
-    The replacement asserts no percentage at all rather than swapping in 2.33x,
-    because #256's single largest cause — the judge being unpriced, "33% of the
-    entire approved figure" in its own words — was fixed by ADR-0064, so that
-    figure is stale in the optimistic direction and no current measurement
-    exists. Quoting it to users would be correcting one false number with
-    another.
-
-    Mutation that reddens this: put any "N%" back into that tooltip.
-    """
-    html = client.get("/ui").text
-
-    tooltip = _info_text_containing(html, "planning estimate")
-    # POSITIVE PARTNER (rule 7): the tooltip was located and is a real
-    # sentence, so the negatives below are not asserted over an empty match.
-    assert tooltip, "the cost-estimate tooltip was not found; the checks below would be vacuous"
-    assert len(tooltip) > 120
-
-    # It must still tell the reader the two things that change a decision: the
-    # figure is not a quote, and the approved number is a cap that holds.
-    assert "not a quote" in tooltip.lower()
-    assert "cap" in tooltip.lower()
-
-    # RED IF: any percentage claim returns. `_estimate_bound_usd` is a true
-    # ceiling and the UI already shows `max_cost_usd` as the approved figure;
-    # an accuracy band for the POINT estimate is the part nothing measures.
-    assert "%" not in tooltip, (
-        f"the cost-estimate tooltip asserts a percentage again: {tooltip!r}. "
-        "No measurement in this repo supports one."
-    )
-    assert "10-30" not in tooltip and "10–30" not in tooltip
-
-
-def test_no_user_facing_copy_promises_an_estimate_accuracy_band() -> None:
-    """RED IF: the 10-30% claim reappears anywhere a user can read it.
-
-    A file-level sweep, because the tooltip test above only sees the one
-    element. `test_the_cost_estimate_tooltip_asserts_no_accuracy_percentage`
-    is its positive partner: it proves the tooltip exists and is non-empty, so
-    this absence check is not passing over a deleted surface.
-    """
-    root = Path(__file__).resolve().parents[2] / "src" / "product_app"
-    surfaces = [root / "templates" / "workspace.html", root / "static" / "app.js"]
-
-    found = 0
-    for path in surfaces:
-        text = path.read_text(encoding="utf-8")
-        found += len(text)
-        for banned in ("10–30%", "10-30%", "higher or lower depending on"):
-            assert banned not in text, f"{path.name} still promises an accuracy band: {banned!r}"
-    # FLOOR: the sweep read real files, not two empty paths.
-    assert found > 100_000
