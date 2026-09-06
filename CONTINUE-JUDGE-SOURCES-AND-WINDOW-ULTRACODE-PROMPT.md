@@ -1,4 +1,4 @@
-# CONTINUE — the clipped critique, then the window's three measurements
+# CONTINUE — the window's three measurements (the clipped critique is REFUTED)
 
 **Written 2026-09-05 by the session that shipped ADR-0099 and ADR-0100.**
 Executable procedure. Read `AGENTS.md` FIRST — it overrides everything here.
@@ -33,7 +33,7 @@ git fetch -q origin && git rev-list --left-right --count main...origin/main   # 
 curl -s https://quorum-ai.fly.dev/status | python3 -m json.tool
 uv run python scripts/live_posture_check.py > /tmp/p.log 2>&1; echo "EXIT=$?"; cat /tmp/p.log
 gh issue list --state open --limit 100
-ls docs/adr/ | tail -3            # next free ADR number; 0100 is TAKEN
+ls docs/adr/ | tail -3            # next free ADR number; 0101 is TAKEN
 ls e2e/tests/review/ 2>/dev/null  # non-empty => make quality is RED locally, not your diff
 ```
 
@@ -105,7 +105,8 @@ The product owner overrode AGENTS.md rule 17b on 2026-09-03:
 The owner's rationale, recorded 2026-09-04: run the paid measurement AFTER the
 code fixes so the same ~$0.06 validates both.
 
-1. **Item 1 — the clipped-critique defect.** Free, live in production, unblocked.
+1. ~~**Item 1 — the clipped-critique defect.**~~ **REFUTED, see ADR-0101.**
+   Not live, not free to measure. The cap question folds into Item 4's run.
 2. **Item 2 — file the judge-source-access issue** and design Route B on paper.
    Free, off the critical path.
 3. **Item 3 — Phase 0, the harvest harness at $0**, validated against SIMULATED
@@ -120,43 +121,63 @@ needed, the money is gone and the window is not repeatable.
 
 ---
 
-## ITEM 1 — THE CLIPPED-CRITIQUE DEFECT (start here)
+## ITEM 1 — THE CAP QUESTION (REFUTED AS WRITTEN — see ADR-0101)
 
-**Claim, MEASURED per ADR-0093:** seven of eight critique calls returned
-`finish_reason: "length"` — the 2000-token cap genuinely reached and the reply
-clipped. Full price for a truncated critique, on a receipt that looks healthy.
+**This item used to read "the clipped-critique defect … live in production
+right now", ranked first as free/live/unblocked. It was none of the three.**
+Refuted 2026-09-05 by three commands; the record is ADR-0101.
 
-**Verify before acting:**
-```bash
-grep -n "DEBATE_ROUND_MAX_TOKENS" src/product_app/debate.py     # expect 2000
-sed -n '325,335p' docs/adr/0093-*.md
-```
+- The "seven of eight `finish_reason: length`" figure is from `a2_probe.py`,
+  2026-08-26: **four default ANSWER models**, on **a prompt written to fill the
+  cap**, in a standalone timeout probe. Filling the cap was the METHOD.
+- Peer critique did not exist until `5aed777` (**2026-09-03**), eight days later
+  — `git log -S"def _build_peer_round" -- src/product_app/debate.py`.
+- Production `last_live_charge_at` is **2026-09-01T21:02:46Z** — **27.3h
+  BEFORE** that commit (`5aed777` is `2026-09-03T00:22:20Z`) — and
+  `global_daily_spend_usd` is `0`. **No critique call has ever run.** Nothing
+  is being clipped in production.
 
-**THE TRAP — two unrelated "seven of eight" figures exist in this repo.** One is
-`finish_reason: "length"` (this item). The other, in
-`docs/analysis/2026-08-26-b3-timeout-probe.md:87`, counts wall-clock timeout
-exceedance and has nothing to do with token caps. ADR-0093 says so explicitly
-because a prior session nearly merged them. Do not cite one for the other.
+**Where the word came from, and it is NOT a transcription slip.** ADR-0093:327
+is careful — *"seven of eight **calls**"* — and :344 says *"No critique call has
+ever run."* But that document's own Measured table calls the probe a
+**"2000-token critique"** TWICE (`0093:43` and `0093:45`, written 2026-09-01 in
+`d860b2a`), and :45 states the population *"across the four slot models"*. It
+was a PROXY — same models, same 2000-token cap, run to ask whether peer
+critique could be built on that transport. Downstream files inherited the
+table's shorthand; they did not fumble a quotation. **This prompt said
+"transcription downstream" and that was itself wrong — two review rounds were
+needed to find it.** ADR-0101 has the full reasoning.
 
-**Why it is worse than measured:** ADR-0096 made round 2's reply LONGER — it now
-returns a critique AND a self-assessment, rationale, sources and a **revised
-answer** — and `synthesis` reads those revised answers as its PRIMARY input. So
-the part most likely to be clipped off the tail is the source-backed answer the
-owner asked to be protected. **Live in production right now.**
+**What survives, and is still open:** ADR-0096 made a round-2 reply carry a
+critique AND a self-assessment, rationale, sources and a revised answer, and
+`synthesis` reads those revised answers as its PRIMARY input — so the tail most
+likely to be cut is the part that matters most. Whether `DEBATE_ROUND_MAX_TOKENS
+= 2000` (`debate.py:76`) fits that reply is **UNMEASURED**. Severity is
+**LATENT**, and it becomes live on the first paid run.
 
-**What to do:**
-1. Measure the real output length of a round-2 reply under ADR-0096's prompts.
-   Do not guess a number.
-2. Raising the cap raises cost. `_estimate_bound_usd` must remain the fail-safe
-   bound; `tests/unit/test_peer_bound_is_a_true_ceiling.py` pins the arithmetic
-   with literals on both sides.
-3. **A pinned number may be a PUBLISHED REQUIREMENT.** One bound is written into
-   21 files; the run deadline is NFR-001/AC-021 in six places including the
-   operator dashboard. `grep` the value before changing it.
-4. A decision gets an ADR in the same PR (rule 16d); regenerate the index with
+**So this item cannot be done before Item 4.** Its own instruction — *"measure
+the real output length, do not guess a number"* — needs a paid run. The cap
+stays at 2000 until the harvest reads a real `debate_round_2` row. Do not move
+it on reasoning; that is the ADR-0094 failure.
+
+If you change it later:
+1. `_estimate_bound_usd` must remain the fail-safe bound;
+   `tests/unit/test_peer_bound_is_a_true_ceiling.py` pins the arithmetic with
+   literals on both sides.
+2. **A pinned number may be a PUBLISHED REQUIREMENT.** The judge-OFF bound and
+   the run deadline (NFR-001/AC-021) are each written into many files,
+   including the operator dashboard. **Do not trust a count here — derive it**,
+   because this one already drifted: it read "21 files", measured 2026-08-26,
+   and `grep -rl "0\.1043" --exclude-dir=.git . | wc -l` returned **26** on
+   2026-09-05. `grep` the value before changing it.
+3. A decision gets an ADR in the same PR (rule 16d); regenerate the index with
    `python3 scripts/generate_adr_index.py`, never by hand.
 
----
+**THE TRAP — the ratio "seven of eight" has TWO measured populations and one
+with no measurement behind it.** Wall-clock timeout exceedance
+(`docs/analysis/2026-08-26-b3-timeout-probe.md:87`), answer-model cap-filling
+(above), and — still — **nothing at all on the critique path**. Do not cite any
+of them for another.
 
 ## ITEM 2 — THE JUDGE CANNOT READ ITS SOURCES (file it; it is in no issue)
 
