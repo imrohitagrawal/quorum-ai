@@ -170,8 +170,11 @@ class Settings(BaseSettings):
 
     # --- Run-level wall-clock deadline (NFR-004 / NFR-001, P3) -----------
     #: Total wall-clock budget for ONE query run, in seconds. docs/11 pins
-    #: the number: NFR-001 "hard timeout at 360 seconds", NFR-004 "a
-    #: completed result or a partial-result explanation within 360 seconds".
+    #: the number: NFR-001 "hard timeout at 720 seconds", NFR-004 "a
+    #: completed result or a partial-result explanation within 720 seconds".
+    #: ADR-0102 moved both 360 -> 720: peer critique made each debate leg
+    #: SEQUENTIAL over four critics, so the five-leg arithmetic below (one
+    #: call per leg) no longer describes the worst case.
     #: Those targets moved with this value on 2026-08-26 (ADR-0078); changing
     #: one without the other makes the product's stated timeout a lie.
     #: On breach the executor degrades the run to an HONEST partial result
@@ -216,7 +219,7 @@ class Settings(BaseSettings):
     #: is published in ``docs/11``, ``docs/12``, the traceability matrix, the
     #: AC-to-test map and the operator dashboard. Moving it here alone would
     #: leave the product contradicting itself; all of them moved together.
-    quorum_run_deadline_seconds: float = 360.0
+    quorum_run_deadline_seconds: float = 720.0
 
     @field_validator("openrouter_timeout_seconds", "tavily_timeout_seconds", mode="after")
     @classmethod
@@ -287,7 +290,7 @@ class Settings(BaseSettings):
         if value > cls.RUN_DEADLINE_MAX_SECONDS:
             raise ValueError(
                 "QUORUM_RUN_DEADLINE_SECONDS must be <= "
-                f"{cls.RUN_DEADLINE_MAX_SECONDS:g}; the documented budget is 360. "
+                f"{cls.RUN_DEADLINE_MAX_SECONDS:g}; the documented budget is 720. "
                 "Keep it comfortably ABOVE the worst-case healthy run, which is "
                 "five sequential legs each bounded by "
                 "openrouter_call_budget_seconds (plus tavily_timeout_seconds on "

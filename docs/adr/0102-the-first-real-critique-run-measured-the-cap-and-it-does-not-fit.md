@@ -174,6 +174,35 @@ the old ladder versus cap 4000 on the new one:
   9,000 characters and found 0 worse-band transitions at every one, so it is
   the one claim here that does not depend on the query.
 
+### Raise the run deadline 360s -> 720s
+
+**Operator decision, and it changes a PUBLISHED REQUIREMENT.**
+`quorum_run_deadline_seconds` is not merely a constant: it is NFR-001 ("hard
+timeout at 360 seconds"), NFR-004 ("within 360 seconds"), AC-021, two rows of
+the traceability matrix, and a line on the operator dashboard. All seven sites
+moved together; a value that lived in the code and disagreed with the published
+target would be worse than either number alone.
+
+The engineering reason it needs to move at all is the one ADR-0078's
+arithmetic could not have anticipated. That ADR set 360 from *"five sequential
+legs, each bounded by `openrouter_call_budget_seconds`, so 5 x 60 = 300s"* —
+**one call per leg**. Peer critique broke that assumption: `_build_peer_round`
+dispatches critics SEQUENTIALLY, so each debate leg is bounded by FOUR call
+budgets, not one. The five-leg model no longer describes the worst case, and
+this change makes those calls longer still.
+
+**What this costs the user:** a run may now take up to twelve minutes before
+the safety net cuts it, where six was promised. That is a real product change,
+not a side effect, which is why NFR-001 and the dashboard move with the
+constant rather than being left to drift.
+
+**`DEBATE_HARD_TIMEOUT_MS` is deliberately NOT moved here.** The round-1 gate
+stays at 180s until a live run measures what round 1 actually takes at cap
+4000. Raising the run deadline first is what makes a larger gate *possible*
+without the gate consuming the entire run budget — at 360s a six-minute gate
+would have equalled the whole deadline, leaving nothing for round 2, synthesis
+and the judge.
+
 ## Rejected alternatives
 
 **5000.** Rejected in favour of 4000 on cost: at production's posture 5000
