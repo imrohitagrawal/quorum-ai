@@ -2,7 +2,7 @@
 
 Before this, both rails summed ``estimated_cost_usd`` and nothing ever corrected
 them. MEASURED on ``main`` at ``dfc0419``: six runs booked $0.1758 against a
-$0.20 cap while their worst-case bounds summed to $0.4458 — **2.23x the cap** —
+$0.40 cap while their worst-case bounds summed to $0.4458 — **2.23x the cap** —
 and completing a run at twice its estimate moved the ledger by exactly $0.0000,
 because ``CostGuardrailEvent`` had no field for a measured actual and the store
 had no writer for one.
@@ -49,8 +49,8 @@ from product_app.feedback_store import (
 ACCOUNT_A = UUID("00000000-0000-0000-0000-0000000000a1")
 ACCOUNT_B = UUID("00000000-0000-0000-0000-0000000000b2")
 
-#: A per-run figure that divides the $0.20 cap into a countable number of runs.
-UNIT = Decimal("0.02")
+#: A per-run figure that divides the $0.40 cap into a countable number of runs.
+UNIT = Decimal("0.04")
 
 
 @pytest.fixture
@@ -146,13 +146,13 @@ def test_the_ledger_reflects_the_measured_actual_not_the_estimate(
         account_id=ACCOUNT_A,
         query_run_id=run_id,
         estimated_cost_usd=Decimal("0.02"),
-        actual_cost_usd=Decimal("0.05"),
+        actual_cost_usd=Decimal("0.10"),
     )
 
-    assert store.daily_spend_for(ACCOUNT_A) == Decimal("0.05")
+    assert store.daily_spend_for(ACCOUNT_A) == Decimal("0.10")
     # The global rail is the same query with the account predicate dropped, so
     # it must move identically or the two rails disagree about one run.
-    assert store.global_daily_spend() == Decimal("0.05")
+    assert store.global_daily_spend() == Decimal("0.10")
 
 
 def test_a_reconciliation_can_lower_the_ledger_when_a_run_cost_less(
@@ -187,7 +187,7 @@ def test_exactly_one_reconciliation_is_written_per_run(store: FeedbackStore) -> 
         account_id=ACCOUNT_A,
         query_run_id=run_id,
         estimated_cost_usd=Decimal("0.02"),
-        actual_cost_usd=Decimal("0.05"),
+        actual_cost_usd=Decimal("0.10"),
     )
     second = store.try_record_cost_reconciliation(
         account_id=ACCOUNT_A,
@@ -200,7 +200,7 @@ def test_exactly_one_reconciliation_is_written_per_run(store: FeedbackStore) -> 
     assert second is False
     assert _event_types(store, run_id).count(COST_RECONCILED_EVENT) == 1
     # The second call must not have moved the number either.
-    assert store.daily_spend_for(ACCOUNT_A) == Decimal("0.05")
+    assert store.daily_spend_for(ACCOUNT_A) == Decimal("0.10")
 
 
 def test_a_run_with_no_open_charge_is_never_reconciled(store: FeedbackStore) -> None:
@@ -217,7 +217,7 @@ def test_a_run_with_no_open_charge_is_never_reconciled(store: FeedbackStore) -> 
             account_id=ACCOUNT_A,
             query_run_id=orphan,
             estimated_cost_usd=Decimal("0.02"),
-            actual_cost_usd=Decimal("0.05"),
+            actual_cost_usd=Decimal("0.10"),
         )
         is False
     )
@@ -241,7 +241,7 @@ def test_a_correction_cannot_outlive_the_charge_it_corrects(
         account_id=ACCOUNT_A,
         query_run_id=run_id,
         estimated_cost_usd=Decimal("0.02"),
-        actual_cost_usd=Decimal("0.05"),
+        actual_cost_usd=Decimal("0.10"),
         now=old + timedelta(minutes=1),
     )
     assert store.daily_spend_for(ACCOUNT_A, now=now) == Decimal("0")
@@ -278,7 +278,7 @@ def test_a_voided_run_is_not_reconciled_afterwards(store: FeedbackStore) -> None
             account_id=ACCOUNT_A,
             query_run_id=run_id,
             estimated_cost_usd=Decimal("0.02"),
-            actual_cost_usd=Decimal("0.05"),
+            actual_cost_usd=Decimal("0.10"),
         )
         is False
     )
@@ -406,17 +406,17 @@ def test_concurrent_charges_never_exceed_the_daily_cap(store: FeedbackStore, thr
     """RED IF the check and the insert stop sharing one hold of the store lock.
 
     MEASURED on the unsynchronised sequence at ``dfc0419``: 8 threads booked
-    $0.2344 (1.17x the $0.20 cap) and 32 booked $0.9376 (**4.69x**).
+    $0.2344 (1.17x the $0.40 cap) and 32 booked $0.9376 (**4.69x**).
     """
     booked = _race(store, threads=threads, atomic=True)
     # Literals on both sides, not ``DAILY_CAP_USD``. The harness is fed that
     # constant as its cap, so asserting the result against the same constant
     # would move with it and could never catch the cap itself being changed
-    # (rule 7a). $0.20 is the shipped cap and $0.02 the shipped UNIT, so ten
+    # (rule 7a). $0.40 is the shipped cap and $0.02 the shipped UNIT, so ten
     # charges fit exactly and an eleventh must not.
-    assert booked <= Decimal("0.20")
-    assert booked == Decimal("0.20"), "the cap should be reached exactly, not undershot"
-    assert Decimal("0.20") == DAILY_CAP_USD, (
+    assert booked <= Decimal("0.40")
+    assert booked == Decimal("0.40"), "the cap should be reached exactly, not undershot"
+    assert Decimal("0.40") == DAILY_CAP_USD, (
         "this test's literals track the shipped cap; if the cap moves, re-derive them"
     )
 
@@ -500,7 +500,7 @@ def test_a_reconciliation_corrects_the_in_memory_rail_too(
     runs, and only the ring feeds ``_cumulative_spend_for`` /
     ``HARD_LIMIT_USD``. Reconciling one and not the other was measured
     blocking an account at $0.2303 of its $0.25 hard limit while the durable
-    ledger — the reconciled truth — read $0.011515 of its $0.20 cap, and
+    ledger — the reconciled truth — read $0.011515 of its $0.40 cap, and
     telling the user "Cumulative spend for this account is 0.2303 USD": a
     money figure 20x the truth, shipped by the change that exists to stop
     false money figures.
@@ -560,9 +560,9 @@ def test_corrections_are_applied_in_insertion_order_not_query_plan_order(
         account_id=ACCOUNT_A,
         query_run_id=run_id,
         estimated_cost_usd=Decimal("0.02"),
-        actual_cost_usd=Decimal("0.05"),
+        actual_cost_usd=Decimal("0.10"),
     )
-    assert store.daily_spend_for(ACCOUNT_A) == Decimal("0.05")  # positive partner
+    assert store.daily_spend_for(ACCOUNT_A) == Decimal("0.10")  # positive partner
 
     store.void_cost_charge(account_id=ACCOUNT_A, query_run_id=run_id, reason="test")
 
@@ -637,7 +637,7 @@ def test_reconciling_without_a_store_reports_failure_rather_than_raising() -> No
             account_id=uuid4(),
             query_run_id=uuid4(),
             estimated_cost_usd=Decimal("0.02"),
-            actual_cost_usd=Decimal("0.05"),
+            actual_cost_usd=Decimal("0.10"),
         )
         is False
     )

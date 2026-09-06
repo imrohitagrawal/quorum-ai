@@ -40,11 +40,40 @@ from product_app.model_slots import ModelSlot
 #: while the worst-case bound crosses the daily cap. That gap is exactly where a
 #: bound-vs-point unit mismatch shows up.
 _MIX = [
-    "anthropic/claude-opus-4",
-    "openai/gpt-4o-mini",
-    "google/gemini-2.5-flash",
-    "nvidia/nemotron-3-nano-30b-a3b",
+    "vendor/rail-expensive",
+    "vendor/rail-mid",
+    "vendor/rail-cheap",
+    "vendor/rail-cheapest",
 ]
+
+#: PRICES THIS FILE OWNS, not the catalog's (ADR-0102).
+#:
+#: These tests need a mix whose POINT estimate sits below a rail while its
+#: BOUND crosses it — the gap where a bound-vs-point unit mismatch shows. When
+#: the threshold ladder went 0.15/0.20/0.25 -> 0.30/0.40/0.50, that window
+#: became unreachable for THIS FIXTURE. Under the caps it pins below
+#: (``cost_debate_output_tokens_cap`` 700, synthesis 800 — deliberately main's,
+#: so the per-call rail does not block first and hide the accumulation rails),
+#: no 4-model combination of the eight price-exact ids, swept across query
+#: lengths 1000-9000, puts the point under $0.30 while the bound clears $0.40.
+#:
+#: THE SCOPE OF THAT SENTENCE MATTERS and the first version of it omitted the
+#: caps: at the SHIPPED cap of 4000 the combination does exist (review found 55,
+#: e.g. two claude-3-haiku plus two claude-opus-4 at a 1,000-character query).
+#: The claim is about this fixture's pinned caps, not about the product.
+#: Owning the prices removes the catalog from the question either way.
+#:
+#: Owning the prices removes the catalog from the question entirely, which is
+#: the same reason ``test_peer_bound_is_a_true_ceiling`` supplies its own.
+#: MEASURED at these values, with the caps the fixture below pins:
+#:   long query  ($_QUERY):  point 0.2889, bound 0.4624  -> confirm
+#:   short query:            point 0.2154, bound 0.4409  -> confirm
+_FIXED_PRICES = {
+    "vendor/rail-expensive": (Decimal("0.027"), Decimal("0.135")),
+    "vendor/rail-mid": (Decimal("0.00027"), Decimal("0.00108")),
+    "vendor/rail-cheap": (Decimal("0.00054"), Decimal("0.0045")),
+    "vendor/rail-cheapest": (Decimal("0.00009"), Decimal("0.00036")),
+}
 _QUERY = "x" * 2500
 
 
@@ -80,10 +109,16 @@ def _point_below_cap_bound_above(monkeypatch: pytest.MonkeyPatch) -> None:
     """
     from product_app import feedback_store
     from product_app.config import settings
+    from product_app.model_slots import openrouter_model_catalog_service
 
     monkeypatch.setattr(settings, "cost_debate_output_tokens_cap", 700)
     monkeypatch.setattr(settings, "cost_synthesis_output_tokens", 800)
     monkeypatch.setattr(feedback_store, "get_store", lambda: _ZeroSpendStore())
+    # Own the prices too — see _FIXED_PRICES for why the real catalog can no
+    # longer place this fixture in the gap these tests need.
+    monkeypatch.setattr(
+        openrouter_model_catalog_service, "price_index", lambda: dict(_FIXED_PRICES)
+    )
 
 
 def test_a_spend_free_account_is_never_blocked_by_the_daily_cap() -> None:
@@ -136,6 +171,6 @@ def test_the_per_call_rail_still_keys_off_the_worst_case_bound() -> None:
         query_text="Compare frontier model safety features.", model_slots=_slots()
     )
     assert estimate.max_cost_usd is not None
-    assert estimate.estimated_cost_usd < Decimal("0.15"), "precondition: point is in ALLOW"
-    assert estimate.max_cost_usd > Decimal("0.15"), "precondition: bound crosses the soft band"
+    assert estimate.estimated_cost_usd < Decimal("0.30"), "precondition: point is in ALLOW"
+    assert estimate.max_cost_usd > Decimal("0.30"), "precondition: bound crosses the soft band"
     assert estimate.threshold_action is CostThresholdAction.REQUIRE_CONFIRMATION

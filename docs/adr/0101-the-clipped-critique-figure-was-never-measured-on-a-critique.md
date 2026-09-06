@@ -45,8 +45,11 @@ The probe ran 2026-08-26, eight days earlier. No critique call was reachable.
 `5aed777` was committed `2026-09-03 05:52:20 +0530` = `2026-09-03T00:22:20Z`,
 so production's last paid run predates the feature by **27.3 hours**.
 
-**Stated at the width of the evidence:** no critique call is recorded anywhere
-in this repo, and production has taken no live charge since `5aed777` landed.
+**Stated at the width of the evidence, as of 2026-09-05:** no critique call was
+recorded anywhere in this repo, and production had taken no live charge since
+`5aed777` landed. **Both ceased to be true on 2026-09-06**, when a production
+run made eight real critique calls — see ADR-0102, which supersedes this
+paragraph and the severity finding below.
 Those are the two things measured. `/status` reads ONE deployment, so it cannot
 see a laptop run with the flag flipped and a personal key — though a simulated
 run dispatches nothing by construction (`_call_debate_model` returns `None`
@@ -175,6 +178,9 @@ mechanism that works here, and this record is its output.
   cap-filling (this record) — and **no measurement at all** on the critique
   path. ADR-0093 already warned about the first collision; this adds the
   second, and says plainly the third has no number behind it.
+- **SUPERSEDED 2026-09-06 by ADR-0102: severity is LIVE again**, and measured
+  — a production run clipped 3 of 4 round-2 replies. The reading below was
+  correct on its date and is kept as written.
 - **The severity claim is downgraded from LIVE to LATENT**, as of 2026-09-05:
   nothing had been clipped in production because no critique call had run. That
   reading is DATED on purpose. A live-execution window is open until

@@ -6947,12 +6947,16 @@
     "models, query length, search, or debate rounds. Review the estimate " +
     "before continuing.";
 
-  // The hard block boundary ($0.25) — the rail's full-scale value. The
-  // confirm tick sits at $0.15 (60% of scale, matched by the CSS segment
+  // The hard block boundary ($0.50) — the rail's full-scale value. The
+  // confirm tick sits at $0.30 (60% of scale, matched by the CSS segment
   // widths). Numbers are the design's fixed guardrail labels; the ACTIVE
   // band is driven by the server ``threshold_action``, never re-derived
   // from these constants.
-  const COST_HARD_LIMIT_USD = 0.25;
+  //
+  // ADR-0102 moved the ladder 0.15/0.20/0.25 -> 0.30/0.40/0.50. The RATIO is
+  // unchanged (0.30/0.50 == 0.15/0.25 == 60%), so the CSS segment widths and
+  // the tick position below did NOT move — only the labels did.
+  const COST_HARD_LIMIT_USD = 0.5;
 
   // Width of the illustrative planning band shown as "estimated range". The
   // server returns a point estimate with no confidence interval, so this ±
@@ -7025,7 +7029,7 @@
 
   // Format a planning band ``lo``–``hi`` at whole-cent precision, but COLLAPSE
   // to a single figure when both endpoints round to the same cents (issue #19):
-  // a "$0.15–$0.15" range reads as a broken widget, not a range. Renders the
+  // a "$0.30–$0.30" range reads as a broken widget, not a range. Renders the
   // low endpoint as the single value in that case (the band is illustrative, so
   // either endpoint is representative). Assumes ``lo <= hi``.
   function gateRangeText(lo, hi) {
@@ -7129,9 +7133,9 @@
     renderCostRows(gateByStage, partitions.byStage, partitions.total);
 
     if (action === "block") {
-      // BLOCK (> $0.25) — Slice 6 (07 cost-blocked · AC-010 · COPY-004).
+      // BLOCK (> $0.50, ADR-0102) — Slice 6 (07 cost-blocked · AC-010 · COPY-004).
       // First-class honest treatment: COPY-004 VERBATIM, the itemized
-      // estimate (rendered above), the $0.25 hard-cap disclosure, an honest
+      // estimate (rendered above), the hard-cap disclosure, an honest
       // "nothing ran / nothing charged", and the server ``reasons[]`` (the
       // real "why" — NEVER a fabricated "4 premium slots · 14,600-char
       // question"). Footer surfaces ``threshold_action: blocked`` + the
@@ -7144,14 +7148,18 @@
       }
       if (gateBlockNote) {
         // The guardrail blocks on the WORST-CASE (max_cost_usd), which can
-        // exceed the $0.25 cap even when the typical estimate shown above is
+        // exceed the cap even when the typical estimate shown above is
         // under it — so the note names the worst case, not the point estimate.
         const maxCost = Number(ce.max_cost_usd);
         const ceiling = Number.isFinite(maxCost) && maxCost > total ? maxCost : total;
+        // ADR-0102: DERIVED from COST_HARD_LIMIT_USD, never a typed literal.
+        // These three strings said "$0.25" after the ladder moved to
+        // 0.30/0.40/0.50 and no gate caught it, so a screen-reader user was
+        // told a different cap from the one on the rail beside them.
         gateBlockNote.textContent =
           `This run's worst-case cost (up to ${gateUsd(ceiling)}) is over the ` +
-          "$0.25 hard cap and no override exists in this release. Nothing " +
-          "ran and nothing was charged.";
+          `${gateUsd(COST_HARD_LIMIT_USD)} hard cap and no override exists in ` +
+          "this release. Nothing ran and nothing was charged.";
         gateBlockNote.hidden = false;
       }
       if (gateBlockFooter) {
@@ -7170,10 +7178,16 @@
       if (gateHintConfirm) gateHintConfirm.hidden = true;
       // No planning range for a run that will not execute.
       if (gateRangeWrap) gateRangeWrap.hidden = true;
-      return `Run blocked. Estimated ${gateUsd(total)} is above the $0.25 hard cap. ${COPY_004_COST_BLOCK}`;
+      // The BOUND is what the rail blocks on, so announce the bound — the
+      // old line announced the POINT estimate against the cap, which could
+      // read "Estimated $0.1984 is above the $0.25 hard cap": false on its face.
+      const announceMax = Number(ce.max_cost_usd);
+      const announceCeiling =
+        Number.isFinite(announceMax) && announceMax > total ? announceMax : total;
+      return `Run blocked. Worst case ${gateUsd(announceCeiling)} is above the ${gateUsd(COST_HARD_LIMIT_USD)} hard cap. ${COPY_004_COST_BLOCK}`;
     }
 
-    // REQUIRE_CONFIRMATION ($0.15–$0.25).
+    // REQUIRE_CONFIRMATION ($0.30–$0.50, ADR-0102).
     // Illustrative ±``PLANNING_RANGE_PCT`` planning band (NOT a server
     // interval). Only shown in this band, where total ≤ the hard limit so
     // ``lo < hi`` always holds; ``hi`` is still clamped to the ceiling and
@@ -7382,12 +7396,12 @@
         if (usdSecondary) renderCostSecondary(estimate.cost_estimate.estimated_cost_usd);
         renderNotices(null);
         if (action === "allow" && autoProceed) {
-          // ≤ $0.15 AND the user chose "Run now": nothing to confirm — go
+          // ≤ $0.30 AND the user chose "Run now": nothing to confirm — go
           // straight to the run. The "See the estimate" path (autoProceed
           // false) skips this branch so it always shows the gate below.
           await proceedWithRun();
         } else {
-          // require_confirmation ($0.15–$0.25) or block (> $0.25):
+          // require_confirmation ($0.30–$0.50) or block (> $0.50):
           // render, switch to the gate, THEN move focus + announce + scroll.
           const announcement = renderCostGate(estimate);
           setView("cost-gate");
@@ -7650,7 +7664,7 @@
     // never POST a create. The confirm button is hidden and the keyboard
     // path is guarded in the block band, and the server rejects it with
     // COST_LIMIT_EXCEEDED — this early return closes the last direct-call
-    // gap so no client path can spend past the $0.25 hard limit.
+    // gap so no client path can spend past the hard limit.
     if (
       state.currentEstimate.cost_estimate.threshold_action === "block"
     ) {
@@ -8260,7 +8274,7 @@
         acTag: "Cost blocked · AC-010 · COPY-004",
         message: `${COPY_004_COST_BLOCK} Nothing ran and nothing was charged.`,
         detailRows: [
-          { label: "Hard cap", value: "$0.25 · no override", mono: true },
+          { label: "Hard cap", value: `${gateUsd(COST_HARD_LIMIT_USD)} · no override`, mono: true },
         ],
         actions: [
           { label: "Choose cheaper models", primary: true, action: () => returnToComposer("slot") },

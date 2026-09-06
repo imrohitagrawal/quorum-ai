@@ -222,13 +222,26 @@ def test_debate_falls_back_to_template_when_live_execution_disabled(
     assert called["count"] == 0
 
 
-def test_debate_round_max_tokens_is_2000() -> None:
-    """RB-5 / D2 — the token cap was raised to 2000 for data completeness
-    so substantive critiques (1200+ chars) don't clip.
+def test_debate_round_max_tokens_is_4000() -> None:
+    """ADR-0102 — raised 2000 -> 4000 after the first real critique run.
 
-    Bite proof: change ``2000`` → the assertion reds.
+    2000 was not a data-completeness guess any more: on the 2026-09-06
+    production run it clipped **3 of 4** round-2 replies, each returning
+    ``finish_reason: "length"`` at exactly 2000 completion tokens. Round 2
+    carries the revised answer synthesis reads as its primary input.
+
+    4000 rather than 5000 on cost: at production's posture (judge ON **and
+    peer critique ON**) 5000 bounds at 0.2033 against 4000's 0.1827, and the
+    run measured nothing that requires the larger value.
+
+    THIS DOCSTRING FIRST SAID "4000 measures 0.1442 and stays in the
+    no-confirmation band". That figure was taken with peer critique OFF, which
+    production does not run; ADR-0102 moved the whole threshold ladder because
+    at the real posture NO useful cap raise fitted under the old line.
+
+    Bite proof: change ``4000`` → the assertion reds.
     """
-    assert DEBATE_ROUND_MAX_TOKENS == 2000
+    assert DEBATE_ROUND_MAX_TOKENS == 4000
 
 
 def test_debate_user_prompt_includes_full_answer_excerpt() -> None:

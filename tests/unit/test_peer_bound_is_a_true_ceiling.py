@@ -177,7 +177,11 @@ def test_the_shipped_posture_is_byte_identical(monkeypatch: pytest.MonkeyPatch) 
     # LITERALS on both sides (rule 7a), measured 2026-09-03 on the shipped
     # catalog with the query at the top of this file.
     assert estimate.estimated_cost_usd == Decimal("0.0548")
-    assert _max_cost(estimate) == Decimal("0.1043")
+    # RE-MEASURED 2026-09-06 (ADR-0102): DEBATE_ROUND_MAX_TOKENS 2000 -> 4000
+    # moved the bound 0.1043 -> 0.1313. The POINT estimate is unchanged at
+    # 0.0548 — the cap prices the fail-safe ceiling, not the typical run — and
+    # that asymmetry is the sanity check that the right number moved.
+    assert _max_cost(estimate) == Decimal("0.1313")
     # The peer branch's honest system-prompt pricing must NOT reach this path.
     # Correcting the moderator's flat 350 would move every figure in ADR-0094's
     # measured 715-mix sweep, which the owner is holding — so it is filed, not
@@ -314,13 +318,14 @@ def test_round_twos_prior_critique_is_priced_for_every_critic(
     Both figures MEASURED on 2026-09-03 against that fixed list, the second by
     reverting the per-critic branch and re-running:
 
-        with the per-critic term:      max_cost_usd = $1.8086
-        charged once at the moderator: max_cost_usd = $1.7466   (-$0.0620)
+        with the per-critic term:      max_cost_usd = $2.5326
+        charged once at the moderator: max_cost_usd = $2.4086   (-$0.1240)
 
-    Both re-measured after ADR-0096 grew the prompts. The SHORTFALL is
-    unchanged at $0.0620 — it is a function of the round-2 critique cap, not of
-    the system prompt — which is the sanity check that the re-measure moved the
-    right thing.
+    RE-MEASURED 2026-09-06 (ADR-0102) after the cap went 2000 -> 4000, by the
+    `elif False:` method below. The SHORTFALL DOUBLED, $0.0620 -> $0.1240,
+    exactly as the cap doubled — this docstring already said it "is a function
+    of the round-2 critique cap", and that prediction is what makes the
+    re-measure trustworthy rather than a number typed to match.
 
     Reproduce the second by replacing ``elif settings.peer_critique_enabled:``
     in ``costs._cost_components``'s ``prior_critique_input_cost`` with
@@ -340,10 +345,10 @@ def test_round_twos_prior_critique_is_priced_for_every_critic(
     with monkeypatch.context() as mp:
         mp.setattr(config.settings, "peer_critique_enabled", True)
         bound = _max_cost(cost_estimation_service.estimate(query_text=_QUERY, model_slots=slots))
-    assert bound == Decimal("1.8086"), (
+    assert bound == Decimal("2.5326"), (
         f"the fail-safe bound on the fixed price list is {bound}; charging round "
-        "2's prior critique once at the moderator's rate gives $1.7466, which "
-        "under-prices by $0.0620 the input every critic actually pays"
+        "2's prior critique once at the moderator's rate gives $2.4086, which "
+        "under-prices by $0.1240 the input every critic actually pays"
     )
 
 

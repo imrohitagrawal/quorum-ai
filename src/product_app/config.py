@@ -170,8 +170,11 @@ class Settings(BaseSettings):
 
     # --- Run-level wall-clock deadline (NFR-004 / NFR-001, P3) -----------
     #: Total wall-clock budget for ONE query run, in seconds. docs/11 pins
-    #: the number: NFR-001 "hard timeout at 360 seconds", NFR-004 "a
-    #: completed result or a partial-result explanation within 360 seconds".
+    #: the number: NFR-001 "hard timeout at 720 seconds", NFR-004 "a
+    #: completed result or a partial-result explanation within 720 seconds".
+    #: ADR-0102 moved both 360 -> 720: peer critique made each debate leg
+    #: SEQUENTIAL over four critics, so the five-leg arithmetic below (one
+    #: call per leg) no longer describes the worst case.
     #: Those targets moved with this value on 2026-08-26 (ADR-0078); changing
     #: one without the other makes the product's stated timeout a lie.
     #: On breach the executor degrades the run to an HONEST partial result
@@ -216,7 +219,7 @@ class Settings(BaseSettings):
     #: is published in ``docs/11``, ``docs/12``, the traceability matrix, the
     #: AC-to-test map and the operator dashboard. Moving it here alone would
     #: leave the product contradicting itself; all of them moved together.
-    quorum_run_deadline_seconds: float = 360.0
+    quorum_run_deadline_seconds: float = 720.0
 
     @field_validator("openrouter_timeout_seconds", "tavily_timeout_seconds", mode="after")
     @classmethod
@@ -287,7 +290,7 @@ class Settings(BaseSettings):
         if value > cls.RUN_DEADLINE_MAX_SECONDS:
             raise ValueError(
                 "QUORUM_RUN_DEADLINE_SECONDS must be <= "
-                f"{cls.RUN_DEADLINE_MAX_SECONDS:g}; the documented budget is 360. "
+                f"{cls.RUN_DEADLINE_MAX_SECONDS:g}; the documented budget is 720. "
                 "Keep it comfortably ABOVE the worst-case healthy run, which is "
                 "five sequential legs each bounded by "
                 "openrouter_call_budget_seconds (plus tavily_timeout_seconds on "
@@ -410,8 +413,17 @@ class Settings(BaseSettings):
     stage_delay_ms: int = 5
 
     # --- Cost guardrails ------------------------------------------------
-    soft_threshold_usd: float = 0.15
-    hard_limit_usd: float = 0.25
+    #
+    # NOT READ BY ANYTHING. ``grep -rn "settings.soft_threshold_usd\|settings.
+    # hard_limit_usd" src/`` returns nothing: the enforcing values are the
+    # module constants ``costs.SOFT_THRESHOLD_USD`` / ``costs.HARD_LIMIT_USD``.
+    # These fields bind from the SAME env names, so an operator who sets
+    # ``HARD_LIMIT_USD`` in the environment moves these and NOT the rail —
+    # which is why they are kept in step rather than deleted: a value that
+    # disagreed with the constant would be worse than one that is merely
+    # unused. ADR-0102 moved both.
+    soft_threshold_usd: float = 0.30
+    hard_limit_usd: float = 0.50
 
     # --- Cost estimation (issue #16: realistic per-call token model) -----
     # The pre-run estimate is a PURE LOCAL calculation — it makes no API
@@ -477,7 +489,7 @@ class Settings(BaseSettings):
     #: (the point estimate keeps the lower typical floor above). MUST stay in
     #: sync with ``debate.DEBATE_ROUND_MAX_TOKENS`` — the value the live debate
     #: call actually enforces.
-    cost_debate_output_tokens_cap: int = 2000
+    cost_debate_output_tokens_cap: int = 4000
     #: Output-token floor for one synthesis section call (the reconciled
     #: answer). Synthesis fans out into up to ``cost_synthesis_sections``
     #: independent live calls, each re-sending the full context.
@@ -498,8 +510,10 @@ class Settings(BaseSettings):
     #: Hard per-call output cap for the four initial answers, enforced as
     #: ``max_tokens`` on the live call (the debate and synthesis calls are
     #: already capped at ``debate.DEBATE_ROUND_MAX_TOKENS`` /
-    #: ``synthesis.SYNTHESIS_SECTION_MAX_TOKENS`` — 2000 / 3000 since WP-D
-    #: raised them from 700 / 800). Without it, initial-answer output is
+    #: ``synthesis.SYNTHESIS_SECTION_MAX_TOKENS`` — 4000 / 3000: WP-D raised
+    #: them from 700 / 800 to 2000 / 3000, and ADR-0102 took the DEBATE cap to
+    #: 4000 after a real critique run clipped 3 of 4 round-2 replies).
+    #: Without it, initial-answer output is
     #: unbounded, so a verbose prompt on an expensive model mix can cost far
     #: more than any pre-run estimate — defeating the cost guardrail. 2000 is
     #: generous (~2× the largest answer observed in the live validation run,
@@ -520,8 +534,12 @@ class Settings(BaseSettings):
     # reviewer, not the user" — both debate system prompts), while the
     # synthesis — the ONLY stage rendered to the user — ran on the cheapest.
     #
-    # Measured per run against live OpenRouter prices, at the enforced caps
-    # (debate 2 calls x 2000 output, synthesis 5 calls x 3000 output):
+    # Measured per run against live OpenRouter prices, at the caps enforced AT
+    # THE TIME OF MEASUREMENT (debate 2 calls x 2000 output, synthesis 5 calls
+    # x 3000 output). ADR-0102 later took the debate cap to 4000, which scales
+    # the debate row below; the CONCLUSION it supports — the debate ran on the
+    # pricier model to produce text the user never sees — is unaffected by the
+    # cap and is why this table is dated rather than re-measured here:
     #
     #   stage      claude-haiku-4.5   gpt-4o-mini   gpt-5-mini
     #   debate         $0.0260          $0.0033       $0.0095
@@ -642,7 +660,8 @@ class Settings(BaseSettings):
     #   of cents.
     # * The exposure from failing CLOSED is the whole product: every visitor
     #   refused for as long as the fault lasts.
-    # * The GLOBAL_DAILY_CEILING_USD rail — 25x larger than the per-account
+    # * The GLOBAL_DAILY_CEILING_USD rail — 12.5x larger than the per-account
+    #   cap since ADR-0102 doubled that cap (it was 25x when this was written)
     #   cap this guards — already chooses fail-open on the IDENTICAL fault,
     #   deliberately and in a comment. Fail-closing the small rail while its
     #   bigger sibling fails open is incoherent.

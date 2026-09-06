@@ -242,7 +242,7 @@ def test_a_memoised_verdict_is_still_served_when_the_account_is_at_its_cap(
     assert len(judge_calls) == 1
     assert str(run.query_run_id) in qr._judge_verdict_memo, "the verdict must be memoised"
 
-    _charge(store, account_id=account, amount=Decimal("0.20"))
+    _charge(store, account_id=account, amount=Decimal("0.40"))
     assert store.daily_spend_for(account) >= DAILY_CAP_USD, "the fixture did not reach the rail"
 
     second = _read(run)
@@ -312,7 +312,7 @@ def test_a_run_refused_for_money_is_not_frozen_unverified_once_the_rail_clears(
     account = uuid4()
     run = _terminal_run(account)
 
-    _charge(store, account_id=account, amount=Decimal("0.20"))
+    _charge(store, account_id=account, amount=Decimal("0.40"))
     refused = _read(run)
     assert _shape(refused) == NO_VERDICT_SHAPE, "the rail did not refuse"
     assert len(judge_calls) == 0
@@ -361,10 +361,10 @@ def test_an_evicted_run_is_not_re_judged_once_its_account_is_at_the_daily_cap(
     # ``event_count`` does move for a real ledger write, in this same process,
     # on this same store handle.
     rows_at_start = store.event_count()
-    _charge(store, account_id=account, amount=Decimal("0.20"))
+    _charge(store, account_id=account, amount=Decimal("0.40"))
     assert store.event_count() > rows_at_start, "event_count did not move for a real ledger write"
     spend_before = store.daily_spend_for(account)
-    assert spend_before == Decimal("0.20")
+    assert spend_before == Decimal("0.40")
     assert spend_before >= DAILY_CAP_USD, "the fixture did not actually reach the rail"
 
     _evict(victim, monkeypatch, judge_calls)
@@ -478,8 +478,8 @@ def test_the_boundary_refuses_at_exactly_the_cap_and_allows_one_cent_under(
 
     at_the_cap = uuid4()
     run_at = _terminal_run(at_the_cap)
-    _charge(store, account_id=at_the_cap, amount=Decimal("0.20"))
-    assert store.daily_spend_for(at_the_cap) == Decimal("0.20")
+    _charge(store, account_id=at_the_cap, amount=Decimal("0.40"))
+    assert store.daily_spend_for(at_the_cap) == Decimal("0.40")
     assert _shape(_read(run_at)) == NO_VERDICT_SHAPE
     assert len(judge_calls) == 0, "exactly at the cap must not buy a judge"
 

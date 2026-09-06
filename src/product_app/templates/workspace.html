@@ -310,7 +310,7 @@
               </div>
             </div>
             <div class="composer-footer">
-              <p class="composer-footer-notice"><strong>See the estimate</strong> to review the itemized cost first, or <strong>Run now</strong> to start low-cost runs immediately — anything needing confirmation still pauses for your approval · the <span class="mono">$0.25</span>/run hard cap always applies · one run at a time per session</p>
+              <p class="composer-footer-notice"><strong>See the estimate</strong> to review the itemized cost first, or <strong>Run now</strong> to start low-cost runs immediately — anything needing confirmation still pauses for your approval · the <span class="mono">$0.50</span>/run hard cap always applies · one run at a time per session</p>
               <div class="composer-footer-actions">
                 <span id="composer-total-estimate" class="mono composer-total" aria-live="polite">—</span>
                 <button id="run-now" class="button button-secondary composer-cta" type="button" data-loading-text="Starting...">
@@ -386,8 +386,8 @@
                   <span id="cost-gate-range-wrap" class="cost-total-range">estimated range <span id="cost-gate-range" class="mono"></span></span>
                 </div>
 
-                <!-- Threshold rail (dataviz). 0 → $0.25 linear; the confirm
-                     tick sits at $0.15 (60%), the block boundary at $0.25
+                <!-- Threshold rail (dataviz). 0 → $0.50 linear; the confirm
+                     tick sits at $0.30 (60%), the block boundary at $0.50
                      (100%). ``renderCostGate`` positions the marker. Colours
                      are ink-tint (approval band) + amber (confirm) + red
                      (block) — never green. -->
@@ -401,8 +401,8 @@
                   </div>
                   <div class="cost-rail-labels mono">
                     <span>$0 — runs on approval</span>
-                    <span class="cost-rail-label-confirm">$0.15 — explicit confirmation</span>
-                    <span class="cost-rail-label-block">$0.25 — blocked, no override</span>
+                    <span class="cost-rail-label-confirm">$0.30 — explicit confirmation</span>
+                    <span class="cost-rail-label-block">$0.50 — blocked, no override</span>
                   </div>
                 </div>
 
@@ -656,7 +656,7 @@
                 <div class="result-next-foot">
                   <span class="result-next-cost">
                     <span class="mono" id="result-next-range">&#8776; $0.05&ndash;0.20</span>
-                    <span class="result-next-cost-note">&middot; you approve the estimate first &middot; hard cap <span class="mono">$0.25</span> &middot; one run at a time</span>
+                    <span class="result-next-cost-note">&middot; you approve the estimate first &middot; hard cap <span class="mono">$0.50</span> &middot; one run at a time</span>
                   </span>
                   <button id="result-next-run" class="button button-primary result-next-run" type="button">Review &amp; run &rarr;</button>
                 </div>
@@ -789,7 +789,7 @@
               <div class="landing-runbar-foot">
                 <p class="landing-cost">
                   <span class="mono landing-cost-figure">&#8776; $0.05&ndash;0.20</span>
-                  <span class="landing-cost-note">&middot; you approve the estimate first &mdash; hard cap <span class="mono">$0.25</span>/run</span>
+                  <span class="landing-cost-note">&middot; you approve the estimate first &mdash; hard cap <span class="mono">$0.50</span>/run</span>
                 </p>
                 <div class="landing-runbar-actions">
                   <button id="landing-estimate" class="button button-secondary" type="button">Estimate</button>

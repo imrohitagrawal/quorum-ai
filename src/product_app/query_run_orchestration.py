@@ -54,6 +54,8 @@ from product_app.config import settings
 from product_app.costs import (
     DAILY_CAP_USD,
     GLOBAL_DAILY_CEILING_USD,
+    HARD_LIMIT_USD,
+    SOFT_THRESHOLD_USD,
     CostBreakdown,
     CostEstimate,
     CostGuardrailDecision,
@@ -1809,11 +1811,26 @@ def _validated_model_slots(
 
 
 def _estimate_reasons(estimate: CostEstimate) -> list[str]:
+    """The reasons published on ``POST /v1/query-runs/estimate``.
+
+    DERIVED FROM THE CONSTANTS, never typed as literals. This function is a
+    SECOND reasons producer — ``CostEstimationService._threshold_for`` is the
+    other — and it reaches the wire on a required response field
+    (``query_runs.py``). ADR-0102 moved the ladder 0.15/0.20/0.25 ->
+    0.30/0.40/0.50 and this function was missed, so one response body carried
+    two ``reasons`` lists quoting DIFFERENT limits for the same run: the
+    top-level said "exceeds USD 0.15" while ``cost_estimate.reasons`` said
+    "could exceed USD 0.30". Nothing pinned it, which is why it shipped.
+    ``tests/integration/test_estimate_reasons_quote_the_live_thresholds.py``
+    pins it now, over real HTTP and in both directions.
+    """
     if estimate.threshold_action is CostThresholdAction.ALLOW:
         return ["Estimated cost is within the normal execution band."]
     if estimate.threshold_action is CostThresholdAction.REQUIRE_CONFIRMATION:
-        return ["Estimated cost exceeds USD 0.15 and requires explicit confirmation."]
-    return ["Estimated cost exceeds USD 0.25 and is blocked for this slice."]
+        return [
+            f"Estimated cost exceeds USD {SOFT_THRESHOLD_USD} and requires explicit confirmation."
+        ]
+    return [f"Estimated cost exceeds USD {HARD_LIMIT_USD} and is blocked for this slice."]
 
 
 #: Per-run memo of the Layer-B judge verdict (P1 / FR-015 wiring). The judge

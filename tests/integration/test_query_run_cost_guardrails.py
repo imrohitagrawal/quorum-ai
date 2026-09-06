@@ -135,15 +135,23 @@ DEFAULT_MODEL_IDS = [
 #: Uses ONLY ``price_exact`` models (verified identical in
 #: ``_FALLBACK_CATALOG`` and the live public catalog) — see
 #: ``test_catalog_fetcher.py::test_cost_band_fixtures_are_built_from_price_exact_models``.
+#: RE-MEASURED 2026-09-06 (ADR-0102). The ladder moved 0.15/0.20/0.25 ->
+#: 0.30/0.40/0.50 and the previous mix's bound (0.1870) stopped reaching the
+#: soft line, so every test keyed on this fixture silently became an ALLOW
+#: test. Chosen for the largest margin to BOTH lines rather than the first fit:
+#: point 0.2249 (ALLOW) and bound 0.3567 (over the soft line). Every id is
+#: price-exact -- ``test_cost_band_fixtures_are_built_from_price_exact_models``
+#: rejected an earlier attempt that used two known price-DRIFTING models, which
+#: would have asserted a band that exists only in degraded mode.
 CONFIRM_MODEL_IDS = [
     "openai/gpt-4.1",
     "anthropic/claude-haiku-4.5",
-    "anthropic/claude-3-haiku",
+    "anthropic/claude-opus-4",
     "google/gemini-2.5-flash",
 ]
-CONFIRM_QUERY = "x" * 20_000
+CONFIRM_QUERY = "x" * 4_000
 
-#: A full opus-tier mix — its bound exceeds the $0.25 hard limit → BLOCK.
+#: A full opus-tier mix — its bound exceeds the $0.50 hard limit → BLOCK.
 BLOCKED_MODEL_IDS = [
     "openai/gpt-4.1",
     "anthropic/claude-opus-4",
@@ -245,6 +253,9 @@ def test_normal_cost_query_is_accepted_with_cost_estimate() -> None:
 
     assert response.status_code == 202
     body = response.json()
+    # POINT estimate, cap-independent (ADR-0102 measured 0.0548 at both caps),
+    # so this ceiling did NOT move with the ladder. A blanket edit loosened it
+    # to 0.30; review showed it still passes at 0.15.
     assert Decimal(body["cost_estimate"]["estimated_cost_usd"]) <= Decimal("0.15")
     assert body["cost_estimate"]["threshold_action"] == "allow"
     event = _events_for(account_id)[0]
@@ -276,7 +287,7 @@ def test_a_confirm_band_query_is_admitted_once_confirmed() -> None:
     assert preview.status_code == 402
     preview_estimate = preview.json()["detail"]["cost_estimate"]
     assert preview_estimate["threshold_action"] == "require_confirmation"
-    assert Decimal(preview_estimate["max_cost_usd"]) > Decimal("0.15")
+    assert Decimal(preview_estimate["max_cost_usd"]) > Decimal("0.30")
 
     response = client.post(
         "/v1/query-runs",
@@ -313,18 +324,18 @@ def test_high_cost_query_requires_confirmation_before_creation() -> None:
     )
 
     # The guardrail keys off the fail-safe max_cost_usd bound (~$0.21 here) —
-    # in the soft band (above USD 0.15) — while the point estimate (~$0.10) is
-    # under the USD 0.20 daily cap. So the per-call confirmation is the binding
+    # in the soft band (above USD 0.30) — while the point estimate is
+    # under the USD 0.40 daily cap. So the per-call confirmation is the binding
     # constraint and the create endpoint mints a confirmation token.
     assert response.status_code == 402
     body = response.json()
     assert body["detail"]["code"] == "COST_CONFIRMATION_REQUIRED"
     assert body["detail"]["cost_estimate"]["threshold_action"] == "require_confirmation"
-    # The rail keys off the worst-case bound: max_cost_usd crosses USD 0.15
+    # The rail keys off the worst-case bound: max_cost_usd crosses USD 0.30
     # while the realistic point estimate stays under it.
     cost_estimate = body["detail"]["cost_estimate"]
-    assert Decimal(cost_estimate["max_cost_usd"]) > Decimal("0.15")
-    assert Decimal(cost_estimate["estimated_cost_usd"]) < Decimal("0.15")
+    assert Decimal(cost_estimate["max_cost_usd"]) > Decimal("0.30")
+    assert Decimal(cost_estimate["estimated_cost_usd"]) < Decimal("0.30")
     assert query_run_repository.get_active_for_account(account_id) is None
     assert _events_for(account_id)[0].event_type == "cost_confirmation_required"
 
@@ -646,6 +657,12 @@ def test_estimate_time_block_still_records_blocked_and_pages_sentry() -> None:
 #: synthesis stage means real money moves faster per run), not a side effect
 #: of anything in this test file.
 #:
+#: ADR-0102 doubled the per-account cap 0.20 -> 0.40 and the count went 3 -> 7.
+#: THE UNIT PRICE BELOW DID NOT MOVE. That is the distinction this constant
+#: exists to keep visible: the earlier 8->6 and 6->3 drops were the price of a
+#: run changing, and this one is the ENVELOPE changing while the price of a run
+#: stays put.
+#:
 #: An intermediate measurement (2026-08-09) said 0.1145 / 1 run. That was
 #: measured against a broken environment: `_FALLBACK_CATALOG` (the catalog
 #: this fixture pins to) had no row for the new synthesis default
@@ -711,7 +728,11 @@ def test_daily_cap_admits_the_number_of_runs_its_dollar_value_pays_for() -> None
     envelope (~$0.078 -> ~$0.183 per account per day), which is a money
     decision, not a side effect.
 
-    The decision that ships with the fix is: leave ``DAILY_CAP_USD`` at 0.20.
+    The decision that shipped with F-01 was: leave ``DAILY_CAP_USD`` at 0.20.
+    ADR-0102 later moved it to 0.40, as one step of the whole three-threshold
+    ladder (0.15/0.20/0.25 -> 0.30/0.40/0.50) -- which is exactly the
+    'move the whole ladder, not this constant alone' the paragraph below
+    describes.
     That value was never derived from watching production spend — ``git log
     -S 'DAILY_CAP_USD = Decimal("0.20")'`` shows commit 9c50239 ("cost: raise
     daily cap to $0.20 so confirmation band is reachable") chose it from an
@@ -746,7 +767,10 @@ def test_daily_cap_admits_the_number_of_runs_its_dollar_value_pays_for() -> None
     ADR-0028 re-measurement (2026-08-09, this task): synthesis moved
     ``openai/gpt-4o-mini`` -> ``openai/gpt-5-mini``, a deliberate quality
     decision (see the ADR) with an accepted, measured cost consequence. The
-    unit moved 0.0317 -> 0.0547 and the admitted run count 6 -> 3. The
+    unit moved 0.0317 -> 0.0547 and the admitted run count 6 -> 3. ADR-0102
+    doubled the cap, so the SAME unit now admits 7: floor(0.40 / 0.0547) = 7,
+    where floor(0.20 / 0.0547) was 3. The unit price is unchanged -- only the
+    envelope is. The
     default mix stays in ALLOW (MEASURED max_cost_usd 0.1043), so the loop
     below's confirmation round-trip stays a no-op for every admitted run,
     same as pre-ADR-0028.
@@ -773,7 +797,7 @@ def test_daily_cap_admits_the_number_of_runs_its_dollar_value_pays_for() -> None
     """
     # The ordering invariant that actually determines the cap's value.
     assert SOFT_THRESHOLD_USD < DAILY_CAP_USD < HARD_LIMIT_USD
-    assert Decimal("0.20") == DAILY_CAP_USD
+    assert Decimal("0.40") == DAILY_CAP_USD
 
     client = TestClient(app)
     account_id = uuid4()
@@ -800,7 +824,9 @@ def test_daily_cap_admits_the_number_of_runs_its_dollar_value_pays_for() -> None
         )
         # The cap admits every run its dollar value pays for, and not one more.
         expected_runs = int((DAILY_CAP_USD / unit).to_integral_value(rounding=ROUND_FLOOR))
-        assert expected_runs == 3, f"default-mix unit price moved: {unit}"
+        # floor(DAILY_CAP_USD / unit) -- literals on both sides (rule 7a), so a
+        # move in EITHER the cap or the unit price is caught, not absorbed.
+        assert expected_runs == 7, f"default-mix unit price moved: {unit}"
 
         completed = 0
         rejection = None

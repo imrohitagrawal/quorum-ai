@@ -24,8 +24,12 @@ of 2026-08-26 measured seven of eight calls returning ``"length"``, but they
 were the four ANSWER models on a prompt written to fill the cap, eight days
 before peer critique existed (``5aed777``, 2026-09-03). ADR-0093's table calls
 that probe a "2000-token critique"; it was a proxy, and that shorthand is
-where the mis-attribution came from. No critique call is recorded anywhere in
-this repo, and production has taken no live charge SINCE ``5aed777`` landed.
+where the mis-attribution came from.
+
+SUPERSEDED IN PART, 2026-09-06 (ADR-0102): a production run has now made real
+critique calls. It clipped **3 of 4** round-2 replies at the 2000 cap, which
+ADR-0102 raised to 4000. So the concern the false claim carried was right even
+though the figure was not, and this field is what measured it.
 """
 
 from __future__ import annotations

@@ -197,14 +197,22 @@ def test_guardrail_keys_off_the_bound_not_the_point_estimate() -> None:
     ``test_query_run_cost_guardrails.py::CONFIRM_MODEL_IDS`` /
     ``CONFIRM_QUERY`` uses for the same reason.
     """
+    # RE-FIXTURED 2026-09-06 (ADR-0102). The ladder moved to 0.30/0.40/0.50 and
+    # the old mix's bound (0.1870) no longer reaches the soft line, so the
+    # fixture stopped exercising the fail-safe. MEASURED replacement, chosen
+    # for the LARGEST margin to both sides rather than the first one that fit:
+    # point 0.2481 (ALLOW) and bound 0.3515 (over the soft line) -- 0.05 clear
+    # of the line in both directions, which is what this docstring's own
+    # "hair-trigger" warning asks for. All four ids are in _FALLBACK_CATALOG,
+    # so the fixture does not price differently offline and live.
     est = cost_estimation_service.estimate(
-        query_text="x" * 20_000,
+        query_text="x" * 4_000,
         model_slots=_slots(
             [
-                "openai/gpt-4.1",
-                "anthropic/claude-haiku-4.5",
-                "anthropic/claude-3-haiku",
-                "google/gemini-2.5-flash",
+                "openai/gpt-4o-mini",
+                "anthropic/claude-opus-4",
+                "google/gemini-2.5-flash-lite",
+                "google/gemini-2.5-pro",
             ]
         ),
     )
@@ -327,7 +335,7 @@ def test_estimate_is_conservative_not_7x_low() -> None:
     ceiling was already living with that variance before ADR-0028 (a ~3×
     multiple of the measured baseline); ADR-0028 raised the true cost enough
     that both measured figures clear it. Widened to a ceiling that
-    comfortably covers both, and stays well under ``HARD_LIMIT_USD`` (0.25)
+    comfortably covers both, and stays well under ``HARD_LIMIT_USD`` (0.50)
     so an actually-absurd regression (back toward the guardrail's hard-block
     territory) would still be caught.
     """
@@ -340,6 +348,14 @@ def test_estimate_is_conservative_not_7x_low() -> None:
     # And not absurdly conservative -- comfortably below the guardrail's own
     # hard-block threshold, wide enough to absorb this file's own
     # collection-order variance (MEASURED 0.0547-0.1147).
+    #
+    # DELIBERATELY NOT MOVED by ADR-0102. This bounds the POINT estimate, which
+    # that ADR measured to be cap-INDEPENDENT (0.0548 at cap 2000 and at 4000),
+    # so the ladder move gives no reason to loosen it. A blanket 0.25 -> 0.50
+    # edit did loosen it to 0.40 -- 80% of the new hard limit, against a
+    # measured range topping out at 0.1147 -- and review caught that it still
+    # passed at 0.20. Keep the tight ceiling: its job is to catch an absurd
+    # regression, and a ceiling four times the measured maximum cannot.
     assert cost <= Decimal("0.20")
 
 

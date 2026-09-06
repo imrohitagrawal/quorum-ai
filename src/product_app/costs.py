@@ -5,12 +5,12 @@ bound — and NOT on ``estimated_cost_usd``, so a run can never bill past a limi
 it was waved through under. ``_threshold_for`` takes that bound as its only
 argument, and ``estimate()`` is its only production caller:
 
-* ``max_cost_usd <= 0.15``  (``SOFT_THRESHOLD_USD``) → ``ALLOW`` (submit
+* ``max_cost_usd <= 0.30``  (``SOFT_THRESHOLD_USD``) → ``ALLOW`` (submit
   freely).
-* ``0.15 < max_cost_usd <= 0.25``  (``HARD_LIMIT_USD``) →
+* ``0.30 < max_cost_usd <= 0.50``  (``HARD_LIMIT_USD``) →
   ``REQUIRE_CONFIRMATION`` (caller must echo back the ``confirmation_token``
   from the estimate response).
-* ``max_cost_usd > 0.25``  → ``BLOCK`` (cannot run, regardless of
+* ``max_cost_usd > 0.50``  → ``BLOCK`` (cannot run, regardless of
   confirmation).
 
 CORRECTED 2026-08-22 (ADR-0064). These three lines named ``estimated_cost_usd``,
@@ -80,8 +80,8 @@ if TYPE_CHECKING:  # import cycle at runtime; the annotation is a string
 
 _log = logging.getLogger(__name__)
 
-SOFT_THRESHOLD_USD = Decimal("0.15")
-HARD_LIMIT_USD = Decimal("0.25")
+SOFT_THRESHOLD_USD = Decimal("0.30")
+HARD_LIMIT_USD = Decimal("0.50")
 #: Per-account daily cap (USD). Defense-in-depth: the per-call
 #: thresholds catch immediate over-spend, the in-memory cumulative
 #: check catches rapid-fire same-window over-spend, but neither bounds
@@ -116,7 +116,7 @@ HARD_LIMIT_USD = Decimal("0.25")
 #: ``tests/integration/test_query_run_cost_guardrails.py::
 #: test_daily_cap_admits_the_number_of_runs_its_dollar_value_pays_for``.
 #:
-#: The decision that ships with F-01 is to LEAVE this at 0.20, because 0.20 was
+#: The decision that shipped with F-01 was to LEAVE this at 0.20, because 0.20 was
 #: never derived from watching production spend and so was never calibrated
 #: against the inflated meter. ``git log -S 'DAILY_CAP_USD = Decimal("0.20")'``
 #: gives commit 9c50239 ("cost: raise daily cap to $0.20 so confirmation band
@@ -148,7 +148,7 @@ HARD_LIMIT_USD = Decimal("0.25")
 #: ``tests/integration/test_query_run_cost_guardrails.py::
 #: test_daily_cap_admits_the_number_of_runs_its_dollar_value_pays_for``
 #: fails if either the meter or this value moves.
-DAILY_CAP_USD = Decimal("0.20")
+DAILY_CAP_USD = Decimal("0.40")
 
 #: Deployment-wide spend ceiling (USD), summed across ALL accounts, per
 #: rolling 24 hours. Issue #100, operator-decided 2026-08-01 (locked, see
@@ -178,10 +178,17 @@ DAILY_CAP_USD = Decimal("0.20")
 #: guard above, which has an identical unsynchronised read-then-act window):
 #: two concurrent requests can both read "under $5" before either one's
 #: spend is recorded, and both proceed live. Worst-case overshoot is bounded
-#: by ``query_runs._MAX_CONCURRENT_RUNS`` (16) x ``HARD_LIMIT_USD`` (0.25) =
-#: $4.00 in the extreme case every in-flight slot races the same instant —
+#: by ``query_runs._MAX_CONCURRENT_RUNS`` (16) x ``HARD_LIMIT_USD`` (0.50) =
+#: $8.00 in the extreme case every in-flight slot races the same instant —
 #: not unbounded, and not worth a distributed lock for a demo-safety rail
 #: that degrades rather than blocks.
+#:
+#: ADR-0102 DOUBLED THAT BOUND, $4.00 -> $8.00, by taking ``HARD_LIMIT_USD``
+#: 0.25 -> 0.50. This ceiling itself is UNCHANGED at $5.00 by the operator's
+#: instruction; what grew is the worst-case overshoot ABOVE it when 16 runs
+#: race the same instant. Recorded rather than absorbed: it is a derived
+#: consequence of the threshold ladder, not a decision taken on its own
+#: evidence, and it is the reason to keep this ceiling where it is.
 GLOBAL_DAILY_CEILING_USD = Decimal("5.00")
 
 #: Minimum gap between two "the daily cap is not being enforced" ERROR records
@@ -740,7 +747,7 @@ class CostEstimationService:
                     confirmation_token=None,
                     breakdown=breakdown,
                     reasons=[
-                        "Worst-case cost is above the USD 0.25 hard limit for this account.",
+                        "Worst-case cost is above the USD 0.50 hard limit for this account.",
                         (
                             "Cumulative spend for this account is "
                             f"{cumulative.quantize(COST_DISPLAY_QUANTUM)} USD; "
@@ -865,7 +872,8 @@ class CostEstimationService:
                 # this question, and described the first as refusing "every
                 # priced request from every account for the duration of the
                 # fault". This is a third: serve, but spend nothing. It also
-                # removes the incoherence ADR-0004 itself named — the 25x-larger
+                # removes the incoherence ADR-0004 itself named — the 12.5x-larger
+                # (25x before ADR-0102 doubled the per-account cap)
                 # global rail fails open on the identical fault — because the
                 # SAME degrade now covers both.
                 #
@@ -1208,7 +1216,8 @@ class CostEstimationService:
         $0.9376 (**4.69x over**), while the serial control booked $0.1758 and
         stayed under. ``costs.GLOBAL_DAILY_CEILING_USD``'s docstring accepted
         that window by design and bounded it at ``_MAX_CONCURRENT_RUNS`` (16) x
-        ``HARD_LIMIT_USD`` ($0.25) = $4.00 of overshoot on a $5.00 rail. The
+        ``HARD_LIMIT_USD`` — $4.00 of overshoot on a $5.00 rail when the limit
+        was $0.25, and $8.00 since ADR-0102 took it to $0.50. The
         operator's decision on 2026-08-06 was that a cap should mean its number,
         so the window is closed rather than bounded — see ADR-0016.
 
@@ -2132,14 +2141,14 @@ class CostEstimationService:
             return (
                 CostThresholdAction.BLOCK,
                 [
-                    "Worst-case cost could exceed the USD 0.25 hard limit for this account.",
+                    "Worst-case cost could exceed the USD 0.50 hard limit for this account.",
                 ],
             )
         if bound > SOFT_THRESHOLD_USD:
             return (
                 CostThresholdAction.REQUIRE_CONFIRMATION,
                 [
-                    "Worst-case cost could exceed USD 0.15 and requires explicit confirmation.",
+                    "Worst-case cost could exceed USD 0.30 and requires explicit confirmation.",
                 ],
             )
         return (

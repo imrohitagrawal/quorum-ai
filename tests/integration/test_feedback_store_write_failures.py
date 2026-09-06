@@ -413,11 +413,12 @@ def _drive(
 # ---------------------------------------------------------------------------
 # The corrected arithmetic. The docstring on ``_backfill_f01_preview_rows``
 # claimed four quarter-cap charges "reach BLOCK"; the check is strict ``>``, so
-# 0.15 + 0.05 is not > 0.20 and the BLOCK lands on charge FIVE.
+# 0.30 + 0.10 is not > 0.40 and the BLOCK lands on charge FIVE (ADR-0102: the
+# ladder doubled, and the real estimate fell back under a quarter-cap).
 # ---------------------------------------------------------------------------
 
 
-def test_block_lands_on_the_fourth_quarter_cap_charge_not_the_fifth(
+def test_block_lands_on_the_fifth_quarter_cap_charge_not_the_fourth(
     tmp_path: Path, restore_store: None
 ) -> None:
     """Pins the boundary the corrected docstring states, from both sides.
@@ -432,10 +433,15 @@ def test_block_lands_on_the_fourth_quarter_cap_charge_not_the_fifth(
     the ledger exactly on the cap ($0.20), and the FIFTH estimate
     (already_spent $0.20 + estimated ~$0.024) was the first to exceed it.
     ADR-0028's pricier synthesis stage raised that estimate to $0.0557 —
-    now OVER a quarter of the cap — so after only THREE quarter-cap charges
-    ($0.15 spent), the FOURTH estimate (already_spent $0.15 + estimated
-    $0.0557 = $0.2057) already exceeds $0.20. The walk now blocks one step
-    earlier than the docstrings this test originally pinned described.
+    then OVER a quarter of the cap — so the walk blocked one step earlier, on
+    the FOURTH.
+
+    ADR-0102 doubled the ladder, taking DAILY_CAP_USD 0.20 -> 0.40 and so
+    _QUARTER_CAP 0.05 -> 0.10. MEASURED, the real estimate is $0.0568, which
+    is UNDER the new quarter — so the walk returns to its ORIGINAL shape: four
+    quarter-cap charges land the ledger exactly on $0.40 and the FIFTH
+    estimate is the first to exceed it. The assertion below is flipped
+    accordingly, exactly as the previous version's own message instructed.
 
     The charge sequence alone does NOT pin the comparator: MEASURED, flipping
     ``>`` to ``>=`` still leaves the BLOCK on the fourth estimate here (the
@@ -461,11 +467,11 @@ def test_block_lands_on_the_fourth_quarter_cap_charge_not_the_fifth(
             query_text=_QUERY, model_slots=_SLOTS, account_id=None
         ).estimated_cost_usd
         assert Decimal("0") < unit < DAILY_CAP_USD, unit
-        assert unit > _QUARTER_CAP, (
-            "this test pins the case where the real estimate exceeds a "
-            "quarter of the cap, moving BLOCK to the fourth step; if a "
-            "future price change drops unit back under _QUARTER_CAP, this "
-            "test's expected action sequence must move back to five"
+        assert unit < _QUARTER_CAP, (
+            "this test pins the case where the real estimate is UNDER a "
+            "quarter of the cap, so BLOCK lands on the fifth step; if a "
+            "future price change pushes unit back over _QUARTER_CAP, this "
+            "test's expected action sequence must move back to four"
         )
 
         actions = _drive(store, service, account_id, 8)
@@ -474,10 +480,11 @@ def test_block_lands_on_the_fourth_quarter_cap_charge_not_the_fifth(
             CostThresholdAction.ALLOW,
             CostThresholdAction.ALLOW,
             CostThresholdAction.ALLOW,
+            CostThresholdAction.ALLOW,
             CostThresholdAction.BLOCK,
         ], actions
-        assert store.daily_spend_for(account_id) == _QUARTER_CAP * 3
-        assert _rows(db) == 3
+        assert store.daily_spend_for(account_id) == _QUARTER_CAP * 4
+        assert _rows(db) == 4
 
         # Exactly ON the cap once this estimate is added: strict ``>`` admits it.
         on_the_line = uuid4()

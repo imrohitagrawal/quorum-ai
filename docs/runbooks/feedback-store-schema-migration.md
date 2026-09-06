@@ -148,7 +148,7 @@ process (no reconnect path; restart once the database is reachable): %s
 ```
 
 ```
-costs: feedback store unavailable, so the USD 0.20 per-account 24h daily spend
+costs: feedback store unavailable, so the USD 0.40 per-account 24h daily spend
 cap is NOT being enforced — every estimate is passing the cap check unmetered.
 … Repeats suppressed for 60.0s.
 ```
@@ -432,7 +432,7 @@ appears in both.
 | `feedback_db: "degraded"`, `feedback_lost_billed_writes > 0` | `F-01 preview backfill did not run: … database is locked` (only on a database whose marker is not yet applied) | `could not open SQLite sink` | (b) RESERVED on an already-schema'd database — the store *opens*, but every write made while the lock is held is swallowed: the ledger freezes and the spend cap stops firing, announced by the rate-limited `a BILLED cost event … was NOT persisted` ERROR. Writes resume by themselves once the holder releases (no restart needed, unlike (a)); the events lost in between never come back |
 
 Case (a) also produces, at most once a minute for as long as the process
-lives, `ERROR costs: feedback store unavailable, so the USD 0.20 per-account
+lives, `ERROR costs: feedback store unavailable, so the USD 0.40 per-account
 24h daily spend cap is NOT being enforced …`. That record is the one to alert
 on: it fires from the money path itself, so it is present even if the boot log
 has already rotated away.
