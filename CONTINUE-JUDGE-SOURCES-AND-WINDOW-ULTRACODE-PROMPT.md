@@ -137,9 +137,16 @@ Refuted 2026-09-05 by three commands; the record is ADR-0101.
   `global_daily_spend_usd` is `0`. **No critique call has ever run.** Nothing
   is being clipped in production.
 
-ADR-0093:327 was right all along — it says *"seven of eight **calls**"* and, at
-line 344, *"No critique call has ever run."* The word "critique" was added in
-transcription downstream. Do not re-add it.
+**Where the word came from, and it is NOT a transcription slip.** ADR-0093:327
+is careful — *"seven of eight **calls**"* — and :344 says *"No critique call has
+ever run."* But that document's own Measured table calls the probe a
+**"2000-token critique"** TWICE (`0093:43` and `0093:45`, written 2026-09-01 in
+`d860b2a`), and :45 states the population *"across the four slot models"*. It
+was a PROXY — same models, same 2000-token cap, run to ask whether peer
+critique could be built on that transport. Downstream files inherited the
+table's shorthand; they did not fumble a quotation. **This prompt said
+"transcription downstream" and that was itself wrong — two review rounds were
+needed to find it.** ADR-0101 has the full reasoning.
 
 **What survives, and is still open:** ADR-0096 made a round-2 reply carry a
 critique AND a self-assessment, rationale, sources and a revised answer, and
@@ -166,10 +173,11 @@ If you change it later:
 3. A decision gets an ADR in the same PR (rule 16d); regenerate the index with
    `python3 scripts/generate_adr_index.py`, never by hand.
 
-**THE TRAP — the ratio "seven of eight" now names THREE different populations.**
-Wall-clock timeout exceedance (`docs/analysis/2026-08-26-b3-timeout-probe.md:87`),
-answer-model cap-filling (above), and — still — **nothing at all on the critique
-path**. Do not cite any of them for another.
+**THE TRAP — the ratio "seven of eight" has TWO measured populations and one
+with no measurement behind it.** Wall-clock timeout exceedance
+(`docs/analysis/2026-08-26-b3-timeout-probe.md:87`), answer-model cap-filling
+(above), and — still — **nothing at all on the critique path**. Do not cite any
+of them for another.
 
 ## ITEM 2 — THE JUDGE CANNOT READ ITS SOURCES (file it; it is in no issue)
 

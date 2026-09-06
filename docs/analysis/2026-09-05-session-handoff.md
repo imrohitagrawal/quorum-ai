@@ -18,7 +18,7 @@ Confirmed on the live site after ADR-0099: `"moderator model"`,
 `"planned, not yet built"` and `"Per-model debate detail is not captured"` are
 ABSENT; the new copy is present.
 
-## The next item is unchanged: Item 1, the clipped-critique defect
+## Item 1, the clipped-critique defect — REFUTED 2026-09-05 (ADR-0101)
 
 > **CORRECTED 2026-09-05 — this section was REFUTED. See ADR-0101.**
 > The paragraph below is left as written because it is the record of what this
@@ -28,7 +28,9 @@ ABSENT; the new copy is present.
 > * **"7 of 8 critique calls clipped"** — the figure is from `a2_probe.py`,
 >   2026-08-26: the four default **ANSWER** models on a prompt written to FILL
 >   the cap, in a standalone timeout probe. Peer critique did not exist until
->   `5aed777` (2026-09-03), eight days later.
+>   `5aed777` (2026-09-03), eight days later. ADR-0093's own table
+>   (`0093:43,45`) calls that probe a "2000-token critique" — a PROXY — and
+>   that shorthand is where the word came from.
 > * **"still live in production"** — production's `last_live_charge_at` is
 >   2026-09-01T21:02:46Z, 27.3h BEFORE that commit. No critique call is
 >   recorded anywhere in this repo, so nothing was being clipped. Severity is
@@ -38,9 +40,10 @@ ABSENT; the new copy is present.
 > *"measure the real output length, do not guess a number"*, and only a paid
 > run can do that. `DEBATE_ROUND_MAX_TOKENS` stays at 2000.
 
-The 2026-09-04 plan's steps 3-7 are untouched. Item 1 (`DEBATE_ROUND_MAX_TOKENS
-= 2000`, 7 of 8 critique calls clipped) is still live in production and still
-costs nothing to start.
+~~The 2026-09-04 plan's steps 3-7 are untouched. Item 1
+(`DEBATE_ROUND_MAX_TOKENS = 2000`, 7 of 8 critique calls clipped) is still live
+in production and still costs nothing to start.~~ **(REFUTED — see the note
+above. The figure is not a critique measurement, and nothing was live.)**
 
 ## What the next session must NOT re-derive
 

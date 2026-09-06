@@ -189,14 +189,16 @@ TELEMETRY_FIELD_NAMES: frozenset[str] = frozenset(
         # but those were the four ANSWER models on a prompt written to FILL
         # the cap -- filling it was the probe's method -- and peer critique
         # did not exist until ``5aed777`` (2026-09-03), eight days later.
+        # ADR-0093's own table calls that probe a "2000-token critique"
+        # (``0093:43,45``); it was a PROXY, not a critique, and ADR-0101
+        # records why the shorthand misleads.
         #
-        # DELIBERATELY NO CLAIM ABOUT PRODUCTION'S STATE HERE. A live window
-        # is open and the critique path is armed, so any such sentence is one
-        # paid run from false and no gate would notice; ADR-0101 carries the
-        # dated reading instead. What a real critique returns is what this
-        # field exists to settle: a clipped critique would be full price for
-        # truncated text, on a receipt that looks perfectly healthy, and no
-        # cost row can carry that.
+        # DELIBERATELY NO CLAIM ABOUT PRODUCTION'S STATE HERE. Any such
+        # sentence is one paid run from false and no gate would notice, so
+        # ADR-0101 carries the reading WITH ITS DATE instead. What a real
+        # critique returns is what this field exists to settle: a clipped
+        # critique would be full price for truncated text, on a receipt that
+        # looks perfectly healthy, and no cost row can carry that.
         "finish_reason",
     }
 )
