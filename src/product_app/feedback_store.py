@@ -533,9 +533,11 @@ class FeedbackStore:
           RE-MEASURED 2026-08-09: ADR-0028's pricier synthesis stage raised
           the real per-run estimate for this mix above a quarter of the cap,
           so the boundary moved one step earlier — ``BLOCK`` now lands on the
-          FOURTH estimate, after only three quarter-cap charges. Pinned by
+          FIFTH estimate, after four quarter-cap charges — ADR-0102 doubled
+          the cap, which put the real estimate back UNDER a quarter of it.
+          Pinned by
           ``tests/integration/test_feedback_store_write_failures.py::
-          test_block_lands_on_the_fourth_quarter_cap_charge_not_the_fifth``.
+          test_block_lands_on_the_fifth_quarter_cap_charge_not_the_fourth``.
           ``store is not None``, so ``costs.py`` takes the metered branch and
           the P1 bypass ERROR never fires. What DOES fire, since issue #109, is
           ``record``'s own rate-limited ERROR naming the disarmed cap, and

@@ -116,7 +116,7 @@ HARD_LIMIT_USD = Decimal("0.50")
 #: ``tests/integration/test_query_run_cost_guardrails.py::
 #: test_daily_cap_admits_the_number_of_runs_its_dollar_value_pays_for``.
 #:
-#: The decision that ships with F-01 is to LEAVE this at 0.20, because 0.20 was
+#: The decision that shipped with F-01 was to LEAVE this at 0.20, because 0.20 was
 #: never derived from watching production spend and so was never calibrated
 #: against the inflated meter. ``git log -S 'DAILY_CAP_USD = Decimal("0.20")'``
 #: gives commit 9c50239 ("cost: raise daily cap to $0.20 so confirmation band
@@ -872,7 +872,8 @@ class CostEstimationService:
                 # this question, and described the first as refusing "every
                 # priced request from every account for the duration of the
                 # fault". This is a third: serve, but spend nothing. It also
-                # removes the incoherence ADR-0004 itself named — the 25x-larger
+                # removes the incoherence ADR-0004 itself named — the 12.5x-larger
+                # (25x before ADR-0102 doubled the per-account cap)
                 # global rail fails open on the identical fault — because the
                 # SAME degrade now covers both.
                 #
@@ -1215,7 +1216,8 @@ class CostEstimationService:
         $0.9376 (**4.69x over**), while the serial control booked $0.1758 and
         stayed under. ``costs.GLOBAL_DAILY_CEILING_USD``'s docstring accepted
         that window by design and bounded it at ``_MAX_CONCURRENT_RUNS`` (16) x
-        ``HARD_LIMIT_USD`` ($0.25) = $4.00 of overshoot on a $5.00 rail. The
+        ``HARD_LIMIT_USD`` — $4.00 of overshoot on a $5.00 rail when the limit
+        was $0.25, and $8.00 since ADR-0102 took it to $0.50. The
         operator's decision on 2026-08-06 was that a cap should mean its number,
         so the window is closed rather than bounded — see ADR-0016.
 

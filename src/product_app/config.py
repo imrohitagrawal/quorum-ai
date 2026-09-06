@@ -410,8 +410,17 @@ class Settings(BaseSettings):
     stage_delay_ms: int = 5
 
     # --- Cost guardrails ------------------------------------------------
-    soft_threshold_usd: float = 0.15
-    hard_limit_usd: float = 0.25
+    #
+    # NOT READ BY ANYTHING. ``grep -rn "settings.soft_threshold_usd\|settings.
+    # hard_limit_usd" src/`` returns nothing: the enforcing values are the
+    # module constants ``costs.SOFT_THRESHOLD_USD`` / ``costs.HARD_LIMIT_USD``.
+    # These fields bind from the SAME env names, so an operator who sets
+    # ``HARD_LIMIT_USD`` in the environment moves these and NOT the rail —
+    # which is why they are kept in step rather than deleted: a value that
+    # disagreed with the constant would be worse than one that is merely
+    # unused. ADR-0102 moved both.
+    soft_threshold_usd: float = 0.30
+    hard_limit_usd: float = 0.50
 
     # --- Cost estimation (issue #16: realistic per-call token model) -----
     # The pre-run estimate is a PURE LOCAL calculation — it makes no API
@@ -648,7 +657,8 @@ class Settings(BaseSettings):
     #   of cents.
     # * The exposure from failing CLOSED is the whole product: every visitor
     #   refused for as long as the fault lasts.
-    # * The GLOBAL_DAILY_CEILING_USD rail — 25x larger than the per-account
+    # * The GLOBAL_DAILY_CEILING_USD rail — 12.5x larger than the per-account
+    #   cap since ADR-0102 doubled that cap (it was 25x when this was written)
     #   cap this guards — already chooses fail-open on the IDENTICAL fault,
     #   deliberately and in a comment. Fail-closing the small rail while its
     #   bigger sibling fails open is incoherent.

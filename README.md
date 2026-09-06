@@ -124,7 +124,7 @@ The full architecture document is at [docs/20-architecture.md](docs/20-architect
 ┌────────────────────────────────────────────────────────────────┐
 │  FastAPI app (src/product_app/main.py)                          │
 │  - CSRF + cookie session middleware (src/product_app/auth.py)   │
-│  - Cost guardrail ($0.25 hard cap at costs.py:49)               │
+│  - Cost guardrail ($0.50 hard cap at costs.py)                  │
 │  - Live-readiness smoke-probe (src/product_app/readiness.py)    │
 └─────┬──────────────────┬──────────────────┬────────────────────┘
       │                  │                  │
@@ -158,7 +158,7 @@ flowchart LR
 
 Key design points, with file:line citations:
 
-- **Cost guardrail, four tiers**: a per-run soft threshold of $0.15 requires explicit confirmation, a per-run hard cap of $0.25 blocks the run outright ([costs.py:48-49](src/product_app/costs.py#L48), `SOFT_THRESHOLD_USD` / `HARD_LIMIT_USD`), a **per-account daily cap of $0.20** ([costs.py:116](src/product_app/costs.py#L116), `DAILY_CAP_USD`), and a **global daily ceiling of $5.00 across every account** ([costs.py:150](src/product_app/costs.py#L150), `GLOBAL_DAILY_CEILING_USD` — the same number exposed live at `/status.global_daily_ceiling_usd`). If the durable spend ledger becomes untrustworthy after a fault, the system degrades to $0 local-simulation rather than serving real spend against an unreliable meter (ADR-0016). A block or ceiling-degrade event also pushes a Sentry alert with account id and estimated cost; the ceiling-degrade alert specifically also carries daily-spend context (the block alert doesn't) — so an operator doesn't have to poll `/status` to notice either. Sentry itself is initialized in `main.py` with its own redaction hooks and is surfaced (deliberately renamed, not as "sentry") at `/status.error_tracking`.
+- **Cost guardrail, four tiers**: a per-run soft threshold of $0.30 requires explicit confirmation, a per-run hard cap of $0.50 blocks the run outright ([costs.py:48-49](src/product_app/costs.py#L48), `SOFT_THRESHOLD_USD` / `HARD_LIMIT_USD`), a **per-account daily cap of $0.40** ([costs.py:116](src/product_app/costs.py#L116), `DAILY_CAP_USD`), and a **global daily ceiling of $5.00 across every account** ([costs.py:150](src/product_app/costs.py#L150), `GLOBAL_DAILY_CEILING_USD` — the same number exposed live at `/status.global_daily_ceiling_usd`). If the durable spend ledger becomes untrustworthy after a fault, the system degrades to $0 local-simulation rather than serving real spend against an unreliable meter (ADR-0016). A block or ceiling-degrade event also pushes a Sentry alert with account id and estimated cost; the ceiling-degrade alert specifically also carries daily-spend context (the block alert doesn't) — so an operator doesn't have to poll `/status` to notice either. Sentry itself is initialized in `main.py` with its own redaction hooks and is surfaced (deliberately renamed, not as "sentry") at `/status.error_tracking`.
 - **Live-readiness probe**: [readiness.py](src/product_app/readiness.py) — runs at app start, re-runs on every `/ready` hit, distinguishes `live`, `live` (with drift), `offline_by_config`, `offline_by_no_key`, and `offline_by_bad_key` (the key is set but the provider refused it — checked with a zero-token key probe, so a revoked key can no longer be served as "live").
 - **Static defaults are the source of truth** for the four model slots. The live catalog is consulted as a **drift check**, not the source — see [model_slots.py:63](src/product_app/model_slots.py#L63) (`DEFAULT_MODEL_IDS`) and `tests/unit/test_model_slots.py`.
 - **Safety warnings before a run starts**: the sensitive-data warning is required unconditionally, on every query; the high-stakes warning is added only when the query text or context matches a pattern. Either way, an unacknowledged required warning blocks `POST /v1/query-runs` (run creation) with HTTP 422. `POST /v1/query-runs/estimate` does **not** enforce this; a cost estimate can be previewed without acknowledging anything. See [safety.py](src/product_app/safety.py) and `POST /v1/query-runs/warnings`.
@@ -196,7 +196,7 @@ A few non-obvious properties that are worth a closer look:
 │   ├── safety.py                 # Sensitive/high-stakes query warnings
 │   ├── catalog_fetcher.py        # Live model catalog + cheapest-per-vendor
 │   ├── model_slots.py            # DEFAULT_MODEL_IDS (source of truth)
-│   ├── costs.py                  # Cost estimation + $0.25 hard cap
+│   ├── costs.py                  # Cost estimation + $0.50 hard cap
 │   ├── readiness.py              # Startup smoke-probe + /ready surface
 │   ├── query_runs.py             # Async query-run state machine + HTTP routes
 │   ├── feedback_store.py         # Durable SQLite sink for feedback events

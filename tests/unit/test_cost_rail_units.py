@@ -51,13 +51,17 @@ _MIX = [
 #: These tests need a mix whose POINT estimate sits below a rail while its
 #: BOUND crosses it — the gap where a bound-vs-point unit mismatch shows. When
 #: the threshold ladder went 0.15/0.20/0.25 -> 0.30/0.40/0.50, that window
-#: became UNREACHABLE with real models: every 4-model combination of the nine
-#: catalog-stable ids, swept across query lengths 1000-9000, failed to put the
-#: point under $0.30 while the bound cleared $0.40. The only model in the whole
-#: 425-entry live catalog that managed it was ``openai/gpt-5-pro``, which is
-#: absent from ``_FALLBACK_CATALOG`` — so the fixture would have asserted one
-#: band offline and another live, the exact trap
-#: ``test_cost_guardrails`` records paying for once already.
+#: became unreachable for THIS FIXTURE. Under the caps it pins below
+#: (``cost_debate_output_tokens_cap`` 700, synthesis 800 — deliberately main's,
+#: so the per-call rail does not block first and hide the accumulation rails),
+#: no 4-model combination of the eight price-exact ids, swept across query
+#: lengths 1000-9000, puts the point under $0.30 while the bound clears $0.40.
+#:
+#: THE SCOPE OF THAT SENTENCE MATTERS and the first version of it omitted the
+#: caps: at the SHIPPED cap of 4000 the combination does exist (review found 55,
+#: e.g. two claude-3-haiku plus two claude-opus-4 at a 1,000-character query).
+#: The claim is about this fixture's pinned caps, not about the product.
+#: Owning the prices removes the catalog from the question either way.
 #:
 #: Owning the prices removes the catalog from the question entirely, which is
 #: the same reason ``test_peer_bound_is_a_true_ceiling`` supplies its own.

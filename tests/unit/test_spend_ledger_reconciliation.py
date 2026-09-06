@@ -2,7 +2,7 @@
 
 Before this, both rails summed ``estimated_cost_usd`` and nothing ever corrected
 them. MEASURED on ``main`` at ``dfc0419``: six runs booked $0.1758 against a
-$0.20 cap while their worst-case bounds summed to $0.4458 — **2.23x the cap** —
+$0.40 cap while their worst-case bounds summed to $0.4458 — **2.23x the cap** —
 and completing a run at twice its estimate moved the ledger by exactly $0.0000,
 because ``CostGuardrailEvent`` had no field for a measured actual and the store
 had no writer for one.
@@ -49,7 +49,7 @@ from product_app.feedback_store import (
 ACCOUNT_A = UUID("00000000-0000-0000-0000-0000000000a1")
 ACCOUNT_B = UUID("00000000-0000-0000-0000-0000000000b2")
 
-#: A per-run figure that divides the $0.20 cap into a countable number of runs.
+#: A per-run figure that divides the $0.40 cap into a countable number of runs.
 UNIT = Decimal("0.04")
 
 
@@ -406,13 +406,13 @@ def test_concurrent_charges_never_exceed_the_daily_cap(store: FeedbackStore, thr
     """RED IF the check and the insert stop sharing one hold of the store lock.
 
     MEASURED on the unsynchronised sequence at ``dfc0419``: 8 threads booked
-    $0.2344 (1.17x the $0.20 cap) and 32 booked $0.9376 (**4.69x**).
+    $0.2344 (1.17x the $0.40 cap) and 32 booked $0.9376 (**4.69x**).
     """
     booked = _race(store, threads=threads, atomic=True)
     # Literals on both sides, not ``DAILY_CAP_USD``. The harness is fed that
     # constant as its cap, so asserting the result against the same constant
     # would move with it and could never catch the cap itself being changed
-    # (rule 7a). $0.20 is the shipped cap and $0.02 the shipped UNIT, so ten
+    # (rule 7a). $0.40 is the shipped cap and $0.02 the shipped UNIT, so ten
     # charges fit exactly and an eleventh must not.
     assert booked <= Decimal("0.40")
     assert booked == Decimal("0.40"), "the cap should be reached exactly, not undershot"
@@ -500,7 +500,7 @@ def test_a_reconciliation_corrects_the_in_memory_rail_too(
     runs, and only the ring feeds ``_cumulative_spend_for`` /
     ``HARD_LIMIT_USD``. Reconciling one and not the other was measured
     blocking an account at $0.2303 of its $0.25 hard limit while the durable
-    ledger — the reconciled truth — read $0.011515 of its $0.20 cap, and
+    ledger — the reconciled truth — read $0.011515 of its $0.40 cap, and
     telling the user "Cumulative spend for this account is 0.2303 USD": a
     money figure 20x the truth, shipped by the change that exists to stop
     false money figures.

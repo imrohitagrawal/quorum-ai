@@ -230,9 +230,14 @@ def test_debate_round_max_tokens_is_4000() -> None:
     ``finish_reason: "length"`` at exactly 2000 completion tokens. Round 2
     carries the revised answer synthesis reads as its primary input.
 
-    4000 rather than 5000 because 5000 takes the judge-ON bound to 0.1577,
-    past ``SOFT_THRESHOLD_USD`` (0.15), which would put a confirmation click
-    on every run. 4000 measures 0.1442.
+    4000 rather than 5000 on cost: at production's posture (judge ON **and
+    peer critique ON**) 5000 bounds at 0.2033 against 4000's 0.1827, and the
+    run measured nothing that requires the larger value.
+
+    THIS DOCSTRING FIRST SAID "4000 measures 0.1442 and stays in the
+    no-confirmation band". That figure was taken with peer critique OFF, which
+    production does not run; ADR-0102 moved the whole threshold ladder because
+    at the real posture NO useful cap raise fitted under the old line.
 
     Bite proof: change ``4000`` → the assertion reds.
     """

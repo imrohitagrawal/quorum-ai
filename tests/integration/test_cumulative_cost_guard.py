@@ -76,10 +76,17 @@ def test_cumulative_over_limit_blocks() -> None:
     service = CostEstimationService()
     account = uuid4()
     # Two previous accepted events that push us above the hard limit.
-    _record_accepted(account_id=account, estimated_cost_usd=Decimal("0.40"))
+    _record_accepted(account_id=account, estimated_cost_usd=Decimal("0.50"))
     _record_accepted(account_id=account, estimated_cost_usd=Decimal("0.10"))
-    # Cumulative is now 0.30 — above HARD_LIMIT_USD (0.25). A new
+    # Cumulative is now 0.60 — above HARD_LIMIT_USD (0.50). A new
     # 0.01 estimate must be blocked.
+    #
+    # ADR-0102 scaled these with the ladder, and the FIRST attempt broke the
+    # scenario: a blanket 0.20 -> 0.40 gave a cumulative of exactly 0.50, and
+    # the guard is strict ``>``, so the cumulative no longer exceeded anything
+    # and the test blocked only because the incoming estimate crossed. The
+    # ratio that matters is cumulative / HARD_LIMIT_USD = 1.2, preserved here
+    # as 0.60 / 0.50 exactly as it was 0.30 / 0.25.
     estimate = service.estimate(
         query_text="a" * 5000,  # a long query so the estimate is non-trivial
         model_slots=[_slot() for _ in range(4)],

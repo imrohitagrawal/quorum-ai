@@ -175,14 +175,17 @@ def test_over_limit_cost_query_is_blocked() -> None:
         model_slots=model_slots,
     )
 
-    # ADR-0102: assert on the BOUND, which is what the rail actually keys off
-    # (``_threshold_for`` takes ``max_cost_usd``, and ``costs.py`` says so in
-    # its own words: "the rail keys off the worst case"). The old assertion
-    # used the POINT estimate — a stronger claim about the fixture that held
-    # only while the ladder was half its present size: MEASURED after the move
-    # to 0.30/0.40/0.50, NO combination of the nine catalog-stable model ids,
-    # at any query length swept, puts the POINT above $0.50. The bound does,
-    # and the bound is the thing under test.
+    # ADR-0102: assert on the BOUND, which is what the rail actually keys off.
+    # ``_threshold_for`` takes ``max_cost_usd`` and nothing else, and
+    # ``estimate()`` is its only production caller — so the bound IS the
+    # subject and the point estimate never was.
+    #
+    # The old assertion used the POINT estimate. THE FIRST VERSION OF THIS
+    # COMMENT JUSTIFIED THE SWITCH WITH A FALSE CLAIM -- that no combination of
+    # the price-exact ids could put the point above $0.50. Review refuted it by
+    # sweeping combinations WITH REPLACEMENT: 51 do, topping out at $0.8907 for
+    # four opus-4 slots at a 9,000-character query. The switch is still right,
+    # for the reason above; the reason first given for it was not.
     assert estimate.max_cost_usd is not None
     assert estimate.max_cost_usd > Decimal("0.50")
     assert estimate.threshold_action == CostThresholdAction.BLOCK

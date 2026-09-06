@@ -335,7 +335,7 @@ def test_estimate_is_conservative_not_7x_low() -> None:
     ceiling was already living with that variance before ADR-0028 (a ~3×
     multiple of the measured baseline); ADR-0028 raised the true cost enough
     that both measured figures clear it. Widened to a ceiling that
-    comfortably covers both, and stays well under ``HARD_LIMIT_USD`` (0.25)
+    comfortably covers both, and stays well under ``HARD_LIMIT_USD`` (0.50)
     so an actually-absurd regression (back toward the guardrail's hard-block
     territory) would still be caught.
     """
@@ -348,7 +348,15 @@ def test_estimate_is_conservative_not_7x_low() -> None:
     # And not absurdly conservative -- comfortably below the guardrail's own
     # hard-block threshold, wide enough to absorb this file's own
     # collection-order variance (MEASURED 0.0547-0.1147).
-    assert cost <= Decimal("0.40")
+    #
+    # DELIBERATELY NOT MOVED by ADR-0102. This bounds the POINT estimate, which
+    # that ADR measured to be cap-INDEPENDENT (0.0548 at cap 2000 and at 4000),
+    # so the ladder move gives no reason to loosen it. A blanket 0.25 -> 0.50
+    # edit did loosen it to 0.40 -- 80% of the new hard limit, against a
+    # measured range topping out at 0.1147 -- and review caught that it still
+    # passed at 0.20. Keep the tight ceiling: its job is to catch an absurd
+    # regression, and a ceiling four times the measured maximum cannot.
+    assert cost <= Decimal("0.20")
 
 
 def test_bound_covers_the_round_two_prompt_that_carries_round_ones_critique() -> None:

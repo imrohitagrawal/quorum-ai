@@ -253,7 +253,10 @@ def test_normal_cost_query_is_accepted_with_cost_estimate() -> None:
 
     assert response.status_code == 202
     body = response.json()
-    assert Decimal(body["cost_estimate"]["estimated_cost_usd"]) <= Decimal("0.30")
+    # POINT estimate, cap-independent (ADR-0102 measured 0.0548 at both caps),
+    # so this ceiling did NOT move with the ladder. A blanket edit loosened it
+    # to 0.30; review showed it still passes at 0.15.
+    assert Decimal(body["cost_estimate"]["estimated_cost_usd"]) <= Decimal("0.15")
     assert body["cost_estimate"]["threshold_action"] == "allow"
     event = _events_for(account_id)[0]
     # #376: the suite runs with OPENROUTER_LIVE_EXECUTION_ENABLED=false, which is
@@ -321,14 +324,14 @@ def test_high_cost_query_requires_confirmation_before_creation() -> None:
     )
 
     # The guardrail keys off the fail-safe max_cost_usd bound (~$0.21 here) —
-    # in the soft band (above USD 0.15) — while the point estimate (~$0.10) is
-    # under the USD 0.20 daily cap. So the per-call confirmation is the binding
+    # in the soft band (above USD 0.30) — while the point estimate is
+    # under the USD 0.40 daily cap. So the per-call confirmation is the binding
     # constraint and the create endpoint mints a confirmation token.
     assert response.status_code == 402
     body = response.json()
     assert body["detail"]["code"] == "COST_CONFIRMATION_REQUIRED"
     assert body["detail"]["cost_estimate"]["threshold_action"] == "require_confirmation"
-    # The rail keys off the worst-case bound: max_cost_usd crosses USD 0.15
+    # The rail keys off the worst-case bound: max_cost_usd crosses USD 0.30
     # while the realistic point estimate stays under it.
     cost_estimate = body["detail"]["cost_estimate"]
     assert Decimal(cost_estimate["max_cost_usd"]) > Decimal("0.30")

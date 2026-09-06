@@ -111,16 +111,31 @@ posture production actually runs:
 | 4000 | 0.1442 | **0.1827** | REQUIRE_CONFIRMATION |
 | 5000 | 0.1577 | 0.2033 | REQUIRE_CONFIRMATION |
 
-At production's posture the old `SOFT_THRESHOLD_USD` of `0.15` left **$0.0085**
-of head-room. There was no cap raise that fitted under it — the crossing point
-is around 2450. So "4000 avoids the confirmation click" was never available;
-the real choice was between accepting the click and moving the line.
+**EVERY FIGURE IN THIS RECORD IS AT ONE SET OF CONDITIONS**, named here because
+the first draft quoted a bound table and a transition sweep taken under
+different ones and review caught the mismatch: the four default slots with
+`search=True`, `peer_critique_enabled=True`, judge `openai/gpt-4.1-mini`, and
+the query `"Compare transparent model answers"` (33 characters). The bound
+moves with query length; a figure without its query is not reproducible.
 
-Worse than a click: at the old `HARD_LIMIT_USD` of `0.25`, sweeping all **425**
-catalog models four-up, cap 2000 → 4000 moved **41** mixes from ALLOW to
-REQUIRE_CONFIRMATION and **33** from REQUIRE_CONFIRMATION to **BLOCK** — a hard
-refusal that mints no confirmation token, i.e. those model choices become
-unrunnable. Example: `google/gemini-3.8-flash`, 0.2150 → 0.2860.
+At production's posture the old `SOFT_THRESHOLD_USD` of `0.15` left **$0.0085**
+of head-room. There was no cap raise that fitted under it. So "4000 avoids the
+confirmation click" was never available; the real choice was between accepting
+the click and moving the line.
+
+Worse than a click. Sweeping all **425** catalog models four-up, under the same
+conditions, **raising the cap alone** would have done this:
+
+| transition, cap 2000 → 4000, ladder unchanged | count |
+|---|---|
+| ALLOW → ALLOW | 183 |
+| ALLOW → **REQUIRE_CONFIRMATION** | **42** |
+| REQUIRE_CONFIRMATION → REQUIRE_CONFIRMATION | 37 |
+| REQUIRE_CONFIRMATION → **BLOCK** | **32** |
+| BLOCK → BLOCK | 131 |
+
+BLOCK mints no confirmation token, so those **32** model choices become
+unrunnable — a hard refusal, not a prompt.
 
 **The operator's decision, taken on that evidence: move the ladder.**
 
@@ -137,14 +152,27 @@ unreachable and the confirmation flow becomes dead code — and says in its own
 words that changing the envelope "has to move the whole three-threshold ladder,
 not this constant alone". Two tests assert that ordering.
 
-Measured outcome of the ladder move, at cap 4000 and production's posture:
+Measured outcome of the ladder move, same sweep, same conditions — cap 2000 on
+the old ladder versus cap 4000 on the new one:
+
+| transition | count |
+|---|---|
+| ALLOW → ALLOW | 225 |
+| REQUIRE_CONFIRMATION → **ALLOW** | **57** |
+| BLOCK → **REQUIRE_CONFIRMATION** | **36** |
+| REQUIRE_CONFIRMATION → REQUIRE_CONFIRMATION | 12 |
+| BLOCK → BLOCK | 95 |
+| **to a WORSE band** | **0** |
 
 - the default mix returns to **ALLOW** (0.1827 against the new 0.30 line);
-- **all 33** models that would have become unrunnable are rescued;
-- 58 mixes that ask for confirmation today would just run, and 36 currently
+- **all 32** models that raising the cap alone would have made unrunnable are
+  rescued;
+- 57 mixes that ask for confirmation today would just run, and 36 currently
   refused become runnable with confirmation;
-- **nothing moves to a worse band.** The sweep found no ALLOW→CONFIRM,
-  no ALLOW→BLOCK and no CONFIRM→BLOCK transition.
+- **nothing moves to a worse band** — no ALLOW→CONFIRM, no ALLOW→BLOCK, no
+  CONFIRM→BLOCK. Independent review re-derived this at query lengths from 33 to
+  9,000 characters and found 0 worse-band transitions at every one, so it is
+  the one claim here that does not depend on the query.
 
 ## Rejected alternatives
 
@@ -197,30 +225,35 @@ rail, not a measured sufficiency.
     `0.0334`** — a debate-cap change must not move it, and did not.
   - The POINT estimate is **unchanged at `0.0548`**: the cap prices the ceiling,
     not the typical run. That asymmetry is the sanity check.
-- **UNMEASURED RISK, stated rather than hidden: per-call time.** ADR-0093
-  concluded a 2000-token critique "fits `openrouter_call_budget_seconds = 60.0`"
-  from wall-clock measurements of 6.385–26.492s. At 4000 that headroom shrinks,
-  and eight such calls sit inside `quorum_run_deadline_seconds` — which is
-  NFR-001/AC-021, a published requirement. **No per-call elapsed time is
-  recorded anywhere**, so this could not be checked. The failure mode is a call
-  budget expiring (fail-safe, not overspend), but a run could return short. The
-  cheapest fix is the `finish_reason` neighbour ADR-0093 already named and did
-  not adopt: add per-call elapsed to the token stream, and read it off the next
-  live run at no cost.
-- **`0.1043` is now stale in 27 files, and they are deliberately NOT rewritten.**
-  It is PROSE in every one — `grep -rn "0\.1043" . | grep assert` returns no
-  assertion, which is why nothing went red. This repo measured that exact
-  pattern before (21 files on 2026-08-26) and PR #378 set the precedent:
-  correct the canonical statement, leave the repetitions. The canonical
-  statement is ADR-0081's table, superseded above. Rewriting 27 files of
-  commentary would be churn on a diff whose concern is the cap (rule 17), and
-  the repetitions are already known-unreliable by their own record.
-  Two of the 27 are NOT stale and must not be "fixed":
-  `docs/18-requirement-traceability-matrix.md` and `CHANGELOG.md` state
-  `0.0771 -> 0.1043` as DATED HISTORY of what ADR-0028 did on 2026-08-09,
-  which remains true.
-  Re-derive rather than trust that count:
-  `grep -rl "0\.1043" --exclude-dir=.git --exclude-dir=.venv . | wc -l`
+- **TIMING: the magnitude is unmeasured, but three facts about it are not.**
+  ADR-0093 concluded a 2000-token critique "fits `openrouter_call_budget_seconds
+  = 60.0`" from wall-clock measurements of 6.385–26.492s, on models generating
+  right up to the cap. This change doubles the tokens on exactly those 8 calls
+  and no per-call elapsed time is recorded anywhere, so the magnitude stays
+  **UNMEASURED**. What is NOT unknown, and what the first draft of this record
+  omitted:
+  - **Dispatch is SEQUENTIAL.** `_build_peer_round` says so in its own
+    docstring and the code is a plain `for critic in critics:` with a blocking
+    call. So one peer round is bounded by *four* call budgets, not one.
+  - **`config.py`'s run-deadline arithmetic assumes one call per leg** — "five
+    sequential legs, each bounded by `openrouter_call_budget_seconds`, so
+    5 x 60 = 300s". Under peer critique the worst case is far larger. This is
+    PRE-EXISTING and not introduced here, but this change makes those calls
+    longer.
+  - **Round 2 is gated on round 1's elapsed time** by
+    `DEBATE_HARD_TIMEOUT_MS = 180_000`. If it fires, `missing_steps` includes
+    `debate_round_2` AND `synthesis` — and round 2 is precisely the round this
+    change exists to protect.
+  - **"Fail-safe, not overspend" was wrong**, and the first draft said it. A
+    cut stream returns `_DISPATCH_UNMEASURED` and logs
+    `billing_class: possibly_billed` with the usage deliberately discarded, and
+    a possibly-billed unpriced call demotes the whole run's receipt from
+    `measured` to `estimated`. What a user observes is a slot that produced
+    nothing, a degraded banner, an `estimated` receipt — **and money that may
+    have been spent**. The honest phrasing is "may pay and return nothing".
+  The cheapest way to measure it is the `finish_reason` neighbour ADR-0093
+  named and did not adopt: add per-call elapsed to the token stream and read it
+  off the next live run at no cost.
 - ADR-0101 is superseded on severity only. Its refutation stands: the
   *"seven of eight"* figure measured answer models on a cap-filling prompt, and
   nothing here makes it a critique measurement.
