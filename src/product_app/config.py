@@ -498,8 +498,10 @@ class Settings(BaseSettings):
     #: Hard per-call output cap for the four initial answers, enforced as
     #: ``max_tokens`` on the live call (the debate and synthesis calls are
     #: already capped at ``debate.DEBATE_ROUND_MAX_TOKENS`` /
-    #: ``synthesis.SYNTHESIS_SECTION_MAX_TOKENS`` — 2000 / 3000 since WP-D
-    #: raised them from 700 / 800). Without it, initial-answer output is
+    #: ``synthesis.SYNTHESIS_SECTION_MAX_TOKENS`` — 4000 / 3000: WP-D raised
+    #: them from 700 / 800 to 2000 / 3000, and ADR-0102 took the DEBATE cap to
+    #: 4000 after a real critique run clipped 3 of 4 round-2 replies).
+    #: Without it, initial-answer output is
     #: unbounded, so a verbose prompt on an expensive model mix can cost far
     #: more than any pre-run estimate — defeating the cost guardrail. 2000 is
     #: generous (~2× the largest answer observed in the live validation run,
@@ -520,8 +522,12 @@ class Settings(BaseSettings):
     # reviewer, not the user" — both debate system prompts), while the
     # synthesis — the ONLY stage rendered to the user — ran on the cheapest.
     #
-    # Measured per run against live OpenRouter prices, at the enforced caps
-    # (debate 2 calls x 2000 output, synthesis 5 calls x 3000 output):
+    # Measured per run against live OpenRouter prices, at the caps enforced AT
+    # THE TIME OF MEASUREMENT (debate 2 calls x 2000 output, synthesis 5 calls
+    # x 3000 output). ADR-0102 later took the debate cap to 4000, which scales
+    # the debate row below; the CONCLUSION it supports — the debate ran on the
+    # pricier model to produce text the user never sees — is unaffected by the
+    # cap and is why this table is dated rather than re-measured here:
     #
     #   stage      claude-haiku-4.5   gpt-4o-mini   gpt-5-mini
     #   debate         $0.0260          $0.0033       $0.0095
