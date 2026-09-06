@@ -6947,12 +6947,16 @@
     "models, query length, search, or debate rounds. Review the estimate " +
     "before continuing.";
 
-  // The hard block boundary ($0.25) — the rail's full-scale value. The
-  // confirm tick sits at $0.15 (60% of scale, matched by the CSS segment
+  // The hard block boundary ($0.50) — the rail's full-scale value. The
+  // confirm tick sits at $0.30 (60% of scale, matched by the CSS segment
   // widths). Numbers are the design's fixed guardrail labels; the ACTIVE
   // band is driven by the server ``threshold_action``, never re-derived
   // from these constants.
-  const COST_HARD_LIMIT_USD = 0.25;
+  //
+  // ADR-0102 moved the ladder 0.15/0.20/0.25 -> 0.30/0.40/0.50. The RATIO is
+  // unchanged (0.30/0.50 == 0.15/0.25 == 60%), so the CSS segment widths and
+  // the tick position below did NOT move — only the labels did.
+  const COST_HARD_LIMIT_USD = 0.5;
 
   // Width of the illustrative planning band shown as "estimated range". The
   // server returns a point estimate with no confidence interval, so this ±

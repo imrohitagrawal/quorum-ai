@@ -246,7 +246,7 @@ def _at_cap_run(store: FeedbackStore) -> Any:
     run = _terminal_run(account)
     assert run.cost_estimate.global_ceiling_reached is False
     assert run.cost_estimate.spend_metering_unavailable is False
-    _charge(store, account_id=account, amount=Decimal("0.20"))
+    _charge(store, account_id=account, amount=Decimal("0.40"))
     assert store.daily_spend_for(account) >= DAILY_CAP_USD, "the fixture did not reach the rail"
     return run
 
@@ -332,7 +332,7 @@ def test_a_later_refusal_cannot_overwrite_a_verdict_already_written(
     # Both memos evicted (the shipped LRUs are bounded), and the rail closes.
     qr._judge_verdict_memo_clear_for_tests()
     qr._evaluation_memo_clear_for_tests()
-    _charge(store, account_id=account, amount=Decimal("0.20"))
+    _charge(store, account_id=account, amount=Decimal("0.40"))
     assert store.daily_spend_for(account) >= DAILY_CAP_USD
 
     qr._persist_run_evaluation(query_run=run, agreement=AGREEMENT)
@@ -708,7 +708,7 @@ def test_a_refused_re_persist_does_not_erase_the_judge_block_already_bought(
         # Both memos evicted (the shipped LRUs are bounded), and the rail closes.
         qr._judge_verdict_memo_clear_for_tests()
         qr._evaluation_memo_clear_for_tests()
-        _charge(store, account_id=account, amount=Decimal("0.20"))
+        _charge(store, account_id=account, amount=Decimal("0.40"))
         assert store.daily_spend_for(account) >= DAILY_CAP_USD
 
         qr._persist_terminal_run(run.query_run_id)

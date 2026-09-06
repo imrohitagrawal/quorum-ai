@@ -275,8 +275,14 @@ def test_breakdown_attached_when_the_bound_drives_a_gated_action() -> None:
     user WHY they were gated.
 
     issue #16: the guardrail keys off the fail-safe ``max_cost_usd`` bound. One
-    opus slot + three cheap slots lands the bound past $0.25 (BLOCK) while the
-    point estimate is only ~$0.11 (ALLOW band). The bound drives the action.
+    opus slot + three cheap slots lands the bound past the soft line while the
+    point estimate is far below it. The bound drives the action.
+
+    ADR-0102 moved the ladder 0.15/0.20/0.25 -> 0.30/0.40/0.50, so this same
+    fixture is now gated at REQUIRE_CONFIRMATION rather than BLOCK (MEASURED:
+    point 0.1371, bound 0.3521). The SUBJECT is unchanged and is what the name
+    says -- a gated estimate carries its breakdown -- so the band is re-measured
+    rather than the fixture being inflated to chase the old label.
 
     Renamed in WP-D: this was ``test_breakdown_attached_on_require_confirmation``
     while asserting ``is BLOCK`` — a title outliving its assertion, which is the
@@ -295,7 +301,12 @@ def test_breakdown_attached_when_the_bound_drives_a_gated_action() -> None:
             ]
         ),
     )
-    assert estimate.threshold_action is CostThresholdAction.BLOCK
+    # Asserting the exact band IS the gated-ness check: ALLOW is the defect
+    # this test exists to exclude, and pinning REQUIRE_CONFIRMATION excludes it.
+    # A separate `is not ALLOW` line was tried here and mypy rejected it as a
+    # non-overlapping identity check -- correctly: after the line above it is
+    # statically always true, i.e. an assertion that cannot fail.
+    assert estimate.threshold_action is CostThresholdAction.REQUIRE_CONFIRMATION
     assert estimate.breakdown is not None
     assert _sum(estimate.breakdown.by_model) == estimate.breakdown.total
     assert _sum(estimate.breakdown.by_stage) == estimate.breakdown.total
@@ -345,7 +356,7 @@ def test_breakdown_attached_on_daily_cap_block() -> None:
             account_id=account_id,
             query_run_id=None,
             recorded_at=datetime.now(UTC),
-            payload={"estimated_cost_usd": "0.2"},
+            payload={"estimated_cost_usd": "0.4"},
         )
 
         estimate = cost_estimation_service.estimate(

@@ -205,9 +205,10 @@ SYNTHESIS_ANSWER_EXCERPT_MAX_CHARS = int(settings.initial_answer_max_tokens * CH
 #: number it currently produces, is the point. A critique cannot be longer
 #: than the debate call that produced it was allowed to be, so the ordering
 #: matters: at the old 700-token debate cap the correct value here was 2800,
-#: and only because F-07 raised that cap to 2000 is it now 8000. Hardcoding
-#: 8000 would have been wrong before F-07 landed and would silently decouple
-#: the next time the debate cap moves. The plan's blanket "→ 8000 chars" is
+#: F-07 raised that cap to 2000, making this 8000; ADR-0102 raised it again to
+#: 4000, making this 16000. Hardcoding either number would have been wrong
+#: before its cap landed and would silently decouple the next time the debate
+#: cap moves — which it now has, twice. The plan's blanket "→ 8000 chars" is
 #: right for the answer excerpts above and wrong for this one.
 SYNTHESIS_DEBATE_EXCERPT_MAX_CHARS = int(DEBATE_ROUND_MAX_TOKENS * CHARS_PER_TOKEN)
 

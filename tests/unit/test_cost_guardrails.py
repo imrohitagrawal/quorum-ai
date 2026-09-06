@@ -78,7 +78,7 @@ def test_a_confirm_band_query_mints_a_confirmation_token() -> None:
         [
             "openai/gpt-4.1",
             "anthropic/claude-haiku-4.5",
-            "anthropic/claude-3-haiku",
+            "anthropic/claude-opus-4",
             "google/gemini-2.5-flash",
         ]
     )
@@ -89,7 +89,7 @@ def test_a_confirm_band_query_mints_a_confirmation_token() -> None:
     )
 
     assert estimate.max_cost_usd is not None
-    assert estimate.max_cost_usd > Decimal("0.15")
+    assert estimate.max_cost_usd > Decimal("0.30")
     assert estimate.threshold_action == CostThresholdAction.REQUIRE_CONFIRMATION
     assert estimate.confirmation_token is not None
 
@@ -132,16 +132,16 @@ def test_high_cost_query_requires_matching_confirmation() -> None:
         [
             "openai/gpt-4.1",
             "anthropic/claude-haiku-4.5",
-            "anthropic/claude-3-haiku",
+            "anthropic/claude-opus-4",
             "google/gemini-2.5-flash",
         ]
     )
     estimate = cost_estimation_service.estimate(
-        query_text="x" * 20_000,
+        query_text="x" * 4_000,
         model_slots=model_slots,
     )
     assert estimate.max_cost_usd is not None
-    assert estimate.estimated_cost_usd < Decimal("0.15") < estimate.max_cost_usd
+    assert estimate.estimated_cost_usd < Decimal("0.30") < estimate.max_cost_usd
     assert estimate.threshold_action == CostThresholdAction.REQUIRE_CONFIRMATION
 
     missing_decision = cost_estimation_service.evaluate_confirmation(
@@ -175,8 +175,18 @@ def test_over_limit_cost_query_is_blocked() -> None:
         model_slots=model_slots,
     )
 
-    assert estimate.estimated_cost_usd > Decimal("0.25")
+    # ADR-0102: assert on the BOUND, which is what the rail actually keys off
+    # (``_threshold_for`` takes ``max_cost_usd``, and ``costs.py`` says so in
+    # its own words: "the rail keys off the worst case"). The old assertion
+    # used the POINT estimate — a stronger claim about the fixture that held
+    # only while the ladder was half its present size: MEASURED after the move
+    # to 0.30/0.40/0.50, NO combination of the nine catalog-stable model ids,
+    # at any query length swept, puts the POINT above $0.50. The bound does,
+    # and the bound is the thing under test.
+    assert estimate.max_cost_usd is not None
+    assert estimate.max_cost_usd > Decimal("0.50")
     assert estimate.threshold_action == CostThresholdAction.BLOCK
+    assert estimate.confirmation_token is None, "a BLOCKed estimate must mint no token"
 
 
 def test_cost_estimate_is_quantized_to_four_decimal_places() -> None:
@@ -255,7 +265,7 @@ def test_daily_cap_blocks_after_threshold() -> None:
     account_id = UUID("00000000-0000-0000-0000-000000000001")
 
     with configure_for_tests() as store:
-        # Pre-populate: account is at the daily cap ($0.20). Any
+        # Pre-populate: account is at the daily cap ($0.40, ADR-0102). Any
         # non-zero estimate pushes the running total strictly over.
         store.record(
             recorder="cost",
@@ -263,7 +273,7 @@ def test_daily_cap_blocks_after_threshold() -> None:
             account_id=account_id,
             query_run_id=None,
             recorded_at=datetime.now(UTC),
-            payload={"estimated_cost_usd": "0.2"},
+            payload={"estimated_cost_usd": "0.4"},
         )
 
         service = CostEstimationService()
@@ -321,7 +331,7 @@ def test_daily_cap_is_per_account() -> None:
             account_id=account_a,
             query_run_id=None,
             recorded_at=datetime.now(UTC),
-            payload={"estimated_cost_usd": "0.2"},
+            payload={"estimated_cost_usd": "0.4"},
         )
 
         service = CostEstimationService()

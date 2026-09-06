@@ -94,37 +94,73 @@ The two MUST move together or the fail-safe bound stops being a ceiling
 `test_estimate_token_model.py::test_bound_cap_assumptions_match_the_enforced_caps`).
 Both are now 4000.
 
-### 4000, not the 5000 first proposed
+### 4000, and the whole threshold ladder with it
 
-Measured by driving `_estimate_bound_usd` directly and varying ONLY the cap,
-judge ON — production's posture, using the four slot models the harvested run
-actually used:
+**The first version of this record measured the wrong thing, and shipped a
+false sentence into `src/`.** It reported a sweep labelled *"judge ON —
+production's posture"* whose numbers were taken with `peer_critique_enabled`
+left at the config default, **False**. `fly.toml:84` sets it `true`, `/status`
+reports it `true`, and this record's own Measurement 1 is a peer-shaped run.
+Adversarial review caught it. The corrected sweep, varying only the cap, at the
+posture production actually runs:
 
-| cap | bound | rail |
+| cap | bound, peer OFF (what the first draft measured) | bound, peer ON (production) | rail at the OLD ladder |
+|---|---|---|---|
+| 2000 | 0.1172 | **0.1415** | ALLOW — by $0.0085 |
+| 3000 | 0.1307 | 0.1621 | REQUIRE_CONFIRMATION |
+| 4000 | 0.1442 | **0.1827** | REQUIRE_CONFIRMATION |
+| 5000 | 0.1577 | 0.2033 | REQUIRE_CONFIRMATION |
+
+At production's posture the old `SOFT_THRESHOLD_USD` of `0.15` left **$0.0085**
+of head-room. There was no cap raise that fitted under it — the crossing point
+is around 2450. So "4000 avoids the confirmation click" was never available;
+the real choice was between accepting the click and moving the line.
+
+Worse than a click: at the old `HARD_LIMIT_USD` of `0.25`, sweeping all **425**
+catalog models four-up, cap 2000 → 4000 moved **41** mixes from ALLOW to
+REQUIRE_CONFIRMATION and **33** from REQUIRE_CONFIRMATION to **BLOCK** — a hard
+refusal that mints no confirmation token, i.e. those model choices become
+unrunnable. Example: `google/gemini-3.8-flash`, 0.2150 → 0.2860.
+
+**The operator's decision, taken on that evidence: move the ladder.**
+
+| constant | before | after |
 |---|---|---|
-| 2000 (before) | 0.1172 | ALLOW |
-| 4000 | **0.1442** | **ALLOW** |
-| 4500 | 0.1510 | REQUIRE_CONFIRMATION |
-| 5000 | 0.1577 | REQUIRE_CONFIRMATION |
+| `SOFT_THRESHOLD_USD` | 0.15 | **0.30** |
+| `DAILY_CAP_USD` | 0.20 | **0.40** |
+| `HARD_LIMIT_USD` | 0.25 | **0.50** |
+| `GLOBAL_DAILY_CEILING_USD` | 5.00 | **5.00 — unchanged, by instruction** |
 
-`SOFT_THRESHOLD_USD` is `0.15`. **5000 would put a confirmation click on every
-production run** — a product behaviour change, not merely a cost one. It
-crosses on the generic test slot list too (there, by 3500). 4000 is the largest
-value measured that keeps production inside the no-confirmation band.
+`DAILY_CAP_USD` is not optional. `costs.py` records that its value comes from
+an ORDERING constraint — `SOFT < DAILY < HARD`, or the confirmation band is
+unreachable and the confirmation flow becomes dead code — and says in its own
+words that changing the envelope "has to move the whole three-threshold ladder,
+not this constant alone". Two tests assert that ordering.
 
-The method reproduces the repo's documented judge-OFF figure exactly (`0.1043`
-at cap 2000), which is the evidence that these numbers are real and not an
-artefact of the probe.
+Measured outcome of the ladder move, at cap 4000 and production's posture:
+
+- the default mix returns to **ALLOW** (0.1827 against the new 0.30 line);
+- **all 33** models that would have become unrunnable are rescued;
+- 58 mixes that ask for confirmation today would just run, and 36 currently
+  refused become runnable with confirmation;
+- **nothing moves to a worse band.** The sweep found no ALLOW→CONFIRM,
+  no ALLOW→BLOCK and no CONFIRM→BLOCK transition.
 
 ## Rejected alternatives
 
-**5000, as first proposed.** Rejected on the measurement above: it crosses
-`SOFT_THRESHOLD_USD` and changes the UX of every run. Recorded because the
-proposal was explicit and the reason for departing from it must be too.
+**5000.** Rejected in favour of 4000 on cost: at production's posture 5000
+bounds at 0.2033 against 4000's 0.1827, and the run measured nothing that
+requires the larger value — three replies stopped at exactly 2000, which puts a
+floor under the requirement and no ceiling on it.
 
-**5000 plus a higher `SOFT_THRESHOLD_USD`.** Rejected: moving a spend guardrail
-to preserve a UX, on the strength of ONE run, is the pattern ADR-0094 exists to
-prevent. The threshold is a money decision that deserves its own evidence.
+**Cap 4000 while leaving the ladder alone.** Rejected by the operator on the
+sweep above: it ships a confirmation click on every run AND makes 33 model
+choices unrunnable. This alternative is recorded because it was the plan for
+two review rounds, and only the corrected posture measurement ruled it out.
+
+**Leaving the cap at 2000 and moving nothing.** Rejected: the clipping is real,
+measured, and lands on the source-backed revised answer that synthesis reads
+first. Doing nothing preserves a defect the run has now demonstrated.
 
 **Leave the cap at 2000 until timing is measured.** Rejected, but it was close.
 Clipping is happening now, in production, on the source-backed answer — and the
@@ -141,6 +177,13 @@ rail, not a measured sufficiency.
   DERIVED (`DEBATE_ROUND_MAX_TOKENS × CHARS_PER_TOKEN`) and its comment is
   emphatic that the derivation is the point. Twice as much critique text now
   reaches synthesis — the stage already carrying 29% of run input.
+- **The global race bound doubles, $4.00 → $8.00.**
+  `GLOBAL_DAILY_CEILING_USD`'s docstring bounds an accepted race at
+  `_MAX_CONCURRENT_RUNS` (16) x `HARD_LIMIT_USD`; doubling the hard limit
+  doubles the worst-case overshoot ABOVE the $5.00 rail. The ceiling itself is
+  unchanged by instruction. This is a DERIVED consequence of the ladder, not a
+  decision taken on its own evidence, and it is the reason to leave the ceiling
+  where it is. Recorded in `costs.py` beside the constant.
 - **The fail-safe bound rises**, judge-OFF `0.1043 → 0.1313` on the default
   slots. Every re-measured literal below was taken by the method its own test
   docstring prescribes, never adjusted to fit:

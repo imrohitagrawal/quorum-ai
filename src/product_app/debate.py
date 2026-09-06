@@ -78,9 +78,20 @@ DEBATE_HARD_TIMEOUT_MS = 180_000
 #: slots 2, 3 and 4 all returned ``finish_reason: "length"`` at exactly 2000
 #: completion tokens. Round 2 carries the REVISED ANSWER that synthesis reads
 #: as its primary input, so the tail being cut was the source-backed answer.
-#: 4000, not 5000: at 5000 the judge-ON bound reaches 0.1577, crossing
-#: ``SOFT_THRESHOLD_USD`` (0.15) and putting a confirmation click on EVERY
-#: run. 4000 measures 0.1442 and stays in the no-confirmation band.
+#: 4000 was chosen against the CONFIRMATION RAIL, not in isolation. At
+#: production's real posture — judge ON **and peer critique ON**, which is what
+#: ``fly.toml`` sets and ``/status`` reports — the bound at cap 2000 is 0.1415
+#: with only $0.0085 of head-room under the old $0.15 line, so NO useful raise
+#: fitted under it. ADR-0102 therefore moved the whole ladder
+#: (0.15/0.20/0.25 -> 0.30/0.40/0.50) alongside this cap; at 4000 the bound is
+#: 0.1827 and sits inside the new no-confirmation band.
+#:
+#: THE FIRST VERSION OF THIS COMMENT WAS FALSE. It said "4000 measures 0.1442
+#: and stays in the no-confirmation band" — measured with peer critique OFF,
+#: the config default, which production does not run. Review caught it. If you
+#: re-measure this, set ``peer_critique_enabled`` explicitly; the default will
+#: quietly answer a different question.
+#:
 #: This value is NOT proven sufficient — a clipped reply reports exactly the
 #: cap, so the run proves only that the models wanted >= 2000.
 DEBATE_ROUND_MAX_TOKENS = 4000

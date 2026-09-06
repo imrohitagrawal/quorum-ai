@@ -1075,9 +1075,15 @@ def test_money_constants_are_pinned_to_their_literal_values() -> None:
 
     These are statements about real money.
     """
-    assert Decimal("0.15") == costs.SOFT_THRESHOLD_USD
-    assert Decimal("0.20") == costs.DAILY_CAP_USD
-    assert Decimal("0.25") == costs.HARD_LIMIT_USD
+    # ADR-0102 moved the whole ladder 0.15/0.20/0.25 -> 0.30/0.40/0.50 so the
+    # raised debate cap fits under the confirmation line at production's real
+    # posture (peer critique ON). DAILY_CAP_USD had to move with them: the
+    # ordering SOFT < DAILY < HARD is what keeps the confirmation band
+    # reachable, and costs.py says lowering or raising the envelope "has to
+    # move the whole three-threshold ladder, not this constant alone".
+    assert Decimal("0.30") == costs.SOFT_THRESHOLD_USD
+    assert Decimal("0.40") == costs.DAILY_CAP_USD
+    assert Decimal("0.50") == costs.HARD_LIMIT_USD
     assert Decimal("0.001") == costs._DEFAULT_PRICE_PER_1K_INPUT
     assert Decimal("0.005") == costs._DEFAULT_PRICE_PER_1K_OUTPUT
     assert Decimal(4) == costs.CHARS_PER_TOKEN

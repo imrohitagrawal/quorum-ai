@@ -76,7 +76,7 @@ def test_cumulative_over_limit_blocks() -> None:
     service = CostEstimationService()
     account = uuid4()
     # Two previous accepted events that push us above the hard limit.
-    _record_accepted(account_id=account, estimated_cost_usd=Decimal("0.20"))
+    _record_accepted(account_id=account, estimated_cost_usd=Decimal("0.40"))
     _record_accepted(account_id=account, estimated_cost_usd=Decimal("0.10"))
     # Cumulative is now 0.30 — above HARD_LIMIT_USD (0.25). A new
     # 0.01 estimate must be blocked.
@@ -148,10 +148,12 @@ def test_only_accepted_events_count() -> None:
 
 
 def test_hard_limit_constant_unchanged() -> None:
-    """The hard $0.25 limit must not change — the cumulative guard
-    is additive protection on top of the per-estimate cap.
+    """The hard limit must not move silently — the cumulative guard is
+    additive protection on top of the per-estimate cap.
+
+    ADR-0102 moved it 0.25 -> 0.50 as part of the three-threshold ladder.
     """
-    assert Decimal("0.25") == HARD_LIMIT_USD
+    assert Decimal("0.50") == HARD_LIMIT_USD
 
 
 def _slot() -> ModelSlot:

@@ -38,6 +38,17 @@ estimate — so a run can never bill past a limit it was waved through under
 `tests/integration/test_query_run_cost_guardrails.py`, against
 `_FALLBACK_CATALOG` and a 33-character query:
 
+> **SUPERSEDED IN PART, 2026-09-06 — see ADR-0102.** The BOUND column and the
+> head-room sentence below it are stale on two counts. (1) ADR-0102 raised
+> `DEBATE_ROUND_MAX_TOKENS` 2000 -> 4000, moving the judge-OFF bound
+> `0.1043 -> 0.1313`. (2) More importantly, **both rows were measured with
+> `peer_critique_enabled` at its config default, False, and production runs it
+> TRUE** — at the real posture the judge-ON bound at cap 2000 was `0.1415`, not
+> `0.1134`, leaving $0.0085 of head-room rather than 3.7 cents. ADR-0102 then
+> moved `SOFT_THRESHOLD_USD` to `0.30`. The POINT column is unchanged. This
+> table is left as written because it is the record of what was measured then;
+> ADR-0102 carries the current figures.
+
 | Configuration | Point | Bound | Band |
 |---|---|---|---|
 | judge OFF | `0.0547` | `0.1043` | ALLOW |
