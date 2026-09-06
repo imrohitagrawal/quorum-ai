@@ -73,7 +73,17 @@ DEBATE_HARD_TIMEOUT_MS = 180_000
 #: cost rails silently under-protect. ``tests/unit/
 #: test_estimate_token_model.py::test_bound_cap_assumptions_match_the_
 #: enforced_caps`` pins the two together.
-DEBATE_ROUND_MAX_TOKENS = 2000
+#: MEASURED 2026-09-06 (ADR-0102), on the first production run that ever made
+#: a real critique call: at 2000 this clipped **3 of 4** round-2 replies —
+#: slots 2, 3 and 4 all returned ``finish_reason: "length"`` at exactly 2000
+#: completion tokens. Round 2 carries the REVISED ANSWER that synthesis reads
+#: as its primary input, so the tail being cut was the source-backed answer.
+#: 4000, not 5000: at 5000 the judge-ON bound reaches 0.1577, crossing
+#: ``SOFT_THRESHOLD_USD`` (0.15) and putting a confirmation click on EVERY
+#: run. 4000 measures 0.1442 and stays in the no-confirmation band.
+#: This value is NOT proven sufficient — a clipped reply reports exactly the
+#: cap, so the run proves only that the models wanted >= 2000.
+DEBATE_ROUND_MAX_TOKENS = 4000
 
 #: How much of each initial answer the debate moderator gets to see.
 #:

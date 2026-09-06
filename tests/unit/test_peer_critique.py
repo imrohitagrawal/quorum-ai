@@ -371,14 +371,20 @@ def test_the_digest_stays_inside_the_synthesis_excerpt_bound(
         # LITERAL on both sides (rule 7a). Asserting against
         # ``SYNTHESIS_DEBATE_EXCERPT_MAX_CHARS`` alone would stay green if that
         # constant were RAISED — the bound asserted against the constant that
-        # defines it. 8000 is its measured value today and 7999 is what four
+        # defines it. 16000 is its measured value today and 15999 is what four
         # critics actually produce (each row spends its own label out of its
         # share), so both sides are pinned.
-        assert len(output.critique_text) == 7999, (
+        #
+        # RE-MEASURED 2026-09-06 (ADR-0102): 8000/7999 -> 16000/15999, because
+        # the constant is DERIVED from ``DEBATE_ROUND_MAX_TOKENS``, which went
+        # 2000 -> 4000. The third assertion below is what forced this
+        # re-measure rather than letting the digest silently double — it is the
+        # tripwire working, not a test that needed relaxing.
+        assert len(output.critique_text) == 15999, (
             f"round {output.round_number} digest is {len(output.critique_text)} chars"
         )
-        assert len(output.critique_text) <= 8000
-        assert SYNTHESIS_DEBATE_EXCERPT_MAX_CHARS == 8000, (
+        assert len(output.critique_text) <= 16000
+        assert SYNTHESIS_DEBATE_EXCERPT_MAX_CHARS == 16000, (
             "the synthesis slice moved; re-measure the digest length above"
         )
 
