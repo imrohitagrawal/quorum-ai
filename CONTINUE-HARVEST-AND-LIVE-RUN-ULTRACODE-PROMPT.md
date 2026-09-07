@@ -276,7 +276,11 @@ reserved key — see the field list's own docstring.)
 
 ### 3b. The harvester
 
-A script — `scripts/window_measurement_report.py` is the suggested name —
+A new script under `scripts/` — `<window-measurement-report>.py` is the
+suggested name; it is written deliberately WITHOUT a resolvable path here,
+because `tests/unit/test_cited_paths_resolve.py` refuses a docs line citing a
+repo path that does not exist, and this one does not exist until you create it
+—
 modelled on `scripts/telemetry_classification_report.py`, which is the repo's
 precedent for this shape. Copy its STRUCTURE (argument handling, the
 `TOKENS_FILE_NAME` constant, the `$TELEMETRY_LOG_DIR` default) but NOT its
@@ -361,7 +365,7 @@ replies — which is exactly what clipped at 2000 and must fit in 4000:
 mkdir -p /tmp/harvest
 fly ssh console -a quorum-ai -C "cat /data/telemetry-tokens.jsonl" \
   > /tmp/harvest/telemetry-tokens.jsonl
-python3 scripts/window_measurement_report.py /tmp/harvest      # needs ITEM 3b merged
+python3 scripts/<window-measurement-report>.py /tmp/harvest   # the ITEM 3b script
 ```
 The filename matters: the script takes a DIRECTORY and reads
 `<dir>/telemetry-tokens.jsonl` inside it, exactly as
