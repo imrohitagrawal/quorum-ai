@@ -365,8 +365,16 @@ replies — which is exactly what clipped at 2000 and must fit in 4000:
 mkdir -p /tmp/harvest
 fly ssh console -a quorum-ai -C "cat /data/telemetry-tokens.jsonl" \
   > /tmp/harvest/telemetry-tokens.jsonl
-python3 scripts/<window-measurement-report>.py /tmp/harvest   # the ITEM 3b script
+python3 scripts/window_measurement_report.py /tmp/harvest --run <query_run_id>
 ```
+`--run` IS REQUIRED. `/data` holds more than one correlated run, and the report
+refuses to choose: with several runs and none named it prints them all, picks no
+headline, and EXITS 1. That refusal exists because picking by recency was
+measured printing the exact opposite of the paid run's result in both money
+directions — one concurrent query on the live `/ui` lands in the same file. Take
+the id from the run you just watched, or from the timestamp window the report
+prints for each run.
+
 The filename matters: the script takes a DIRECTORY and reads
 `<dir>/telemetry-tokens.jsonl` inside it, exactly as
 `telemetry_classification_report.py` does. Redirecting to `tokens.jsonl` and
