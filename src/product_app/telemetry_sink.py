@@ -200,6 +200,73 @@ TELEMETRY_FIELD_NAMES: frozenset[str] = frozenset(
         # critique would be full price for truncated text, on a receipt that
         # looks perfectly healthy, and no cost row can carry that.
         "finish_reason",
+        # Issue #447 / the live window's measurement 3 -- what shape the
+        # provider's ``annotations`` block arrived in, how many entries it
+        # held, and how many characters of passage CONTENT came with them.
+        #
+        # A LABEL, A COUNT AND A LENGTH. Never the passage. Passage text is
+        # unbounded upstream text of a size nobody here has measured; writing
+        # it here would be the exact unbounded-input exposure #268 is open
+        # about, persisted to disk.
+        #
+        # These exist because the 2026-09-06 paid run LOST this measurement.
+        # ``providers._extract_citations`` keeps only title and url, and
+        # ``SourceReference`` has no content field, so the answer to "do
+        # ``:online`` annotations carry passage content?" was discarded at
+        # parse time and no amount of reading telemetry afterwards could
+        # recover it. One run, two answers: whether #447 can be closed
+        # WITHOUT new outbound fetches, and whether the flat-``url`` read at
+        # ``providers._extract_citations`` has been dead all along
+        # (ADR-0084).
+        #
+        # ``annotation_content_chars`` is ABSENT rather than ``0`` when no
+        # ``content`` key was present anywhere. The two are different answers
+        # and the route decision turns on the difference; see
+        # :class:`providers.AnnotationShape`.
+        "annotation_shape",
+        "annotation_count",
+        "annotation_content_chars",
+        # The four below were added after adversarial review DEMONSTRATED that
+        # the three above cannot be read on their own. Each kills a specific
+        # measured ambiguity; none is defensive padding.
+        #
+        # ``annotation_sites`` — WHERE an annotations key appeared on the wire.
+        # ``_reassemble_streamed_completion`` collects from ``choices[0].delta``
+        # only, so a provider using any other site produces a payload
+        # indistinguishable from one where nothing arrived. Without this,
+        # ``shape="absent"`` cannot tell "the provider sent none" from "we did
+        # not look there" -- and the harvest prints the first while observing
+        # the second, which is a verdict about an upstream drawn from our own
+        # reader (AGENTS.md rule 8c).
+        "annotation_sites",
+        # ``annotation_arrivals`` -- the RAW element count beside the distinct
+        # one. The fold concatenates each frame's list without de-duplicating
+        # (deliberately, to mirror ``_extract_citations``), so a provider that
+        # re-sends its whole array on every delta lands N copies. Measured on
+        # this repo's own reassembler: 2 distinct sources across 4 content
+        # frames arrive as 8. The multiplier is the content-frame count, which
+        # varies with answer length -- so it is not even constant across calls.
+        "annotation_arrivals",
+        # ``annotation_content_shape`` -- what TYPE the content value was.
+        # ``annotation_content_chars == 0`` was measured to mean four different
+        # things at once: an empty string, a JSON null, a mapping, and a LIST
+        # OF PARTS holding 360 real characters. The route decision turns on
+        # whether passage text is available, so a list-of-parts reported as a
+        # bare 0 would send the project to build a fetcher it does not need.
+        "annotation_content_shape",
+        # ``annotation_usable_count`` -- how many sources ``_extract_citations``
+        # ACCEPTS from the annotations block, by running it rather than
+        # inferring from the label. ``shape="flat"`` came with zero extracted
+        # citations on a committed test payload, because the label tests key
+        # presence while the reader also runs ``_sanitize_source_url``. This is
+        # ADR-0084's question as a number.
+        #
+        # NOT a count of what the product SHIPS. The reader is run over a
+        # de-duplicated block and the product does not de-duplicate, so on a
+        # cumulative re-send ``LiveProviderResult.sources`` really does carry
+        # the duplicates. See ``providers._annotation_usable_count``; compare
+        # ``annotation_arrivals`` against ``annotation_count`` to see it.
+        "annotation_usable_count",
     }
 )
 
