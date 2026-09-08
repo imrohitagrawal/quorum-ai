@@ -1,9 +1,8 @@
 """Re-runnable mutation proof for the #447 annotation capture (ADR-0104).
 
-SCOPE: the CAPTURE only (``providers.py``, ``telemetry_sink.py``). The reader
-that turns these fields into a verdict ships separately, under ``scripts/``,
-and brings its own mutants — the two answer different questions and a reviewer
-cannot audit both in one diff. See ADR-0105.
+SCOPE: the capture (``providers.py``, ``telemetry_sink.py``) AND the reader
+(``scripts/window_measurement_report.py``). The capture's mutants shipped with
+ADR-0104; the reader's arrive here with ADR-0105.
 
 WHY THIS IS COMMITTED RATHER THAN RUN BY HAND
 ---------------------------------------------
@@ -46,11 +45,13 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 PROVIDERS = ROOT / "src" / "product_app" / "providers.py"
+REPORT = ROOT / "scripts" / "window_measurement_report.py"
 SINK = ROOT / "src" / "product_app" / "telemetry_sink.py"
 
 T_ANN = "tests/unit/test_provider_annotation_shape.py"
+T_RPT = "tests/unit/test_window_measurement_report.py"
 T_SINK = "tests/unit/test_telemetry_sink.py"
-ALL_TESTS = (T_ANN, T_SINK)
+ALL_TESTS = (T_ANN, T_RPT, T_SINK)
 
 #: ``(name, file, old, new, tests)``. ``old`` must appear EXACTLY ONCE or the
 #: mutant is reported INVALID rather than silently mutating the wrong function
@@ -268,6 +269,311 @@ MUTANTS: tuple[tuple[str, Path, str, str, tuple[str, ...]], ...] = (
         "        ANNOTATION_SITE_FRAME,\n    }\n)",
         "    }\n)",
         (T_ANN,),
+    ),
+    (
+        "the harvester exits 0 on empty input",
+        REPORT,
+        '            "the build under test emits the token stream.",\n'
+        "            file=sys.stderr,\n        )\n        return 1",
+        '            "the build under test emits the token stream.",\n'
+        "            file=sys.stderr,\n        )\n        return 0",
+        (T_RPT,),
+    ),
+    (
+        "the harvester stops filtering on the token event name",
+        REPORT,
+        '    return [row for row in rows if row.get("message") == TOKEN_EVENT]',
+        "    return list(rows)",
+        (T_RPT,),
+    ),
+    (
+        "unparsable lines are skipped without being counted",
+        REPORT,
+        "        except json.JSONDecodeError:\n            skipped += 1",
+        "        except json.JSONDecodeError:\n            skipped += 0",
+        (T_RPT,),
+    ),
+    (
+        "uncorrelated rows are pooled into a run again",
+        REPORT,
+        "        if not isinstance(run_id, str) or not run_id:\n"
+        "            uncorrelated.append(row)\n            continue",
+        '        if not isinstance(run_id, str) or not run_id:\n            run_id = ""',
+        (T_RPT,),
+    ),
+    (
+        "runs are ordered by first appearance instead of last",
+        REPORT,
+        "        last_seen[run_id] = position",
+        "        last_seen.setdefault(run_id, position)",
+        (T_RPT,),
+    ),
+    (
+        "a run with no usable finish_reason reports FITS",
+        REPORT,
+        '    if uninformative:\n        return (\n            f"NOT MEASURED',
+        '    if False:\n        return (\n            f"NOT MEASURED',
+        (T_RPT,),
+    ),
+    (
+        "a reply exactly at the cap reports FITS",
+        REPORT,
+        "    if caps and longest is not None and longest == min(caps):",
+        "    if caps and longest is not None and longest == -1:",
+        (T_RPT,),
+    ),
+    (
+        "two caps in one group no longer refuse",
+        REPORT,
+        '    if len(caps) > 1:\n        return (\n            f"NOT COMPARABLE',
+        '    if False:\n        return (\n            f"NOT COMPARABLE',
+        (T_RPT,),
+    ),
+    (
+        "completion_max reports the minimum",
+        REPORT,
+        '        "completion_max": max(completions) if completions else None,',
+        '        "completion_max": min(completions) if completions else None,',
+        (T_RPT,),
+    ),
+    (
+        "one field-less row vetoes the whole measurement again",
+        REPORT,
+        "    if captured == 0:",
+        "    if captured < searching:",
+        (T_RPT,),
+    ),
+    (
+        "absent annotations are blamed on the provider regardless of site",
+        REPORT,
+        '        if not result["missed_site_calls"]:\n            lines.append(\n'
+        '                f"NO ANNOTATIONS ON THE WIRE',
+        '        if True:\n            lines.append(\n                f"NO ANNOTATIONS ON THE WIRE',
+        (T_RPT,),
+    ),
+    (
+        "zero characters of content reports ROUTE A POSSIBLE",
+        REPORT,
+        '    elif not result["content_chars_total"]:',
+        "    elif False:",
+        (T_RPT,),
+    ),
+    (
+        "the M3 census counts calls that never asked for search",
+        REPORT,
+        '    shapes = Counter(str(row.get("annotation_shape", FIELD_MISSING))'
+        " for row in searching)",
+        '    shapes = Counter(str(row.get("annotation_shape", FIELD_MISSING)) for row in rows)',
+        (T_RPT,),
+    ),
+    (
+        "the critique cost counts round 2 only",
+        REPORT,
+        "CRITIQUE_STAGES = (STAGE_DEBATE_ROUND_1, STAGE_DEBATE_ROUND_2)",
+        "CRITIQUE_STAGES = (STAGE_DEBATE_ROUND_2,)",
+        (T_RPT,),
+    ),
+    (
+        "the debate-fit reading looks at round 2 only, as it first did",
+        REPORT,
+        '    stage_rows = [row for row in rows if row.get("stage") in CRITIQUE_STAGES]\n'
+        "    reasons = Counter(",
+        '    stage_rows = [row for row in rows if row.get("stage") == STAGE_DEBATE_ROUND_2]\n'
+        "    reasons = Counter(",
+        (T_RPT,),
+    ),
+    (
+        "the per-round split is dropped, hiding WHICH round clipped",
+        REPORT,
+        "    per_round = {}\n    for stage in CRITIQUE_STAGES:",
+        "    per_round = {}\n    for stage in ():",
+        (T_RPT,),
+    ),
+    (
+        "the report guesses a headline when two runs are present",
+        REPORT,
+        "    if wanted_run is None and len(ordered) > 1:",
+        "    if False:",
+        (T_RPT,),
+    ),
+    (
+        "--run is ignored and the default is used instead",
+        REPORT,
+        "    selected = wanted_run if wanted_run is not None else ordered[0]",
+        "    selected = ordered[0]",
+        (T_RPT,),
+    ),
+    (
+        "an unknown --run silently falls back to a default",
+        REPORT,
+        "    if wanted_run is not None and wanted_run not in grouped:",
+        "    if False:",
+        (T_RPT,),
+    ),
+    (
+        "the missed-site reading is gated on the run's annotation total again",
+        REPORT,
+        '    if result["missed_site_calls"]:',
+        '    if result["missed_site_calls"] and not result["annotations_total"]:',
+        (T_RPT,),
+    ),
+    (
+        "the passage floor is removed, so a snippet reads as a passage",
+        REPORT,
+        '    elif (result["content_chars_max"] or 0) < MIN_PASSAGE_CHARS:',
+        "    elif False:",
+        (T_RPT,),
+    ),
+    (
+        "measurement 1 loses its completeness verdict",
+        REPORT,
+        "    if calls < EXPECTED_CRITIQUE_CALLS:",
+        "    if False:",
+        (T_RPT,),
+    ),
+    (
+        "an empty debate claims the round never ran",
+        REPORT,
+        '            "NO DEBATE ROWS — no debate_round_1 or debate_round_2 token rows are "',
+        '            "NO ROUND-2 ROWS — the run produced no debate_round_2 call at all. "',
+        (T_RPT,),
+    ),
+    (
+        "the passage floor is set uselessly LOW rather than removed",
+        REPORT,
+        "MIN_PASSAGE_CHARS = 200",
+        "MIN_PASSAGE_CHARS = 2",
+        (T_RPT,),
+    ),
+    (
+        "the timestamp window collapses to its last stamp",
+        REPORT,
+        'window = f"{stamps[0]} .. {stamps[-1]}" if stamps else "(no timestamps)"',
+        'window = f"{stamps[-1]} .. {stamps[-1]}" if stamps else "(no timestamps)"',
+        (T_RPT,),
+    ),
+    (
+        "a call that delta DID read is counted as entirely missed",
+        REPORT,
+        '        if "delta" not in str(row.get("annotation_sites", FIELD_MISSING)).split(",")',
+        '        if True or "delta" in str(row.get("annotation_sites", FIELD_MISSING))',
+        (T_RPT,),
+    ),
+    (
+        "the partial-sample line is dropped",
+        REPORT,
+        '    if result["partly_missed_calls"]:',
+        "    if False:",
+        (T_RPT,),
+    ),
+    (
+        "the mixed-cap refusal moves back above the positive evidence",
+        REPORT,
+        '    if len(caps) > 1:\n        return (\n            f"NOT COMPARABLE — no reply clipped',
+        "    if len(caps) > 1 or True:\n        return (\n"
+        '            f"NOT COMPARABLE — no reply clipped',
+        (T_RPT,),
+    ),
+    (
+        "an over-cap reply borrows the exactly-at-the-cap reason",
+        REPORT,
+        "    if caps and longest is not None and longest > min(caps):",
+        "    if False:",
+        (T_RPT,),
+    ),
+    (
+        "the clipped verdict stops naming which round clipped",
+        REPORT,
+        "f\"'length' at cap(s) {caps} ({where}). The cap did NOT fit.{partial}\"",
+        "f\"'length' at cap(s) {caps}. The cap did NOT fit.{partial}\"",
+        (T_RPT,),
+    ),
+    (
+        "the short-critique verdict invents a cause again",
+        REPORT,
+        '            f"FEWER THAN A FULL PEER ROUND — {calls} of the {EXPECTED_CRITIQUE_CALLS} "',
+        "            f\"PARTIAL — a floor, not the run's cost — {calls} of the "
+        '{EXPECTED_CRITIQUE_CALLS} "',
+        (T_RPT,),
+    ),
+    (
+        "--run=<id> is read as a directory instead of refused",
+        REPORT,
+        '    unknown = [a for a in args if a.startswith("-")]',
+        "    unknown = []",
+        (T_RPT,),
+    ),
+    (
+        "a second --run is silently ignored",
+        REPORT,
+        '    if args.count("--run") > 1:',
+        "    if False:",
+        (T_RPT,),
+    ),
+    (
+        "a second directory is silently ignored",
+        REPORT,
+        "    if len(args) > 1:",
+        "    if False:",
+        (T_RPT,),
+    ),
+    (
+        "the judge's prompt tokens are hardcoded to zero",
+        REPORT,
+        '    stage_rows = [row for row in rows if row.get("stage") == STAGE_JUDGE]\n'
+        "    return {\n"
+        '        "calls": len(stage_rows),\n'
+        '        "prompt_tokens": sum(_ints(stage_rows, "prompt_tokens")),',
+        '    stage_rows = [row for row in rows if row.get("stage") == STAGE_JUDGE]\n'
+        "    return {\n"
+        '        "calls": len(stage_rows),\n'
+        '        "prompt_tokens": 0,',
+        (T_RPT,),
+    ),
+    (
+        "usage_absent is no longer counted per stage",
+        REPORT,
+        '            "usage_absent": sum('
+        '1 for row in stage_rows if row.get("usage_absent") is True),',
+        '            "usage_absent": 0,',
+        (T_RPT,),
+    ),
+    (
+        "bools are allowed into the token distributions",
+        REPORT,
+        "        if isinstance(value, int) and not isinstance(value, bool):",
+        "        if isinstance(value, int):",
+        (T_RPT,),
+    ),
+    (
+        "the unparsable ceiling is loosened 0.05 -> 0.99",
+        REPORT,
+        "MAX_UNPARSABLE_SHARE = 0.05",
+        "MAX_UNPARSABLE_SHARE = 0.99",
+        (T_RPT,),
+    ),
+    (
+        "the uninformative refusal is moved ABOVE the positive evidence",
+        REPORT,
+        '    if result["clipped"]:\n        where = ',
+        '    if uninformative:\n        return "NOT MEASURED — moved"\n'
+        '    if result["clipped"]:\n        where = ',
+        (T_RPT,),
+    ),
+    (
+        "the refusal is widened so a real CLIPPED reading is discarded",
+        REPORT,
+        '    if result["clipped"]:\n        where = ',
+        '    if uninformative:\n        return "NOT MEASURED — widened"\n'
+        '    if result["clipped"]:\n        where = ',
+        (T_RPT,),
+    ),
+    (
+        "the rotation scope line is dropped",
+        REPORT,
+        '    print(f"Reads {TOKENS_FILE_NAME} only — rotated backups (.1-.4) are NOT included.")',
+        "    pass",
+        (T_RPT,),
     ),
 )
 
