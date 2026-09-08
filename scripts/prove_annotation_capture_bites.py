@@ -88,6 +88,15 @@ MUTANTS: tuple[tuple[str, Path, str, str, tuple[str, ...]], ...] = (
         (T_ANN,),
     ),
     (
+        # Found by the CI mutation gate, not by this set: the list-of-parts
+        # fixture had ONE dict-with-text part, so `+=` and `=` agreed.
+        "the content-parts sum keeps only the LAST part instead of adding",
+        PROVIDERS,
+        "                if isinstance(text, str):\n                    total += len(text)",
+        "                if isinstance(text, str):\n                    total = len(text)",
+        (T_ANN,),
+    ),
+    (
         "a list of content parts counts zero characters",
         PROVIDERS,
         "    if isinstance(value, list):\n        total = 0",

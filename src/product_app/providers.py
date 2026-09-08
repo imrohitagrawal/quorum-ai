@@ -2690,7 +2690,13 @@ def _whole_body_annotation_sites(whole: dict[str, object]) -> frozenset[str]:
     if _has_annotation_content(whole):
         sites.add(ANNOTATION_SITE_FRAME)
     choices = whole.get("choices")
-    if not isinstance(choices, list) or not choices:
+    # No ``or not choices``: :func:`_index_zero_choice` already returns ``None``
+    # for an empty list, so the extra condition was redundant AND generated an
+    # equivalent mutant — ``or`` -> ``and`` differs only for a non-list that is
+    # truthy and iterable and contains a mapping, i.e. a tuple, which
+    # ``json.loads`` never produces. ADR-0069's rule for an equivalent mutant is
+    # to stop it being GENERATED rather than to record an exception for it.
+    if not isinstance(choices, list):
         return frozenset(sites)
     first = _index_zero_choice(choices)
     if first is None:

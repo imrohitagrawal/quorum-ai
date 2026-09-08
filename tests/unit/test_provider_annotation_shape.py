@@ -376,6 +376,11 @@ def test_no_content_key_is_absent_and_an_empty_one_is_zero(
         (None, "null", 0),
         ({"body": "x" * 50}, "mapping", 0),
         (["the whole passage "] * 20, "list", 360),
+        # TWO text parts, not one, and that is the point: with a single part
+        # ``total += len(text)`` and ``total = len(text)`` give the same answer,
+        # so the CI mutation gate caught `+=` -> `=` surviving. 4 + 5 = 9 is a
+        # sum no single part produces.
+        ([{"type": "text", "text": "abcd"}, {"type": "text", "text": "efghi"}], "list", 9),
         ([{"type": "text", "text": "abc"}, {"type": "image"}], "list", 3),
         (12345, "other", 0),
     ],
