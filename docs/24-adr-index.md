@@ -107,6 +107,7 @@ ways, so the record shows what was believed on a date and what replaced it.
 | [ADR-0101](adr/0101-the-clipped-critique-figure-was-never-measured-on-a-critique.md) | The clipped-critique figure was never measured on a critique | Architecture | Accepted — 2026-09-05 |
 | [ADR-0102](adr/0102-the-first-real-critique-run-measured-the-cap-and-it-does-not-fit.md) | The first real critique run measured the cap, and 2000 does not fit | Architecture | Accepted — 2026-09-06 |
 | [ADR-0103](adr/0103-the-live-window-is-extended-because-the-capture-must-ship-before-the-spend.md) | The live window is extended because the capture must ship before the spend | Architecture | Accepted — 2026-09-07 |
+| [ADR-0104](adr/0104-the-annotation-capture-records-a-shape-a-count-and-a-length.md) | The annotation capture records a shape, a count and a length | Architecture | Accepted — 2026-09-07 |
 
 **This index was itself stale** until 2026-07-30: ADR-0002 had existed since
 2026-07-19 and was never listed here. A hand-maintained index is a derived fact

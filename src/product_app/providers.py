@@ -1498,6 +1498,16 @@ class ProviderExecutionService:
                                 terminator=_STREAM_TERMINATOR_NOT_A_STREAM,
                                 frame_count=0,
                                 unrecognised_lines=0,
+                                # #447. No frames were folded here — the whole
+                                # body parsed as one completion — so the
+                                # per-frame probe never ran and this helper
+                                # answers the same question over the body.
+                                # It reports the empty set when no annotations
+                                # key is present, which the harvest reads as a
+                                # statement about the provider; that is correct
+                                # HERE, because on this path there are no
+                                # frames whose contents we might have missed.
+                                annotation_sites=_whole_body_annotation_sites(whole),
                                 body_error=None,
                             )
         except HTTPError as exc:
@@ -1748,6 +1758,9 @@ class ProviderExecutionService:
                 usage=usage,
                 stream_terminator=streamed.terminator,
                 finish_reason=_finish_reason_label(parsed),
+                annotations=_annotation_shape(parsed),
+                annotation_sites=streamed.annotation_sites,
+                annotation_usable_count=_annotation_usable_count(parsed),
                 labels=telemetry_labels,
             )
         return LiveProviderResult(
@@ -2572,6 +2585,123 @@ def _iter_sse_data(chunks: Iterator[bytes]) -> Iterator[str | _UnrecognisedLine]
         yield "\n".join(pending)
 
 
+#: The two keys either the fold or :func:`_extract_citations` would treat as an
+#: annotations block. Used ONLY to record where such a key appeared; nothing
+#: reads a value through this set, so widening it cannot change an answer.
+_ANNOTATION_KEYS: frozenset[str] = frozenset({"annotations", "citations"})
+
+#: Where an annotations-ish key was seen on a streamed frame. A CLOSED
+#: vocabulary, for the same reason every other label in this module is closed:
+#: the value reaches a durable file with a fixed byte ceiling.
+#:
+#: ``delta`` is the ONLY site :func:`_reassemble_streamed_completion` actually
+#: collects from. The other three exist to say "the provider sent annotations
+#: somewhere we do not read" — which is a completely different finding from
+#: "the provider sent none", and is invisible without them.
+ANNOTATION_SITE_DELTA = "delta"
+ANNOTATION_SITE_MESSAGE = "message"
+ANNOTATION_SITE_CHOICE = "choice"
+ANNOTATION_SITE_FRAME = "frame"
+
+#: Every site name :attr:`_StreamedCompletion.annotation_sites` may contain.
+ANNOTATION_SITES: frozenset[str] = frozenset(
+    {
+        ANNOTATION_SITE_DELTA,
+        ANNOTATION_SITE_MESSAGE,
+        ANNOTATION_SITE_CHOICE,
+        ANNOTATION_SITE_FRAME,
+    }
+)
+
+#: What the ``sites`` field reports when no annotations-ish key appeared on any
+#: frame. A word, not an empty string: an empty value in a JSONL column reads
+#: as "the field was not filled in", and this is a positive observation.
+ANNOTATION_SITE_NONE = "none"
+
+
+def _has_annotation_content(container: object) -> bool:
+    """Does this mapping hold an annotations key with something IN it?
+
+    TRUTHINESS, not key presence, and the difference was a defect. The first
+    version tested ``_ANNOTATION_KEYS & container.keys()``, so a provider
+    sending ``"annotations": []`` or ``"annotations": null`` — the field
+    present and empty — recorded a site. The payload was then ``absent`` WITH a
+    site, which the harvest reads as "an annotations key was on the wire and
+    our fold missed it", and it printed *"This is a defect in our reassembler,
+    not an answer about the provider."*
+
+    That is backwards: the provider emitted the field and put nothing in it.
+    The verdict sent a reader off to debug the fold, on the single question the
+    paid run is bought to answer, and it failed toward the expensive
+    conclusion.
+
+    A site now means "something was there", so ``absent`` plus a site means
+    "something was there and we did not collect it" — which is the only
+    reading that supports the sentence the harvest prints.
+    """
+    if not isinstance(container, dict):
+        return False
+    return any(bool(container.get(key)) for key in _ANNOTATION_KEYS)
+
+
+def _index_zero_choice(choices: list[object]) -> dict[str, object] | None:
+    """The choice the fold treats as choice zero, or ``None``.
+
+    ``choice.get("index", 0) == 0`` — the same rule
+    :func:`_reassemble_streamed_completion` applies — rather than
+    ``choices[0]``. Nothing sends ``n`` today so the two agree in production,
+    but a measurement that selects differently from the reader it describes is
+    a measurement of something else.
+    """
+    for choice in choices:
+        if isinstance(choice, dict) and choice.get("index", 0) == 0:
+            return choice
+    return None
+
+
+def _whole_body_annotation_sites(whole: dict[str, object]) -> frozenset[str]:
+    """Sites for a body that parsed as ONE completion rather than a stream.
+
+    The ``_STREAM_TERMINATOR_NOT_A_STREAM`` path folds no frames, so the
+    per-frame probe never runs. It must nonetheless answer the SAME question,
+    at the SAME four sites, or the not-a-stream path silently reports
+    ``sites=none`` — and the harvest reads ``absent`` plus ``sites=none`` as a
+    statement about the PROVIDER.
+
+    The first version checked ``choices[0].message`` alone. Measured: a body
+    carrying a top-level ``citations`` key, or annotations at choice level,
+    reported ``none``, and the harvest printed *"no annotations key appeared at
+    any site we look at ... On this evidence the provider sent none."* That is
+    the exact rule-8c sentence this probe exists to delete, reintroduced on the
+    one path the probe did not cover.
+
+    THREE sites, not four: ``delta`` is absent by construction, because a
+    whole-body completion has no deltas. An earlier docstring said "the SAME
+    four sites" two sentences before saying delta was excluded.
+
+    The choice is selected the way the streaming probe selects it — by
+    ``index == 0``, not by position. They disagreed: a body whose
+    ``choices[0]`` carries ``index: 1`` had the streaming probe reporting
+    ``none`` and this one reporting ``choice``. Not reachable while nothing
+    sends ``n`` in the request body, but "checked exactly as the streaming
+    probe checks it" was a claim the code did not honour.
+    """
+    sites: set[str] = set()
+    if _has_annotation_content(whole):
+        sites.add(ANNOTATION_SITE_FRAME)
+    choices = whole.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return frozenset(sites)
+    first = _index_zero_choice(choices)
+    if first is None:
+        return frozenset(sites)
+    if _has_annotation_content(first):
+        sites.add(ANNOTATION_SITE_CHOICE)
+    if _has_annotation_content(first.get("message")):
+        sites.add(ANNOTATION_SITE_MESSAGE)
+    return frozenset(sites)
+
+
 @dataclass(frozen=True)
 class _StreamedCompletion:
     """One streamed response, folded into the shape the extractors already read.
@@ -2600,6 +2730,16 @@ class _StreamedCompletion:
     #: the stream carried something we could not read, so an answer assembled
     #: from the rest is missing content we cannot account for.
     unrecognised_lines: int
+    #: WHERE an ``annotations``/``citations`` key was SEEN on any frame, as a
+    #: subset of :data:`ANNOTATION_SITES` (#447). Recorded here rather than
+    #: derived from :attr:`payload`, and that is the whole point: the fold
+    #: collects annotations from ``choices[0].delta`` ONLY, so a provider that
+    #: puts them anywhere else produces a payload indistinguishable from one
+    #: where nothing arrived. Without this field the measurement cannot tell
+    #: "the provider sent none" from "we did not look there", and the harvest
+    #: would report the first while observing the second — a verdict about an
+    #: upstream drawn from our own reader (AGENTS.md rule 8c).
+    annotation_sites: frozenset[str]
     # ``BaseException`` rather than ``Exception``, matching the declared type of
     # ``_EXPECTED_BODY_ERRORS`` that fills it and of the
     # ``_log_post_dispatch_failure`` that consumes it. Narrowing it here would
@@ -2678,6 +2818,8 @@ def _reassemble_streamed_completion(
     text_parts: list[str] = []
     annotations: list[object] = []
     citations: list[object] = []
+    # #447 observation only. Nothing here is read by anything that decides.
+    annotation_sites: set[str] = set()
     finish_reason: object = None
     latched = False
     usage: object = None
@@ -2733,6 +2875,12 @@ def _reassemble_streamed_completion(
                 terminator = _STREAM_TERMINATOR_ERROR
         if isinstance(frame.get("usage"), dict):
             usage = frame["usage"]
+        # #447, observation only: does an annotations-ish key appear at the
+        # TOP of the frame? Checked before the ``choices`` guard below, because
+        # a frame with no usable ``choices`` returns early and would otherwise
+        # never be looked at.
+        if _has_annotation_content(frame):
+            annotation_sites.add(ANNOTATION_SITE_FRAME)
         choices = frame.get("choices")
         if not isinstance(choices, list):
             continue
@@ -2742,8 +2890,17 @@ def _reassemble_streamed_completion(
             index = choice.get("index", 0)
             if index != 0:
                 continue
+            # #447, observation only. Three sites the fold does NOT read, each
+            # recorded so ``absent`` can be attributed. Nothing below changes
+            # what is collected.
+            if _has_annotation_content(choice):
+                annotation_sites.add(ANNOTATION_SITE_CHOICE)
+            if _has_annotation_content(choice.get("message")):
+                annotation_sites.add(ANNOTATION_SITE_MESSAGE)
             delta = choice.get("delta")
             if isinstance(delta, dict):
+                if _has_annotation_content(delta):
+                    annotation_sites.add(ANNOTATION_SITE_DELTA)
                 piece = delta.get("content")
                 if isinstance(piece, str):
                     text_parts.append(piece)
@@ -2789,6 +2946,7 @@ def _reassemble_streamed_completion(
         terminator=terminator,
         frame_count=frame_count,
         unrecognised_lines=unrecognised,
+        annotation_sites=frozenset(annotation_sites),
         body_error=body_error,
     )
 
@@ -3042,6 +3200,387 @@ def _finish_reason_label(payload: object) -> str:
     return FINISH_REASON_OTHER
 
 
+#: The CLOSED set of labels :func:`_annotation_shape` may report, and the rule
+#: that assigns them.
+#:
+#: Bounded for the same reason :data:`_KNOWN_FINISH_REASONS` is: the value goes
+#: into a durable file with a fixed byte ceiling, and an upstream-authored
+#: string there is an unbounded write.
+#:
+#: **This label is STRUCTURAL. It says where the url sits, and nothing more.**
+#: An earlier version of this comment said ``flat`` meant "our reader works and
+#: ADR-0084 is refuted". That was refuted by counterexample: an annotation like
+#: ``{"source": "web", "url_citation": {"url": …}}`` has a truthy top-level
+#: key, so it labels ``flat``, while :func:`_extract_citations` — which also
+#: runs :func:`_sanitize_source_url` and iterates EVERY mapping, not just the
+#: first — extracts nothing from it. That counterexample is committed as a
+#: test rather than recounted here. Whether the reader works is answered by
+#: ``annotation_usable_count``, which MEASURES it instead of inferring it.
+#:
+#: * ``absent`` — no annotations reached the folded payload. Read it WITH
+#:   ``annotation_sites``: ``absent`` plus ``sites=none`` is a statement about
+#:   the provider; ``absent`` plus any other site is a statement about our fold.
+#: * ``flat`` — the first distinct mapping has a truthy top-level ``url`` or
+#:   ``source``.
+#: * ``nested`` — it has a ``url_citation`` mapping. This is the shape
+#:   OpenRouter's documentation describes; **nobody here has observed the live
+#:   API send it**, which is the point of shipping the measurement.
+#: * ``other`` — neither. Load-bearing: without it an unexpected shape is filed
+#:   under one of the three above and the measurement reads clean.
+#:
+#: TIE-BREAK, stated because it is a judgement call: a mapping carrying BOTH
+#: reports ``flat``, because the flat key is the one this product's reader
+#: looks at first. No content is lost — ``content_chars`` searches
+#: ``url_citation`` whichever label was assigned.
+ANNOTATION_SHAPE_ABSENT = "absent"
+ANNOTATION_SHAPE_FLAT = "flat"
+ANNOTATION_SHAPE_NESTED = "nested"
+ANNOTATION_SHAPE_OTHER = "other"
+
+#: Every value :func:`_annotation_shape` may return as its ``shape``.
+ANNOTATION_SHAPES: frozenset[str] = frozenset(
+    {
+        ANNOTATION_SHAPE_ABSENT,
+        ANNOTATION_SHAPE_FLAT,
+        ANNOTATION_SHAPE_NESTED,
+        ANNOTATION_SHAPE_OTHER,
+    }
+)
+
+#: What TYPE the ``content`` value had, where one was present at all.
+#:
+#: This exists because ``content_chars == 0`` was found to mean four different
+#: things at once: an empty string, a JSON ``null``, a mapping, and a LIST OF
+#: PARTS holding 360 real characters. The route decision turns on whether
+#: passage text is available, so a list-of-parts reported as ``0`` would send
+#: the project to build a fetcher it does not need.
+#:
+#: ``list`` is not lumped in with ``other``: a list of content parts is a
+#: standard multimodal content shape and is the one non-string case from which
+#: text can be recovered — so ``content_chars`` DOES count the string parts
+#: inside it, and this label is what says the number came from there.
+ANNOTATION_CONTENT_ABSENT = "absent"
+ANNOTATION_CONTENT_STRING = "string"
+ANNOTATION_CONTENT_LIST = "list"
+ANNOTATION_CONTENT_MAPPING = "mapping"
+ANNOTATION_CONTENT_NULL = "null"
+ANNOTATION_CONTENT_OTHER = "other"
+
+#: Every value :func:`_annotation_shape` may return as its ``content_shape``.
+ANNOTATION_CONTENT_SHAPES: frozenset[str] = frozenset(
+    {
+        ANNOTATION_CONTENT_ABSENT,
+        ANNOTATION_CONTENT_STRING,
+        ANNOTATION_CONTENT_LIST,
+        ANNOTATION_CONTENT_MAPPING,
+        ANNOTATION_CONTENT_NULL,
+        ANNOTATION_CONTENT_OTHER,
+    }
+)
+
+#: Ranked worst-to-best for :func:`_annotation_content_shape`'s reduction over
+#: many annotations. When a block mixes shapes, the LEAST useful one wins, so a
+#: single unreadable content field is never hidden behind a readable one. The
+#: reduction has to be total and order-independent; a "first one seen" rule
+#: would make the answer depend on frame order.
+_ANNOTATION_CONTENT_RANK: tuple[str, ...] = (
+    ANNOTATION_CONTENT_ABSENT,
+    ANNOTATION_CONTENT_OTHER,
+    ANNOTATION_CONTENT_MAPPING,
+    ANNOTATION_CONTENT_NULL,
+    ANNOTATION_CONTENT_LIST,
+    ANNOTATION_CONTENT_STRING,
+)
+
+
+@dataclass(frozen=True, slots=True)
+class AnnotationShape:
+    """What the provider's ``annotations`` block looked like. COUNTS ONLY.
+
+    Issue #447 / the live window's measurement 3. The judge is handed
+    ``[i] title :: url`` and never the page behind the url, and nothing in
+    ``src/`` resolves one. Whether that can be fixed WITHOUT a new outbound
+    fetcher turns on one unmeasured fact: do OpenRouter's ``:online``
+    annotations carry passage CONTENT? The 2026-09-06 paid run could not answer
+    it, because :func:`_extract_citations` discards every field but title and
+    url at parse time.
+
+    NEVER THE TEXT. Labels from closed sets, counts, and a LENGTH. Passage
+    content is unbounded upstream text -- nobody here has weighed a real
+    ``:online`` response, and this module's own 64 KiB body-cap note says so --
+    and this sink writes shapes and enumerations, never content (ADR-0031).
+    Capturing the passages to prove the passages exist would be the exact
+    unbounded-input exposure #268 is open about, written to disk.
+    """
+
+    #: One of :data:`ANNOTATION_SHAPES`. STRUCTURAL — see that constant's note.
+    shape: str
+    #: How many DISTINCT annotations arrived. Distinct, not raw, because
+    #: ``_fold_stream`` concatenates every frame's list without de-duplicating:
+    #: a provider re-sending its whole array on each delta would otherwise
+    #: multiply this by the content-frame count, which varies with answer
+    #: length. Compare against ``arrivals`` to see whether that happened.
+    count: int
+    #: Raw element count across every frame, before de-duplication.
+    arrivals: int
+    #: Total characters of STRING content found, or ``None`` when no
+    #: ``content`` key was present anywhere.
+    #:
+    #: ``None`` and ``0`` are DIFFERENT ANSWERS and the route decision turns on
+    #: the difference: ``None`` means the upstream sends no content field at
+    #: all. But ``0`` alone is ambiguous — read it WITH ``content_shape``,
+    #: which is what says whether the zero came from an empty string, a null,
+    #: or a structure this counts nothing from.
+    content_chars: int | None
+    #: One of :data:`ANNOTATION_CONTENT_SHAPES`.
+    content_shape: str
+
+
+#: The one value every "nothing arrived" path returns. A module constant rather
+#: than six identical literals, so the six arms cannot drift apart.
+_NO_ANNOTATIONS = AnnotationShape(ANNOTATION_SHAPE_ABSENT, 0, 0, None, ANNOTATION_CONTENT_ABSENT)
+
+
+def _annotation_content_shape(value: object) -> str:
+    """The bounded label for one ``content`` value's TYPE."""
+    if isinstance(value, str):
+        return ANNOTATION_CONTENT_STRING
+    if value is None:
+        return ANNOTATION_CONTENT_NULL
+    if isinstance(value, list):
+        return ANNOTATION_CONTENT_LIST
+    if isinstance(value, dict):
+        return ANNOTATION_CONTENT_MAPPING
+    return ANNOTATION_CONTENT_OTHER
+
+
+def _content_chars(value: object) -> int:
+    """How many characters of readable text this ``content`` value holds.
+
+    A string counts itself. A LIST counts the string parts inside it, at one
+    level — the standard content-parts shape, either bare strings or
+    ``{"type": "text", "text": …}`` mappings. Everything else counts zero,
+    and :func:`_annotation_content_shape` is what tells the reader which.
+    """
+    if isinstance(value, str):
+        return len(value)
+    if isinstance(value, list):
+        total = 0
+        for part in value:
+            if isinstance(part, str):
+                total += len(part)
+            elif isinstance(part, dict):
+                text = part.get("text")
+                if isinstance(text, str):
+                    total += len(text)
+        return total
+    return 0
+
+
+def _annotation_content(annotation: dict[str, object]) -> tuple[bool, int, str]:
+    """``(a content key was present, characters held, the value's shape)``.
+
+    Looks in ``url_citation.content`` first and a top-level ``content`` second,
+    matching the two shapes :data:`ANNOTATION_SHAPES` distinguishes. A key that
+    is present but not a string still counts as PRESENT — "the upstream sends
+    this field" is the observation the route decision needs, and it is true
+    whatever type arrived — but the TYPE is reported rather than silently
+    flattened to zero.
+    """
+    seen = False
+    chars = 0
+    shapes: list[str] = []
+    nested = annotation.get("url_citation")
+    if isinstance(nested, dict) and "content" in nested:
+        seen = True
+        value = nested.get("content")
+        chars += _content_chars(value)
+        shapes.append(_annotation_content_shape(value))
+    if "content" in annotation:
+        seen = True
+        value = annotation.get("content")
+        chars += _content_chars(value)
+        shapes.append(_annotation_content_shape(value))
+    if not shapes:
+        return False, 0, ANNOTATION_CONTENT_ABSENT
+    return seen, chars, min(shapes, key=_ANNOTATION_CONTENT_RANK.index)
+
+
+def _annotation_key(annotation: object) -> str:
+    """A stable identity for one annotation, for de-duplication.
+
+    ``json.dumps(..., sort_keys=True, default=repr)`` rather than a url: a
+    de-duplication keyed on the url would collapse two genuinely different
+    annotations that happen to cite the same page with different passages,
+    which is exactly the case measurement 3 cares about. ``default=repr``
+    keeps it total over values ``json`` cannot serialise.
+    """
+    try:
+        return json.dumps(annotation, sort_keys=True, default=repr)
+    except (TypeError, ValueError):  # pragma: no cover - unreachable from json.loads
+        # NOT what ``default=repr`` covers, which an earlier comment here said.
+        # ``default=repr`` handles unserialisable VALUES. This clause handles
+        # unsortable KEYS and circular references:
+        # ``json.dumps({1: "a", "b": 2}, sort_keys=True, default=repr)`` raises
+        # ``TypeError: '<' not supported between instances of 'str' and 'int'``.
+        # Neither is reachable from ``json.loads`` output, which always gives
+        # string keys and no cycles -- so the clause is dead, but for the
+        # opposite reason to the one that was written down.
+        return repr(annotation)
+
+
+def _annotation_shape(payload: object) -> AnnotationShape:
+    """The bounded shape of the folded ``annotations`` block.
+
+    Total over every JSON-shaped input, exactly as :func:`_finish_reason_label`
+    is: a payload that is not a mapping, a missing/empty/non-list ``choices``,
+    a non-mapping element, a missing message, or an annotations value that is
+    not a non-empty list all report :data:`ANNOTATION_SHAPE_ABSENT` with zero
+    counts and ``None`` chars. This runs on the paid path inside a
+    ``contextlib.suppress``, but it must not need it — instrumentation that can
+    raise is instrumentation that can be dropped from the very run it was built
+    for, with nothing going red.
+
+    **It reads the FOLDED payload, which is our reconstruction and not the
+    provider's response.** That is why ``absent`` alone means nothing and must
+    be read against :attr:`_StreamedCompletion.annotation_sites`. The one thing
+    this function must not do is let a reader mistake the fold's behaviour for
+    the upstream's.
+
+    Reads ``annotations or citations`` in that order, mirroring
+    :func:`_extract_citations` exactly, so the measurement and the product
+    never describe different blocks. (On the only live caller the fold has
+    already normalised both into ``annotations``; the ``citations`` arm is kept
+    so the two functions stay textually identical rather than merely
+    equivalent.)
+
+    The LABEL comes from the first DISTINCT mapping — "which shape is this
+    provider sending?" is a property of the block. The COUNT, the CHARACTERS
+    and the CONTENT SHAPE are reduced over every distinct mapping, because
+    "how much content came back?" is not answerable from one.
+    """
+    if not isinstance(payload, dict):
+        return _NO_ANNOTATIONS
+    choices = payload.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return _NO_ANNOTATIONS
+    first_choice = choices[0]
+    if not isinstance(first_choice, dict):
+        return _NO_ANNOTATIONS
+    message = first_choice.get("message")
+    if not isinstance(message, dict):
+        return _NO_ANNOTATIONS
+    annotations = message.get("annotations") or message.get("citations") or []
+    if not isinstance(annotations, list) or not annotations:
+        return _NO_ANNOTATIONS
+
+    arrivals = len(annotations)
+    seen_keys: set[str] = set()
+    distinct: list[object] = []
+    for item in annotations:
+        key = _annotation_key(item)
+        if key in seen_keys:
+            continue
+        seen_keys.add(key)
+        distinct.append(item)
+
+    mappings = [item for item in distinct if isinstance(item, dict)]
+    seen_content = False
+    total_chars = 0
+    content_shapes: list[str] = []
+    for mapping in mappings:
+        mapping_seen, mapping_chars, mapping_shape = _annotation_content(mapping)
+        seen_content = seen_content or mapping_seen
+        total_chars += mapping_chars
+        content_shapes.append(mapping_shape)
+
+    count = len(distinct)
+    content_chars = total_chars if seen_content else None
+    present = [s for s in content_shapes if s != ANNOTATION_CONTENT_ABSENT]
+    content_shape = (
+        min(present, key=_ANNOTATION_CONTENT_RANK.index) if present else ANNOTATION_CONTENT_ABSENT
+    )
+
+    if not mappings:
+        # A non-empty list whose every element is a scalar. NOT ``absent`` —
+        # something did arrive, and filing it under the label for silence would
+        # hide a real upstream change.
+        return AnnotationShape(
+            ANNOTATION_SHAPE_OTHER, count, arrivals, content_chars, content_shape
+        )
+
+    first = mappings[0]
+    if first.get("url") or first.get("source"):
+        label = ANNOTATION_SHAPE_FLAT
+    elif isinstance(first.get("url_citation"), dict):
+        label = ANNOTATION_SHAPE_NESTED
+    else:
+        label = ANNOTATION_SHAPE_OTHER
+    return AnnotationShape(label, count, arrivals, content_chars, content_shape)
+
+
+def _annotation_usable_count(payload: object) -> int:
+    """How many sources the PRODUCT'S OWN reader yields from the annotations.
+
+    ADR-0084's question as a number: has the annotations path ever produced a
+    source? Answered by running :func:`_extract_citations` rather than
+    re-deriving its rules, so the measurement cannot drift from the reader's
+    own acceptance test.
+
+    **It is NOT a count of what the product ships.** It runs the reader over a
+    DE-DUPLICATED block, and the product does not de-duplicate: on a cumulative
+    re-send the product's ``LiveProviderResult.sources`` really does carry the
+    duplicates, and ``debate.py``'s three-source cap then spends slots on them.
+    That is a product defect this field deliberately does not encode — the
+    question here is "does the path yield anything at all", and a count
+    multiplied by an unrelated streaming detail cannot answer it. Compare
+    ``annotation_arrivals`` against ``annotation_count`` to see the duplication
+    itself.
+
+    Two things this has to get right, and the first version got the second one
+    wrong:
+
+    * ``content=""`` disables the inline-markdown fallback, which scans the
+      string it is handed. Counting that fallback would answer "does the
+      product find sources?" — a different question.
+    * **The annotations are DE-DUPLICATED FIRST.** ``_extract_citations`` does
+      not de-duplicate its annotations arm, so on a cumulative re-send it
+      returned 8 for 2 distinct sources and the harvest printed *"yielded 8
+      source(s) from 2 annotation(s)"* — the exact multiplication
+      ``annotation_count`` was added to kill, surviving one field over.
+
+    Total over every input shape, like its neighbours: anything the guards
+    below reject reports ``0``.
+    """
+    if not isinstance(payload, dict):
+        return 0
+    choices = payload.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return 0
+    first_choice = choices[0]
+    if not isinstance(first_choice, dict):
+        return 0
+    message = first_choice.get("message")
+    if not isinstance(message, dict):
+        return 0
+    block = message.get("annotations") or message.get("citations") or []
+    if not isinstance(block, list) or not block:
+        return 0
+
+    seen: set[str] = set()
+    distinct: list[object] = []
+    for item in block:
+        key = _annotation_key(item)
+        if key in seen:
+            continue
+        seen.add(key)
+        distinct.append(item)
+    # A payload carrying ONLY the de-duplicated block, so the real reader runs
+    # over exactly what ``annotation_count`` counted.
+    deduped = {"choices": [{"message": {"content": "", "annotations": distinct}}]}
+    return len(_extract_citations(deduped, content=""))
+
+
 def _log_call_token_shape(
     *,
     model_id: str,
@@ -3050,6 +3589,9 @@ def _log_call_token_shape(
     usage: TokenUsage | None,
     stream_terminator: str,
     finish_reason: str,
+    annotations: AnnotationShape,
+    annotation_sites: frozenset[str],
+    annotation_usable_count: int,
     labels: CallTelemetryLabels | None,
 ) -> None:
     """Record how many INPUT tokens this call carried (issue #268).
@@ -3074,6 +3616,34 @@ def _log_call_token_shape(
     on account of it. The reading that would justify moving one, and the
     condition for deleting this stream, are in
     ``docs/adr/0031-three-blocked-issues-get-durable-telemetry-not-a-guessed-fix.md``.
+
+    The ``annotation_*`` fields are issue #447's measurement and follow the same
+    COUNTS ONLY rule: labels from closed sets, counts, and a number of
+    characters. The passage text those characters were counted from never
+    leaves this frame.
+
+    Seven fields rather than three, and each of the extra four exists because a
+    reviewer DEMONSTRATED that the reading is otherwise ambiguous:
+
+    * ``annotation_sites`` — WHERE an annotations key appeared on the wire.
+      Without it ``shape="absent"`` cannot distinguish "the provider sent none"
+      from "the fold collects only from ``delta`` and the provider used another
+      site", and the harvest would print the first while observing the second.
+    * ``annotation_arrivals`` — the raw element count beside the DISTINCT one.
+      A provider re-sending its whole array per delta lands N copies; measured
+      on this repo's own reassembler, 2 distinct sources across 4 content
+      frames arrive as 8.
+    * ``annotation_content_shape`` — what TYPE the content value was.
+      ``content_chars == 0`` was found to mean an empty string, a JSON null, a
+      mapping, AND a list of parts holding 360 real characters.
+    * ``annotation_usable_count`` — how many sources ``_extract_citations``
+      actually yields from the annotations block. MEASURED, not inferred:
+      ``shape="flat"`` is committed with a payload yielding zero extracted
+      citations, so inferring "the reader works" from the label
+      answers a different question from the one ADR-0084 asks.
+
+    See :class:`AnnotationShape` for why ``content_chars`` is ABSENT rather
+    than ``0`` when the upstream sends no ``content`` key at all.
 
     ``usage_absent`` is reported rather than a fabricated ``prompt_tokens: 0``.
     A zero would sit in the distribution and drag every percentile taken from
@@ -3117,7 +3687,24 @@ def _log_call_token_shape(
         "usage_absent": usage is None,
         "stream_terminator": stream_terminator,
         "finish_reason": finish_reason,
+        # Issue #447 / window measurement 3. See :class:`AnnotationShape` for
+        # why lengths are captured and the passage never is.
+        "annotation_shape": annotations.shape,
+        "annotation_count": annotations.count,
+        "annotation_arrivals": annotations.arrivals,
+        "annotation_content_shape": annotations.content_shape,
+        "annotation_usable_count": annotation_usable_count,
+        # Sorted and joined so the column is stable: a set's iteration order is
+        # not, and a column whose value reorders between identical rows cannot
+        # be grouped.
+        "annotation_sites": ",".join(sorted(annotation_sites)) or ANNOTATION_SITE_NONE,
     }
+    # ABSENT, not zero. ``None`` means the upstream sends no ``content`` key at
+    # all; ``0`` means the key was there and yielded no characters. A default
+    # would erase a distinction the route decision turns on — and
+    # ``annotation_content_shape`` is what says which kind of zero it was.
+    if annotations.content_chars is not None:
+        fields["annotation_content_chars"] = annotations.content_chars
     if usage is not None:
         fields["prompt_tokens"] = usage.prompt_tokens
         fields["completion_tokens"] = usage.completion_tokens
