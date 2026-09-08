@@ -311,11 +311,25 @@ def test_every_field_the_two_streams_actually_emit_is_declared(
     assert len(billing_seen) >= 11, (
         f"only {len(billing_seen)} billing field names were collected; the drivers went quiet"
     )
-    # Raised 9 -> 11 on 2026-08-30 (ADR-0084). Measured by instrumenting this
-    # test: 11 token field names are emitted today. At 9 the two newest fields
-    # could both go silent undetected -- which is the failure this floor exists
-    # to catch, so a floor two below the truth was not a floor.
-    assert len(token_seen) >= 11, (
+    # Raised 9 -> 11 on 2026-08-30 (ADR-0084), 11 -> 18 on 2026-09-07 (#447).
+    # Every number here was MEASURED by raising this floor to 999 and reading
+    # the failure message: on a clean ``git archive HEAD`` copy the driver
+    # emitted **12**; on this branch it emits **18**.
+    #
+    # So the floor said 11 while the truth was 12: ``finish_reason`` was added
+    # after the 11 was measured and nothing compared the two -- the exact
+    # silent drift this comment's last sentence warns about. Pinned at the
+    # measured value and not below it.
+    #
+    # The +6 is ``annotation_shape``, ``annotation_count``,
+    # ``annotation_arrivals``, ``annotation_sites``,
+    # ``annotation_content_shape`` and ``annotation_usable_count``.
+    # ``annotation_content_chars`` is deliberately NOT among them: the driver's
+    # payload carries no annotations at all, so that field is absent -- a live
+    # demonstration on a real drive that absent and 0 stay distinct. It means
+    # this floor covers 6 of the 7 new fields; the seventh is covered by
+    # ``test_the_wire_carries_every_annotation_field``.
+    assert len(token_seen) >= 18, (
         f"only {len(token_seen)} token field names were collected; the #268 "
         f"driver emitted nothing, so this check is measuring the billing stream twice"
     )
