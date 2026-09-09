@@ -205,3 +205,61 @@ def test_a_skipped_round_two_is_never_announced_as_started(
     assert announced == [], "round 2 was skipped, but the boundary announced it as started"
     stages = _stages(run_id)
     assert stages["debate_round_2"] != "running", stages
+
+
+def test_a_service_that_never_announces_still_marks_round_two(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """RED WHEN: the orchestrator's fallback marker is deleted.
+
+    The boundary callback is OPTIONAL: ``run_debate_rounds`` accepts
+    ``on_round_two_start=None``, and a double, a fake, or a future alternate
+    implementation may simply not call it. When that happens the orchestrator
+    must still mark ``debate_round_2`` RUNNING before completing it, or a run
+    driven by such a service shows round 2 jumping from pending straight to
+    completed and the stage is never announced at all.
+
+    THIS TEST ASSERTS THE WRITE, NOT THE END STATE, and that distinction is the
+    whole test. The first version asserted the final stage state and the final
+    ``detail`` string -- both of which the COMPLETED write sets regardless -- so
+    it stayed GREEN with the fallback marker deleted. It measured nothing. Only
+    the sequence of ``update_status`` calls can tell "announced then completed"
+    apart from "completed out of nowhere".
+    """
+    original_debate = debate_stub_service.run_debate_rounds
+    original_update = query_run_repository.update_status
+    writes: list[tuple[str, str]] = []
+    seen: list[str] = []
+
+    def _swallowing(**kwargs: Any) -> Any:
+        # Drop the callback on the floor, exactly as a caller that passed none.
+        seen.append("called")
+        kwargs["on_round_two_start"] = None
+        return original_debate(**kwargs)
+
+    def _recording(query_run_id: Any, **kwargs: Any) -> Any:
+        stage = kwargs.get("stage_name")
+        state = kwargs.get("stage_state")
+        if stage and state:
+            writes.append((str(stage), str(state)))
+        return original_update(query_run_id, **kwargs)
+
+    monkeypatch.setattr(debate_stub_service, "run_debate_rounds", _swallowing)
+    monkeypatch.setattr(query_run_repository, "update_status", _recording)
+
+    client = TestClient(app)
+    run_id, body = _drive(client)
+
+    # Positive partners: the double was used, the recorder recorded, the run
+    # finished. Every assertion below is meaningless without all three.
+    assert seen == ["called"], "the debate service double was never invoked"
+    assert writes, "no stage writes were recorded — the spy did not attach"
+    assert body["status"] == "completed", body.get("status")
+
+    assert ("debate_round_2", "running") in writes, (
+        f"round 2 was never announced as running by the fallback path; writes were {writes!r}"
+    )
+    # And in the right ORDER: announced before completed.
+    assert writes.index(("debate_round_2", "running")) < writes.index(
+        ("debate_round_2", "completed")
+    ), writes
