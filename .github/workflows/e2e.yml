@@ -266,7 +266,13 @@ jobs:
         # exactly the headroom to delete all twelve and stay green, which is
         # what every raise above exists to prevent. MEASURED, not computed —
         # the 17-spec lane run exactly as the step above runs it reported
-        # "283 passed (9.6m)" on 2026-09-09.
+        # "284 passed" in CI on 2026-09-09 (run 34403188667).
+        #
+        # NOT the number the same lane reports locally, which is 283. The floor
+        # is enforced against the CI report, so the CI count is the one that may
+        # be banked as headroom -- setting it from a local measurement leaves
+        # exactly one test deletable while the gate stays green, which is the
+        # thing this floor exists to stop. Measure it where it is enforced.
         # 269 -> 271 (ADR-0100): critique-cost-rows.spec.ts gains the pair that
         # drives the estimate-attribution note — present with critique rows,
         # ABSENT on a moderator run. Same rule as every raise above: measured by
@@ -323,7 +329,7 @@ jobs:
         # reported "263 passed (6.1m)" on 2026-09-03 — on a CLEANED `.data`,
         # because the durable per-IP mint cap accumulates across local runs and
         # a poisoned database presents as ~30 unrelated timeouts.
-        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 283 --lane "invariants lane"
+        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 284 --lane "invariants lane"
 
       - name: Clear the previous lane's JUnit report
         run: rm -f e2e/results.xml
