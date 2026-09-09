@@ -5596,17 +5596,34 @@
         ? `<span class="session-trail-status">${escapeHtml(statusLabel)}</span>`
         : "";
       btn.innerHTML =
-        `<span class="session-trail-question" title="${escapeHtml(e.question)}">${escapeHtml(e.question)}</span>` +
+        `<span class="session-trail-question" title="${escapeHtml(e.question)}">${escapeHtml(truncateTrailQuestion(e.question))}</span>` +
         statusTag +
         `<span class="session-trail-time mono">${escapeHtml(trailTimeLabel(e.timestamp))}</span>`;
-      btn.addEventListener("click", () => restoreTrailRun(e.runId));
+      btn.addEventListener("click", () => restoreTrailRun(e));
       host.appendChild(btn);
     }
     const clearBtn = el("session-trail-clear");
     if (clearBtn) clearBtn.hidden = false;
   }
 
-  function restoreTrailRun(runId) {
+  /**
+   * Restore a finished run from the session trail.
+   *
+   * Takes the trail ENTRY, not a bare run id. It used to take the id and then
+   * label the restored run with `state.liveQueryText` -- which is set only on
+   * SUBMIT (see proceedWithRun). So clicking an earlier entry showed that run's
+   * answer under the MOST RECENT run's question, and because this function also
+   * wrote the value back, restoring A and then B labelled B with A's question.
+   * The same wrong value reached the transcript heading, the "Follow up"
+   * prefill and the exported file's `**Question:**` line.
+   *
+   * The entry already carries the question and is already in scope at the click
+   * handler; nothing new is fetched, stored or sent. `sessionTrail` stays
+   * in-memory and never enters an API payload -- the question is user prose and
+   * the result endpoint deliberately does not carry `query_text`.
+   */
+  function restoreTrailRun(entry) {
+    const runId = entry && entry.runId;
     if (!runId) return;
     // Defense in depth alongside the disabled attribute in renderSessionTrail:
     // never let a trail click hijack a run that is actively in flight.
@@ -5619,8 +5636,14 @@
     api(`/v1/query-runs/${runId}`, { method: "GET" })
       .then((result) => {
         state.lastResult = result;
-        const res = result.result || {};
-        const question = state.liveQueryText || (res && res.model_answers && res.model_answers.length && res.model_answers[0].answer_text ? res.model_answers[0].answer_text.slice(0, 120) : "") || "";
+        // THIS run's own question. There is no fallback on purpose: the old one
+        // sliced the first model's ANSWER to 120 chars and printed it under
+        // "You asked", which is reachable today (goToActiveRun starts polling
+        // without ever setting liveQueryText, so an entry can carry an empty
+        // question). An unknown question renders the house "—" treatment in
+        // renderResult, which is honest; a model's answer presented as the
+        // user's question is not.
+        const question = entry.question ? String(entry.question) : "";
         state.liveQueryText = question;
         renderResult(result);
         setView("result");
@@ -7932,7 +7955,12 @@
       const liveCount = Number(result.live_count ?? (result.result && result.result.live_count) ?? 0);
       const trailStatus = demoMode && liveCount === 0 ? "simulated" : result.status;
       appendSessionTrailEntry({
-        question: truncateTrailQuestion(state.liveQueryText),
+        // The FULL question, not the 80-char display form. Restoring this run
+        // has to put the user's own words back under "You asked", and a
+        // truncated copy would print an ellipsised question into the result
+        // view and into the exported file. Truncation is a RENDER concern and
+        // now happens in renderSessionTrail.
+        question: state.liveQueryText ? String(state.liveQueryText).trim() : "",
         runId: result.query_run_id || result.correlation_id,
         timestamp: Date.now(),
         status: trailStatus,

@@ -183,6 +183,21 @@ def test_the_stripper_never_corrupts_a_repo_javascript_file() -> None:
         and "vendor" not in f.parts
         and ".venv" not in f.parts
         and "build" not in f.parts
+        # Playwright's own OUTPUT, not this repo's source. Both directories are
+        # gitignored (.gitignore:44) and hold minified Vite bundles, on which
+        # this scanner is documented as unsafe and REFUSES -- so any session
+        # that ran the e2e lane before pytest in the same tree saw this test go
+        # red and had to work out that its own diff was innocent. Measured
+        # 2026-09-09 on this branch: red with the directories present, "11
+        # passed" after `rm -rf e2e/playwright-report e2e/test-results`, same
+        # working tree otherwise.
+        #
+        # Same shape as the trap AGENTS.md rule 13a records for
+        # test_no_orphaned_e2e_specs: this sweep enumerates the FILESYSTEM with
+        # rglob, so .gitignore does not narrow it and only an explicit exclusion
+        # can. CI never saw it because it runs the e2e lane in a separate job.
+        and "playwright-report" not in f.parts
+        and "test-results" not in f.parts
     ]
     # FLOOR (rule 7): a clean sweep over nothing proves nothing.
     assert len(targets) >= 1, "no repo JavaScript found to check — the sweep is vacuous"
