@@ -754,20 +754,54 @@ export const goldenConsensusResp = () => {
   // that goes with 4 of 4. Without it `isConsensusResult` returns false and
   // every `[data-consensus="true"]` assertion below stops measuring anything.
   resp.result.agreement = { aligned: 4, total: 4, panel_agreement: "agreed" };
+  // Slot 3 is already the zero-source slot in the base builder. Slot 4 joins it
+  // so the four per-answer shapes really do sum to the 2-of-4 stated below.
+  for (const answer of resp.result.model_answers) {
+    if (answer.slot_number === 4) {
+      answer.sources = [];
+      answer.citation_coverage = {
+        answer_count: 1,
+        sourced_answer_count: 0,
+        sourced_answer_ratio: "0.00",
+        target_ratio: "1.00",
+        target_met: false,
+      };
+    }
+  }
   resp.result.final_synthesis = {
     ...resp.result.final_synthesis,
-    citation_coverage: CC_ONE_UNSOURCED,
+    // BELOW the source-coverage bar, deliberately, and this is load-bearing.
+    //
+    // The green consensus band carries an amber `.result-verdict-coverage`
+    // caution line as a CHILD, and three F-04 contrast tests measure that
+    // child against the green surface. The line only renders when
+    // `target_met === false`.
+    //
+    // ADR-0106 moved `CC_ONE_UNSOURCED` (3 of 4) from below-target to AT
+    // target, which stopped this builder rendering the line at all — and the
+    // three contrast tests went red rather than silently green, because each
+    // asserts `ratio > 0` before comparing. That positive partner is what
+    // turned "the gate now measures nothing" into a visible failure.
+    //
+    // 2 of 4 restores the subject. A run where every model agreed but only
+    // half cited a source is a real and interesting shape: consensus is not
+    // evidence. The per-answer sources below are adjusted to match, because a
+    // fixture whose prose contradicts its own structured values is the
+    // dishonest shape these gates exist to catch.
+    citation_coverage: {
+      answer_count: 4,
+      sourced_answer_count: 2,
+      sourced_answer_ratio: "0.50",
+      target_ratio: "0.75",
+      target_met: false,
+    },
     synthesis_mode: "simulated",
-    // Keep every field that RESTATES the numbers consistent with CC_ONE_UNSOURCED and
-    // with 4-of-4. A fixture whose prose contradicts its own structured values
-    // is the dishonest shape these gates exist to catch, and it would quietly
-    // undermine any future assertion that reads that prose.
     quality_checks: {
       ...resp.result.final_synthesis.quality_checks,
-      citation_coverage_target_met: true,
+      citation_coverage_target_met: false,
     },
     source_support:
-      "Backed by **cited** sources on three of four responding models — one short of every model, which meets the target of at most one unsourced answer.",
+      "Backed by **cited** sources on two of four responding models — two short, which **misses** the target of at most one unsourced answer.",
     disagreement:
       "No model **dissents**: all four converged on the same recommendation, including the secondary point about gating the export behind a manual review.",
   };

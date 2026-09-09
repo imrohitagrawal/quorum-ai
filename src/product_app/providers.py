@@ -47,7 +47,7 @@ from urllib.parse import urlparse
 from urllib.request import Request
 from uuid import UUID
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, computed_field, model_validator
 
 from product_app.config import RuntimeEnvironment, settings
 from product_app.credentialed_url import (
@@ -247,68 +247,40 @@ class CitationCoverage(BaseModel):
     sourced_answer_count: int = Field(ge=0)
     #: ``sourced_answer_count / answer_count``, quantized to 2dp.
     sourced_answer_ratio: Decimal = Field(ge=Decimal("0"), le=Decimal("1"))
-    #: The bar this run had to clear, as a ratio, DERIVED from
-    #: ``answer_count`` -- not a constant. ADR-0106 replaced the fixed 0.80
-    #: with "at most one answer may lack a primary source", which is
-    #: ``max(1, answer_count - 1) / answer_count``: 1.00, 0.50, 0.67, 0.75 at
-    #: n = 1..4. Reported so a client can still see what was required.
-    #:
-    #: ``target_met`` is NOT derived from comparing this against
-    #: ``sourced_answer_ratio``. Both sides are quantized to 2dp, and deciding
-    #: on rounded values is how 2/3 came to hinge on ``0.666...`` rounding up.
-    #: The verdict is computed from the COUNTS; this field only reports it.
-    #: The declared default is a SENTINEL, not a bar. ``_derive_target_ratio``
-    #: below always injects the real value, so this is unreachable through
-    #: normal construction -- but a type checker cannot see a ``mode="before"``
-    #: validator, and making the field required would force the argument into
-    #: 38 unrelated test files that have no opinion about the bar.
-    #:
-    #: ``-1`` and ``validate_default=True`` together make a leak LOUD: if the
-    #: validator ever stops injecting, construction raises on ``ge=0`` instead
-    #: of quietly serving a plausible-looking number. A default inside [0, 1]
-    #: would have been served as if it were measured.
-    target_ratio: Decimal = Field(
-        default=Decimal("-1"), ge=Decimal("0"), le=Decimal("1"), validate_default=True
-    )
     target_met: bool
 
-    @model_validator(mode="before")
-    @classmethod
-    def _derive_target_ratio(cls, data: Any) -> Any:
-        """Fill ``target_ratio`` from ``answer_count`` when it is not given.
+    # WHY COMPUTED AND NOT STORED. The bar is a pure function of
+    # ``answer_count`` (ADR-0106: "at most one answer may lack a primary
+    # source" = ``max(1, answer_count - 1) / answer_count``), so a stored copy
+    # is a second place it can be written down and disagree.
+    #
+    # An earlier revision DID store it, policed by a validator. That needed a
+    # sentinel default to satisfy the type checker, and the sentinel leaked
+    # into the PUBLISHED SCHEMA as ``default: '-1'`` -- a value outside this
+    # field's own bound, advertised to clients, on a field that had silently
+    # dropped out of ``required``. The consistency gate shipped with ADR-0106
+    # caught it. A field that cannot be assigned cannot do that.
+    #
+    # Kept OUT of the schema description on purpose: that text is published to
+    # API consumers, and it is a note to this repo, not to them.
+    #
+    # ``target_met`` is NOT derived by comparing this against
+    # ``sourced_answer_ratio``. Both are quantized to 2dp, and deciding on
+    # rounded values is how 2/3 came to hinge on ``0.666...`` rounding up. The
+    # verdict comes from the COUNTS; this only reports the bar that was applied.
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def target_ratio(self) -> Decimal:
+        """The share of answers that had to carry a primary source, this run.
 
-        The bar is a function of the run's size (ADR-0106), so there is no
-        constant to default it to. Deriving it here means every construction
-        site -- production, tests, fixtures replayed through this model --
-        reports the bar the code actually applied, and cannot drift from it by
-        being written down a second time.
-
-        An explicitly supplied value is CHECKED, not trusted. A caller that
-        states a bar the implementation does not apply is the exact defect this
-        change exists to remove; accepting it silently would reintroduce it one
-        layer up.
+        Derived from ``answer_count``: 1.00, 0.50, 0.67, 0.75 at n = 1..4.
         """
-        if not isinstance(data, dict):
-            return data
-        answer_count = data.get("answer_count")
-        if not isinstance(answer_count, int) or isinstance(answer_count, bool):
-            return data
-        if answer_count <= 0:
-            derived = Decimal("1.00")
-        else:
-            derived = (
-                Decimal(citation_coverage_required_count(answer_count)) / Decimal(answer_count)
-            ).quantize(Decimal("0.01"))
-        supplied = data.get("target_ratio")
-        if supplied is None:
-            return {**data, "target_ratio": derived}
-        if Decimal(str(supplied)).quantize(Decimal("0.01")) != derived:
-            raise ValueError(
-                f"target_ratio {supplied!r} contradicts the bar this code applies "
-                f"for answer_count={answer_count} ({derived}). The bar is derived, "
-                "not declared -- see ADR-0106."
-            )
-        return data
+        if self.answer_count <= 0:
+            # No answers came back, so the bar cannot be cleared. Reported as
+            # 1.00 rather than 0, which would read as "any run clears it".
+            return Decimal("1.00")
+        required = citation_coverage_required_count(self.answer_count)
+        return (Decimal(required) / Decimal(self.answer_count)).quantize(Decimal("0.01"))
 
     @model_validator(mode="after")
     def _numerator_cannot_outrun_denominator(self) -> CitationCoverage:
@@ -4248,7 +4220,6 @@ def calculate_citation_coverage(
             answer_count=0,
             sourced_answer_count=0,
             sourced_answer_ratio=Decimal("0"),
-            target_ratio=Decimal("1.00"),
             target_met=False,
         )
     sourced_answer_ratio = (Decimal(sourced_answer_count) / Decimal(answer_count)).quantize(
@@ -4259,7 +4230,6 @@ def calculate_citation_coverage(
         answer_count=answer_count,
         sourced_answer_count=sourced_answer_count,
         sourced_answer_ratio=sourced_answer_ratio,
-        target_ratio=(Decimal(required) / Decimal(answer_count)).quantize(Decimal("0.01")),
         # From the COUNTS. Comparing the two quantized ratios would give the
         # same answer for every n the product can emit, but it would make the
         # verdict depend on the rounding step; this cannot.

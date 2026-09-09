@@ -867,6 +867,7 @@ def test_the_untrusted_data_rule_is_still_the_last_word() -> None:
         ROUND_ONE_SYSTEM_PROMPT,
         ROUND_TWO_SYSTEM_PROMPT,
     )
+
     # From its DEFINING module: `debate` only re-imports it, and mypy refuses a
     # non-explicit re-export. Reading it from the source also means this guard
     # cannot be satisfied by `debate` shadowing the name with its own copy.

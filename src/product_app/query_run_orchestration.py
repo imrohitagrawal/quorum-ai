@@ -1325,6 +1325,36 @@ def _execute_query_run(query_run_id: UUID, account_id: UUID) -> None:
     # without reaching ``record_debate_outputs`` — leaves ``ENTERED`` behind
     # and the receipt cannot claim ``measured``.
     query_run_repository.mark_billable_stage_entered(query_run_id, BillableStage.DEBATE)
+    # ADR-0108. Both debate rounds run inside the ONE call below, so the stage
+    # markers could only move before it and after it: round 1 COMPLETED, round 2
+    # RUNNING and round 2 COMPLETED all fired on return, within
+    # ``settings.stage_delay_ms`` (5 ms by default) of each other. Against a
+    # 750 ms poll that made "round 2 is running" a state the UI could not
+    # observe, and the one time it could be read, the round had already
+    # finished. The strip showed round 2 starting after it ended.
+    #
+    # The callback moves both markers at the real boundary instead. It is
+    # dispatched from inside the debate service, after its round-2 skip gate.
+    round_two_announced = False
+
+    def _announce_round_two() -> None:
+        """Round 1 is done and round 2 is about to be dispatched."""
+        nonlocal round_two_announced
+        round_two_announced = True
+        query_run_repository.update_status(
+            query_run_id,
+            status_value=QueryRunStatus.DEBATE_ROUND_2_RUNNING,
+            stage_name="debate_round_1",
+            stage_state=StageState.COMPLETED,
+            detail="Debate round 1 completed.",
+        )
+        query_run_repository.update_status(
+            query_run_id,
+            stage_name="debate_round_2",
+            stage_state=StageState.RUNNING,
+            detail="Running debate round 2.",
+        )
+
     debate_result = debate_stub_service.run_debate_rounds(
         account_id=account_id,
         query_run_id=query_run_id,
@@ -1333,6 +1363,7 @@ def _execute_query_run(query_run_id: UUID, account_id: UUID) -> None:
         openrouter_key=openrouter_key,
         context=query_run.context,
         should_stop=lambda: _should_stop(query_run_id),
+        on_round_two_start=_announce_round_two,
     )
     # F-05 Layer 2 (#106): a cancel that landed while the debate stage was
     # already entered stopped every round from BILLING (the should_stop
@@ -1389,13 +1420,18 @@ def _execute_query_run(query_run_id: UUID, account_id: UUID) -> None:
         if halted.status is QueryRunStatus.PARTIAL:
             _mark_remaining_stages(query_run_id, ["synthesis"])
         return
-    query_run_repository.update_status(
-        query_run_id,
-        stage_name="debate_round_2",
-        stage_state=StageState.RUNNING,
-        detail="Running debate round 2.",
-    )
-    sleep(settings.stage_delay_ms / 1000)
+    # Only when the boundary callback never fired -- a caller that passed no
+    # callback, or a service that returned before reaching the seam. Re-marking
+    # a finished round RUNNING would flip the strip from complete back to
+    # running on the next poll, which is the defect in the other direction.
+    if not round_two_announced:
+        query_run_repository.update_status(
+            query_run_id,
+            stage_name="debate_round_2",
+            stage_state=StageState.RUNNING,
+            detail="Running debate round 2.",
+        )
+        sleep(settings.stage_delay_ms / 1000)
     if _should_stop(query_run_id):
         return
     query_run_repository.update_status(

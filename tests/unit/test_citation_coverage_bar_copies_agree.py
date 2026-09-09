@@ -130,11 +130,17 @@ def test_the_served_schema_carries_no_fixed_default_for_the_bar() -> None:
     prop = schema["properties"]["target_ratio"]
     assert "default" not in prop, (
         f"CitationCoverage.target_ratio regained a default ({prop.get('default')!r}); "
-        "the bar is a function of answer_count and has no constant value"
+        "the bar is a function of answer_count and has no constant value. This "
+        "fired for real on a sentinel default of '-1' -- see ADR-0106."
+    )
+    assert prop.get("readOnly") is True, (
+        "the bar is computed; a writable field invites a client to send one"
     )
     # Positive partner: prove we are reading the real schema, not an empty dict.
     assert schema["properties"]["target_met"]["type"] == "boolean"
-    assert "target_ratio" in schema["required"]
+    assert "target_ratio" in schema["required"], (
+        "target_ratio fell out of required; the server always sends it"
+    )
 
 
 def test_the_bar_is_stated_once_and_the_rule_is_a_count() -> None:
@@ -156,62 +162,47 @@ def test_the_bar_is_stated_once_and_the_rule_is_a_count() -> None:
     assert two_of_four.target_met is False
 
 
-def test_the_sentinel_default_can_never_be_served_as_a_bar() -> None:
-    """RED WHEN: the sentinel becomes a plausible number, or stops being validated.
+def test_the_bar_cannot_be_declared_at_all() -> None:
+    """RED WHEN: ``target_ratio`` becomes a settable field again.
 
-    ``target_ratio`` declares ``default=Decimal("-1")`` purely so a type checker
-    sees an optional argument; ``_derive_target_ratio`` always overwrites it.
-    Two properties keep that honest, and both are asserted here because a dead
-    default is exactly the kind of thing that quietly comes alive:
+    It is a ``computed_field``. A caller cannot state a bar the code does not
+    apply, because there is nowhere to state it -- strictly stronger than
+    validating a stored copy, and the reason the stored version was abandoned.
 
-      * the default is OUTSIDE the field's own ``[0, 1]`` bound, so it cannot be
-        mistaken for a measured bar; and
-      * ``validate_default=True``, so if the injection ever stops happening,
-        construction RAISES rather than serving ``-1`` or some plausible 0.80.
+    THAT VERSION SHIPPED A REAL DEFECT, and this test exists because of it. To
+    satisfy the type checker it declared ``default=Decimal("-1")``; the export
+    then published ``default: '-1'`` on the field -- a value outside its own
+    ``[0, 1]`` bound, advertised to API clients -- while ``target_ratio``
+    silently dropped out of the schema's ``required`` list. The sibling test
+    above caught it on the full-suite run.
     """
     from product_app.providers import CitationCoverage
 
-    field = CitationCoverage.model_fields["target_ratio"]
-    assert field.default == Decimal("-1"), (
-        "the sentinel moved; if it now sits inside [0, 1] it can be served as a bar nobody measured"
+    assert "target_ratio" not in CitationCoverage.model_fields, (
+        "target_ratio is a settable field again; a hand-written bar can now disagree with the code"
     )
-    assert field.validate_default is True, (
-        "without validate_default the sentinel would leak silently instead of raising"
+    assert "target_ratio" in CitationCoverage.model_computed_fields
+
+    # Supplying it changes nothing -- the computed value wins.
+    coverage = CitationCoverage(
+        answer_count=4,
+        sourced_answer_count=3,
+        sourced_answer_ratio=Decimal("0.75"),
+        target_ratio=Decimal("0.80"),  # type: ignore[call-arg]
+        target_met=True,
+    )
+    assert coverage.target_ratio == Decimal("0.75"), (
+        "a supplied target_ratio reached the served value"
     )
 
-    # And the injection really does overwrite it, at more than one run size --
-    # a single case would also pass if the value were hardcoded.
+    # Derived at more than one run size -- a single case would also pass
+    # against a hardcoded constant.
     assert calculate_citation_coverage(
         answer_count=4, sourced_answer_count=3
     ).target_ratio == Decimal("0.75")
     assert calculate_citation_coverage(
         answer_count=1, sourced_answer_count=1
     ).target_ratio == Decimal("1.00")
-
-
-def test_a_declared_bar_that_contradicts_the_code_is_rejected() -> None:
-    """RED WHEN: the model starts trusting a hand-written ``target_ratio``.
-
-    This is the runtime half of the same guard, and the reason the scan above
-    can be scoped to ``e2e/``: anything that reaches the Python model at all
-    cannot lie about the bar.
-    """
-    from product_app.providers import CitationCoverage
-
-    with pytest.raises(ValueError, match="contradicts the bar"):
-        CitationCoverage(
-            answer_count=4,
-            sourced_answer_count=3,
-            sourced_answer_ratio=Decimal("0.75"),
-            target_ratio=Decimal("0.80"),
-            target_met=True,
-        )
-    # Positive partner: the same payload WITHOUT the bad literal is accepted,
-    # so the rejection above is about the contradiction and not the shape.
-    ok = CitationCoverage(
-        answer_count=4,
-        sourced_answer_count=3,
-        sourced_answer_ratio=Decimal("0.75"),
-        target_met=True,
-    )
-    assert ok.target_ratio == Decimal("0.75")
+    # SERIALIZED, not merely present on the object: the point is that a client
+    # sees the bar that was applied.
+    assert coverage.model_dump()["target_ratio"] == Decimal("0.75")

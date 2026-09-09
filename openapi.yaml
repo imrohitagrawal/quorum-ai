@@ -394,20 +394,25 @@ components:
           type: string
           pattern: ^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$
           title: Sourced Answer Ratio
+        target_met:
+          type: boolean
+          title: Target Met
         target_ratio:
           type: string
           pattern: ^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$
           title: Target Ratio
-          default: '-1'
-        target_met:
-          type: boolean
-          title: Target Met
+          description: 'The share of answers that had to carry a primary source, this run.
+
+
+            Derived from ``answer_count``: 1.00, 0.50, 0.67, 0.75 at n = 1..4.'
+          readOnly: true
       type: object
       required:
       - answer_count
       - sourced_answer_count
       - sourced_answer_ratio
       - target_met
+      - target_ratio
       title: CitationCoverage
       description: 'How much of the panel''s output carries a primary source.
 

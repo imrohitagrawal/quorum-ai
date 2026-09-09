@@ -988,6 +988,7 @@ class DebateOrchestrationService:
         openrouter_key: str = "",
         context: dict[str, Any] | None = None,
         should_stop: Callable[[], bool] | None = None,
+        on_round_two_start: Callable[[], None] | None = None,
     ) -> DebateResult:
         if model_slots is None:
             model_slots = []
@@ -1122,6 +1123,26 @@ class DebateOrchestrationService:
                 live_call_usages=live_call_usages,
             )
 
+        # ADR-0108. Round 1 is finished and round 2 is about to be dispatched.
+        #
+        # Both rounds run inside this ONE call, so the orchestrator could only
+        # move the stage markers before it and after it: it marked
+        # ``debate_round_1`` RUNNING, called this, and then fired round 1
+        # COMPLETED, round 2 RUNNING and round 2 COMPLETED in a burst on
+        # return. The burst is ``settings.stage_delay_ms`` wide -- 5 ms by
+        # default -- against a 750 ms poll, so "round 2 is running" was a state
+        # the UI essentially could not observe. It was reported only after the
+        # round it describes had already finished.
+        #
+        # Placed AFTER the budget gate above on purpose: a round 2 that is
+        # skipped must never be announced as started.
+        #
+        # The callback writes through ``update_status``, whose F-05 terminal
+        # guard silently refuses writes to an already-terminal run -- so a
+        # cancel that landed mid-round cannot be overwritten here. Nothing may
+        # pass ``allow_terminal=True`` from this seam.
+        if on_round_two_start is not None:
+            on_round_two_start()
         round_two_started = perf_counter()
         round_two_critiques: tuple[SlotCritique, ...] = ()
         round_two_shape = CRITIQUE_SHAPE_MODERATOR
