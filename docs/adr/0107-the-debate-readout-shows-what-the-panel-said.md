@@ -78,8 +78,10 @@ Lengthening a system prompt is a money change: it is priced on every critic
 call, and under the peer shape that is EIGHT calls at four models' prices.
 Measured rather than assumed.
 
-`PROSE_ATTRIBUTION_INSTRUCTION` is 440 characters = 110 tokens, added to both
-round prompts.
+`PROSE_ATTRIBUTION_INSTRUCTION` is 440 characters. The prompts grow by 442 --
+the splice adds a two-character separator -- i.e. **110.5 tokens each**, which
+is what the table below reflects. (An earlier draft said "440 chars = 110
+tokens", understating by half a token.)
 
 | quantity | before | after |
 |---|---|---|

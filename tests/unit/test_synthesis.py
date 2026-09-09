@@ -667,7 +667,7 @@ def test_user_prompt_carries_the_critique_up_to_the_debate_derived_cap() -> None
 def test_recommendation_prompt_enforces_decision_support_caveat_and_gates() -> None:
     """Workstream-2 tightened ``_RECOMMENDATION_PROMPT`` so the model
     cannot omit the decision-support caveat, cannot bury a failed-count,
-    and cannot quietly approve action when coverage is below 80%.
+    and cannot quietly approve action when the source-coverage target is missed.
     The prompt itself encodes the hard rules; this test pins that
     contract.
     """

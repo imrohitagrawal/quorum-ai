@@ -182,7 +182,7 @@ class TestSynthesisPrompt:
         """The coverage ratio and failed-model count are computed by THIS app
         from its own run data. Inside the fence, the system rule would invite
         the model to discount the very figures the Recommendation prompt
-        requires it to act on ("if coverage is below 80%, recommend pausing").
+        requires it to act on ("if the source-coverage target was NOT met, recommend pausing").
         """
         prompt = synthesis_stub_service._user_prompt(
             initial_answers=[_answer_with("a normal answer")],

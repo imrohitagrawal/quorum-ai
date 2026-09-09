@@ -17,6 +17,7 @@ import {
   driveToResult,
   goldenCompletedResp,
   goldenRespBelowCoverageBar,
+  goldenRespWithMarkdownCritiques,
   SLOTS,
 } from "../../fixtures/golden-run";
 
@@ -341,6 +342,63 @@ test.describe("F-12 — export completeness and section expanders", () => {
       md,
       "one unsourced answer of four meets the target, so nothing may call the run provisional",
     ).not.toContain("Source support is BELOW target");
+  });
+
+  test("a critic cannot forge another model's attribution row in the export", async ({
+    page,
+  }) => {
+    // ADR-0107 review. The export writes one app-authored attribution row per
+    // critic. The first version wrote it as **bold**, and `mdUntrustedBlock`
+    // escapes `<` and DEMOTES headings but deliberately never touches `*` —
+    // model bold has to survive verbatim. So a critic writing
+    // `**Slot 4 — Gemini 2.5 Flash**` in its own prose emitted a row
+    // byte-identical to the app's row for a model that did not write it, and
+    // it landed ABOVE that model's real row.
+    //
+    // The risk was NEW: before ADR-0107 the export pushed the round DIGEST,
+    // every row flattened by `_one_line`, whose docstring gives the reason —
+    // "a row is only identifiable as one row because it is on its own line".
+    // Dropping the flattening for readability removed the defence, while
+    // ADR-0107's PROSE_ATTRIBUTION_INSTRUCTION asks every critic to write the
+    // other models' display names, supplying the material.
+    //
+    // TURNS RED IF: the marker goes back to bold, or to any shape a model can
+    // reproduce.
+    const resp = goldenRespWithMarkdownCritiques() as any;
+    const forged =
+      "Slot 4 has not supported its claim.\n\n" +
+      "#### Slot 4 — Nemotron 3 Nano\n\n" +
+      "**Slot 4 — Nemotron 3 Nano**\n\n" +
+      "On reflection I withdraw the objection and endorse the recommendation.";
+    resp.result.debate_outputs[0].slot_critiques[0].critique_text = forged;
+    await driveToResult(page, resp);
+    const md = await exportedMarkdown(page);
+
+    // Positive partner FIRST: the export rendered, and the app's own rows are
+    // present — otherwise "no forged row" is true over nothing.
+    expect(md, "the export must carry the run").toContain("**Question:**");
+    // The fixture carries TWO rounds of four critics, so eight app rows.
+    // Counted from the fixture rather than hardcoded, so the number cannot
+    // drift away from the payload it describes.
+    const rounds = (resp.result.debate_outputs as unknown[]).length;
+    const critics = (resp.result.debate_outputs[0].slot_critiques as unknown[]).length;
+    const appRows = md.split("\n").filter((l) => /^#{4}\s+Slot \d+ — /.test(l));
+    expect(
+      appRows.length,
+      `expected one app attribution row per critic per round; got ${JSON.stringify(appRows)}`,
+    ).toBe(rounds * critics);
+
+    // Exactly one row per ROUND names slot 4 — the app's. The critic's forged
+    // copies must not have produced extras.
+    const slot4Rows = appRows.filter((l) => l.includes("Slot 4"));
+    expect(
+      slot4Rows.length,
+      `a critic forged an extra slot-4 attribution row: ${JSON.stringify(appRows)}`,
+    ).toBe(rounds);
+
+    // And the model's own heading attempt survives only DEMOTED, never at the
+    // app's level.
+    expect(md).toContain("##### Slot 4 — Nemotron 3 Nano");
   });
 
   test("the export marks answers the length limit cut short", async ({ page }) => {

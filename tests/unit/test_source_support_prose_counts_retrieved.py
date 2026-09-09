@@ -340,8 +340,9 @@ def test_the_retrieved_note_reaches_ONLY_the_source_support_section(
     ``_user_prompt`` is built once and passed to all five sections. The note
     ends "do not describe the run as having no sources at all"; a reviewer
     found an earlier version of it landing in the RECOMMENDATION prompt, beside
-    the safety rule that steers "pause for human review" when coverage is under
-    80%. Scope, not wording, is what keeps it out of there."""
+    the safety rule that steers "pause for human review" when the
+    source-coverage target is missed. Scope, not wording, is what keeps it out
+    of there."""
     monkeypatch.setattr(settings, "openrouter_live_execution_enabled", True)
     answers = _live_answers(attach=[True, True, True, True], monkeypatch=monkeypatch)
 

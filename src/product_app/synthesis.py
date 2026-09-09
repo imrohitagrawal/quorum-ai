@@ -289,6 +289,22 @@ class SynthesisStatus(StrEnum):
     FAILED = "failed"
 
 
+def _coverage_shortfall_sentence(coverage: CitationCoverage) -> str:
+    """One sentence that is TRUE for every state where the target is missed.
+
+    The coverage rule is ``sourced_answer_count >= max(1, answer_count - 1)``
+    over a domain that includes ``answer_count`` 0 and 1, so "more than one
+    answer lacked a source" is false at both ends. Reporting the measured counts
+    sidesteps the paraphrase entirely.
+    """
+    total = coverage.answer_count
+    sourced = coverage.sourced_answer_count
+    if total <= 0:
+        return "No model answers came back, so nothing could be sourced. "
+    noun = "answer" if total == 1 else "answers"
+    return f"Only {sourced} of {total} {noun} that came back carried a primary source. "
+
+
 class SynthesisQualityChecks(BaseModel):
     citation_coverage_target_met: bool
     false_consensus_preserved: bool
@@ -1317,9 +1333,21 @@ class SynthesisOrchestrationService:
             base = (
                 "Recommendation: do not act on the consensus yet. "
                 + (
-                    "More than one of the answers that came back lacked a primary source. "
-                    if not target_met
-                    else ""
+                    # STATE THE COUNTS. Any English summary of the rule is false
+                    # somewhere in the domain, because the domain includes 0 and
+                    # 1 answers and the rule is `sourced >= max(1, n - 1)`.
+                    #
+                    # "More than one of the answers that came back lacked a
+                    # primary source" -- this line until ADR-0106 review -- is
+                    # FALSE at n=0 (none came back, so none lacked one) and at
+                    # n=1, sourced=0 (exactly one lacked one, not more than one).
+                    # Both are reachable when three or four slots fail, which is
+                    # precisely when this templated fallback is used. The old
+                    # 80%-based sentence was true in both.
+                    #
+                    # Counts cannot be wrong, and they tell the reader more than
+                    # any paraphrase of the threshold would.
+                    _coverage_shortfall_sentence(coverage) if not target_met else ""
                 )
                 + (
                     f"At least one model ({failed_count}) failed to return a usable response. "

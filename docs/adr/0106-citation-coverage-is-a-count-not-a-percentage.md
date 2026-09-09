@@ -15,7 +15,10 @@ sanction a live-execution posture.
 `CITATION_COVERAGE_TARGET = Decimal("0.80")` was compared against
 `sourced_answer_count / answer_count`, quantized to 2dp. The product refuses any
 slot list that is not exactly 4 (`model_slots.py:314`), so `answer_count` is the
-number of slots that produced text: 1-4.
+number of slots that produced text. The domain is **0-4**, not 1-4: every slot can fail, and the
+`answer_count <= 0` branch below is reachable. Getting that domain wrong in the
+first draft produced a user-facing sentence that was false at 0 and 1 -- see
+Consequences.
 
 Over that domain the 0.80 target has **no attainable intermediate state**.
 
@@ -26,7 +29,9 @@ Over that domain the 0.80 target has **no attainable intermediate state**.
 | 3 | 0.00, 0.33, 0.67, 1.00 | 3/3 only |
 | 4 | 0.00, 0.25, 0.50, 0.75, 1.00 | 4/4 only |
 
-It cuts a five-valued space at exactly the point a 100% rule would. **The number
+At each n it cuts that n's attainable set at exactly the point a 100% rule
+would. (The union over n = 1..4 holds seven distinct 2dp values, not five;
+five is the count for n = 4 alone, which an earlier draft conflated.) **The number
 0.80 was doing no work**: for every n >= 1 it is indistinguishable from "every
 answer must be sourced".
 
@@ -48,8 +53,12 @@ quantized-ratio collisions:
   1.00 [(1,1), (2,2), (3,3), (4,4)]
 ```
 
-**`1/2` and `2/4` are the same quantized ratio, `0.50`.** A ratio threshold
-therefore *cannot* pass one and fail the other. The rule the owner asked for is
+**`1/2` and `2/4` are the same number, `0.50`** -- not merely equal after
+rounding. The ratio is simply not injective on the `(k, n)` pairs that must get
+different verdicts, so a ratio threshold *cannot* pass one and fail the other.
+(An earlier draft credited the quantization step for this. That was wrong:
+quantization is irrelevant here, though it IS the right explanation for the
+2-of-3 case below, where 0.6667 rounds up to meet a 0.67 bar.) The rule the owner asked for is
 not expressible as a percentage at all. That is the finding that chose the form,
 not a preference for counts.
 
@@ -103,7 +112,7 @@ does pass 2/3 and fail 2/4. Rejected on honesty: 0.66 is a magic number
 reverse-engineered from one boundary, it still cannot express "at most one
 unsourced" (1/2 fails), and no reader could restate it as a rule.
 
-**Remove `target_ratio` from the schema.** It is served (`openapi.yaml:397`) and
+**Remove `target_ratio` from the schema.** It is served (`openapi.yaml`, the `CitationCoverage` schema) and
 part of the pre-S2 contract. Deriving it keeps the shape and makes the value
 true; removing it is a breaking change for no gain.
 
@@ -113,8 +122,11 @@ true; removing it is a breaking change for no gain.
   audit prompt, NFR-003, AC-031 and `docs/114-success-metrics.md` all state the
   rule in words rather than a percentage. **An LLM system prompt changes.**
 - `evaluation.py`'s advisory grounding threshold said it "mirrors the existing
-  `CITATION_COVERAGE_TARGET` of 0.80". That constant is measured against a
-  corpus and is NOT moved; only the now-false claim of mirroring is corrected.
+  `CITATION_COVERAGE_TARGET` of 0.80". It is NOT moved, and the mirroring claim
+  is corrected. Note what it is not: **0.80 there is not corpus-measured
+  either.** `0.8462` is where the faithful side of the corpus sits, not where
+  0.80 came from, and that comment's own last line reads "the margin is thin and
+  it is not calibrated". Re-deriving it is open work.
 - `docs/validation/*.json` are frozen records of past runs and are NOT edited.
   They carry `target_ratio: "0.80"` because that is what those runs reported.
 - A new consistency gate pins every served/fixture copy of `target_ratio`
@@ -124,10 +136,18 @@ true; removing it is a breaking change for no gain.
 
 ## The bar is derived, not declared
 
-`CitationCoverage` gained a `mode="before"` validator that fills `target_ratio`
-from `answer_count` when it is absent, and **rejects an explicitly supplied
-value that contradicts the bar the code applies**. So the served field cannot
-drift from the rule by being written down a second time.
+`target_ratio` is a **`computed_field`**: a pure function of `answer_count`,
+with nowhere to write a second copy. Supplying one is silently ignored, because
+there is no field to set.
+
+**This ADR described something else until review corrected it.** The first
+implementation STORED the field and policed it with a `mode="before"` validator
+that rejected a contradicting value. That needed a sentinel default to satisfy
+the type checker, and the sentinel leaked into the published schema as
+`default: '-1'` -- outside the field's own `[0, 1]` bound -- while `target_ratio`
+silently fell out of `required`. The gate below caught it and the field became
+computed, in the ADR-0108 commit. The validator is gone; a reader following this
+ADR to `providers.py` would not have found it.
 
 It earned its keep on the first run: it rejected
 `tests/unit/test_consensus_boilerplate_blindness.py`, which had been carrying a
@@ -139,7 +159,7 @@ hardcoded `target_ratio=Decimal("0.80")` on a one-answer shape whose real bar is
 **The trust score does not move**, and this is stronger than a numeric
 comparison: `grep -rn "target_met" src/product_app/evaluation.py` returns **no
 matches**. The composite's coverage input is `coverage_ratio=
-coverage.sourced_answer_ratio` (`synthesis.py:526`) -- the *ratio*. `target_met`
+coverage.sourced_answer_ratio` (`synthesis.py`, `coverage_ratio=coverage.sourced_answer_ratio`) -- the *ratio*. `target_met`
 is not an input to the trust arithmetic at all, so no value of the target can
 change the score.
 

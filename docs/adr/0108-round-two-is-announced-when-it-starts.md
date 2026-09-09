@@ -24,12 +24,25 @@ already finished.
 Two corrections to the original report, both from re-verifying it:
 
 - its line numbers were off by ~25 (`query_run_orchestration.py:1304-1410`, and
-  the `debate.py` round call sites are `:1013` / `:1101`);
+  the `debate.py` round-1 call site is `:1013`, and round 2 dispatches after the
+  skip gate -- grep `_build_peer_round(` rather than trusting a line number,
+  which is the standard this very paragraph is holding the report to);
 - it proposed choosing between "a callback, splitting the orchestration call,
   or emitting the transition before dispatch" *after* establishing whether the
-  UI polls or streams. It polls. There is **no SSE anywhere in `src/`** —
-  `grep -rn "EventSource|text/event-stream|StreamingResponse|sse"` returns
+  UI polls or streams. It polls: `app.js`'s `startPolling` uses
+  `setInterval(..., 750)`, and **nothing in `src/` serves SSE to the browser** —
+  `grep -rnE "EventSource|text/event-stream|StreamingResponse" src/` returns
   nothing.
+
+  A first draft of this paragraph claimed "no SSE anywhere in `src/`" and cited
+  `grep -rn "EventSource|text/event-stream|StreamingResponse|sse"`. Both halves
+  were wrong, and review caught them. The claim is false — `providers.py` has a
+  full SSE frame parser (`_iter_sse_data`) for the OpenRouter *client* path.
+  The command is worse than the claim: basic `grep` treats `|` as a literal, so
+  that pattern matches nothing against **any** tree, including one full of
+  `EventSource`. It was a check that counts nothing, quoted inside an ADR as
+  the proof of its own conclusion — the exact shape AGENTS.md rule 7 forbids,
+  shipped in the document arguing for rigour.
 
 ## A finding that changes where a fix may usefully land
 

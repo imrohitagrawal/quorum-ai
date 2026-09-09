@@ -1591,6 +1591,14 @@
     pending: "pending",
     failed: "failed",
     skipped: "skipped",
+    // ADR-0108 made this reachable. The round-boundary callback marks
+    // `debate_round_1` COMPLETED at the real boundary, which is BEFORE
+    // `record_debate_outputs` writes the round's DebateOutput -- so for the
+    // whole of round 2 the strip says round 1 is complete while this card has
+    // no round-1 entry to render. Without a "completed" key the lookup fell
+    // through to "pending" and the body read "This round has not started yet.",
+    // i.e. the fix for round 2's marker made round 1's card lie instead.
+    completed: "complete",
   };
 
   const LIVE_ROUND_PLACEHOLDER_BODY = {
@@ -1605,6 +1613,11 @@
     pending: "This round has not started yet.",
     failed: "This round did not complete.",
     skipped: "This round was skipped.",
+    // ADR-0108: the marker moves at the real round boundary, which is a moment
+    // BEFORE the round's DebateOutput is recorded. Says what is true in that
+    // window -- the round is done and its text is on its way -- rather than
+    // falling through to "has not started yet", which is the opposite of true.
+    completed: "This round has finished; its critique is being recorded.",
   };
 
   // Map a run status to the header pill's visible text + colour state. The
@@ -3281,7 +3294,25 @@
             const who = mdEscapeInline(
               displayNameForModel(c.critic_model_id) || c.critic_model_id || "unknown model",
             );
-            push(`**Slot ${c.critic_slot_number} — ${who}**`, "");
+            // A HEADING, not bold. `mdUntrustedBlock` escapes `<` and DEMOTES
+            // any ATX heading in model text, but it deliberately does not touch
+            // `*` -- model bold has to survive verbatim. So a bold marker is
+            // forgeable: a critic writing `**Slot 4 — Gemini 2.5 Flash**` in its
+            // own prose emits a row byte-identical to this one, for a model that
+            // did not write it, and it lands ABOVE that model's real row.
+            //
+            // That risk is NEW here. Before this change the export pushed the
+            // round DIGEST, every row flattened by `_one_line`, whose docstring
+            // states the purpose exactly: "a row is only identifiable as one row
+            // because it is on its own line". Dropping the flattening for
+            // readability removed the defence, and ADR-0107's own
+            // PROSE_ATTRIBUTION_INSTRUCTION asks every critic to write the other
+            // models' display names -- so the forging material is supplied.
+            //
+            // `####` cannot be forged: a model's own `####` is demoted to
+            // `#####` on the way through, so app rows and model rows can never
+            // collide at the same level.
+            push(`#### Slot ${c.critic_slot_number} — ${who}`, "");
             if (c.critique_text) push(mdUntrustedBlock(String(c.critique_text).trim()), "");
           }
         } else if (r.critique_text) {
@@ -4150,6 +4181,10 @@
   const TRUST_BASIS =
     "A weighted blend of seven automated checks on this run's own output. It is not a judgement of whether the answer is correct.";
   const TRUST_MET_LEAD = "Checks fully met:";
+  // Renders ONLY beneath the met list, so the shortfall bullets cannot read as
+  // items under "Checks fully met:". No digit and none of the banned advisory
+  // words, so it stays legal if it ever reaches the unverified branch.
+  const TRUST_SHORTFALL_LEAD = "Checks that fell short:";
 
   const TRUST_BAND_LABELS = {
     low: "low trust",
@@ -4200,6 +4235,13 @@
     box.removeAttribute("data-state");
     box.removeAttribute("data-band");
 
+    // Set when the "Checks fully met" list renders, so the shortfall list
+    // below can label itself. Without a label the two lists are visually
+    // identical -- same padding, font and colour -- and the container's 8px
+    // row gap is the SAME between the heading and its list as between that
+    // list and the next, so proximity gives no grouping signal and the
+    // failure bullets read as items under "Checks fully met:".
+    let metListRendered = false;
     const ev = result && result.evaluation;
     // D-14: an absent / null / malformed evaluation ⇒ hidden, zero text. (An
     // em-dash would read as "nothing wrong found"; silence is honest here.)
@@ -4264,10 +4306,14 @@
       // WHAT THE NUMBER MEANS, then WHAT IT LOOKED AT. Both textContent via
       // mkEl (D-15) — never setProse, which is for provider prose.
       box.appendChild(mkEl("p", "result-trust-score-basis", TRUST_BASIS));
-      // The checks this run passed OUTRIGHT. The existing "why" list below
-      // carries the ones that fell short, so the two together account for the
-      // signals the composite actually weighed — which is the explanation the
-      // headline was missing.
+      // The checks this run passed OUTRIGHT, above the ones that fell short.
+      //
+      // NOT a complete account of the composite, and this comment used to
+      // claim it was. The shortfall list is `.slice(0, 3)`, so with four or
+      // more sub-1.0 signals -- reachable on the verified branch -- a signal
+      // appears in NEITHER list. What a reader gets is the passing set in full
+      // and the worst few shortfalls: the explanation the bare headline was
+      // missing, not an audit of the arithmetic.
       //
       // Driven off the SERVED contributions array, never a hardcoded list of
       // seven: when `citation_marker_grounding` is unknown the server drops it
@@ -4293,6 +4339,7 @@
           );
         }
         box.appendChild(metList);
+        metListRendered = true;
       }
     } else {
       // R4: the standing disclosure is always the first line.
@@ -4345,6 +4392,14 @@
       .sort((a, b) => Number(a.value) - Number(b.value))
       .slice(0, 3);
     if (whys.length) {
+      // Only when the met list is above it: on the unverified branch this list
+      // stands alone and needs no disambiguation, and adding a line there would
+      // move visual baselines for no reason.
+      if (metListRendered) {
+        box.appendChild(
+          mkEl("p", "result-trust-score-why-lead", TRUST_SHORTFALL_LEAD),
+        );
+      }
       const list = mkEl("ul", "result-trust-score-why");
       for (const c of whys) {
         list.appendChild(mkEl("li", "result-trust-score-why-item", TRUST_WHY[c.signal]));

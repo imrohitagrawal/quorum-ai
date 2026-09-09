@@ -2883,6 +2883,13 @@ html[data-theme="dark"] .landing-preview-caption {
   color: var(--text-secondary);
 }
 
+.result-trust-score-why-lead {
+  margin: 0;
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--text-secondary);
+}
+
 .result-trust-score-met-lead {
   margin: 0;
   font-size: 0.8rem;

@@ -32,9 +32,10 @@ Three facts established before designing anything:
 Explain it on the **VERIFIED branch only**, and say what the number is not.
 
 Three additions: a one-sentence basis line, a `TRUST_SIGNAL_LABELS` map, and a
-list of the checks the run passed outright. The existing "why" list keeps the
-ones that fell short, so the two together account for the signals the composite
-actually weighed.
+list of the checks the run passed outright, above the ones that fell short.
+The two are NOT a complete account of the composite: the shortfall list is
+`.slice(0, 3)`, so with four or more sub-1.0 signals a signal appears in
+neither. The passing set is complete; the shortfalls are the worst few.
 
 **No neutral label map existed.** `TRUST_WHY` was the only signal-key-to-English
 map in the codebase and every string in it is a failure phrasing ("Not every
