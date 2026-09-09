@@ -80,7 +80,33 @@ _LOGGER = logging.getLogger(__name__)
 # look the name up from this module's globals on every call.
 urlopen = CREDENTIAL_OPENER.open
 
-CITATION_COVERAGE_TARGET = Decimal("0.80")
+#: How many of a run's answers may lack a primary source and still meet the
+#: target. ADR-0106.
+#:
+#: This replaced ``CITATION_COVERAGE_TARGET = Decimal("0.80")``, which was
+#: compared against the 2dp-quantized ``sourced_answer_count / answer_count``.
+#: The product refuses any slot list that is not exactly 4
+#: (``model_slots.validate_model_slots``), so ``answer_count`` is 1-4 and the
+#: ratio has at most five attainable values. Over that domain 0.80 was met by
+#: 1/1, 2/2, 3/3 and 4/4 and by nothing else -- indistinguishable from a 100%
+#: rule, so the number 0.80 was doing no work.
+#:
+#: It is a COUNT and not a percentage because the rule is not expressible as
+#: one. Measured over the whole domain: ``1/2`` and ``2/4`` both quantize to
+#: ``0.50``, so no threshold can pass one and fail the other. A ratio of 0.67
+#: would pass 2/3 only because ``0.666...`` rounds UP, making the verdict an
+#: artefact of the quantization step. A count depends on neither.
+CITATION_COVERAGE_MAX_UNSOURCED_ANSWERS = 1
+
+
+def citation_coverage_required_count(answer_count: int) -> int:
+    """How many sourced answers ``answer_count`` answers must carry.
+
+    ``max(1, ...)`` so a one-answer run is never handed a bar of zero, which
+    would make the target trivially met by a run that sourced nothing --
+    exactly the vacuous pass AGENTS.md rule 7 exists to forbid.
+    """
+    return max(1, answer_count - CITATION_COVERAGE_MAX_UNSOURCED_ANSWERS)
 
 
 def _resolve_display_name(model_id: str) -> str:
@@ -197,9 +223,11 @@ class CitationCoverage(BaseModel):
     one primary (non-fallback) source** — nothing more, and the field names say
     so. It used to divide a per-answer BOOLEAN by a characters-based estimate
     of "material claims", so the numerator and denominator did not share units
-    and a run of four long, fully-sourced answers scored ~12% against an 80%
-    target. Every run was therefore labelled provisional and the recommendation
-    always said "pause for human review".
+    and a run of four long, fully-sourced answers scored ~12% against the 80%
+    target OF THE TIME. Every run was therefore labelled provisional and the
+    recommendation always said "pause for human review". (That percentage
+    target is itself gone -- ADR-0106 replaced it with a count rule. The 80%
+    here is a historical figure, not a bar this code still applies.)
 
     What this metric does NOT claim: that each individual assertion inside an
     answer is supported. Counting sources says a citation is present; it says
@@ -219,8 +247,68 @@ class CitationCoverage(BaseModel):
     sourced_answer_count: int = Field(ge=0)
     #: ``sourced_answer_count / answer_count``, quantized to 2dp.
     sourced_answer_ratio: Decimal = Field(ge=Decimal("0"), le=Decimal("1"))
-    target_ratio: Decimal = CITATION_COVERAGE_TARGET
+    #: The bar this run had to clear, as a ratio, DERIVED from
+    #: ``answer_count`` -- not a constant. ADR-0106 replaced the fixed 0.80
+    #: with "at most one answer may lack a primary source", which is
+    #: ``max(1, answer_count - 1) / answer_count``: 1.00, 0.50, 0.67, 0.75 at
+    #: n = 1..4. Reported so a client can still see what was required.
+    #:
+    #: ``target_met`` is NOT derived from comparing this against
+    #: ``sourced_answer_ratio``. Both sides are quantized to 2dp, and deciding
+    #: on rounded values is how 2/3 came to hinge on ``0.666...`` rounding up.
+    #: The verdict is computed from the COUNTS; this field only reports it.
+    #: The declared default is a SENTINEL, not a bar. ``_derive_target_ratio``
+    #: below always injects the real value, so this is unreachable through
+    #: normal construction -- but a type checker cannot see a ``mode="before"``
+    #: validator, and making the field required would force the argument into
+    #: 38 unrelated test files that have no opinion about the bar.
+    #:
+    #: ``-1`` and ``validate_default=True`` together make a leak LOUD: if the
+    #: validator ever stops injecting, construction raises on ``ge=0`` instead
+    #: of quietly serving a plausible-looking number. A default inside [0, 1]
+    #: would have been served as if it were measured.
+    target_ratio: Decimal = Field(
+        default=Decimal("-1"), ge=Decimal("0"), le=Decimal("1"), validate_default=True
+    )
     target_met: bool
+
+    @model_validator(mode="before")
+    @classmethod
+    def _derive_target_ratio(cls, data: Any) -> Any:
+        """Fill ``target_ratio`` from ``answer_count`` when it is not given.
+
+        The bar is a function of the run's size (ADR-0106), so there is no
+        constant to default it to. Deriving it here means every construction
+        site -- production, tests, fixtures replayed through this model --
+        reports the bar the code actually applied, and cannot drift from it by
+        being written down a second time.
+
+        An explicitly supplied value is CHECKED, not trusted. A caller that
+        states a bar the implementation does not apply is the exact defect this
+        change exists to remove; accepting it silently would reintroduce it one
+        layer up.
+        """
+        if not isinstance(data, dict):
+            return data
+        answer_count = data.get("answer_count")
+        if not isinstance(answer_count, int) or isinstance(answer_count, bool):
+            return data
+        if answer_count <= 0:
+            derived = Decimal("1.00")
+        else:
+            derived = (
+                Decimal(citation_coverage_required_count(answer_count)) / Decimal(answer_count)
+            ).quantize(Decimal("0.01"))
+        supplied = data.get("target_ratio")
+        if supplied is None:
+            return {**data, "target_ratio": derived}
+        if Decimal(str(supplied)).quantize(Decimal("0.01")) != derived:
+            raise ValueError(
+                f"target_ratio {supplied!r} contradicts the bar this code applies "
+                f"for answer_count={answer_count} ({derived}). The bar is derived, "
+                "not declared -- see ADR-0106."
+            )
+        return data
 
     @model_validator(mode="after")
     def _numerator_cannot_outrun_denominator(self) -> CitationCoverage:
@@ -4118,7 +4206,7 @@ _INLINE_MARKDOWN_LINK_RE = re.compile(r"\[([^\]]+)\]\((https?://[^\s)]+)\)")
 #:
 #: WP-C / F-03: this is a LENGTH ESTIMATE, not the citation-coverage
 #: denominator. It used to be, and that was the defect — dividing a per-answer
-#: boolean by it made the 80% target unreachable at any realistic answer
+#: boolean by it made the then-current 80% target unreachable at any realistic answer
 #: length. Its only remaining job is the informational
 #: ``QueryRunResultResponse.material_claim_count`` figure. Do not reintroduce
 #: it into :func:`calculate_citation_coverage`.
@@ -4152,20 +4240,30 @@ def calculate_citation_coverage(
     even when every one of them was sourced.
     """
     if answer_count <= 0:
+        # No answers came back, so there is no coverage to have met. The bar is
+        # reported as 1.00 -- unattainable over an empty population -- and
+        # ``target_met`` stays False. Reporting "met" here would be a pass
+        # measured over nothing, which is the shape AGENTS.md rule 7 forbids.
         return CitationCoverage(
             answer_count=0,
             sourced_answer_count=0,
             sourced_answer_ratio=Decimal("0"),
+            target_ratio=Decimal("1.00"),
             target_met=False,
         )
     sourced_answer_ratio = (Decimal(sourced_answer_count) / Decimal(answer_count)).quantize(
         Decimal("0.01")
     )
+    required = citation_coverage_required_count(answer_count)
     return CitationCoverage(
         answer_count=answer_count,
         sourced_answer_count=sourced_answer_count,
         sourced_answer_ratio=sourced_answer_ratio,
-        target_met=sourced_answer_ratio >= CITATION_COVERAGE_TARGET,
+        target_ratio=(Decimal(required) / Decimal(answer_count)).quantize(Decimal("0.01")),
+        # From the COUNTS. Comparing the two quantized ratios would give the
+        # same answer for every n the product can emit, but it would make the
+        # verdict depend on the rounding step; this cannot.
+        target_met=sourced_answer_count >= required,
     )
 
 

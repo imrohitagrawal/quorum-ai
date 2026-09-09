@@ -189,6 +189,7 @@ class TestSynthesisPrompt:
             debate_outputs=[],
             failed_count=2,
             coverage_ratio=type("R", (), {"__str__": lambda self: "0.5"})(),
+            coverage_target_met=False,
         )
         assert prompt.count(UNTRUSTED_BEGIN) == 1
         assert prompt.endswith(UNTRUSTED_END)
@@ -206,6 +207,7 @@ class TestSynthesisPrompt:
             debate_outputs=[],
             failed_count=0,
             coverage_ratio=type("R", (), {"__str__": lambda self: "0.0"})(),
+            coverage_target_met=False,
         )
         assert prompt.count(UNTRUSTED_END) == 1
         assert prompt.rindex(UNTRUSTED_END) == len(prompt) - len(UNTRUSTED_END)
@@ -228,6 +230,7 @@ class TestSynthesisPrompt:
             ),
             failed_count=0,
             coverage_ratio=type("R", (), {"__str__": lambda self: "0.0"})(),
+            coverage_target_met=False,
         )
         assert prompt.count(UNTRUSTED_END) == 1
 
@@ -352,6 +355,7 @@ class TestSourceTitles:
             debate_outputs=[],
             failed_count=0,
             coverage_ratio=type("R", (), {"__str__": lambda self: "0.0"})(),
+            coverage_target_met=False,
         )
 
     def test_a_multiline_title_cannot_forge_prompt_structure(self) -> None:

@@ -512,6 +512,7 @@ def _synthesis_user_prompt(context: dict[str, str] | None) -> str:
         debate_outputs=[],
         failed_count=0,
         coverage_ratio=Decimal("0.5"),
+        coverage_target_met=False,
         context=context,
     )
 

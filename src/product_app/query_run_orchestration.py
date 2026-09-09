@@ -397,7 +397,8 @@ class QueryRunResultResponse(BaseModel):
     #:
     #: WP-C / F-03: this is NOT the citation-coverage denominator any more, and
     #: it never should have been — dividing a per-answer boolean by it made the
-    #: 80% target unreachable at any realistic answer length. Coverage now
+    #: then-current 80% target unreachable at any realistic answer length (that
+    #: percentage target is gone too; see ADR-0106). Coverage now
     #: divides answers by answers (see ``CitationCoverage``). The field is kept
     #: because it is part of the served pre-S2 contract
     #: (tests/contract/test_query_run_evaluation_additive.py), not because

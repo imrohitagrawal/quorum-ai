@@ -13,7 +13,12 @@
 // to a readable height with a control to open them; SHORT sections must not
 // grow a control they do not need.
 import { test, expect } from "@playwright/test";
-import { driveToResult, goldenCompletedResp, SLOTS } from "../../fixtures/golden-run";
+import {
+  driveToResult,
+  goldenCompletedResp,
+  goldenRespBelowCoverageBar,
+  SLOTS,
+} from "../../fixtures/golden-run";
 
 // Read the Blob the export writes, without touching the filesystem: stub
 // URL.createObjectURL, click, then read back the Blob's text.
@@ -294,6 +299,48 @@ test.describe("F-12 — export completeness and section expanders", () => {
       md,
       "nothing was simulated on this run, so the file must not say it was"
     ).not.toMatch(/simulat/i);
+  });
+
+  // ---- ADR-0106: the export's source-support verdict ----------------------
+  //
+  // The exported file is the copy a user KEEPS, and it carries a one-line
+  // provisional warning when the run missed the source-coverage target. Until
+  // this pair, that line was asserted NOWHERE — python or e2e — in either
+  // direction. It survived only because `goldenCompletedResp()` happened to be
+  // below target; ADR-0106 moved that builder to AT target, which would have
+  // silently retired the only thing exercising the line at all.
+  //
+  // The two tests are each other's partner (AGENTS.md rule 7): one proves the
+  // warning appears when it must, the other proves it is not simply always
+  // printed. Neither alone means anything.
+
+  test("a run that MISSES the coverage target warns in the exported file", async ({ page }) => {
+    // TURNS RED IF: the `citation_coverage.target_met === false` branch in
+    // buildResultMarkdown stops emitting its row, or the row's wording drifts
+    // from the screen's.
+    await driveToResult(page, goldenRespBelowCoverageBar());
+    const md = await exportedMarkdown(page);
+    // Positive partner FIRST: the assertions below mean nothing unless the
+    // export actually rendered a run.
+    expect(md, "the export must carry the run at all").toContain("**Question:**");
+    expect(
+      md,
+      "a run below the source-coverage target must say so in the kept file",
+    ).toContain("Source support is BELOW target");
+  });
+
+  test("a run that MEETS the coverage target carries no such warning", async ({ page }) => {
+    // The other direction. goldenCompletedResp() has one unsourced answer of
+    // four, which MEETS the ADR-0106 target — so the provisional row must be
+    // absent. Without this, "always print the warning" would pass the test
+    // above.
+    await driveToResult(page);
+    const md = await exportedMarkdown(page);
+    expect(md, "the export must carry the run at all").toContain("**Question:**");
+    expect(
+      md,
+      "one unsourced answer of four meets the target, so nothing may call the run provisional",
+    ).not.toContain("Source support is BELOW target");
   });
 
   test("the export marks answers the length limit cut short", async ({ page }) => {

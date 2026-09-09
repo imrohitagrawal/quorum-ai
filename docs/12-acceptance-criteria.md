@@ -226,7 +226,7 @@ Given query cost telemetry is available, when cost is reviewed, then average, pe
 
 ## AC-031 Citation coverage measured
 
-Given a sampled set of source-backed completed queries is reviewed, when each answer that came back is checked for a visible primary source, then the share of those answers carrying one is scored against the 80 percent target in NFR-003.
+Given a sampled set of source-backed completed queries is reviewed, when each answer that came back is checked for a visible primary source, then the count of those answers carrying one is scored against the NFR-003 target, which is that at most one answer in the run may lack a primary source (ADR-0106).
 
 - Requirement: NFR-003
 - Test: TEST-NFR-003

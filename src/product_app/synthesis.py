@@ -274,9 +274,10 @@ _RECOMMENDATION_PROMPT = _section_prompt(
     "safety, or regulated professional advice.'\n"
     "2. If `failed_count > 0`, lead with that fact in the first "
     "sentence — do not bury it.\n"
-    "3. If source coverage — the share of answers carrying a primary "
-    "source — is below 80%, recommend pausing for "
-    "human review before any action.\n"
+    "3. If the directives say the source-coverage target was NOT met, "
+    "recommend pausing for human review before any action. Do not "
+    "recompute that verdict from the percentage — it is decided by "
+    "the application and stated for you.\n"
     "4. Otherwise recommend acting on the consensus pending a "
     "human source audit.\n"
     "Output is shown to the user as 'Recommendation'."
@@ -524,6 +525,7 @@ class SynthesisOrchestrationService:
             debate_outputs=debate_outputs,
             failed_count=failed_count,
             coverage_ratio=coverage.sourced_answer_ratio,
+            coverage_target_met=coverage.target_met,
             context=context,
         )
 
@@ -762,6 +764,7 @@ class SynthesisOrchestrationService:
         debate_outputs: list[DebateOutput],
         failed_count: int,
         coverage_ratio: Decimal,
+        coverage_target_met: bool,
         context: dict[str, Any] | None = None,
     ) -> str:
         """Build a compact, deterministic prompt that fits within the
@@ -785,6 +788,12 @@ class SynthesisOrchestrationService:
             "Do NOT repeat the user's question verbatim in your response.",
             f"Source coverage: {Decimal(str(coverage_ratio)) * 100:.0f}% of the answers "
             "carried at least one primary source.",
+            # ADR-0106. The VERDICT, not a number for the model to compare.
+            # The target is "at most one answer may lack a primary source",
+            # which is a count rule; asking a model to re-derive it from a
+            # rounded percentage is asking it to do arithmetic it cannot check
+            # (75% is BELOW the old 80% figure and yet MEETS the rule at n=4).
+            "Source-coverage target: " + ("MET." if coverage_target_met else "NOT MET."),
             f"Failed model count: {failed_count}.",
         ]
 
@@ -1203,7 +1212,8 @@ class SynthesisOrchestrationService:
             # sections, and this sentence ends "do not report the run as having
             # no sources" — landing that in the RECOMMENDATION prompt puts it
             # beside the safety rule that steers "pause for human review" when
-            # coverage is under 80%. A reviewer found it there; nothing in the
+            # the source-coverage target is missed. A reviewer found it there;
+            # nothing in the
             # product needs it there.
             user_prompt=_with_retrieved_note(user_prompt, initial_answers),
             # WP-G2 (F-10): this was the one section of five that accepted
@@ -1307,7 +1317,7 @@ class SynthesisOrchestrationService:
             base = (
                 "Recommendation: do not act on the consensus yet. "
                 + (
-                    "Fewer than 80% of the answers carried a primary source. "
+                    "More than one of the answers that came back lacked a primary source. "
                     if not target_met
                     else ""
                 )

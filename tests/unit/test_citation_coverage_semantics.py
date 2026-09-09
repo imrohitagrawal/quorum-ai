@@ -226,13 +226,24 @@ def test_half_sourced_run_reports_half_and_misses_the_target() -> None:
     assert target_met is False
 
 
-def test_three_of_four_sourced_still_misses_the_eighty_percent_target() -> None:
-    """0.75 < 0.80 — the target is a real bar, not a formality."""
+def test_three_of_four_sourced_meets_the_target() -> None:
+    """RED WHEN: the target goes back to being a percentage bar.
+
+    ADR-0106. This assertion is INVERTED from what it was. Under the old 0.80
+    threshold 3-of-4 missed the target, which -- over a domain where the only
+    attainable ratios are 0, .25, .50, .75 and 1.00 -- made the target
+    identical to "every answer must be sourced". One unsourced answer out of
+    four is now inside the bar.
+
+    ``test_half_sourced_run_reports_half_and_misses_the_target`` above is the
+    partner that keeps a REAL failing case (2 of 4), so this pair cannot both
+    be satisfied by a rule that always passes.
+    """
     ratio, target_met, _ = _run_coverage(
         _four_answers(texts=[_LONG_ANSWER] * 4, sourced=[True, True, True, False])
     )
     assert ratio == Decimal("0.75")
-    assert target_met is False
+    assert target_met is True
 
 
 def _failed_answer(slot_index: int = 3) -> InitialModelAnswer:

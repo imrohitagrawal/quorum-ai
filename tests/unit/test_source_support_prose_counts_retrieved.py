@@ -350,6 +350,7 @@ def test_the_retrieved_note_reaches_ONLY_the_source_support_section(
         debate_outputs=[],
         failed_count=0,
         coverage_ratio=Decimal("0.00"),
+        coverage_target_met=False,
     )
     assert "web search this product ran supplied" not in shared, (
         "the retrieved-sources note leaked into the SHARED prompt, so it now "

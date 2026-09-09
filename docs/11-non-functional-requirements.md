@@ -35,17 +35,17 @@ These NFRs apply to the Release 1 MVP query workflow and supporting browser-sess
 ## NFR-003 Citation coverage
 
 - Category: Grounding quality.
-- Target: At least 80 percent of the answers that came back in a run carry at least one visible primary source link when source-backed search succeeds. "Came back" is load-bearing: a slot that failed, was cancelled, or hit the deadline produced no text to source and is out of both terms, because the `completeness` signal is what reports a missing slot. Stating the denominator as "the four answers" would be wrong on any degraded run.
+- Target: At most ONE of the answers that came back in a run may lack a visible primary source link, when source-backed search succeeds. Equivalently `sourced_answer_count >= max(1, answer_count - 1)`. This replaced an "at least 80 percent" bar on 2026-09-09 (ADR-0106): a run has at most four answers, so the ratio had at most five attainable values and 80 percent was met only by a fully sourced run — the number was doing no work. It is a COUNT and not a percentage because the rule cannot be written as one: 1-of-2 and 2-of-4 are both 0.50, so no threshold passes one and fails the other. "Came back" is load-bearing: a slot that failed, was cancelled, or hit the deadline produced no text to source and is out of both terms, because the `completeness` signal is what reports a missing slot. Stating the denominator as "the four answers" would be wrong on any degraded run.
 - Measurement: `providers.calculate_citation_coverage` — sourced answers divided by answers that produced text, per run. Fallback/web-search sources are excluded; only the model's own primary citations count.
 - Scope limit (state it, do not imply otherwise): this measures whether a citation is PRESENT on each answer. It does not verify that the citation supports the claim. Whether a citation marker resolves to a real source is a separate signal, `citation_marker_grounding`.
-- History: until WP-C (2026-07-27) the target read "material factual claims" and the code divided a per-answer boolean by a ~1-claim-per-200-characters estimate. Numerator and denominator did not share units, so a run of four long, fully-sourced answers scored about 12 percent and the target was unreachable in practice. Recorded in `docs/63-technical-debt-register.md`.
+- History: until ADR-0106 (2026-09-09) the target was "at least 80 percent"; until WP-C (2026-07-27) it read "material factual claims" and the code divided a per-answer boolean by a ~1-claim-per-200-characters estimate. Numerator and denominator did not share units, so a run of four long, fully-sourced answers scored about 12 percent and the target was unreachable in practice. Recorded in `docs/63-technical-debt-register.md`.
 - Owner: Product owner.
 - Priority: Must.
 - Rationale: Citation visibility is a core success signal for reducing hallucination risk.
 - Acceptance criteria: AC-011, AC-018, AC-031.
 - Tests: TEST-NFR-003.
 - Dashboard: Source coverage (share of answers carrying a primary source) by query sample and provider path.
-- Alert: Ticket when sampled source coverage falls below 80 percent for two consecutive review batches. Note the series steps UP at the WP-C changeover; compare like-for-like across that boundary.
+- Alert: Ticket when more than 20 percent of the runs in a sample MISS the target (i.e. carry two or more unsourced answers) for two consecutive review batches. This is a rate over RUNS, not the old per-answer coverage percentage — stating it the old way would compare a run-level verdict against an answer-level bar. Note the series steps at two boundaries and neither is like-for-like: the WP-C changeover (2026-07-27) and the ADR-0106 rule change (2026-09-09), which by construction moves 3-of-4 runs from MISS to MEET.
 - Source: `docs/114-success-metrics.md`.
 
 ## NFR-004 Dependency resilience
