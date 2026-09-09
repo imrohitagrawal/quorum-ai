@@ -1796,9 +1796,36 @@
     stateEl.className = "live-round-state";
     stateEl.textContent = "complete";
     header.append(pill, stateEl);
+    // Same rule as the transcript card: prefer the per-critic text, which is
+    // full and unflattened, over the prompt-shaped digest. This surface was the
+    // one showing ONLY the digest, so it is where the wall of text was most
+    // visible during a run.
+    const critiques = Array.isArray(round.slot_critiques) ? round.slot_critiques : [];
     const body = document.createElement("div");
     body.className = "live-round-body";
-    setProse(body, round.critique_text);
+    if (critiques.length) {
+      for (const critique of critiques) {
+        if (!critique) continue;
+        const item = document.createElement("div");
+        item.className = "live-round-critic";
+        const who = document.createElement("span");
+        who.className = "live-round-critic-slot";
+        // The catalog's short label, not the raw `vendor/model-id` slug. The
+        // id is what the payload carries; displayNameForModel is what the rest
+        // of the UI already shows a user.
+        who.textContent = `Slot ${critique.critic_slot_number} — ${
+          displayNameForModel(critique.critic_model_id) || critique.critic_model_id || "unknown model"
+        }`;
+        item.appendChild(who);
+        const prose = document.createElement("div");
+        prose.className = "live-round-critic-body";
+        setProse(prose, String(critique.critique_text || "").trim(), "");
+        item.appendChild(prose);
+        body.appendChild(item);
+      }
+    } else {
+      setProse(body, round.critique_text);
+    }
     card.append(header, body);
     return card;
   }
@@ -3244,7 +3271,22 @@
         // the user KEEPS, so a stale claim here outlives the screen it came
         // from — this was the third and least visible of its three render
         // sites.
-        if (r.critique_text) push(mdUntrustedBlock(String(r.critique_text).trim()), "");
+        // Prefer the per-critic records over the digest, for the same reason
+        // the screen does: the digest is flattened and cut to a PROMPT budget,
+        // and the exported file is the copy the user keeps.
+        const critiques = Array.isArray(r.slot_critiques) ? r.slot_critiques : [];
+        if (critiques.length) {
+          for (const c of critiques) {
+            if (!c) continue;
+            const who = mdEscapeInline(
+              displayNameForModel(c.critic_model_id) || c.critic_model_id || "unknown model",
+            );
+            push(`**Slot ${c.critic_slot_number} — ${who}**`, "");
+            if (c.critique_text) push(mdUntrustedBlock(String(c.critique_text).trim()), "");
+          }
+        } else if (r.critique_text) {
+          push(mdUntrustedBlock(String(r.critique_text).trim()), "");
+        }
       }
     }
 
@@ -5083,10 +5125,34 @@
     }
     card.appendChild(head);
 
-    const body = mkEl("div", "transcript-round-body");
-    const text = String(round.critique_text || "").trim();
-    setProse(body, text, "This round did not produce a critique summary.");
-    card.appendChild(body);
+    // THE DIGEST IS NOT SHOWN WHEN THE FULL CRITIQUES ARE.
+    //
+    // `critique_text` is `debate.py::_peer_digest` — each critic flattened by
+    // `_one_line` (headings, blank lines and bullets collapsed into one run of
+    // spaces) and cut to SYNTHESIS_DEBATE_EXCERPT_MAX_CHARS / n, which at four
+    // critics discards about three quarters of each. Both properties exist for
+    // a PROMPT: the bound is a token budget, and the flattening is a
+    // prompt-injection defence for a line-delimited list a MODEL reads. A
+    // browser has neither constraint, and applying them to a display produced
+    // the wall of text — literal `##` and `- ` marks in a single paragraph,
+    // cut mid-sentence.
+    //
+    // Below this card, `slot_critiques[].critique_text` is already rendered per
+    // critic, in full, through setProse. So the digest was a lossy, flattened
+    // restatement sitting directly above the correct rendering of the same
+    // words. It is kept ONLY for the moderator/fallback shape, where there are
+    // no per-critic records and it is the only text there is.
+    //
+    // `_peer_digest` itself is deliberately UNCHANGED: it still feeds round 2's
+    // prompt and the synthesis excerpt, where the bound and the sanitisation
+    // are load-bearing.
+    const critiquesForBody = Array.isArray(round.slot_critiques) ? round.slot_critiques : [];
+    if (!critiquesForBody.length) {
+      const body = mkEl("div", "transcript-round-body");
+      const text = String(round.critique_text || "").trim();
+      setProse(body, text, "This round did not produce a critique summary.");
+      card.appendChild(body);
+    }
 
     // ADR-0096: the PER-CRITIC detail, in full.
     //
@@ -5112,7 +5178,14 @@
           mkEl(
             "span",
             "transcript-critic-slot",
-            `Slot ${critique.critic_slot_number} — ${critique.critic_model_id || "unknown model"}`,
+            // #290 readout: the catalog short label ("Claude Haiku 4.5"), not
+            // the raw `vendor/model-id` slug. `SlotCritique` carries only
+            // `critic_model_id`, and displayNameForModel resolves it the same
+            // way every other model label in this UI is resolved — falling back
+            // to a prettified slug, then to the id, so nothing is invented.
+            `Slot ${critique.critic_slot_number} — ${
+              displayNameForModel(critique.critic_model_id) || critique.critic_model_id || "unknown model"
+            }`,
           ),
         );
         // PER CRITIC, not per round. A round carries one `debate_mode`, so a

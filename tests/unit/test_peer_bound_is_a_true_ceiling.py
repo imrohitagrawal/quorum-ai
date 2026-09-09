@@ -118,10 +118,14 @@ def test_the_bound_prices_one_call_per_slot_not_one_per_round(
     # ABOVE `4 x moderator`, and that gap is the fix for a demonstrated ceiling
     # breach, not slack. Both figures MEASURED 2026-09-03; literals on both
     # sides (rule 7a).
-    # RE-MEASURED after ADR-0096 grew both system prompts (0.0213 -> 0.0230).
+    # RE-MEASURED after ADR-0096 grew both system prompts (0.0213 -> 0.0230),
+    # then again after ADR-0107 added PROSE_ATTRIBUTION_INSTRUCTION to both
+    # round prompts (0.0230 -> 0.0235). The bound reads the prompt's real
+    # length, so it moved on its own; only this pinned literal had to be
+    # re-measured, which is the property this test exists to preserve.
     # The peer figure moves and the moderator one does not, which is itself the
     # point: ADR-0096's convergence contract is asked of PEER critics only.
-    assert (moderator, peer) == (Decimal("0.0052"), Decimal("0.0230"))
+    assert (moderator, peer) == (Decimal("0.0052"), Decimal("0.0235"))
     assert peer > moderator * 4, (
         f"debate_round_1 is {peer} under peer critique against {moderator} under "
         f"the moderator on an identical four-slot panel; four critics are not priced"
@@ -318,7 +322,8 @@ def test_round_twos_prior_critique_is_priced_for_every_critic(
     Both figures MEASURED on 2026-09-03 against that fixed list, the second by
     reverting the per-critic branch and re-running:
 
-        with the per-critic term:      max_cost_usd = $2.5326
+        with the per-critic term:      max_cost_usd = $2.5396
+        (was $2.5326 before ADR-0107 lengthened both round prompts)
         charged once at the moderator: max_cost_usd = $2.4086   (-$0.1240)
 
     RE-MEASURED 2026-09-06 (ADR-0102) after the cap went 2000 -> 4000, by the
@@ -345,7 +350,7 @@ def test_round_twos_prior_critique_is_priced_for_every_critic(
     with monkeypatch.context() as mp:
         mp.setattr(config.settings, "peer_critique_enabled", True)
         bound = _max_cost(cost_estimation_service.estimate(query_text=_QUERY, model_slots=slots))
-    assert bound == Decimal("2.5326"), (
+    assert bound == Decimal("2.5396"), (
         f"the fail-safe bound on the fixed price list is {bound}; charging round "
         "2's prior critique once at the moderator's rate gives $2.4086, which "
         "under-prices by $0.1240 the input every critic actually pays"
@@ -385,19 +390,24 @@ def test_the_peer_branch_prices_the_system_prompt_it_actually_sends(
     # RE-MEASURED after ADR-0096. Both prompts were reframed around evidence
     # and convergence, and round 2 gained the self-assessment contract, so the
     # worst-case peer prompt went 479.5 -> 923.75 tokens against a flat 350.
+    # ADR-0107 then added PROSE_ATTRIBUTION_INSTRUCTION (440 chars = 110
+    # tokens) to BOTH round prompts, taking it to 1034.25. Measured effect on
+    # the default mix, peer-on: point $0.0623 -> $0.0627, bound $0.1698 ->
+    # $0.1701. Real, and priced on eight critic calls -- but four hundredths
+    # of a cent, nowhere near the $0.25 hard limit named above.
     # The gap this branch closes therefore nearly QUADRUPLED with the design
     # change — and closed automatically, because the bound reads the prompt's
     # real length instead of a number somebody has to remember to update.
-    assert peer_tokens == Decimal("923.75")
+    assert peer_tokens == Decimal("1034.25")
     assert flat == Decimal(350)
-    assert peer_tokens - flat == Decimal("573.75"), (
+    assert peer_tokens - flat == Decimal("684.25"), (
         "the per-call shortfall the peer branch exists to stop pricing away"
     )
     # The MODERATOR shape is deliberately NOT corrected — see the comment in
     # `_cost_components`. Its own prompt is still longer than the flat price,
     # and that pre-existing gap is filed, not fixed here.
     moderator_tokens = Decimal(debate_system_prompt_max_chars(peer=False)) / CHARS_PER_TOKEN
-    assert moderator_tokens == Decimal("647.25")
+    assert moderator_tokens == Decimal("757.75")
     assert moderator_tokens > flat, (
         "the pre-existing moderator shortfall this change deliberately leaves alone"
     )

@@ -670,6 +670,49 @@ export const goldenRespWithPeerCritiques = (live = 3, eligible = 4) => {
 };
 
 /**
+ * A peer run whose per-critic text carries REAL MARKDOWN (ADR-0107).
+ *
+ * A third dedicated builder (AGENTS.md rule 13d). `goldenRespWithPeerCritiques`
+ * gives every critic the flat string "Slot N critique." — which cannot show the
+ * defect this fixture exists for, because there is no structure to flatten.
+ *
+ * The digest the round card used to display is `_peer_digest`: each critique
+ * put through `_one_line` (headings, blank lines and bullets collapsed to
+ * single spaces) and cut to a PROMPT's token budget. Against flat text that is
+ * invisible; against a critique with a `##` heading and a list it produces the
+ * literal marks `##` and `1.` inside one run of prose. So each critic here
+ * carries a heading, bold, a list and a blockquote, and `critique_text` on the
+ * ROUND carries the flattened digest a real server would have sent alongside
+ * them — the two disagreeing is the whole point.
+ */
+export const goldenRespWithMarkdownCritiques = () => {
+  const resp = goldenCompletedResp() as Record<string, any>;
+  const per = (n: number) =>
+    `## Critic ${n} reading\n\n**Where it agrees:** the recommendation holds.\n\n` +
+    `1. The export slice is scoped too widely.\n` +
+    `2. The retention figure is _unsourced_.\n\n` +
+    `> Caveat: this rests on the \`citation_check\` output alone.`;
+  for (const round of resp.result.debate_outputs) {
+    round.critique_shape = "peer";
+    round.eligible_critic_count = 4;
+    round.slot_critiques = Array.from({ length: 4 }, (_v, i) => ({
+      critic_slot_number: i + 1,
+      critic_model_id: SLOTS[i].model_id,
+      critique_text: per(i + 1),
+      focus_areas: [],
+      critique_mode: "live",
+    }));
+    // What `_peer_digest` would have produced from those four: flattened by
+    // `_one_line` and cut. Present so a test can prove this text is NOT what
+    // the reader is shown.
+    round.critique_text = Array.from({ length: 4 }, (_v, i) =>
+      `Slot ${i + 1}: ${per(i + 1).replace(/\s+/g, " ").slice(0, 90)}`,
+    ).join("\n");
+  }
+  return resp;
+};
+
+/**
  * A completed run whose DEBATE fell back to Quorum's own template while the
  * ANSWERS stayed live — `debate_mode: "fallback"` on every round.
  *

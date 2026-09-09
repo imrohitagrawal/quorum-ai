@@ -398,6 +398,7 @@ components:
           type: string
           pattern: ^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$
           title: Target Ratio
+          default: '-1'
         target_met:
           type: boolean
           title: Target Met
@@ -406,7 +407,6 @@ components:
       - answer_count
       - sourced_answer_count
       - sourced_answer_ratio
-      - target_ratio
       - target_met
       title: CitationCoverage
       description: 'How much of the panel''s output carries a primary source.
