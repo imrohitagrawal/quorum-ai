@@ -9,6 +9,7 @@ import {
   EVAL_CLEAN,
   EVAL_UNKNOWN_GROUNDING_REFUSAL,
   EVAL_VERIFIED_HIGH,
+  EVAL_MISSING_HIGH_STAKES,
   EVAL_S2_SHAPED,
 } from "../../fixtures/golden-run";
 import { readTokens, scanSubtreeForGreen } from "../../fixtures/tokens";
@@ -447,6 +448,99 @@ test.describe("trust-score invariants (FR-016)", () => {
     // The reasons-to-doubt list still renders (grounding 0.8 / coverage 0.85).
     const whys = await page.locator(`${SURFACE} .result-trust-score-why-item`).allInnerTexts();
     expect(whys.length).toBeGreaterThan(0);
+  });
+
+  // ---- #290 readout: the number is explained --------------------------------
+  //
+  // "92 of 100 — high trust" named no scale and said nothing about what had
+  // been examined, so a reader could not tell whether it was a claim about the
+  // ANSWER (it is not) or about automated checks on the run's own output (it
+  // is). `trust.diagnostics.contributions` was already served and already read
+  // — only as up-to-three NEGATIVE lines — so the data for the explanation
+  // existed and only the display was missing.
+
+  test("the verified headline says what the number is, and is not", async ({ page }) => {
+    // TURNS RED IF: the basis line is dropped from the verified branch.
+    await page.setViewportSize({ width: 1440, height: 1200 });
+    await driveWithEval(page, EVAL_VERIFIED_HIGH);
+    const basis = page.locator(`${SURFACE} .result-trust-score-basis`);
+    await expect(basis).toHaveCount(1);
+    const text = await basis.innerText();
+    // It must name the SCALE and disclaim the thing it is not, in words — the
+    // panel already carries the digits, and repeating them here would break
+    // the arithmetic bans above.
+    expect(text).toContain("seven automated checks");
+    expect(text).toContain("not a judgement of whether the answer is correct");
+    expect(text, "the basis line must carry no digit of its own").not.toMatch(/\d/);
+  });
+
+  test("the verified panel lists the checks that were fully met", async ({ page }) => {
+    // TURNS RED IF: the met-list stops rendering, or stops being driven off
+    // the SERVED contributions.
+    await page.setViewportSize({ width: 1440, height: 1200 });
+    await driveWithEval(page, EVAL_VERIFIED_HIGH);
+
+    const met = await page.locator(`${SURFACE} .result-trust-score-met-item`).allInnerTexts();
+    // EVAL_VERIFIED_HIGH has five signals at exactly 1.0 and two below it
+    // (grounding 0.8, coverage 0.85), so the split is the interesting one:
+    // neither list is empty and they do not overlap.
+    expect(met.length, `expected the met checks to render; got ${JSON.stringify(met)}`).toBe(5);
+    expect(met).toContain("Every answer came from a live model");
+    expect(met).toContain("Every model slot produced a usable answer");
+
+    // THE PARTNER: the two signals that fell SHORT must not appear as met.
+    // Without this, "list everything" would pass the assertion above while
+    // telling the reader a failing check had passed — the one outcome this
+    // panel must never produce.
+    expect(met).not.toContain("Citation markers point at a listed source");
+    expect(met).not.toContain("Every answer carried a primary source");
+    const whys = await page.locator(`${SURFACE} .result-trust-score-why-item`).allInnerTexts();
+    expect(whys.length, "the shortfall list must still render alongside").toBe(2);
+
+    // R3 still binds on the new lines.
+    const text = await surfaceText(page);
+    for (const id of SIGNAL_IDENTIFIERS) {
+      expect(text, `met-list: R3 — identifier "${id}" must not appear`).not.toContain(id);
+    }
+  });
+
+  test("the explanation is absent from the UNVERIFIED treatment", async ({ page }) => {
+    // THE BOUNDARY, and the reason the visual baselines do not move: every
+    // committed screenshot in trust-score-visual.spec.ts drives an UNVERIFIED
+    // variant (EVAL_MISSING_HIGH_STAKES), so scoping the explanation to the
+    // verified branch leaves those baselines byte-identical. Verified by
+    // dumping this surface's outerHTML before and after the change.
+    //
+    // It is also the honest scope: the unverified treatment must carry no
+    // digit and none of the label words, and the unexplained headline only
+    // ever appeared on the verified branch.
+    await page.setViewportSize({ width: 1440, height: 1200 });
+    await driveWithEval(page, EVAL_MISSING_HIGH_STAKES);
+    const surface = page.locator(SURFACE);
+    // Positive partner FIRST: the unverified surface really did render.
+    await expect(surface).toBeVisible();
+    await expect(surface).not.toBeEmpty();
+    await expect(page.locator(`${SURFACE} .result-trust-score-basis`)).toHaveCount(0);
+    await expect(page.locator(`${SURFACE} .result-trust-score-met-item`)).toHaveCount(0);
+  });
+
+  test("the verified panel does not overflow at any viewport", async ({ page }) => {
+    // The added lines must not clip. The existing overflow test drives an
+    // UNVERIFIED variant, so the verified branch — which is the one that grew —
+    // was not covered by it.
+    for (const width of [375, 768, 1440]) {
+      await page.setViewportSize({ width, height: 900 });
+      await driveWithEval(page, EVAL_VERIFIED_HIGH);
+      const box = await page.locator(SURFACE).evaluate((el) => ({
+        sw: el.scrollWidth,
+        cw: el.clientWidth,
+        sh: el.scrollHeight,
+        ch: el.clientHeight,
+      }));
+      expect(box.cw, `@${width}px the surface must have laid out`).toBeGreaterThan(0);
+      expect(box.sw, `@${width}px horizontal overflow`).toBeLessThanOrEqual(box.cw + 1);
+      expect(box.sh, `@${width}px vertical clipping`).toBeLessThanOrEqual(box.ch + 1);
+    }
   });
 
   test("GREEN RULE holds on the verified surface too", async ({ page }) => {

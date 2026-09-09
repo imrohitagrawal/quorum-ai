@@ -2871,6 +2871,38 @@ html[data-theme="dark"] .landing-preview-caption {
   color: var(--ink);
 }
 
+/* #290 readout: what the number means, and which checks it passed.
+   Tokens only, and never --c-green/--success/* — the D-6 GREEN RULE covers
+   this whole surface, "checks met" included. --text-secondary composited on
+   --info-soft is the pairing the existing .result-trust-score-why-item uses
+   and that the a11y walk already accepts at this size. */
+.result-trust-score-basis {
+  margin: 0;
+  font-size: 0.82rem;
+  line-height: 1.55;
+  color: var(--text-secondary);
+}
+
+.result-trust-score-met-lead {
+  margin: 0;
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--text-secondary);
+}
+
+.result-trust-score-met {
+  margin: 0;
+  padding-left: 1.1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.result-trust-score-met-item {
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+}
+
 .result-trust-score-why {
   margin: 0;
   padding-left: 1.1rem;

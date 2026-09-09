@@ -4115,6 +4115,42 @@
   // bands the server can emit alongside a numeric score (build_trust_score);
   // anything else fails the verified guard and falls back to the unverified
   // treatment (fail closed).
+  // NEUTRAL names for the seven Layer-A signals (#290 readout).
+  //
+  // `TRUST_WHY` below is the only signal-key -> English map that existed, and
+  // every string in it is a FAILURE phrasing ("Not every answer came from a
+  // live model"), unusable for saying what a run got RIGHT. So the panel could
+  // list what fell short and never what was checked, and the headline number
+  // had nothing to stand on.
+  //
+  // Written to the same rules as the rest of this surface: app-authored
+  // constants, no digits, no raw signal identifiers, and none of the advisory
+  // label words the invariant spec bans. They are deliberately statements of
+  // what PASSING looks like, so one map reads correctly under a tick.
+  const TRUST_SIGNAL_LABELS = {
+    citation_marker_grounding: "Citation markers point at a listed source",
+    live_ratio: "Every answer came from a live model",
+    citation_coverage_ratio: "Every answer carried a primary source",
+    completeness: "Every model slot produced a usable answer",
+    disagreement_integrity: "Dissent was preserved, not flattened",
+    uncertainty_surfaced: "Open uncertainty was flagged",
+    decision_support_framing_present: "Framed as decision support",
+  };
+  // What the number IS, in one sentence, and what it is not.
+  //
+  // The reported defect: "of 100 — high trust" names no scale and says nothing
+  // about what was examined, so a reader cannot tell whether it is a claim
+  // about the ANSWER (it is not) or about the checks this product ran on the
+  // run's own output (it is).
+  //
+  // VERIFIED BRANCH ONLY. The unverified treatment must carry no digit at all
+  // and none of the label words, and it already states its own limits; adding
+  // this there would break those invariants for no gain, since the unexplained
+  // headline only ever appears on the verified branch.
+  const TRUST_BASIS =
+    "A weighted blend of seven automated checks on this run's own output. It is not a judgement of whether the answer is correct.";
+  const TRUST_MET_LEAD = "Checks fully met:";
+
   const TRUST_BAND_LABELS = {
     low: "low trust",
     moderate: "moderate trust",
@@ -4225,6 +4261,39 @@
         ),
       );
       box.appendChild(scoreLine);
+      // WHAT THE NUMBER MEANS, then WHAT IT LOOKED AT. Both textContent via
+      // mkEl (D-15) — never setProse, which is for provider prose.
+      box.appendChild(mkEl("p", "result-trust-score-basis", TRUST_BASIS));
+      // The checks this run passed OUTRIGHT. The existing "why" list below
+      // carries the ones that fell short, so the two together account for the
+      // signals the composite actually weighed — which is the explanation the
+      // headline was missing.
+      //
+      // Driven off the SERVED contributions array, never a hardcoded list of
+      // seven: when `citation_marker_grounding` is unknown the server drops it
+      // and renormalises the rest, so a run can legitimately carry six.
+      const served =
+        ev.trust && ev.trust.diagnostics && Array.isArray(ev.trust.diagnostics.contributions)
+          ? ev.trust.diagnostics.contributions
+          : [];
+      const met = served.filter(
+        (c) =>
+          c &&
+          typeof c.signal === "string" &&
+          Object.prototype.hasOwnProperty.call(TRUST_SIGNAL_LABELS, c.signal) &&
+          Number.isFinite(Number(c.value)) &&
+          Number(c.value) >= 1.0,
+      );
+      if (met.length) {
+        box.appendChild(mkEl("p", "result-trust-score-met-lead", TRUST_MET_LEAD));
+        const metList = mkEl("ul", "result-trust-score-met");
+        for (const c of met) {
+          metList.appendChild(
+            mkEl("li", "result-trust-score-met-item", TRUST_SIGNAL_LABELS[c.signal]),
+          );
+        }
+        box.appendChild(metList);
+      }
     } else {
       // R4: the standing disclosure is always the first line.
       box.appendChild(mkEl("p", "result-trust-score-disclosure", TRUST_DISCLOSURE));
