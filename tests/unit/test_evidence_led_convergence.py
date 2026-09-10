@@ -338,6 +338,7 @@ def _prompt_for(rounds: list[object]) -> str:
         debate_outputs=cast("list[DebateOutput]", rounds),
         failed_count=0,
         coverage_ratio=Decimal("1"),
+        coverage_target_met=False,
     )
 
 

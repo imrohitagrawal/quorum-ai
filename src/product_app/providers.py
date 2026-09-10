@@ -47,7 +47,7 @@ from urllib.parse import urlparse
 from urllib.request import Request
 from uuid import UUID
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, computed_field, model_validator
 
 from product_app.config import RuntimeEnvironment, settings
 from product_app.credentialed_url import (
@@ -80,7 +80,33 @@ _LOGGER = logging.getLogger(__name__)
 # look the name up from this module's globals on every call.
 urlopen = CREDENTIAL_OPENER.open
 
-CITATION_COVERAGE_TARGET = Decimal("0.80")
+#: How many of a run's answers may lack a primary source and still meet the
+#: target. ADR-0106.
+#:
+#: This replaced ``CITATION_COVERAGE_TARGET = Decimal("0.80")``, which was
+#: compared against the 2dp-quantized ``sourced_answer_count / answer_count``.
+#: The product refuses any slot list that is not exactly 4
+#: (``model_slots.validate_model_slots``), so ``answer_count`` is 1-4 and the
+#: ratio has at most five attainable values. Over that domain 0.80 was met by
+#: 1/1, 2/2, 3/3 and 4/4 and by nothing else -- indistinguishable from a 100%
+#: rule, so the number 0.80 was doing no work.
+#:
+#: It is a COUNT and not a percentage because the rule is not expressible as
+#: one. Measured over the whole domain: ``1/2`` and ``2/4`` both quantize to
+#: ``0.50``, so no threshold can pass one and fail the other. A ratio of 0.67
+#: would pass 2/3 only because ``0.666...`` rounds UP, making the verdict an
+#: artefact of the quantization step. A count depends on neither.
+CITATION_COVERAGE_MAX_UNSOURCED_ANSWERS = 1
+
+
+def citation_coverage_required_count(answer_count: int) -> int:
+    """How many sourced answers ``answer_count`` answers must carry.
+
+    ``max(1, ...)`` so a one-answer run is never handed a bar of zero, which
+    would make the target trivially met by a run that sourced nothing --
+    exactly the vacuous pass AGENTS.md rule 7 exists to forbid.
+    """
+    return max(1, answer_count - CITATION_COVERAGE_MAX_UNSOURCED_ANSWERS)
 
 
 def _resolve_display_name(model_id: str) -> str:
@@ -197,9 +223,11 @@ class CitationCoverage(BaseModel):
     one primary (non-fallback) source** — nothing more, and the field names say
     so. It used to divide a per-answer BOOLEAN by a characters-based estimate
     of "material claims", so the numerator and denominator did not share units
-    and a run of four long, fully-sourced answers scored ~12% against an 80%
-    target. Every run was therefore labelled provisional and the recommendation
-    always said "pause for human review".
+    and a run of four long, fully-sourced answers scored ~12% against the 80%
+    target OF THE TIME. Every run was therefore labelled provisional and the
+    recommendation always said "pause for human review". (That percentage
+    target is itself gone -- ADR-0106 replaced it with a count rule. The 80%
+    here is a historical figure, not a bar this code still applies.)
 
     What this metric does NOT claim: that each individual assertion inside an
     answer is supported. Counting sources says a citation is present; it says
@@ -219,8 +247,40 @@ class CitationCoverage(BaseModel):
     sourced_answer_count: int = Field(ge=0)
     #: ``sourced_answer_count / answer_count``, quantized to 2dp.
     sourced_answer_ratio: Decimal = Field(ge=Decimal("0"), le=Decimal("1"))
-    target_ratio: Decimal = CITATION_COVERAGE_TARGET
     target_met: bool
+
+    # WHY COMPUTED AND NOT STORED. The bar is a pure function of
+    # ``answer_count`` (ADR-0106: "at most one answer may lack a primary
+    # source" = ``max(1, answer_count - 1) / answer_count``), so a stored copy
+    # is a second place it can be written down and disagree.
+    #
+    # An earlier revision DID store it, policed by a validator. That needed a
+    # sentinel default to satisfy the type checker, and the sentinel leaked
+    # into the PUBLISHED SCHEMA as ``default: '-1'`` -- a value outside this
+    # field's own bound, advertised to clients, on a field that had silently
+    # dropped out of ``required``. The consistency gate shipped with ADR-0106
+    # caught it. A field that cannot be assigned cannot do that.
+    #
+    # Kept OUT of the schema description on purpose: that text is published to
+    # API consumers, and it is a note to this repo, not to them.
+    #
+    # ``target_met`` is NOT derived by comparing this against
+    # ``sourced_answer_ratio``. Both are quantized to 2dp, and deciding on
+    # rounded values is how 2/3 came to hinge on ``0.666...`` rounding up. The
+    # verdict comes from the COUNTS; this only reports the bar that was applied.
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def target_ratio(self) -> Decimal:
+        """The share of answers that had to carry a primary source, this run.
+
+        Derived from ``answer_count``: 1.00, 0.50, 0.67, 0.75 at n = 1..4.
+        """
+        if self.answer_count <= 0:
+            # No answers came back, so the bar cannot be cleared. Reported as
+            # 1.00 rather than 0, which would read as "any run clears it".
+            return Decimal("1.00")
+        required = citation_coverage_required_count(self.answer_count)
+        return (Decimal(required) / Decimal(self.answer_count)).quantize(Decimal("0.01"))
 
     @model_validator(mode="after")
     def _numerator_cannot_outrun_denominator(self) -> CitationCoverage:
@@ -4118,7 +4178,7 @@ _INLINE_MARKDOWN_LINK_RE = re.compile(r"\[([^\]]+)\]\((https?://[^\s)]+)\)")
 #:
 #: WP-C / F-03: this is a LENGTH ESTIMATE, not the citation-coverage
 #: denominator. It used to be, and that was the defect — dividing a per-answer
-#: boolean by it made the 80% target unreachable at any realistic answer
+#: boolean by it made the then-current 80% target unreachable at any realistic answer
 #: length. Its only remaining job is the informational
 #: ``QueryRunResultResponse.material_claim_count`` figure. Do not reintroduce
 #: it into :func:`calculate_citation_coverage`.
@@ -4152,6 +4212,10 @@ def calculate_citation_coverage(
     even when every one of them was sourced.
     """
     if answer_count <= 0:
+        # No answers came back, so there is no coverage to have met. The bar is
+        # reported as 1.00 -- unattainable over an empty population -- and
+        # ``target_met`` stays False. Reporting "met" here would be a pass
+        # measured over nothing, which is the shape AGENTS.md rule 7 forbids.
         return CitationCoverage(
             answer_count=0,
             sourced_answer_count=0,
@@ -4161,11 +4225,15 @@ def calculate_citation_coverage(
     sourced_answer_ratio = (Decimal(sourced_answer_count) / Decimal(answer_count)).quantize(
         Decimal("0.01")
     )
+    required = citation_coverage_required_count(answer_count)
     return CitationCoverage(
         answer_count=answer_count,
         sourced_answer_count=sourced_answer_count,
         sourced_answer_ratio=sourced_answer_ratio,
-        target_met=sourced_answer_ratio >= CITATION_COVERAGE_TARGET,
+        # From the COUNTS. Comparing the two quantized ratios would give the
+        # same answer for every n the product can emit, but it would make the
+        # verdict depend on the rounding step; this cannot.
+        target_met=sourced_answer_count >= required,
     )
 
 

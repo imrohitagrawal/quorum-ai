@@ -2017,6 +2017,35 @@ html[data-theme="dark"] .landing-preview-caption {
   color: var(--body);
 }
 
+/* Per-critic rows inside a live round card (#290 readout).
+   Mirrors .transcript-critic deliberately: the same content in the live view
+   and the transcript should not be two different visual languages. Tokens
+   only -- no literal colours -- so both themes follow the existing palette. */
+.live-round-critic {
+  padding-left: var(--space-3);
+  border-left: 2px solid var(--line);
+}
+
+.live-round-critic + .live-round-critic {
+  margin-top: var(--space-3);
+}
+
+.live-round-critic-slot {
+  display: block;
+  margin-bottom: var(--space-2);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  color: var(--muted);
+}
+
+.live-round-critic-body {
+  margin: 0;
+  font-size: 0.85rem;
+  line-height: 1.6;
+  color: var(--body);
+}
+
 /* Sidebar. */
 .live-run-side {
   display: flex;
@@ -2840,6 +2869,45 @@ html[data-theme="dark"] .landing-preview-caption {
   font-size: 0.92rem;
   line-height: 1.5;
   color: var(--ink);
+}
+
+/* #290 readout: what the number means, and which checks it passed.
+   Tokens only, and never --c-green/--success/* — the D-6 GREEN RULE covers
+   this whole surface, "checks met" included. --text-secondary composited on
+   --info-soft is the pairing the existing .result-trust-score-why-item uses
+   and that the a11y walk already accepts at this size. */
+.result-trust-score-basis {
+  margin: 0;
+  font-size: 0.82rem;
+  line-height: 1.55;
+  color: var(--text-secondary);
+}
+
+.result-trust-score-why-lead {
+  margin: 0;
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--text-secondary);
+}
+
+.result-trust-score-met-lead {
+  margin: 0;
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--text-secondary);
+}
+
+.result-trust-score-met {
+  margin: 0;
+  padding-left: 1.1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.result-trust-score-met-item {
+  font-size: 0.82rem;
+  color: var(--text-secondary);
 }
 
 .result-trust-score-why {

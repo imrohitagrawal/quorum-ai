@@ -64,7 +64,7 @@ finding has:
 |---|---|---|
 | `model_slot` | A default model slot has high failure rate or low citation coverage | "Slot 2 (claude-3-haiku) failed 40% of calls in the last 7 days — consider swapping to claude-haiku-4.5" |
 | `safety_regex` | A high-stakes query type is not caught by the current regex | "Queries about 'mortgage' or 'refinance' are high-stakes financial advice but the regex only matches 'investment'" |
-| `citation_threshold` | Citation coverage is consistently below 80% | "Average citation coverage over 7 days: 42%. The 80% target is not being met for any model." |
+| `citation_threshold` | Runs are consistently missing the source-coverage target | "Average citation coverage over 7 days: 42%. The source-coverage target is not being met for any model." |
 | `cost_threshold` | Cost estimates are wrong relative to actual provider bills | (requires cost tracking, deferred to L5) |
 | `pipeline_timing` | A pipeline stage is consistently slow | "Debate round 2 averages 12s, 4× round 1. Consider reducing DEBATE_HARD_TIMEOUT_MS or simplifying round 2 prompt." |
 | `provider_fallback` | A high share of entire RUNS come back local_simulation — since #171 a live-call failure is reported per model as FAILED (see `model_slot` above), never as a per-model fallback to simulation; local_simulation only ever covers a WHOLE run | "62% of runs in the last 24h were entirely local_simulation — the demo key may be missing, invalid, or unfunded." |

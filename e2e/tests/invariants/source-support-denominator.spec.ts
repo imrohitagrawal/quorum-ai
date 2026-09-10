@@ -153,12 +153,23 @@ async function driveToResult(page: Page, coverage?: unknown) {
   await expect(page.locator("#result-verdict[data-consensus]")).toBeVisible({ timeout: 20000 });
 }
 
-/** Build a citation_coverage payload; ratio defaults to a coherent one. */
+/** Build a citation_coverage payload; ratio defaults to a coherent one.
+ *
+ * ADR-0106: `target_ratio` is DERIVED from `answer_count` (`max(1, n-1)/n`),
+ * not a constant. A fixed "0.80" here would state a bar the server never
+ * applies for any n. These rows assert on the CAPTION, which reads the counts,
+ * so `target_met` stays false throughout and no row depends on the verdict.
+ */
+const barFor = (n: unknown) => {
+  const count = typeof n === "number" && n > 0 ? n : 0;
+  if (count <= 0) return "1.00";
+  return (Math.max(1, count - 1) / count).toFixed(2);
+};
 const cov = (answer_count: unknown, sourced_answer_count: unknown, ratio = "0.75") => ({
   answer_count,
   sourced_answer_count,
   sourced_answer_ratio: ratio,
-  target_ratio: "0.80",
+  target_ratio: barFor(answer_count),
   target_met: false,
 });
 

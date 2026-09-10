@@ -571,6 +571,7 @@ def test_user_prompt_carries_the_answer_up_to_the_derived_cap() -> None:
         debate_outputs=[],
         failed_count=0,
         coverage_ratio=type("R", (), {"__str__": lambda self: "0.0"})(),
+        coverage_target_met=False,
     )
     # Everything up to the derived cap reaches the model...
     assert ("x" * CAP) in user_prompt
@@ -587,6 +588,7 @@ def test_user_prompt_carries_the_answer_up_to_the_derived_cap() -> None:
         debate_outputs=[],
         failed_count=0,
         coverage_ratio=type("R", (), {"__str__": lambda self: "0.0"})(),
+        coverage_target_met=False,
     )
     assert longest_possible in prompt2, (
         "a full-length initial answer is being truncated on its way into "
@@ -632,6 +634,7 @@ def test_user_prompt_carries_the_critique_up_to_the_debate_derived_cap() -> None
         ),
         failed_count=0,
         coverage_ratio=type("R", (), {"__str__": lambda self: "0.0"})(),
+        coverage_target_met=False,
     )
     assert ("y" * CAP) in user_prompt
     assert ("y" * (CAP + 1)) not in user_prompt
@@ -653,6 +656,7 @@ def test_user_prompt_carries_the_critique_up_to_the_debate_derived_cap() -> None
         ),
         failed_count=0,
         coverage_ratio=type("R", (), {"__str__": lambda self: "0.0"})(),
+        coverage_target_met=False,
     )
     assert longest_possible in prompt2, (
         "a full-length debate critique is being truncated on its way into "
@@ -663,7 +667,7 @@ def test_user_prompt_carries_the_critique_up_to_the_debate_derived_cap() -> None
 def test_recommendation_prompt_enforces_decision_support_caveat_and_gates() -> None:
     """Workstream-2 tightened ``_RECOMMENDATION_PROMPT`` so the model
     cannot omit the decision-support caveat, cannot bury a failed-count,
-    and cannot quietly approve action when coverage is below 80%.
+    and cannot quietly approve action when the source-coverage target is missed.
     The prompt itself encodes the hard rules; this test pins that
     contract.
     """
@@ -675,7 +679,14 @@ def test_recommendation_prompt_enforces_decision_support_caveat_and_gates() -> N
     # Failed-count and coverage gates are spelled out as rules, not
     # buried in prose.
     assert "failed_count > 0" in _RECOMMENDATION_PROMPT
-    assert "below 80%" in _RECOMMENDATION_PROMPT
+    # ADR-0106: the coverage gate keys on the VERDICT the application computed,
+    # not on a percentage the model would have to re-derive. Pinning the old
+    # "below 80%" string here would now pin a rule that contradicts
+    # ``CitationCoverage.target_met`` at n=4, where 75% MEETS the target.
+    assert "source-coverage target was NOT met" in _RECOMMENDATION_PROMPT
+    assert "80%" not in _RECOMMENDATION_PROMPT, (
+        "the recommendation prompt must not carry a percentage bar the product no longer applies"
+    )
     # "Verbatim" + "lead with that fact" tell the model the caveat and
     # the failure disclosure are non-negotiable.
     assert "verbatim" in _RECOMMENDATION_PROMPT

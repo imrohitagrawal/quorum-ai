@@ -322,7 +322,7 @@ test.describe("PR6 — verdict band is agreement-led (#8/#15)", () => {
           answer_count: 4,
           sourced_answer_count: 1,
           sourced_answer_ratio: "0.25",
-          target_ratio: "0.80",
+          target_ratio: "0.75",
           target_met: false,
         },
       }),
@@ -356,11 +356,12 @@ test.describe("PR6 — verdict band is agreement-led (#8/#15)", () => {
   });
 
   test("coverage at target renders NO caution line", async ({ page }) => {
-    // The other direction of the caution-line rule. This used to lean on
-    // goldenCompletedResp() being at target, but that fixture is now honestly
-    // BELOW target (slot 3 returns no sources -> 3 of 4 = 0.75; review A6), so
-    // the at-target shape is supplied explicitly. Keeping this test is the
-    // point: without it, "always render the caution" would pass.
+    // The other direction of the caution-line rule. The at-target shape is
+    // supplied explicitly rather than leaned on from goldenCompletedResp(),
+    // and stays that way after ADR-0106 moved that builder back to at-target:
+    // a test that depends on a shared builder's verdict re-breaks every time
+    // the rule moves. Keeping this test is the point: without it, "always
+    // render the caution" would pass.
     await driveWith(
       page,
       withSynthesis({
@@ -368,7 +369,7 @@ test.describe("PR6 — verdict band is agreement-led (#8/#15)", () => {
           answer_count: 4,
           sourced_answer_count: 4,
           sourced_answer_ratio: "1.00",
-          target_ratio: "0.80",
+          target_ratio: "0.75",
           target_met: true,
         },
       }),
@@ -568,7 +569,10 @@ test.describe("WP-B — verdict band regressions (F-04, F-18, F-21, F-22)", () =
         r.result.final_synthesis = {
           ...r.result.final_synthesis,
           synthesis_mode: "simulated",
-          citation_coverage: { answer_count: 4, sourced_answer_count: 3, sourced_answer_ratio: "0.75", target_ratio: "0.80", target_met: false },
+          // ADR-0106: 3 of 4 now MEETS the target, so this shape would render no
+          // caution line at all and the contrast assertion below would measure
+          // nothing. 2 of 4 keeps it genuinely below the bar.
+          citation_coverage: { answer_count: 4, sourced_answer_count: 2, sourced_answer_ratio: "0.50", target_ratio: "0.75", target_met: false },
         };
         return r;
       })(),
@@ -650,10 +654,13 @@ test.describe("WP-B — verdict band regressions (F-04, F-18, F-21, F-22)", () =
         page,
         withSynthesis({
           citation_coverage: {
+            // ADR-0106: 2, not 3 — at four answers, three sourced now MEETS the
+            // target, and a payload asserting target_met:false on it would be a
+            // shape the server cannot emit.
             answer_count: 4,
-            sourced_answer_count: 3,
+            sourced_answer_count: 2,
             sourced_answer_ratio: ratio,
-            target_ratio: "0.80",
+            target_ratio: "0.75",
             target_met: false,
           },
         }),
@@ -682,7 +689,7 @@ test.describe("WP-B — verdict band regressions (F-04, F-18, F-21, F-22)", () =
           answer_count: 4,
           sourced_answer_count: 0,
           sourced_answer_ratio: "0.00",
-          target_ratio: "0.80",
+          target_ratio: "0.75",
           target_met: false,
         },
       }),

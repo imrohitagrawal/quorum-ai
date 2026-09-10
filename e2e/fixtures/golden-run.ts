@@ -172,7 +172,7 @@ const MESSY_DISAGREEMENT =
   "Rerunning it costs 3*40 per cohort and 2*12 per quarter.\n\n" +
   MESSY_BULLET_LIST;
 const MESSY_SOURCE_SUPPORT =
-  "Backed by **cited** sources on three of four responding models. Source coverage 0.75 against a 0.80 target.";
+  "Backed by **cited** sources on three of four responding models — one short of every model, which **meets** the target of at most one unsourced answer (ADR-0106).";
 // Deliberately > 180 chars with a `**bold**` run STRADDLING character 180
 // (opening `**` at index 167, closing at 229): the old
 // `truncateText(uncertaintyText, 180)` sliced here mid-run, leaving a dangling
@@ -256,18 +256,29 @@ export const SLOTS = [
 // WP-C / F-03: coverage is the share of ANSWERS carrying a primary source, so
 // a PER-ANSWER shape is always out of 1. The old fixture used 12/10 = 0.85,
 // which is not a shape the server can emit for one answer at all.
-const CC = { answer_count: 1, sourced_answer_count: 1, sourced_answer_ratio: "1.00", target_ratio: "0.80", target_met: true };
+const CC = { answer_count: 1, sourced_answer_count: 1, sourced_answer_ratio: "1.00", target_ratio: "1.00", target_met: true };
 // The empty-citation case (#31 shape): a slot that answered but returned NO sources.
-const CC_EMPTY = { answer_count: 1, sourced_answer_count: 0, sourced_answer_ratio: "0.00", target_ratio: "0.80", target_met: false };
-// BELOW-TARGET coverage at RUN level, and now internally consistent with the
-// four per-answer shapes above: slot 3 is CC_EMPTY, so 3 of 4 answers carry a
-// primary source -> 0.75, just under the 0.80 target. Drives the verdict band's
-// caution line.
+const CC_EMPTY = { answer_count: 1, sourced_answer_count: 0, sourced_answer_ratio: "0.00", target_ratio: "1.00", target_met: false };
+// ONE UNSOURCED ANSWER at RUN level, internally consistent with the four
+// per-answer shapes above: slot 3 is CC_EMPTY, so 3 of 4 answers carry a
+// primary source -> 0.75.
+//
+// ADR-0106 INVERTED this fixture's verdict. It used to be the BELOW-target
+// shape (0.75 < 0.80) and drove the verdict band's caution line. The target is
+// now "at most one answer may lack a primary source", which 3-of-4 MEETS, so
+// this builder no longer renders that caution. The below-target UI state is
+// covered by `goldenRespBelowCoverageBar()` below and by the explicit payloads
+// in verdict-band.spec.ts -- NOT by growing this shared builder (AGENTS.md
+// rule 13d).
+//
+// The counts are deliberately UNCHANGED: moving them would move the four
+// per-answer source shapes too, and with them the source expanders and their
+// specs. Only the verdict moved, because only the rule moved.
 //
 // This replaces a 4/32 = 0.13 shape that was the F-03 defect itself: a boolean
 // numerator over a chars-per-claim denominator. That number was UNREACHABLE by
 // any well-sourced run, so the caution line it drove fired on every run.
-const CC_BELOW = { answer_count: 4, sourced_answer_count: 3, sourced_answer_ratio: "0.75", target_ratio: "0.80", target_met: false };
+const CC_ONE_UNSOURCED = { answer_count: 4, sourced_answer_count: 3, sourced_answer_ratio: "0.75", target_ratio: "0.75", target_met: true };
 const BY_MODEL = [
   { model_id: "openai/gpt-4o-mini", display_name: "GPT-4o-mini", usd: "0.034", kind: "model" },
   { model_id: "anthropic/claude-haiku-4.5", display_name: "Claude Haiku 4.5", usd: "0.062", kind: "model" },
@@ -348,12 +359,16 @@ const goldenSynthesis = () => ({
   source_support: MESSY_SOURCE_SUPPORT, uncertainty: MESSY_UNCERTAINTY,
   // Review A6: this is the RUN-level shape, so it must be the run-level
   // constant, not the per-answer CC. goldenAnswer(2) is the zero-source slot,
-  // so a real server on these four answers emits 3 of 4 = 0.75, below target.
+  // so a real server on these four answers emits 3 of 4 = 0.75.
   // It previously carried CC (answer_count: 1), which no server can emit for a
   // run — and goldenCompletedResp() is what the blocking invariant, visual,
   // degraded and a11y lanes all consume.
-  recommendation: MESSY_RECOMMENDATION, citation_coverage: CC_BELOW,
-  quality_checks: { citation_coverage_target_met: false, false_consensus_preserved: false, decision_support_framing_present: true, high_stakes_warning_required: true },
+  //
+  // ADR-0106: `citation_coverage_target_met` MUST equal
+  // `CC_ONE_UNSOURCED.target_met`. It is the same verdict written twice, and
+  // the two disagreed here until the rule change forced them to be compared.
+  recommendation: MESSY_RECOMMENDATION, citation_coverage: CC_ONE_UNSOURCED,
+  quality_checks: { citation_coverage_target_met: true, false_consensus_preserved: false, decision_support_framing_present: true, high_stakes_warning_required: true },
   high_stakes_notice: MESSY_CAVEAT, latency_ms: 4200, summary: MESSY_SUMMARY,
 });
 const progress = (stage: string, states: string[]) => ({
@@ -436,6 +451,41 @@ export const INLINE_BULLET_LIST =
  * The golden completed run, with block structure seeded onto the blockquote
  * path and both inline-prose paths — the three surfaces issue #120 names.
  */
+/**
+ * The BELOW-BAR coverage shape: two of four answers unsourced.
+ *
+ * ADR-0106 moved `goldenCompletedResp()` from below-target to at-target, because
+ * the target became "at most one answer may lack a primary source" and that
+ * builder carries exactly one. The below-target UI state -- the verdict band's
+ * amber caution line and the export's "Source support is BELOW target" row --
+ * still needs a golden-path driver, and AGENTS.md rule 13d says to add a
+ * DEDICATED builder rather than mutate the shared one.
+ *
+ * Only the run-level coverage object moves. The four per-answer source shapes
+ * are left alone on purpose: changing them would move the source expanders and
+ * their specs, which have nothing to do with this rule.
+ */
+export const goldenRespBelowCoverageBar = () => {
+  const resp = goldenCompletedResp() as Record<string, any>;
+  resp.result.final_synthesis = {
+    ...resp.result.final_synthesis,
+    citation_coverage: {
+      answer_count: 4,
+      sourced_answer_count: 2,
+      sourced_answer_ratio: "0.50",
+      target_ratio: "0.75",
+      target_met: false,
+    },
+    quality_checks: {
+      ...resp.result.final_synthesis.quality_checks,
+      citation_coverage_target_met: false,
+    },
+    source_support:
+      "Backed by **cited** sources on two of four responding models — two short, which **misses** the target of at most one unsourced answer (ADR-0106).",
+  };
+  return resp;
+};
+
 export const goldenRespWithBlockStructure = () => {
   const resp = goldenCompletedResp() as Record<string, any>;
   resp.result.final_synthesis.recommendation = QUOTED_ORDERED_AND_BULLETS;
@@ -620,6 +670,49 @@ export const goldenRespWithPeerCritiques = (live = 3, eligible = 4) => {
 };
 
 /**
+ * A peer run whose per-critic text carries REAL MARKDOWN (ADR-0107).
+ *
+ * A third dedicated builder (AGENTS.md rule 13d). `goldenRespWithPeerCritiques`
+ * gives every critic the flat string "Slot N critique." — which cannot show the
+ * defect this fixture exists for, because there is no structure to flatten.
+ *
+ * The digest the round card used to display is `_peer_digest`: each critique
+ * put through `_one_line` (headings, blank lines and bullets collapsed to
+ * single spaces) and cut to a PROMPT's token budget. Against flat text that is
+ * invisible; against a critique with a `##` heading and a list it produces the
+ * literal marks `##` and `1.` inside one run of prose. So each critic here
+ * carries a heading, bold, a list and a blockquote, and `critique_text` on the
+ * ROUND carries the flattened digest a real server would have sent alongside
+ * them — the two disagreeing is the whole point.
+ */
+export const goldenRespWithMarkdownCritiques = () => {
+  const resp = goldenCompletedResp() as Record<string, any>;
+  const per = (n: number) =>
+    `## Critic ${n} reading\n\n**Where it agrees:** the recommendation holds.\n\n` +
+    `1. The export slice is scoped too widely.\n` +
+    `2. The retention figure is _unsourced_.\n\n` +
+    `> Caveat: this rests on the \`citation_check\` output alone.`;
+  for (const round of resp.result.debate_outputs) {
+    round.critique_shape = "peer";
+    round.eligible_critic_count = 4;
+    round.slot_critiques = Array.from({ length: 4 }, (_v, i) => ({
+      critic_slot_number: i + 1,
+      critic_model_id: SLOTS[i].model_id,
+      critique_text: per(i + 1),
+      focus_areas: [],
+      critique_mode: "live",
+    }));
+    // What `_peer_digest` would have produced from those four: flattened by
+    // `_one_line` and cut. Present so a test can prove this text is NOT what
+    // the reader is shown.
+    round.critique_text = Array.from({ length: 4 }, (_v, i) =>
+      `Slot ${i + 1}: ${per(i + 1).replace(/\s+/g, " ").slice(0, 90)}`,
+    ).join("\n");
+  }
+  return resp;
+};
+
+/**
  * A completed run whose DEBATE fell back to Quorum's own template while the
  * ANSWERS stayed live — `debate_mode: "fallback"` on every round.
  *
@@ -661,26 +754,60 @@ export const goldenConsensusResp = () => {
   // that goes with 4 of 4. Without it `isConsensusResult` returns false and
   // every `[data-consensus="true"]` assertion below stops measuring anything.
   resp.result.agreement = { aligned: 4, total: 4, panel_agreement: "agreed" };
+  // Slot 3 is already the zero-source slot in the base builder. Slot 4 joins it
+  // so the four per-answer shapes really do sum to the 2-of-4 stated below.
+  for (const answer of resp.result.model_answers) {
+    if (answer.slot_number === 4) {
+      answer.sources = [];
+      answer.citation_coverage = {
+        answer_count: 1,
+        sourced_answer_count: 0,
+        sourced_answer_ratio: "0.00",
+        target_ratio: "1.00",
+        target_met: false,
+      };
+    }
+  }
   resp.result.final_synthesis = {
     ...resp.result.final_synthesis,
-    citation_coverage: CC_BELOW,
+    // BELOW the source-coverage bar, deliberately, and this is load-bearing.
+    //
+    // The green consensus band carries an amber `.result-verdict-coverage`
+    // caution line as a CHILD, and three F-04 contrast tests measure that
+    // child against the green surface. The line only renders when
+    // `target_met === false`.
+    //
+    // ADR-0106 moved `CC_ONE_UNSOURCED` (3 of 4) from below-target to AT
+    // target, which stopped this builder rendering the line at all — and the
+    // three contrast tests went red rather than silently green, because each
+    // asserts `ratio > 0` before comparing. That positive partner is what
+    // turned "the gate now measures nothing" into a visible failure.
+    //
+    // 2 of 4 restores the subject. A run where every model agreed but only
+    // half cited a source is a real and interesting shape: consensus is not
+    // evidence. The per-answer sources below are adjusted to match, because a
+    // fixture whose prose contradicts its own structured values is the
+    // dishonest shape these gates exist to catch.
+    citation_coverage: {
+      answer_count: 4,
+      sourced_answer_count: 2,
+      sourced_answer_ratio: "0.50",
+      target_ratio: "0.75",
+      target_met: false,
+    },
     synthesis_mode: "simulated",
-    // Keep every field that RESTATES the numbers consistent with CC_BELOW and
-    // with 4-of-4. A fixture whose prose contradicts its own structured values
-    // is the dishonest shape these gates exist to catch, and it would quietly
-    // undermine any future assertion that reads that prose.
     quality_checks: {
       ...resp.result.final_synthesis.quality_checks,
       citation_coverage_target_met: false,
     },
     source_support:
-      "Backed by **cited** sources on three of four responding models. Source coverage 0.75 against a 0.80 target.",
+      "Backed by **cited** sources on two of four responding models — two short, which **misses** the target of at most one unsourced answer.",
     disagreement:
       "No model **dissents**: all four converged on the same recommendation, including the secondary point about gating the export behind a manual review.",
   };
   // WP-C / F-03: ``material_claim_count`` is an INDEPENDENT length estimate now
   // (chars/200 across the four answers), not the coverage denominator, so it is
-  // deliberately NOT derived from CC_BELOW any more. Nothing renders it — the
+  // deliberately NOT derived from CC_ONE_UNSOURCED any more. Nothing renders it — the
   // "Claims inspected" card was removed with the redefinition — but the served
   // field is still part of the pre-S2 contract, so the fixture carries a
   // plausible value.

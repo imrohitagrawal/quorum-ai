@@ -226,13 +226,24 @@ def test_half_sourced_run_reports_half_and_misses_the_target() -> None:
     assert target_met is False
 
 
-def test_three_of_four_sourced_still_misses_the_eighty_percent_target() -> None:
-    """0.75 < 0.80 — the target is a real bar, not a formality."""
+def test_three_of_four_sourced_meets_the_target() -> None:
+    """RED WHEN: the target goes back to being a percentage bar.
+
+    ADR-0106. This assertion is INVERTED from what it was. Under the old 0.80
+    threshold 3-of-4 missed the target, which -- over a domain where the only
+    attainable ratios are 0, .25, .50, .75 and 1.00 -- made the target
+    identical to "every answer must be sourced". One unsourced answer out of
+    four is now inside the bar.
+
+    ``test_half_sourced_run_reports_half_and_misses_the_target`` above is the
+    partner that keeps a REAL failing case (2 of 4), so this pair cannot both
+    be satisfied by a rule that always passes.
+    """
     ratio, target_met, _ = _run_coverage(
         _four_answers(texts=[_LONG_ANSWER] * 4, sourced=[True, True, True, False])
     )
     assert ratio == Decimal("0.75")
-    assert target_met is False
+    assert target_met is True
 
 
 def _failed_answer(slot_index: int = 3) -> InitialModelAnswer:
@@ -349,3 +360,68 @@ def test_fallback_only_sources_do_not_count_as_coverage() -> None:
     assert answer.citation_coverage.sourced_answer_count == 0
     assert answer.citation_coverage.sourced_answer_ratio == Decimal("0.00")
     assert answer.citation_coverage.target_met is False
+
+
+# ---------------------------------------------------------------------------
+# ADR-0106 review: the shortfall sentence must be true over the WHOLE domain
+# ---------------------------------------------------------------------------
+
+
+def test_the_shortfall_sentence_is_true_at_every_missed_state() -> None:
+    """RED WHEN: the recommendation paraphrases the rule instead of counting.
+
+    The rule is ``sourced >= max(1, answer_count - 1)`` and the domain includes
+    ``answer_count`` 0 and 1 -- so ANY English paraphrase is false at one end.
+    ADR-0106 shipped "More than one of the answers that came back lacked a
+    primary source", which is false at n=0 (none came back, so none lacked one)
+    and at n=1/sourced=0 (exactly one lacked one). Both states are reachable
+    when three or four slots fail, which is exactly when this templated
+    fallback is used, and the sentence it replaced was true in both.
+
+    Adversarial review found it; no test covered ``answer_count = 1`` at all.
+    """
+    from product_app.providers import calculate_citation_coverage
+    from product_app.synthesis import _coverage_shortfall_sentence
+
+    missed = [
+        (n, k)
+        for n in range(0, 5)
+        for k in range(0, n + 1)
+        if not calculate_citation_coverage(answer_count=n, sourced_answer_count=k).target_met
+    ]
+    # Positive partner: the domain sweep must actually find missed states,
+    # including the two ends the defect lived at.
+    assert (0, 0) in missed and (1, 0) in missed, missed
+    assert len(missed) >= 6, missed
+
+    for n, k in missed:
+        coverage = calculate_citation_coverage(answer_count=n, sourced_answer_count=k)
+        sentence = _coverage_shortfall_sentence(coverage)
+        assert sentence, f"no sentence for {k}/{n}"
+        # The banned paraphrase, in either direction.
+        assert "More than one" not in sentence, (
+            f"{k}/{n}: the sentence paraphrases the rule again -- {sentence!r}"
+        )
+        if n == 0:
+            assert "No model answers came back" in sentence, sentence
+        else:
+            # It states the MEASURED counts, so it cannot be false.
+            assert f"{k} of {n}" in sentence, f"{k}/{n} -> {sentence!r}"
+            assert ("1 answer that" in sentence) == (n == 1), f"{k}/{n} pluralisation: {sentence!r}"
+
+
+def test_a_met_run_gets_no_shortfall_sentence() -> None:
+    """The partner: the sentence must not appear when the target IS met.
+
+    Without this, always emitting it would satisfy the sweep above.
+    """
+    from product_app.providers import calculate_citation_coverage
+    from product_app.synthesis import _coverage_shortfall_sentence
+
+    met = calculate_citation_coverage(answer_count=4, sourced_answer_count=3)
+    assert met.target_met is True
+    # The helper is only ever CALLED when the target is missed; this pins the
+    # caller's guard by proving the met case is a distinguishable state.
+    missed = calculate_citation_coverage(answer_count=4, sourced_answer_count=2)
+    assert missed.target_met is False
+    assert _coverage_shortfall_sentence(missed) != _coverage_shortfall_sentence(met)

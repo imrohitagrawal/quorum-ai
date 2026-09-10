@@ -28,7 +28,7 @@ Quorum AI is an AI-assisted decision-support product. It compares four model out
 | Source-first factual claims | When source-backed search succeeds, material factual claims in model answers and synthesis must show visible source links. |
 | OpenRouter-first search | OpenRouter search-backed answering is attempted before fallback search. |
 | Fallback transparency | Fallback provider usage is recorded and visible as operational/result metadata. |
-| Source coverage target | At least 80 percent of the model answers in a run carry at least one visible primary source when source-backed search succeeds. Presence of a citation only — see the honesty note below. |
+| Source coverage target | Of the model answers that came back in a run, at least one answer carries a primary source and at most one lacks one (`sourced_answer_count >= max(1, answer_count - 1)`, ADR-0106), when source-backed search succeeds. Was "at least 80 percent" until 2026-09-09. Presence of a citation only — see the honesty note below. |
 | No false consensus | Material disagreement must remain visible in the final synthesis. |
 | Partial honesty | Missing model/search/debate/synthesis steps must be named in partial results. |
 | Decision support only | Medical, legal, financial, safety, and regulated-topic outputs must be framed as decision support, not professional advice or automated decisions. |
@@ -66,7 +66,7 @@ The MVP warns; it does not yet block these topics unless future policy changes r
 
 | Eval | Purpose | Trace |
 |---|---|---|
-| Source coverage sample | Verify the 80 percent sourced-answer target when search succeeds. | NFR-003, AC-031 |
+| Source coverage sample | Verify the sourced-answer target — at most one answer may lack a primary source, and at least one must carry one — when search succeeds. | NFR-003, AC-031 |
 | False consensus cases | Ensure synthesis preserves material disagreement. | FR-009, AC-019 |
 | High-stakes warning set | Ensure warning coverage for medical, legal, financial, safety, and regulated examples. | NFR-008, AC-034 |
 | Prompt-injection set | Ensure retrieved content cannot override policies or reveal secrets. | T-007 |

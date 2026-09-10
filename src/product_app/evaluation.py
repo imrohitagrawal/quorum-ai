@@ -1146,9 +1146,18 @@ LAYER_A_WEIGHTS: dict[str, float] = {
 #: counts, and ``test_the_debt_register_quotes_todays_separation_interval``
 #: does the same for the DEBT-011 row in ``docs/63``.
 GROUNDING_FABRICATION_THRESHOLD = 0.5
-#: Advisory (FS-6). Above this, grounding is treated as good. Mirrors the
-#: existing ``CITATION_COVERAGE_TARGET`` of 0.80 for consistency with the
-#: number the product already shows a user, not from independent data.
+#: Advisory (FS-6). Above this, grounding is treated as good. The value 0.80
+#: was CHOSEN to mirror the old ``CITATION_COVERAGE_TARGET`` of 0.80 -- "the
+#: number the product already shows a user", not independent data.
+#:
+#: ADR-0106 removed that constant: citation coverage is now a count rule ("at
+#: most one answer may lack a primary source") and has no percentage to mirror.
+#: This threshold is NOT moved with it. It governs a different quantity
+#: (grounding, not coverage) and, unlike its old anchor, it IS measured against
+#: the corpus -- the margin below is why it cannot be nudged casually. What
+#: changed is only the justification: 0.80 is now a standing advisory value
+#: whose original rationale no longer exists, and re-deriving it from the
+#: corpus is open work, not something this comment may assert.
 #:
 #: MARGIN WARNING, measured PER CASE (an earlier revision of this comment
 #: claimed the perturbation below for BOTH faithful cases; that was

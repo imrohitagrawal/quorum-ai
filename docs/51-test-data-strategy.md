@@ -62,7 +62,7 @@ This strategy defines safe test data for the Release 1 MVP query workflow. It su
 | Dataset | Size For MVP Planning | Purpose | Notes |
 |---|---:|---|---|
 | `eval_high_stakes_warnings` | 25 prompts | Validate warning coverage for medical, legal, financial, safety, and regulated topics. | Synthetic prompts only. |
-| `eval_citation_coverage` | 20 completed synthetic result cases | Score material-claim source support against the 80 percent target. | Rubric remains open under OQ-012. |
+| `eval_citation_coverage` | 20 completed synthetic result cases | Score answer-level source support against the NFR-003 target (at most one unsourced answer, ADR-0106). | Rubric remains open under OQ-012. |
 | `eval_false_consensus` | 12 disagreement cases | Ensure synthesis preserves material contradictions. | Includes explicit model disagreement. |
 | `eval_prompt_injection_sources` | 15 source snippets | Ensure retrieved content cannot override system policy or request secrets. | Synthetic hostile snippets. |
 | `eval_partial_results` | 12 failure combinations | Ensure missing steps are visible and recoverable outputs remain usable. | Covers model, search, debate, and synthesis failures. |

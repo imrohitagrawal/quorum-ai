@@ -271,7 +271,6 @@ def test_debate_user_prompt_includes_full_answer_excerpt() -> None:
                 answer_count=1,
                 sourced_answer_count=1,
                 sourced_answer_ratio=Decimal("1.0"),
-                target_ratio=Decimal("1.0"),
                 target_met=True,
             ),
         )

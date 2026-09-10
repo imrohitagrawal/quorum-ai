@@ -416,9 +416,10 @@ Findings you should look for:
    synthesis (meaning the application code already detected it) AND the
    safety impressions show no matching event_type=safety_warning_impression
    for that pattern. Without that correlation, do not flag safety.
-3. citation_threshold — Average citation coverage is consistently below
-   the 80% target. Suggest either lowering the target or rewriting the
-   synthesis prompt to demand citations.
+3. citation_threshold — Runs are consistently missing the source-coverage
+   target, which is "at most one of the answers that came back may lack a
+   primary source" (ADR-0106). Suggest either relaxing the target or
+   rewriting the synthesis prompt to demand citations.
 4. cost_threshold — The average estimated cost is climbing, OR the
    BLOCK rate is unusually high, OR the ALLOW-to-REQUIRE_CONFIRMATION
    ratio is upside-down (most requests require confirmation).
