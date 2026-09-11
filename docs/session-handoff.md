@@ -1,7 +1,7 @@
 # Session Handoff
 
 ## Date/time
-2026-09-05T12:17:09+05:30
+2026-09-11T23:25:01+05:30
 
 ## Open work
 `docs/65-open-work.md` — the source of truth for what is open, what blocks what,
@@ -11,32 +11,33 @@ line further down this file is the factory router's view of the lifecycle, not a
 work status.
 
 ## Latest narrative handoff
-`docs/analysis/2026-09-05-session-handoff.md` — read this for full context before editing. (today)
+`docs/analysis/2026-09-11-session-handoff.md` — read this for full context before editing. (today)
 
 This file is a mechanical snapshot (branch/git-status/skill-route/live state) —
 regenerated fresh every `make handoff`. The narrative above (what happened,
 what's next, the traps) lives in the dated doc it points to, not here.
 
 ## Current branch/worktree
-docs/session-handoff-0905
+eviden/2026-09-10-window-measurements
 
 ## Live state (measured fresh by this run, not hand-carried)
 Run `make handoff` again for current numbers instead of trusting this file
 once it ages -- every value below is read from git/gh/`/status` at
 generation time, per #134.
 
-- **`origin/main` tip:** `50d4497a0257`
-- **Last commit touching `src/`:** `50d4497a0257`
-- **Production vs. last `src/` commit:** unavailable: could not reach https://quorum-ai.fly.dev/status (last src/ commit is 50d4497)
-- **pytest collected (no execution):** 4279
+- **`origin/main` tip:** `c40b2e12f3e8`
+- **Last commit touching `src/`:** `c40b2e12f3e8`
+- **Production vs. last `src/` commit:** unavailable: could not reach https://quorum-ai.fly.dev/status (last src/ commit is c40b2e1)
+- **pytest collected (no execution):** 4460
 - **e2e lane spec counts:** invariants: 20, ops: 2, degraded: 1
-- **Open issues:** 3
+- **Open issues:** 6
 - **Changed-lines coverage:** not computed here -- `make diff-cover` shares
   coverage data with every pytest-invoking target and races with them if run
   concurrently (AGENTS.md rule 15), so this file does not run it. Run
   `make quality && make diff-cover DIFF_BASE=origin/main` for a current number.
 - **Remote branches not merged into `origin/main`:**
-- None (every remote branch merges into `main`)
+- `eviden/2026-09-10-window-measurements`
+- `imrohitagrawal-patch-1`
 
 ## Current phase
 Operate, learn, and improve
@@ -93,7 +94,8 @@ Operate, learn, and improve
 
 ## Git status
 ```text
-?? docs/analysis/2026-09-05-session-handoff.md
+?? CONTINUE-290-READOUT-AND-LIVE-RUN-ULTRACODE-PROMPT.md
+?? docs/analysis/2026-09-11-session-handoff.md
 ```
 
 ## Diff stat
