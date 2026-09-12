@@ -766,6 +766,14 @@ components:
           type: boolean
           title: Searched
           default: false
+        billing_class:
+          anyOf:
+          - type: string
+            enum:
+            - not_billed
+            - possibly_billed
+          - type: 'null'
+          title: Billing Class
         shortened:
           type: boolean
           title: Shortened

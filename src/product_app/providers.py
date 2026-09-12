@@ -41,7 +41,7 @@ from http.client import HTTPException, IncompleteRead
 from math import ceil
 from threading import RLock
 from time import perf_counter
-from typing import Any
+from typing import Any, Final, Literal
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import Request
@@ -430,6 +430,23 @@ class TokenUsage(BaseModel):
     model_id: str | None = None
 
 
+#: The two billing verdicts for a call that produced no usable answer. These are
+#: the strings the failure-path logs have always used; #105 step 1 promotes them
+#: from log text to a recorded field so the distinction survives to the cost
+#: layer instead of being thrown away one frame above it.
+#:
+#: ``not_billed`` is the STRONGER claim: the request was refused before
+#: inference (a status in ``_UNBILLED_HTTP_STATUSES``) or never left the
+#: process, so no charge is possible. ``possibly_billed`` is the honest reading
+#: of anything that was DISPATCHED — the provider may already have generated and
+#: charged for a completion nobody captured.
+#: Annotated ``Final[Literal[...]]`` rather than bare ``str`` so mypy accepts them
+#: where the closed field type is required — the same shape ``synthesis.py`` uses
+#: for its own string constants, and the reason it uses it.
+BILLING_NOT_BILLED: Final[Literal["not_billed"]] = "not_billed"
+BILLING_POSSIBLY_BILLED: Final[Literal["possibly_billed"]] = "possibly_billed"
+
+
 class InitialModelAnswer(BaseModel):
     slot_number: int = Field(ge=1, le=4)
     model_id: str
@@ -461,6 +478,37 @@ class InitialModelAnswer(BaseModel):
     #: slot, and for a slot whose ``:online`` attempt was rejected and served
     #: by the bare-id retry — none of those was billed a search fee.
     searched: bool = False
+    #: #105 step 1 (ADR-0112). For a slot that produced NO usable answer, whether
+    #: the attempt could still have cost money: ``BILLING_NOT_BILLED`` when the
+    #: request was refused before inference or never dispatched,
+    #: ``BILLING_POSSIBLY_BILLED`` when it was dispatched and the provider may
+    #: already have generated and charged.
+    #:
+    #: ``None`` means the question was not asked. Today that is exactly one
+    #: case — a slot that produced an answer, whose cost is itemised from its
+    #: captured usage — because all three failure constructors now set a
+    #: verdict. **A consumer must still read ``None`` as UNKNOWN, never as
+    #: ``not_billed``**: every record written before this field existed carries
+    #: ``None`` too, and the data cannot tell those apart.
+    #:
+    #: All three matter. An earlier draft set it only in ``_failed_answer``, so
+    #: a deadline-cut slot — whose POST may be in flight and already charged —
+    #: recorded ``None`` and was indistinguishable from a slot that answered.
+    #: That is the field-drift footgun the failure constructors' own docstrings
+    #: warn about, fired in the file that documents it.
+    #:
+    #: NOTHING PRICES ANYTHING FROM THIS YET, deliberately. ADR-0012 refused to
+    #: narrow the possibly-billed posture on a guess and ADR-0031 set a sampling
+    #: bar that is read from the durable telemetry log, not from this field. It
+    #: exists so a cost-layer decision becomes possible, not so it is taken.
+    #:
+    #: ``Literal``, not ``str``: the value space is closed and the field is
+    #: served, so an invalid spelling should be a type error rather than
+    #: something a consumer has to defend against. ``cost_source`` on
+    #: ``QueryRunResultResponse`` is the same shape on a money field and renders
+    #: as ``type: string`` + ``enum`` in ``openapi.yaml`` with nothing extra to
+    #: decide.
+    billing_class: Literal["not_billed", "possibly_billed"] | None = None
     #: WP-D (F-07): this answer is NOT the model's complete view, so the text
     #: below is incomplete. Two causes set it, and the field deliberately does
     #: not distinguish them — see :data:`_UNCLEAN_FINISH_REASONS`:
@@ -635,20 +683,29 @@ class ProviderExecutionService:
         provider_attempt_order: list[ProviderPath] = [ProviderPath.LOCAL_SIMULATION]
 
         if self._should_force_provider_failure(query_text=query_text, model_slot=model_slot):
+            # The LOCAL-only test seam. It returns before any POST, so nothing
+            # was dispatched and nothing can have been billed.
             return self._failed_answer(
                 account_id=account_id,
                 query_run_id=query_run_id,
                 model_slot=model_slot,
                 credential_source=credential_source,
                 started_at=started_at,
+                billing_class=BILLING_NOT_BILLED,
             )
 
         # Default path: local simulation. We always return a deterministic,
         # well-shaped stub answer. Live  is only attempted when the
         # operator has explicitly opted in AND supplied a key.
         live_response: LiveProviderResult | None = None
+        # #105 step 1. Which verdict this slot reports if it ends up FAILED.
+        # ``not_billed`` until something is actually dispatched, because that is
+        # the state before any request leaves. The forced-failure seam ABOVE
+        # returns before this is read at all (it passes its own verdict), and a
+        # slot with live execution off never enters the branch below.
+        live_billing_class: Literal["not_billed", "possibly_billed"] = BILLING_NOT_BILLED
         if self._live_execution_enabled(openrouter_key=openrouter_key):
-            live_response = self._live_openrouter_response(
+            live_outcome = self._live_openrouter_response(
                 openrouter_key=openrouter_key,
                 query_text=query_text,
                 model_slot=model_slot,
@@ -662,8 +719,23 @@ class ProviderExecutionService:
                     slot_number=model_slot.slot_number,
                 ),
             )
-            if live_response is not None:
-                provider_attempt_order = [ProviderPath.OPENROUTER_SEARCH]
+            # ANY outcome other than ``None`` means a request was dispatched, so
+            # the provider may already have generated and charged. That is the
+            # whole condition — one test, not two branches. An earlier draft set
+            # the verdict separately inside the success branch and commented that
+            # it covered the F-06 empty-text shape; this same change routes that
+            # shape to ``_DispatchedUnmeasured``, so the comment described
+            # behaviour it had just removed and the assignment was provably dead
+            # (a success always has visible text, so it always completes).
+            if live_outcome is not None:
+                live_billing_class = BILLING_POSSIBLY_BILLED
+                # Narrowed by EXCLUSION, not by ``isinstance(LiveProviderResult)``.
+                # ``test_provider_stubs`` stands a duck-typed ``_FakeLiveResult``
+                # in here, which an isinstance check silently routes down the
+                # failure path — measured, three tests went red.
+                if not isinstance(live_outcome, _DispatchedUnmeasured):
+                    live_response = live_outcome
+                    provider_attempt_order = [ProviderPath.OPENROUTER_SEARCH]
 
         # A live response with any answer text counts as a successful
         # primary-provider call. The plan relaxed the prior ``sources``
@@ -746,6 +818,7 @@ class ProviderExecutionService:
                 model_slot=model_slot,
                 credential_source=credential_source,
                 started_at=started_at,
+                billing_class=live_billing_class,
             )
 
         # No live response, or live response returned no usable text.
@@ -889,8 +962,14 @@ class ProviderExecutionService:
         model_slot: ModelSlot,
         credential_source: ProviderCredentialSource,
         started_at: float,
+        billing_class: Literal["not_billed", "possibly_billed"],
     ) -> InitialModelAnswer:
         """Report the slot MISSING. It carries no ``token_usage`` — deliberately.
+
+        ``billing_class`` records whether this missing slot could still have cost
+        money. It is REQUIRED, deliberately: the defect this parameter exists to
+        fix was a value that understated billing, so a caller who forgets it must
+        get a type error rather than a silent ``not_billed``.
 
         #175, the money decision, stated where the code makes it. A slot can
         reach here after a call that really was billed: a whitespace-only (or
@@ -960,6 +1039,7 @@ class ProviderExecutionService:
             ),
             error_code="PROVIDER_UNAVAILABLE",
             provider_notice=NOTICE_PROVIDER_UNAVAILABLE,
+            billing_class=billing_class,
         )
 
     def cancelled_answer(
@@ -969,6 +1049,7 @@ class ProviderExecutionService:
         account_id: UUID,
         query_run_id: UUID,
         credential_source: ProviderCredentialSource,
+        billing_class: Literal["not_billed", "possibly_billed"],
     ) -> InitialModelAnswer:
         """Build a stub ``InitialModelAnswer`` for a slot cancelled before
         the model call started.
@@ -1022,6 +1103,7 @@ class ProviderExecutionService:
                 sourced_answer_count=0,
             ),
             error_code="CANCELLED",
+            billing_class=billing_class,
             provider_notice=NOTICE_CANCELLED,
         )
 
@@ -1032,6 +1114,7 @@ class ProviderExecutionService:
         account_id: UUID,
         query_run_id: UUID,
         credential_source: ProviderCredentialSource,
+        billing_class: Literal["not_billed", "possibly_billed"],
     ) -> InitialModelAnswer:
         """Build a stub ``InitialModelAnswer`` for a slot cut by the run-level
         wall-clock deadline (NFR-004 / P3).
@@ -1039,6 +1122,18 @@ class ProviderExecutionService:
         Sibling of :meth:`cancelled_answer` — same field set, same FAILED
         status, same rationale for existing as a thin helper (field drift
         between failure constructors is a known footgun). The differences:
+
+        ``billing_class`` is REQUIRED and is decided by the CALLER, not here.
+        Round 2 of review caught this constructor hardcoding
+        ``possibly_billed``: correct when a request was in flight, but a lie on
+        a run that could not spend at all. With live execution off — including
+        the #100 global-ceiling path, which forces ``openrouter_key = ""``
+        PRECISELY so the run cannot spend — no POST is ever made, and the field
+        claimed a dispatch that was impossible. This constructor cannot know:
+        the key lives at the call site. So the call site decides, and forgetting
+        to is a type error. Same reasoning as ``_failed_answer``; an earlier
+        draft applied it there and not here, which is the asymmetry review
+        named.
 
         * ``error_code="RUN_DEADLINE_EXCEEDED"`` — the run's budget expired,
           which is neither a user cancel nor a provider failure; the audit /
@@ -1079,6 +1174,7 @@ class ProviderExecutionService:
                 sourced_answer_count=0,
             ),
             error_code="RUN_DEADLINE_EXCEEDED",
+            billing_class=billing_class,
             provider_notice=NOTICE_RUN_DEADLINE,
         )
 
@@ -1089,7 +1185,7 @@ class ProviderExecutionService:
         query_text: str,
         model_slot: ModelSlot,
         telemetry_labels: CallTelemetryLabels | None = None,
-    ) -> LiveProviderResult | None:
+    ) -> LiveProviderResult | _DispatchedUnmeasured | None:
         """Call ``/chat/completions`` with web search enabled.
 
         Search contract: the model id we send is
@@ -1118,7 +1214,16 @@ class ProviderExecutionService:
             model_slot=model_slot,
             telemetry_labels=telemetry_labels,
         )
-        if result is None or isinstance(result, _SearchRejected | _DispatchedUnmeasured):
+        # #105 step 1: ``_DispatchedUnmeasured`` is returned to the CALLER rather
+        # than collapsed into ``None`` here. Those two mean different things —
+        # "may already have been charged" versus "provably was not" — and this
+        # frame flattening them is precisely why a failed slot could not tell the
+        # cost layer which it was. ``_SearchRejected`` still collapses: it is a
+        # 400/404 on the ``:online`` id, already in ``_UNBILLED_HTTP_STATUSES``,
+        # and the bare-id retry above it has already run.
+        if isinstance(result, _DispatchedUnmeasured):
+            return _DISPATCH_UNMEASURED
+        if result is None or isinstance(result, _SearchRejected):
             return None
         # F-06: ``_post_openrouter`` returns a real result for an EMPTY
         # completion so the debate/synthesis path can record the usage the
@@ -1184,7 +1289,19 @@ class ProviderExecutionService:
         # slot's cannot, and it is why the fix costs the run its ``measured``
         # label: see ``_failed_answer`` for the money decision (#175).
         if not is_visible(result.answer_text):
-            return None
+            # #105 step 1: ``_DISPATCH_UNMEASURED``, not ``None``. A 200 arrived
+            # carrying the provider's own ``usage``, so this call WAS dispatched
+            # and those tokens were charged — it is the one failure mode where
+            # money provably moved and the slot still produces nothing. Reporting
+            # it as ``None`` told the cost layer "nothing was billed", which is
+            # the opposite of the truth.
+            #
+            # This changes NOTHING about F-06's intent. The caller still does not
+            # accept the answer and still does not flip
+            # ``provider_attempt_order`` to OPENROUTER_SEARCH, because only a
+            # real ``LiveProviderResult`` does that. The sentinel carries the
+            # billing verdict and nothing else.
+            return _DISPATCH_UNMEASURED
         return result
 
     def _call_openrouter_with_optional_search(
@@ -1440,7 +1557,7 @@ class ProviderExecutionService:
                 "provider_base_url_refused",
                 extra={
                     "model_id": model_id,
-                    "billing_class": "not_billed",
+                    "billing_class": BILLING_NOT_BILLED,
                     "base_url_scheme": base_scheme,
                     "base_url_host": base_host,
                 },
@@ -1617,7 +1734,7 @@ class ProviderExecutionService:
                     "status_code": exc.code,
                     "url": exc.url,
                     "model_id": model_id,
-                    "billing_class": "possibly_billed" if billed else "not_billed",
+                    "billing_class": BILLING_POSSIBLY_BILLED if billed else BILLING_NOT_BILLED,
                     **_billing_evidence_shape(exc),
                 },
             )
@@ -1652,7 +1769,7 @@ class ProviderExecutionService:
                 extra={
                     "error_type": type(exc.reason).__name__,
                     "model_id": model_id,
-                    "billing_class": "possibly_billed" if billed else "not_billed",
+                    "billing_class": BILLING_POSSIBLY_BILLED if billed else BILLING_NOT_BILLED,
                 },
             )
             if billed:
@@ -1721,7 +1838,7 @@ class ProviderExecutionService:
                 "upstream_provider_stream_incomplete",
                 extra={
                     "model_id": model_id,
-                    "billing_class": "possibly_billed",
+                    "billing_class": BILLING_POSSIBLY_BILLED,
                     "stream_frames": streamed.frame_count,
                     "unrecognised_lines": streamed.unrecognised_lines,
                     "usage_absent": _extract_usage(streamed.payload) is None,
@@ -1813,7 +1930,7 @@ class ProviderExecutionService:
                 "upstream_provider_empty_answer",
                 extra={
                     "model_id": model_id,
-                    "billing_class": "possibly_billed",
+                    "billing_class": BILLING_POSSIBLY_BILLED,
                     "usage_absent": usage is None,
                 },
             )
@@ -2052,7 +2169,7 @@ class ProviderExecutionService:
             _LOGGER.warning(
                 "tavily_base_url_refused",
                 extra={
-                    "billing_class": "not_billed",
+                    "billing_class": BILLING_NOT_BILLED,
                     "base_url_scheme": base_scheme,
                     "base_url_host": base_host,
                 },
@@ -3190,7 +3307,7 @@ def _log_post_dispatch_failure(
         extra={
             "error_type": type(exc).__name__,
             "model_id": model_id,
-            "billing_class": "possibly_billed",
+            "billing_class": BILLING_POSSIBLY_BILLED,
         },
     )
 
