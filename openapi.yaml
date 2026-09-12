@@ -762,6 +762,10 @@ components:
           anyOf:
           - $ref: '#/components/schemas/TokenUsage'
           - type: 'null'
+        searched:
+          type: boolean
+          title: Searched
+          default: false
         shortened:
           type: boolean
           title: Shortened

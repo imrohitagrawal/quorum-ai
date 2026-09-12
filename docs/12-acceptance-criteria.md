@@ -270,9 +270,36 @@ Given a query is accepted, when it moves through submission, provider calls, fal
 
 Given OpenRouter charges a flat per-request web-search plugin fee (~$0.02/request) that is separate from token cost, when a query's cost is estimated and later measured, then the system intentionally does NOT account for that fee: `cost_web_search_request_fee_usd` is permanently `0.0` by decision, the fee is never surfaced to the user or on the UI (at `0.0` it folds invisibly into the total estimate — no separate line item), and the cost guardrail remains fail-safe without it because the pre-run estimate already runs at or above the measured token cost (measured live run 2026-07-17: estimate $0.0199 ≥ actual $0.0149). The per-slot plumbing (server + client) is retained only as a dormant repo-tracking hook, not a pending activation.
 
+**SUPERSEDED IN PART — 2026-09-12 (issue #105, CHG-006, ADR-0110).** The
+criterion's DECISION still holds: the fee is `0.0` and nothing is surfaced. Three
+of its statements above do not, and are corrected here rather than silently left
+standing:
+
+- **"~$0.02/request" is wrong.** The measured charge is **$0.007** flat. Of the 27
+  generation rows in the owner's OpenRouter export for 2026-09-10, exactly 8 carry
+  a `cost_web_search` and every one is `0.007`. The ~$0.02 figure came from
+  OpenRouter's published rate card, never from a bill.
+- **The fail-safe rationale is refuted.** Run 5a9c2d63 was approved at an estimate
+  of $0.076 while its measured token cost alone was $0.0938 — so the estimate ran
+  BELOW the measured token cost, on this criterion's own token-for-token terms
+  (including the fee, the true charge was $0.121763).
+- **The plumbing is no longer "per-slot, dormant, not a pending activation."**
+  ADR-0110 extends it to the MEASURED path, and activation is now an open
+  product-owner decision, not a closed won't-activate.
+
+Also note "never surfaced to the user or on the UI" is true only AT `0.0`: at
+$0.007 the cheapest searching slot's card moves from `<$0.001` to about `$0.007`.
+
 - Requirement: NFR-002
-- Decision: accepted 2026-07-17 (issue #18); see CHG-005 and `config.py cost_web_search_request_fee_usd`
-- Test: existing #18 mechanism tests (behaviour unchanged at `0.0`)
+- Decision: accepted 2026-07-17 (issue #18); see CHG-005. **Rationale superseded
+  2026-09-12 by CHG-006; the exclusion itself is pending re-decision.** See
+  ADR-0110 and `config.py cost_web_search_request_fee_usd`
+- Test: existing #18 mechanism tests (behaviour unchanged at `0.0`).
+  `tests/unit/test_cost_search_fee.py` pins the estimate side;
+  `tests/unit/test_actual_cost_source.py::test_the_measured_fee_term_reads_the_SETTING_and_scales_with_it`
+  pins the measured side. Neither asserts the default is `0.0` — only
+  `tests/test_doc_gate_consistency.py::test_env_example_values_match_the_real_defaults`
+  catches that, indirectly
 
 ## Release 2: Trust & Evaluation
 

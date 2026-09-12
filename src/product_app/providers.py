@@ -449,6 +449,18 @@ class InitialModelAnswer(BaseModel):
     #: (no real billing) or when the provider omitted the usage object. Read
     #: by the cost layer to compute a measured actual cost.
     token_usage: TokenUsage | None = None
+    #: #105 defect B: this slot's answer came from a live call that went out
+    #: with the ``:online`` suffix, so OpenRouter charged its flat
+    #: per-request web-search fee on top of the tokens. Read by the cost layer
+    #: so the MEASURED total carries that fee; before this existed, the
+    #: measured figure was the token cost alone and under-reported every
+    #: searching run (measured against the provider's own ledger on
+    #: 2026-09-10: $0.007 x 4 initial calls = $0.028 per run).
+    #:
+    #: ``False`` for every simulated, fallback, failed and search-disabled
+    #: slot, and for a slot whose ``:online`` attempt was rejected and served
+    #: by the bare-id retry — none of those was billed a search fee.
+    searched: bool = False
     #: WP-D (F-07): this answer is NOT the model's complete view, so the text
     #: below is incomplete. Two causes set it, and the field deliberately does
     #: not distinguish them — see :data:`_UNCLEAN_FINISH_REASONS`:
@@ -709,6 +721,7 @@ class ProviderExecutionService:
                 provider_notice=search_disabled_notice,
                 token_usage=live_response.usage,
                 shortened=live_response.is_truncated,
+                searched=live_response.searched,
             )
 
         # #171: live execution is ON and this slot produced no usable live
@@ -820,6 +833,7 @@ class ProviderExecutionService:
         provider_notice: str | None = None,
         token_usage: TokenUsage | None = None,
         shortened: bool = False,
+        searched: bool = False,
     ) -> InitialModelAnswer:
         duration_ms = max(1, round((perf_counter() - started_at) * 1000))
         provider_event_recorder.record(
@@ -864,6 +878,7 @@ class ProviderExecutionService:
             provider_notice=provider_notice,
             token_usage=token_usage,
             shortened=shortened,
+            searched=searched,
         )
 
     def _failed_answer(
@@ -1828,6 +1843,12 @@ class ProviderExecutionService:
             sources=citations,
             usage=usage,
             is_truncated=is_truncated,
+            # The suffix IS the search flag, as it goes on the wire — the same
+            # predicate the token-shape telemetry records, for the same
+            # reason. ``model_id`` here is the id this frame POSTed, so a
+            # bare-id retry after a rejected ``:online`` attempt reports
+            # False and is charged no fee.
+            searched=model_id.endswith(":online"),
         )
 
     def call_with_prompt(
@@ -2089,6 +2110,20 @@ class LiveProviderResult:
     #: ``False`` — the honest reading of a response that carried no signal is
     #: "no evidence of truncation", never "definitely truncated".
     is_truncated: bool = False
+    #: #105 defect B: this call went out with the ``:online`` suffix, so
+    #: OpenRouter charged its flat per-request web-search fee on top of the
+    #: tokens. Set from the model id ACTUALLY PUT ON THE WIRE, which is the
+    #: only thing that decides whether the fee was billed — see the note at
+    #: the ``search_enabled`` telemetry field, which reads the same suffix for
+    #: the same reason.
+    #:
+    #: Deliberately the OUTCOME, not the intent. ``ModelSlot.search`` is the
+    #: intent and is NOT equivalent: when ``:online`` is rejected (HTTP
+    #: 400/404) the caller retries with the BARE model id, and it is that bare
+    #: retry that gets billed — no fee. Pricing a flat fee off the intent
+    #: would over-charge exactly those slots on a receipt labelled
+    #: ``measured``.
+    searched: bool = False
 
 
 #: Internal sentinel returned by ``_post_openrouter`` when ````

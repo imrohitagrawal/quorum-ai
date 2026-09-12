@@ -453,26 +453,74 @@ class Settings(BaseSettings):
     cost_web_search_context_tokens: int = 2000
     #: Flat per-request fee OpenRouter's ``:online`` web-search plugin charges
     #: for EACH searching initial-answer call, IN ADDITION to the token costs
-    #: above. OpenRouter bills the web plugin at ~$4 per 1,000 results with a
-    #: default of 5 results/request → ~$0.02/request. This term is independent
-    #: of the model's token price, so it is the ONLY web-search cost a
-    #: ``$0``-priced (``:free``) model incurs — without it a searching
-    #: :free-model slot is estimated at $0, which under-counts the real spend
-    #: and (because the guardrail keys off the estimate) is a fail-safe hole
-    #: (issue #18). Applied per slot only when that slot has search enabled;
-    #: search-disabled slots omit it. Tunable via ``COST_WEB_SEARCH_REQUEST_FEE_USD``.
+    #: above. This term is independent of the model's token price, so it is the
+    #: ONLY web-search cost a ``$0``-priced (``:free``) model incurs — without
+    #: it a searching :free-model slot is estimated at $0, which under-counts
+    #: the real spend (issue #18). Applied per slot only when that slot has
+    #: search enabled; search-disabled slots omit it. Tunable via
+    #: ``COST_WEB_SEARCH_REQUEST_FEE_USD``.
     #:
-    #: DEFAULT 0.0 — INTENTIONALLY, PERMANENTLY OFF (accepted decision, 2026-07-17;
-    #: see AC-037 in docs/12-acceptance-criteria.md and issue #18). The fee is a
-    #: real OpenRouter charge (~$4/1,000 results × 5 = ~$0.02/request per their
-    #: docs), but we have ACCEPTED not to account for it: the 2026-07-17 measured
-    #: live run showed the pre-run estimate already runs ABOVE the actual token
-    #: cost (est $0.0199 ≥ measured $0.0149), so the cost guardrail — which keys
-    #: off the estimate — stays fail-safe without this term. The plumbing (server
-    #: + client, per-slot) is retained ONLY as a dormant repo-tracking hook, not a
-    #: pending TODO; it is never surfaced to users (at 0.0 it folds invisibly into
-    #: the total estimate, no separate line). Activating it would shift the
-    #: CONFIRM/BLOCK bands and is deliberately NOT done. Leave at 0.0.
+    #: THE REAL PRICE IS $0.007, MEASURED. The owner's OpenRouter activity
+    #: export for 2026-09-10 (docs/analysis/2026-09-10-openrouter-activity.csv)
+    #: has 27 generation rows; exactly 8 carry a ``cost_web_search`` and every
+    #: one of them is exactly ``0.007``, in two batches of four — one per answer
+    #: model, none on the debate/synthesis/judge calls. The "~$4 per 1,000
+    #: results × 5 results = ~$0.02/request" figure this comment used to quote
+    #: came from OpenRouter's docs, not from a bill, and is roughly 3x the
+    #: charge actually levied. Do not reinstate it.
+    #:
+    #: DEFAULT 0.0 — still off, but no longer on its original reasoning.
+    #: The 2026-07-17 decision (AC-037 in docs/12-acceptance-criteria.md,
+    #: CHG-005 in docs/19-change-control-log.md, issue #18) accepted the
+    #: exclusion because the pre-run estimate was measured running ABOVE the
+    #: actual token cost (est $0.0199 ≥ measured $0.0149), making the exclusion
+    #: fail-safe. **That premise is refuted**: on 2026-09-10 run 5a9c2d63 was
+    #: approved at an estimate of $0.076 while its measured TOKEN cost alone
+    #: was $0.0938 — the estimate ran BELOW, on the 2026-07-17 comparison's own
+    #: token-for-token terms. (Including the fee the true charge was $0.121763.)
+    #: AC-037 and CHG-005 therefore need revising, and ACTIVATION IS A
+    #: PRODUCT-OWNER DECISION (CHG-005 records the exclusion as one).
+    #:
+    #: THE CONSEQUENCE FIGURES ARE DELIBERATELY NOT REPEATED HERE. They depend
+    #: on the peer-critique and judge postures and on whether prices come from
+    #: the live catalog or the static table, and a transcribed copy of them in
+    #: this comment was wrong twice. Run the sweep at decision time — it prints
+    #: its own posture and price source before any number:
+    #:     uv run python scripts/proofs/search_fee_band_sweep.py [--fallback-prices]
+    #: ADR-0110 records what it showed under the real production posture.
+    #:
+    #: One correction to what this comment used to claim. The three per-call
+    #: CONFIRM/BLOCK bands do NOT key off the point estimate —
+    #: ``_threshold_for`` takes the fail-safe bound that becomes
+    #: ``max_cost_usd`` (see the module docstring of costs.py, corrected there
+    #: in 2026-08-22 and missed here). But the fee is applied inside
+    #: ``_cost_components``, which feeds BOTH figures, so activating it raises
+    #: the point estimate and the bound alike, each by the fee times the number
+    #: of searching slots. The bands move because the bound rises; the
+    #: DAILY_CAP_USD and cumulative rails move because the point estimate
+    #: rises. Both directions are fail-safe (a ceiling that bites sooner).
+    #:
+    #: "Never surfaced to users" holds only AT 0.0: ``app.js``'s
+    #: ``perModelEstimateText`` renders ``<$0.001`` below the display quantum,
+    #: so at $0.007 the cheapest searching slot's card would change from
+    #: ``<$0.001`` to about ``$0.007``.
+    #:
+    #: The plumbing is no longer estimate-only. Since ADR-0110 the MEASURED
+    #: path carries this term too, charged per call that actually went out with
+    #: the ``:online`` suffix (``InitialModelAnswer.searched``). At 0.0 both
+    #: paths add exactly nothing.
+    #:
+    #: ACTIVATION IS NOT A ONE-VALUE CHANGE. Eight tests pin the pre-fee
+    #: arithmetic and go RED at 0.007 — the exact partition split, four
+    #: "byte-identical posture" bound pins, and the daily-cap envelope test,
+    #: which reports "the pinned static catalog's default-mix price moved to
+    #: 0.0827". ADR-0110 lists all eight by name. None of them is wrong; each
+    #: must be re-measured in the PR that activates the fee.
+    #:
+    #: There is also no ``fly.toml`` entry for this: the env-var spelling
+    #: ``COST_WEB_SEARCH_REQUEST_FEE_USD`` appears in no deploy config and no
+    #: workflow — only in ``.env.example`` and here. Changing this default
+    #: therefore changes production, local and CI together.
     cost_web_search_request_fee_usd: float = 0.0
     #: Output-token floor for a single initial answer.
     cost_initial_output_tokens: int = 700
