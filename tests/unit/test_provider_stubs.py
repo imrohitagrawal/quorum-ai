@@ -11,7 +11,10 @@ from tests.provider_wire import sse_from_completion
 from product_app.model_slots import ModelSlot, validate_model_slots
 from product_app.provider_keys import ProviderCredentialSource
 from product_app.providers import (
+    _DISPATCH_UNMEASURED,
     _SEARCH_REJECTED,
+    BILLING_NOT_BILLED,
+    BILLING_POSSIBLY_BILLED,
     NOTICE_DEMO_MODE,
     NOTICE_PROVIDER_UNAVAILABLE,
     NOTICE_SEARCH_DISABLED,
@@ -416,7 +419,7 @@ def test_live_response_retries_without_online_suffix_on_404(
     assert result.sources == []
 
 
-def test_live_response_returns_none_when_both_online_and_bare_fail(
+def test_live_response_reports_dispatched_when_both_online_and_bare_fail(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """L2: when both ``:online`` and the bare retry fail, the
@@ -424,11 +427,16 @@ def test_live_response_returns_none_when_both_online_and_bare_fail(
 
     F-06 UPDATE: the assertion moved from the INTERNAL dispatcher to
     ``_live_openrouter_response``, the boundary this test actually cares
-    about. Internally a 5xx is now ``_DISPATCH_UNMEASURED`` ("dispatched, may
-    have been billed") rather than ``None`` ("provably not billed"), because
-    the debate/synthesis path needs that distinction to keep a receipt honest.
-    The initial-answer path's observable contract is unchanged: still ``None``,
-    still one POST, still no surprise retry.
+    about. Internally a 5xx is ``_DISPATCH_UNMEASURED`` ("dispatched, may have
+    been billed") rather than ``None`` ("provably not billed"), because the
+    debate/synthesis path needs that distinction to keep a receipt honest.
+
+    #105 STEP 1 UPDATE: this boundary now returns that sentinel too. It used to
+    flatten it to ``None``, and that flattening is the defect ADR-0112 fixes —
+    the cost layer could not tell a refused request from one that may already
+    have been charged, which is why a run whose every slot failed booked the
+    whole pre-run estimate. What this test previously called "the observable
+    contract" was the collapse itself.
     """
     from urllib.error import HTTPError
 
@@ -451,7 +459,13 @@ def test_live_response_returns_none_when_both_online_and_bare_fail(
     # do NOT retry. The test asserts the current behavior — failure of the
     # online call is treated as a hard failure, not a search rejection.
     assert call_count == 1
-    assert result is None
+    # Dispatched, so the verdict is "may have been charged" (#105 step 1).
+    assert result is _DISPATCH_UNMEASURED
+    # The SLOT-level consequence — still FAILED, still no usage, and now
+    # carrying that verdict — is pinned in
+    # tests/unit/test_failed_slot_billing_verdict.py, which enables live
+    # execution. This service fixture has it off, so a slot here would complete
+    # via local simulation and prove nothing about the failure path.
 
 
 def test_live_response_rejects_online_only_for_400_and_404(
@@ -572,7 +586,7 @@ def test_per_slot_search_off_skips_online_attempt(
     assert result.answer_text == "training-data answer"
 
 
-def test_per_slot_search_off_returns_none_when_bare_call_fails(
+def test_per_slot_search_off_reports_dispatched_when_the_bare_call_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """L2: when ``ModelSlot.search`` is ``False`` and the bare-id POST
@@ -583,9 +597,14 @@ def test_per_slot_search_off_returns_none_when_bare_call_fails(
 
     F-06 UPDATE: asserted at ``_live_openrouter_response`` rather than the
     internal dispatcher — see
-    ``test_live_response_returns_none_when_both_online_and_bare_fail`` for why
+    ``test_live_response_reports_dispatched_when_both_online_and_bare_fail`` for why
     a 5xx is no longer a bare ``None`` inside the provider seam. The
     search-off contract itself is unchanged.
+
+    #105 STEP 1 UPDATE: the boundary now reports ``_DISPATCH_UNMEASURED`` for a
+    dispatched failure instead of flattening it to ``None``. The search-off
+    contract — one POST, bare id, no ``:online`` attempt — is what this test is
+    for and is untouched.
     """
     from urllib.error import HTTPError
 
@@ -616,7 +635,10 @@ def test_per_slot_search_off_returns_none_when_bare_call_fails(
 
     # Exactly one attempt; no retry.
     assert call_count == 1
-    assert result is None
+    # Dispatched, so the verdict is "may have been charged" (#105 step 1).
+    # The search-off contract this test exists for is the single bare POST
+    # above, which is unchanged.
+    assert result is _DISPATCH_UNMEASURED
 
 
 def test_per_slot_search_off_response_records_search_disabled_notice(
@@ -704,6 +726,7 @@ def test_cancelled_answer_has_expected_shape() -> None:
         account_id=uuid4(),
         query_run_id=uuid4(),
         credential_source=ProviderCredentialSource.APP_OWNED,
+        billing_class=BILLING_NOT_BILLED,
     )
 
     # Identity fields carry through from the slot.
@@ -742,6 +765,7 @@ def test_deadline_exceeded_answer_has_expected_shape() -> None:
         account_id=uuid4(),
         query_run_id=uuid4(),
         credential_source=ProviderCredentialSource.APP_OWNED,
+        billing_class=BILLING_POSSIBLY_BILLED,
     )
 
     assert answer.slot_number == 3
@@ -772,6 +796,7 @@ def test_cancelled_answer_records_a_provider_event() -> None:
         account_id=account_id,
         query_run_id=query_run_id,
         credential_source=ProviderCredentialSource.APP_OWNED,
+        billing_class=BILLING_NOT_BILLED,
     )
 
     events = scoped_events(provider_event_recorder, query_run_id=query_run_id)
@@ -795,6 +820,7 @@ def test_deadline_exceeded_answer_records_a_provider_event() -> None:
         account_id=account_id,
         query_run_id=query_run_id,
         credential_source=ProviderCredentialSource.APP_OWNED,
+        billing_class=BILLING_POSSIBLY_BILLED,
     )
 
     events = scoped_events(provider_event_recorder, query_run_id=query_run_id)
