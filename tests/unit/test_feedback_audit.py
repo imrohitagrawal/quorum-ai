@@ -35,6 +35,7 @@ from product_app.feedback_store import (
     record_event,
 )
 from product_app.model_slots import ModelSlot
+from product_app.providers import BILLING_NOT_BILLED, BILLING_POSSIBLY_BILLED
 
 # ---------------------------------------------------------------------------
 # FeedbackStore
@@ -491,12 +492,14 @@ def test_cancelled_and_deadline_exceeded_slots_are_visible_through_the_real_reco
             account_id=account_id,
             query_run_id=run_id,
             credential_source=ProviderCredentialSource.APP_OWNED,
+            billing_class=BILLING_NOT_BILLED,
         )
         provider_execution_service.deadline_exceeded_answer(
             model_slot=deadline_slot,
             account_id=account_id,
             query_run_id=run_id,
             credential_source=ProviderCredentialSource.APP_OWNED,
+            billing_class=BILLING_POSSIBLY_BILLED,
         )
         record_event(
             recorder="provider",

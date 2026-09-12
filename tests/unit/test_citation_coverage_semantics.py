@@ -37,6 +37,7 @@ from product_app.debate import debate_stub_service
 from product_app.model_slots import ModelSlot, validate_model_slots
 from product_app.provider_keys import ProviderCredentialSource
 from product_app.providers import (
+    BILLING_NOT_BILLED,
     InitialAnswerStatus,
     InitialModelAnswer,
     LiveProviderResult,
@@ -255,6 +256,11 @@ def _failed_answer(slot_index: int = 3) -> InitialModelAnswer:
         model_slot=slots[slot_index],
         credential_source=ProviderCredentialSource.APP_OWNED,
         started_at=0.0,
+        # Required since #105 / ADR-0112. This helper is about COVERAGE, not
+        # billing, so the value is irrelevant here — but the parameter has no
+        # default on purpose: the defect it exists to fix was a value that
+        # understated billing, so forgetting it must be a type error.
+        billing_class=BILLING_NOT_BILLED,
     )
     assert answer.status is InitialAnswerStatus.FAILED, "precondition: the answer must fail"
     return answer

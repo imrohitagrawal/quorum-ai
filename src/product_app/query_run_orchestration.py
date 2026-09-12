@@ -96,6 +96,8 @@ from product_app.model_slots import (
 )
 from product_app.provider_keys import ProviderCredentialSource
 from product_app.providers import (
+    BILLING_NOT_BILLED,
+    BILLING_POSSIBLY_BILLED,
     NOT_INVOKED_PATHS,
     InitialAnswerStatus,
     InitialModelAnswer,
@@ -1220,6 +1222,9 @@ def _execute_query_run(query_run_id: UUID, account_id: UUID) -> None:
                 account_id=account_id,
                 query_run_id=query_run_id,
                 credential_source=credential_source,
+                # Checked BEFORE ``produce_initial_answer``, so this slot never
+                # dispatched — whatever the key says.
+                billing_class=BILLING_NOT_BILLED,
             )
         return provider_execution_service.produce_initial_answer(
             account_id=account_id,
@@ -1255,6 +1260,18 @@ def _execute_query_run(query_run_id: UUID, account_id: UUID) -> None:
                 continue
             deadline_breached = True
             answer = provider_execution_service.deadline_exceeded_answer(
+                # The cut future keeps running, so a POST may be in flight or
+                # already charged — BUT only if one could be made at all. With
+                # live execution off (no key, or the #100 ceiling path forcing
+                # it empty so the run cannot spend) nothing was dispatched and
+                # claiming otherwise would be a false money claim on a $0 run.
+                billing_class=(
+                    BILLING_POSSIBLY_BILLED
+                    if provider_execution_service._live_execution_enabled(
+                        openrouter_key=openrouter_key
+                    )
+                    else BILLING_NOT_BILLED
+                ),
                 model_slot=model_slot,
                 account_id=account_id,
                 query_run_id=query_run_id,

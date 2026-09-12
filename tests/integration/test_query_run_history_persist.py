@@ -24,7 +24,7 @@ from fastapi.testclient import TestClient
 from product_app import run_history_store
 from product_app.debate import debate_event_recorder
 from product_app.main import app
-from product_app.providers import provider_event_recorder
+from product_app.providers import BILLING_NOT_BILLED, provider_event_recorder
 from product_app.query_runs import query_run_repository
 from product_app.safety import WARNING_VERSION, WarningType
 from product_app.synthesis import synthesis_event_recorder
@@ -144,6 +144,7 @@ def test_partial_run_is_persisted(monkeypatch: pytest.MonkeyPatch) -> None:
             account_id=kwargs["account_id"],
             query_run_id=kwargs["query_run_id"],
             credential_source=kwargs["credential_source"],
+            billing_class=BILLING_NOT_BILLED,
         )
 
     monkeypatch.setattr(service, "produce_initial_answer", _all_fail)

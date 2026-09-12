@@ -68,10 +68,32 @@ fallthrough still exists by design, but it is no longer silent end-to-end —
 an upstream `HTTPError` logs an `upstream_provider_http_error` WARNING with
 `status_code`/`model_id`, the simulated answer carries an explicit
 provider notice, and `live_count`/the degraded banner surface it to the
-user. **Network-level failures (URL error, timeout, JSON-decode,
-empty body) still return `None` without a log line** — they are visible
-only through the run payload (`live_count`) and the banner (PR #68 pins
-this asymmetry).
+user. **Network-level failures split by whether the request left the process**,
+and since #105 / ADR-0112 the served payload says which. Measured, one fault at
+a time, by capturing the return value and the emitted log event (fault injected at the
+`product_app.providers` `urlopen` seam; the exact log event for a malformed body
+depends on where parsing gives up, so treat that row as "one of the
+body/stream events" rather than a single guaranteed name):
+
+| fault | returns | slot records | logs |
+|---|---|---|---|
+| DNS failure (`gaierror`) | `None` | `not_billed` | `upstream_provider_opener_error` |
+| connection refused | `None` | `not_billed` | `upstream_provider_opener_error` |
+| connect timeout (`URLError(TimeoutError)`) | `_DISPATCH_UNMEASURED` | `possibly_billed` | `upstream_provider_opener_error` |
+| read timeout (bare `TimeoutError`) | `_DISPATCH_UNMEASURED` | `possibly_billed` | `upstream_provider_transport_error` |
+| empty body | `_DISPATCH_UNMEASURED` | `possibly_billed` | `upstream_provider_stream_incomplete` |
+| JSON-decode failure | `_DISPATCH_UNMEASURED` | `possibly_billed` | `upstream_provider_body_unreadable` |
+| HTTP 5xx | `_DISPATCH_UNMEASURED` | `possibly_billed` | `upstream_provider_http_error` |
+| HTTP 401 (and the rest of `_UNBILLED_HTTP_STATUSES`) | `None` | `not_billed` | `upstream_provider_http_error` |
+
+So "URL error" is not one case: only the timeout flavour is dispatched. **Every
+one of these logs**, which is the half of this paragraph's earlier wording that
+was correct when written (PR #68) and became false on 2026-08-05 (`843583b`) when
+the logging landed. A first attempt at this correction claimed the old text was
+"wrong in both halves" and named `_empty_answer` as one of the log events; both
+were wrong — the `None` half is still right for DNS and connection-refused, and
+`upstream_provider_empty_answer` is emitted by none of these faults. They remain
+visible through the run payload (`live_count`) and the banner too.
 
 ### Resolution (2026-07-17, from the issue-closing record)
 

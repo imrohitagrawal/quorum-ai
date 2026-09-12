@@ -10,8 +10,11 @@ because ZWSP is not `str.isspace()`. Before the fix this served
 
 The fix (`visible_text.is_visible`, wired into
 ``providers._live_openrouter_response``) makes ``_live_openrouter_response``
-return ``None`` for such a completion — the same guard #175 already proved
-for whitespace-only text. With live execution ON, #171's "report the slot
+REFUSE such a completion — the same guard #175 already proved for
+whitespace-only text. Since #105 / ADR-0112 it refuses by returning
+``_DISPATCH_UNMEASURED`` rather than the ``None`` it returned when this was
+written: a 200 arrived, so the call was dispatched and may have been charged,
+and saying ``None`` there asserted the opposite. With live execution ON, #171's "report the slot
 missing, never substitute simulated text" rule then takes over: each slot is
 reported FAILED (``PROVIDER_UNAVAILABLE``), not silently repaired. The run
 comes back honestly ``partial``, with ``cost_source="estimated"`` and
@@ -200,6 +203,11 @@ def test_zwsp_only_slots_are_reported_failed_not_live(monkeypatch: pytest.Monkey
 
     # A charge nothing could measure is never labelled "measured".
     assert body["cost_source"] == "estimated"
+    # #105 / ADR-0112: the verdict must reach the SERVED payload, not just the
+    # in-process record. A 200 arrived for every slot, so each was dispatched.
+    served_answers = body["result"]["model_answers"]
+    assert served_answers, "precondition: the served payload must carry slots"
+    assert [a["billing_class"] for a in served_answers] == ["possibly_billed"] * len(served_answers)
 
     # No material claims invented over answers that produced nothing.
     assert body["material_claim_count"] == 0

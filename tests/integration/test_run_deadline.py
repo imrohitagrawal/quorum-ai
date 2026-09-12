@@ -173,6 +173,14 @@ def test_a_slow_slot_degrades_to_a_timed_out_partial_within_the_deadline(
     for slot in (3, 4):
         assert by_slot[slot]["status"] == "failed"
         assert by_slot[slot]["error_code"] == "RUN_DEADLINE_EXCEEDED"
+        # #105 / ADR-0112. This harness runs with live execution OFF and an
+        # EMPTY key, so no POST is possible — a deadline-cut slot here provably
+        # cost nothing. An earlier version of that change hardcoded
+        # ``possibly_billed`` in the constructor and therefore claimed a
+        # dispatch that could not have happened, on a run that cannot spend at
+        # all (the #100 global-ceiling path forces the key empty for exactly
+        # that reason). The verdict is decided at the call site from the key.
+        assert by_slot[slot]["billing_class"] == "not_billed"
 
     # RB-5 honesty: live_count counts COMPLETED live slots only — the sim
     # pipeline is local, so live stays 0 and the cut slots inflate nothing.
