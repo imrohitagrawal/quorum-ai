@@ -126,7 +126,9 @@ form while the window covers `now`. **Closing a window means flag → `false` AN
 both edits atomically when a window still covers `now`, and — since #460
 (ADR-0111) — flips the flag ALONE when the window has already lapsed, which is
 the likelier incident. It refuses loudly when the flag already reads off, when a
-`standing` window is declared, and when any window's `mode` is unrecognised.
+`standing` window is declared AND nothing covers `now`, and when the declaration
+cannot be trusted at all. A covering window still takes the two-edit path even
+alongside a standing one.
 Still verify `/status.live_execution` yourself afterward: editing a tracked file
 changes nothing until it is deployed, and a `fly secrets set` overrides it.
 

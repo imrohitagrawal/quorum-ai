@@ -104,8 +104,10 @@ open-work-write:
 # under incident pressure. When nothing covers `now` and nothing is standing,
 # it flips the flag ALONE and leaves the declaration file untouched (#460,
 # ADR-0111) -- the lapsed case, which is the likelier incident. It refuses
-# loudly when the flag already reads off, when a `standing` window is
-# declared, and when any window's `mode` is unrecognised.
+# loudly when the flag already reads off, when a `standing` window is declared
+# AND nothing covers `now`, and when the declaration cannot be trusted at all
+# (decided with the posture checker's own `parse_windows`, not a field check).
+# A covering window still takes the two-edit path even alongside a standing one.
 close-window: check-python
 	$(PYTHON) scripts/close_live_window.py
 

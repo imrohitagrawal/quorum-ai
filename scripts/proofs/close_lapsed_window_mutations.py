@@ -112,15 +112,20 @@ MUTATIONS: list[tuple[str, str, str, str]] = [
     # mutation a reviewer ran that SURVIVED the original suite, because nothing
     # read the standing refusal's message.
     (
-        "08 an unrecognised mode is treated as 'no window' (ends a sanction)",
+        "08 the trust check is dropped, so an unreadable file is read as empty",
         "closer",
-        "    return [\n"
-        '        str(entry.get("mode"))\n'
-        "        for entry in windows\n"
-        '        if isinstance(entry, dict) and entry.get("mode") '
-        "not in (MODE_TIME_BOXED, MODE_STANDING)\n"
-        "    ]",
-        "    return []",
+        "        if parse_windows(payload) is None:",
+        "        if False:",
+    ),
+    (
+        "09 the trust check moves AHEAD of selecting open windows (the regression)",
+        "closer",
+        "    closed = close_windows(payload, now)\n"
+        "    if not closed and not has_standing_window(payload):",
+        "    if parse_windows(payload) is None:\n"
+        "        return 2\n"
+        "    closed = close_windows(payload, now)\n"
+        "    if not closed and not has_standing_window(payload):",
     ),
     (
         "09 every absence is reported as a lapse that happened",

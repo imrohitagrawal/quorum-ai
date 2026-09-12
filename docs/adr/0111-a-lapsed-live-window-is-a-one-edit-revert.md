@@ -72,14 +72,15 @@ which is why this is a range and not a point.
 **When no window covers `now` and none is `standing`, a flag still reading
 `"true"` is STRANDED — flip it, alone.**
 
-Four states, and two of them are refusals:
+Five states, and three of them are refusals:
 
 | state | action |
 |---|---|
 | a `time_boxed` window covers `now` | both edits, as before |
 | nothing covers `now`, no `standing` entry, flag ON | **flip the flag only**, exit 0 |
 | nothing covers `now`, no `standing` entry, flag already off | refuse — nothing to revert |
-| a `standing` window is declared | refuse — see below |
+| a `standing` window is declared **and nothing covers `now`** | refuse — ending one is policy |
+| the declaration cannot be trusted at all | refuse (exit 2) — nothing may be concluded from it |
 
 **The declaration file is NOT touched in the lapsed case.** Nothing covers `now`,
 so there is no `expires_at` to stamp, and rewriting a lapsed entry's expiry would
@@ -99,8 +100,8 @@ decision this script does not make for an entry whose `mode` reads `standing`.
 The revert is gated on "nothing covers `now` **and** nothing is standing", and
 `has_standing_window()` is that predicate.
 
-**An unrecognised `mode` refuses outright (exit 2), and that was a defect found
-in review.** The declaration file's README says an unrecognised mode makes the
+**An UNTRUSTED declaration refuses outright (exit 2), and getting this right took
+two rounds.** The declaration file's README says an unrecognised mode makes the
 WHOLE FILE untrusted, and `find_open_windows` already mirrored that. The first
 version of this change did NOT: `has_standing_window` matched `mode ==
 "standing"` exactly, so a wrongly-cased `"Standing"` was invisible to both
@@ -115,9 +116,24 @@ EXIT=0
 flag after: "false"      <-- a standing sanction, silently ended
 ```
 
-`unrecognised_modes()` now refuses first, so nothing is concluded from an
-untrusted file. Mutations 01, 03 and 08 are the three ways of losing this, and
-all three are killed. A caveat this ADR will not overstate: an unrecognised mode
+The FIRST fix for that hand-rolled a ``mode``-only check and ran it before
+selecting open windows. A second review round showed both halves were wrong:
+
+* it validated one field, so a naive timestamp, a missing ``expires_at``, a
+  non-dict entry, a non-list ``windows`` or a missing ``windows`` key all fell
+  through — and a window that COVERS NOW was then reported as "no window is
+  declared at all", sending an operator to ``fly secrets`` when the cause was a
+  typo in the file in front of them;
+* running it first made the tool WORSE than the code it replaced. A typo on any
+  entry, including a long-expired historical one the README says to keep, aborted
+  the command and left the flag ``"true"`` in a state the previous code reverted
+  correctly. A guard against concluding-from-absence was applied to a path that
+  had positively FOUND a covering window.
+
+So the check is now the posture checker's OWN ``parse_windows``, applied ONLY to
+the absence branch. That fixes the class rather than the instances, keeps an
+EMPTY window list trusted ("nothing is declared" is a fact; only an unreadable
+file is unknown), and deletes the bespoke helper. A caveat this ADR will not overstate: an unrecognised mode
 is a *refusal*, so the stranded-flag case inside an untrusted file still needs a
 human — which is correct, because the file cannot be read.
 

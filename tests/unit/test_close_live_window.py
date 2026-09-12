@@ -312,6 +312,99 @@ def test_main_still_refuses_a_standing_window_even_though_the_flag_is_on(
     assert "nothing to revert" not in err
 
 
+@pytest.mark.parametrize(
+    ("label", "windows"),
+    [
+        # Each of these is a declaration the POSTURE CHECKER refuses to parse, so
+        # nothing may be concluded from it. The first two are the dangerous ones:
+        # the window COVERS `now`, so an operator told "no window is declared at
+        # all" would go looking at `fly secrets` while the real cause is a typo in
+        # the file in front of them.
+        (
+            "naive expires_at, and it covers now",
+            [
+                {
+                    "mode": "time_boxed",
+                    "opened_at": _OPEN_START,
+                    "expires_at": "2026-09-01T17:00:00",
+                    "owner": "o",
+                    "reason": "r",
+                }
+            ],
+        ),
+        (
+            "expires_at missing, and it covers now",
+            [{"mode": "time_boxed", "opened_at": _OPEN_START, "owner": "o", "reason": "r"}],
+        ),
+        (
+            "an unrecognised mode",
+            [{"mode": "Standing", "opened_at": _OPEN_START, "owner": "o", "reason": "r"}],
+        ),
+        ("an entry that is not a dict", ["oops"]),
+    ],
+)
+def test_main_refuses_a_declaration_the_POSTURE_CHECKER_cannot_trust(
+    closer: ModuleType, tmp_path: Path, capsys: Any, label: str, windows: list[Any]
+) -> None:
+    """An UNREADABLE declaration is not the same as an EMPTY one.
+
+    The lapsed revert concludes "nothing sanctions this posture" from an ABSENCE,
+    so it must first establish that the file can be trusted to say so.
+    ``parse_windows`` is the posture checker's own predicate and its docstring
+    states the distinction: None means "this file did not tell me anything I may
+    rely on", which every caller must turn into UNKNOWN, never into "nothing is
+    declared".
+
+    A first version of this guard checked only ``mode``, so the first two rows
+    here fell straight through and a window that COVERS NOW was reported as "no
+    window is declared at all". Adversarial review demonstrated it.
+
+    RED IF: any untrusted shape reaches the revert branch, or the flag is touched
+    while the declaration cannot be read.
+    """
+    fly, windows_file = _write_fixture(tmp_path, flag_value="true", windows=windows)
+    before = windows_file.read_text(encoding="utf-8")
+    rc = closer.main(
+        ["--fly-toml", str(fly), "--windows-file", str(windows_file), "--now", _NOW_ISO]
+    )
+    assert rc == 2, label
+    assert 'OPENROUTER_LIVE_EXECUTION_ENABLED = "true"' in fly.read_text(encoding="utf-8")
+    assert windows_file.read_text(encoding="utf-8") == before
+    assert "cannot be trusted" in capsys.readouterr().err
+
+
+def test_a_covering_window_still_reverts_even_beside_an_UNTRUSTED_entry(
+    closer: ModuleType, tmp_path: Path
+) -> None:
+    """The regression this guard caused, pinned so it cannot come back.
+
+    A first version ran the trust check BEFORE selecting open windows, so a typo
+    on ANY entry — including a long-expired historical one the declaration file's
+    own README says to leave in place — aborted the command and left the flag
+    "true", in a state the PREVIOUS code reverted correctly. A guard against
+    concluding-from-absence was applied to a path that had positively FOUND a
+    covering window, which made the revert tool worse rather than safer.
+
+    RED IF: the trust check moves back ahead of ``close_windows``, or otherwise
+    blocks a revert that has a covering window to close.
+    """
+    fly, windows_file = _write_fixture(
+        tmp_path,
+        flag_value="true",
+        windows=[
+            _window(opened=_OPEN_START, expires=_OPEN_END),
+            {"mode": "standng", "opened_at": _EXPIRED_START, "owner": "o", "reason": "typo"},
+        ],
+    )
+    rc = closer.main(
+        ["--fly-toml", str(fly), "--windows-file", str(windows_file), "--now", _NOW_ISO]
+    )
+    assert rc == 0
+    assert 'OPENROUTER_LIVE_EXECUTION_ENABLED = "false"' in fly.read_text(encoding="utf-8")
+    payload = json.loads(windows_file.read_text(encoding="utf-8"))
+    assert closer.find_open_windows(payload, _NOW) == []
+
+
 def test_main_refuses_an_unrecognised_window_mode_and_leaves_the_flag_ALONE(
     closer: ModuleType, tmp_path: Path, capsys: Any
 ) -> None:

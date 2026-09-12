@@ -34,8 +34,10 @@ WHAT THIS IS FOR
     which is why one edit is valid there and two are required when a window
     still covers ``now``.
 
-    It still refuses, loudly, in the two cases that are genuinely nothing to
-    do: the flag already reads off, or a ``standing`` window is declared.
+    It still refuses, loudly, in three cases: the flag already reads off; a
+    ``standing`` window is declared AND nothing covers ``now``; or the
+    declaration cannot be trusted at all, which it decides with the posture
+    checker's own ``parse_windows`` rather than a hand-rolled field check.
 
     The two file writes are not a single filesystem transaction — if the
     second write fails partway (disk full, permissions), the flag is written
@@ -70,6 +72,9 @@ import re
 import sys
 from pathlib import Path
 from typing import Any
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from live_posture_check import parse_windows  # noqa: E402  (sibling script)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 FLY_TOML = REPO_ROOT / "fly.toml"
@@ -168,31 +173,6 @@ def _describe_absence(payload: dict[str, Any], now: dt.datetime) -> str:
         "In fact no window is declared at all, so the flag was on with nothing "
         "behind it — check for a fly secrets override."
     )
-
-
-def unrecognised_modes(payload: dict[str, Any]) -> list[str]:
-    """Every ``mode`` value that is neither ``time_boxed`` nor ``standing``.
-
-    The declaration file's own README says an unrecognised mode makes the WHOLE
-    FILE untrusted rather than being silently ignored, and
-    ``find_open_windows`` already mirrors that by refusing to treat such an
-    entry as closeable. This exists so ``main`` mirrors it too.
-
-    It has to, because of #460: the lapsed revert concludes "nothing sanctions
-    this posture" from the ABSENCE of a covering or standing window. A
-    wrongly-cased ``"Standing"`` is absent from both predicates, so without this
-    check that conclusion was drawn from an untrusted file and the flag was
-    flipped — silently ending a standing sanction, the one thing the revert must
-    never do. Adversarial review demonstrated it.
-    """
-    windows = payload.get("windows")
-    if not isinstance(windows, list):
-        return []
-    return [
-        str(entry.get("mode"))
-        for entry in windows
-        if isinstance(entry, dict) and entry.get("mode") not in (MODE_TIME_BOXED, MODE_STANDING)
-    ]
 
 
 def has_standing_window(payload: dict[str, Any]) -> bool:
@@ -296,21 +276,47 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
 
-    unknown = unrecognised_modes(payload)
-    if unknown:
-        print(
-            f"{windows_path} declares an unrecognised window mode: "
-            f"{sorted(set(unknown))}. Recognised modes are {MODE_TIME_BOXED!r} "
-            f"and {MODE_STANDING!r}.\n"
-            "The whole file is therefore untrusted and NOTHING is concluded from "
-            "it — including 'no window sanctions this'. Fix the mode by hand, "
-            "then re-run.",
-            file=sys.stderr,
-        )
-        return 2
-
     closed = close_windows(payload, now)
     if not closed and not has_standing_window(payload):
+        # BEFORE concluding "nothing sanctions this posture" from an ABSENCE,
+        # establish that the file can be trusted to say so. ``parse_windows`` is
+        # the posture checker's OWN predicate and its docstring states exactly
+        # this distinction: None means "this file did not tell me anything I may
+        # rely on", which every caller must turn into UNKNOWN rather than into
+        # "nothing is declared".
+        #
+        # This replaced a hand-rolled ``mode``-only check, and the replacement is
+        # the point rather than a tidy-up. That check was wrong twice over:
+        #
+        #   * it ran BEFORE ``close_windows``, so a typo on ANY entry — including
+        #     a long-expired historical one the declaration file's own README
+        #     says to leave in place — aborted the command and left the flag
+        #     "true", in a state the PREVIOUS code reverted correctly. A guard
+        #     against concluding-from-absence was applied to a path that had
+        #     positively FOUND a covering window, which made the revert tool
+        #     worse, not safer;
+        #   * it validated one field. A naive timestamp, a missing
+        #     ``expires_at``, a non-dict entry, a non-list ``windows`` or a
+        #     missing ``windows`` key all fell straight through, and a window
+        #     that COVERS NOW was then reported as "no window is declared at
+        #     all" — sending an operator to look at ``fly secrets`` when the
+        #     cause was a typo in the file in front of them.
+        #
+        # Both were found by adversarial review of the first fix. Reusing the
+        # checker's predicate fixes the class instead of the instances, and
+        # correctly keeps an EMPTY window list trusted: "nothing is declared" is
+        # a fact, and only an UNREADABLE file is unknown.
+        if parse_windows(payload) is None:
+            print(
+                f"{windows_path} cannot be trusted, so nothing is concluded from "
+                "it — including 'no window sanctions this'. The posture checker "
+                "refuses to parse it (an unrecognised mode, a timestamp without "
+                "an explicit offset, a missing required field, or a malformed "
+                "entry). Fix the declaration by hand, then re-run.\n"
+                f"{FLAG} is left exactly as it was.",
+                file=sys.stderr,
+            )
+            return 2
         # #460: NOTHING covers `now`, and no standing window sanctions a live
         # posture — so if the flag still reads on, it is STRANDED. That is the
         # most likely real incident, not an edge case: on 2026-09-11 a window
