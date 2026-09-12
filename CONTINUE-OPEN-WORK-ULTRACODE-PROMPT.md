@@ -123,8 +123,12 @@ refuses `flag off + window still open`, so flipping the flag alone has no valid
 form while the window covers `now`. **Closing a window means flag → `false` AND
 `expires_at` → now, in the SAME commit.** **#407 is fixed**: run
 `make close-window` (or `python3 scripts/close_live_window.py`) — it performs
-both edits atomically and refuses loudly if nothing is currently open. Still
-verify `/status.live_execution` yourself afterward.
+both edits atomically when a window still covers `now`, and — since #460
+(ADR-0111) — flips the flag ALONE when the window has already lapsed, which is
+the likelier incident. It refuses loudly when the flag already reads off, when a
+`standing` window is declared, and when any window's `mode` is unrecognised.
+Still verify `/status.live_execution` yourself afterward: editing a tracked file
+changes nothing until it is deployed, and a `fly secrets set` overrides it.
 
 ### #290 (W2) is now unblocked
 
