@@ -1386,12 +1386,15 @@
     // so ``searchFlags`` defaults to all-ON — but keying off it per slot means
     // this stays exact if a per-slot search toggle ever ships (issue #20). A
     // searching slot's prompt carries the injected web-search context AND the
-    // flat per-request web-search plugin fee (issue #18). NOTE (#18): that fee
-    // is an ACCEPTED-as-excluded term — ``web_search_request_fee_usd`` is
-    // permanently 0.0 by decision (see config.py / AC-037), so ``fee`` below is
-    // always 0 and NOTHING web-search-fee-related is ever shown to the user; it
-    // folds invisibly into the total. Both terms mirror the server's
-    // ``_estimate_from_slots``.
+    // flat per-request web-search plugin fee (issue #18). NOTE (#105, ADR-0110,
+    // superseding the older #18 note here): ``web_search_request_fee_usd`` is
+    // still 0.0, so ``fee`` below is still always 0 and nothing fee-related is
+    // shown today — but it is no longer "permanently" 0.0 by decision. The real
+    // charge is $0.007 and activation is an open product-owner decision. If it
+    // is activated, this stops being invisible: ``fmtUsd`` renders ``<$0.001``
+    // below the display quantum, and at $0.007 no searching slot can round that
+    // low, so the cheapest slot's card would change. Both terms mirror the
+    // server's ``_estimate_from_slots``.
     const searchOn = (i) => (searchFlags ? !!searchFlags[i] : true);
 
     return modelIds.map((modelId, i) => {

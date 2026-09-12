@@ -292,8 +292,15 @@ class _FakeLiveResult:
     """Minimal stand-in for ``LiveProviderResult`` that doesn't require
     pulling the dataclass into the test module. Mirrors the real fields,
     including the ``usage`` record added for measured-cost capture (defaults
-    to ``None`` — these tests do not exercise the usage path) and
-    ``is_truncated`` added for the (shortened) surface."""
+    to ``None`` — these tests do not exercise the usage path),
+    ``is_truncated`` added for the (shortened) surface, and ``searched``
+    added for the #105 web-search fee.
+
+    ``searched`` defaults to ``False`` because this double stands in for a
+    response that has already come back — it cannot know what went on the
+    wire, and these tests do not exercise the fee. The slots that DO pin the
+    wire-vs-intent distinction drive the real ``urlopen`` seam instead, in
+    ``tests/unit/test_search_fee_wire_truth.py``."""
 
     def __init__(
         self,
@@ -302,11 +309,13 @@ class _FakeLiveResult:
         sources: list[SourceReference],
         usage: TokenUsage | None = None,
         is_truncated: bool = False,
+        searched: bool = False,
     ) -> None:
         self.answer_text = answer_text
         self.sources = sources
         self.usage = usage
         self.is_truncated = is_truncated
+        self.searched = searched
 
 
 def test_live_response_uses_online_suffix_for_search(

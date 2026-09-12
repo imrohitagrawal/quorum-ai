@@ -78,18 +78,22 @@ def _answer(
     model_id: str,
     provider_path: ProviderPath,
     token_usage: TokenUsage | None,
+    searched: bool = False,
+    source_count: int = 1,
 ) -> InitialModelAnswer:
     return InitialModelAnswer(
         slot_number=slot,
         model_id=model_id,
         display_name=model_id,
         answer_text="An answer.",
+        searched=searched,
         sources=[
             SourceReference(
-                title="s",
-                url="https://example.com",
+                title=f"s{n}",
+                url=f"https://example.com/{n}",
                 provider=provider_path,
             )
+            for n in range(source_count)
         ],
         provider_attempt_order=[provider_path],
         provider_path=provider_path,
@@ -288,6 +292,224 @@ def test_measured_total_is_exact_from_captured_tokens(monkeypatch: pytest.Monkey
     assert source == "measured"
     assert actual == Decimal("0.0385")
     assert breakdown is not None and breakdown.total == Decimal("0.0385")
+
+
+# --- issue #105 defect B: the flat :online per-search fee in the MEASURED total --
+
+
+@pytest.mark.parametrize(
+    ("fee", "searched_count", "expected_total"),
+    [
+        (0.01, 0, "0.0385"),
+        (0.01, 1, "0.0485"),
+        (0.01, 2, "0.0585"),
+        (0.01, 4, "0.0785"),
+        # THE SUB-CENT ROW. Every value above is a whole number of cents, so an
+        # implementation that rounds or truncates the fee to cents satisfies
+        # all four and still charges NOTHING at the real price. Adversarial
+        # review demonstrated exactly that with
+        # ``Decimal(int(fee * 100)) / 100``, green across 116 tests. $0.007 is
+        # the measured OpenRouter charge, so this row is the one the activation
+        # decision actually turns on: 0.0385 + 4 x 0.007 = 0.0665.
+        (0.007, 4, "0.0665"),
+        (0.007, 2, "0.0525"),
+    ],
+)
+def test_measured_total_adds_the_flat_search_fee_once_per_SEARCHING_call(
+    monkeypatch: pytest.MonkeyPatch,
+    fee: float,
+    searched_count: int,
+    expected_total: str,
+) -> None:
+    """#105 defect B. The measured total must carry OpenRouter's flat
+    per-request web-search fee once for each initial call that actually went
+    out with the ``:online`` suffix — and never for a call that did not.
+
+    Asserts CARDINALITY, not a clean-path outcome (AGENTS.md rule 6b): the
+    same 11 priced calls are held constant and only the NUMBER of searching
+    slots varies, so the fee's multiplicity is what the four rows measure. An
+    implementation that adds the fee once per RUN passes row 1 and fails rows
+    2-4; one that adds it to every priced call (11, not 4) fails row 4; one
+    that omits it entirely passes row 0 and fails the rest.
+
+    The fee is monkeypatched to ``0.01`` — neither the shipped default
+    (``0.0``) nor the measured provider price (``0.007``) — so no row can pass
+    as an artifact of either, and both sides of every assertion are literals
+    (rule 7a: never assert a bound against the constant that defines it).
+    Row ``(4, "0.0665")`` uses the real ``0.007`` precisely because every other
+    value here is a whole number of cents; see the note on that row.
+
+    Base arithmetic is inherited from
+    ``test_measured_total_is_exact_from_captured_tokens``: every model is an
+    unknown id -> the default floor prices, every call is
+    prompt=1000/completion=500 -> 0.0035 each, 4 initial + 2 debate + 5
+    synthesis = 11 calls -> 0.0385.
+
+    Turns RED when: the fee term is dropped from the measured initial-slot
+    cost, is applied per run instead of per searching call, is applied to a
+    non-searching slot, or leaks onto the debate/synthesis/judge calls
+    (which never carry the ``:online`` suffix -- ``providers.py`` says so at
+    the ``call_with_prompt`` seam, and the 2026-09-10 provider ledger records
+    the fee on exactly the 4 initial-answer generations per run and on none
+    of the other 19).
+    """
+    from product_app import config
+
+    monkeypatch.setattr(config.settings, "debate_model_id", "x/unknown-debate", raising=False)
+    monkeypatch.setattr(config.settings, "synthesis_model_id", "x/unknown-synth", raising=False)
+    monkeypatch.setattr(config.settings, "cost_web_search_request_fee_usd", fee)
+    unknown_ids = ["x/unknown-1", "x/unknown-2", "x/unknown-3", "x/unknown-4"]
+    # Source counts deliberately UNEQUAL and deliberately including zero. The
+    # fee is per REQUEST, so it cannot scale with how many citations came back
+    # — and a searching call very often returns none at all (providers.py
+    # records ~0-3% citation coverage on the live :online path). With every
+    # slot holding one source, `fee * len(answer.sources)` is `fee * 1` and is
+    # indistinguishable from the correct arithmetic; these counts separate them.
+    source_counts = [0, 3, 1, 7]
+    answers = [
+        _answer(
+            slot=i + 1,
+            model_id=mid,
+            provider_path=ProviderPath.OPENROUTER_SEARCH,
+            token_usage=_usage(1000, 500),
+            searched=i < searched_count,
+            source_count=source_counts[i],
+        )
+        for i, mid in enumerate(unknown_ids)
+    ]
+    run = _run(
+        initial_answers=answers,
+        debate_call_usages=[(1, _usage(1000, 500)), (2, _usage(1000, 500))],
+        synthesis_call_usages=[_usage(1000, 500) for _ in range(5)],
+        estimate=_estimate("0.4000"),
+        model_ids=unknown_ids,
+    )
+    actual, breakdown, source = _actual_cost(run)  # type: ignore[arg-type]
+    assert source == "measured"
+    assert actual == Decimal(expected_total)
+    assert breakdown is not None and breakdown.total == Decimal(expected_total)
+
+
+def test_the_search_fee_lands_on_the_searching_slots_own_by_model_row(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#105 defect B. The fee is part of the cost of the call that incurred
+    it, so it must show up in THAT slot's ``by_model`` row -- not be smeared
+    across the four slots and not parked on an unrelated row.
+
+    Two slots searched and two did not, with every slot priced identically in
+    tokens, so the only thing that can separate the rows is the fee. Pinning
+    the per-row figures (rather than only the grand total) is what stops a
+    "divide the fee by four" implementation from passing: that would give all
+    four rows 0.0060 and the total would still be 0.0625.
+
+    Turns RED when: the fee is added outside the per-slot term, distributed
+    evenly across slots, or attached to a non-searching slot.
+    """
+    from product_app import config
+
+    monkeypatch.setattr(config.settings, "debate_model_id", "x/unknown-debate", raising=False)
+    monkeypatch.setattr(config.settings, "synthesis_model_id", "x/unknown-synth", raising=False)
+    monkeypatch.setattr(config.settings, "cost_web_search_request_fee_usd", 0.01)
+    unknown_ids = ["x/unknown-1", "x/unknown-2", "x/unknown-3", "x/unknown-4"]
+    answers = [
+        _answer(
+            slot=i + 1,
+            model_id=mid,
+            provider_path=ProviderPath.OPENROUTER_SEARCH,
+            token_usage=_usage(1000, 500),
+            searched=i < 2,
+        )
+        for i, mid in enumerate(unknown_ids)
+    ]
+    run = _run(
+        initial_answers=answers,
+        debate_call_usages=[(1, _usage(1000, 500)), (2, _usage(1000, 500))],
+        synthesis_call_usages=[_usage(1000, 500) for _ in range(5)],
+        estimate=_estimate("0.4000"),
+        model_ids=unknown_ids,
+    )
+    _actual, breakdown, source = _actual_cost(run)  # type: ignore[arg-type]
+    assert source == "measured"
+    assert breakdown is not None
+    slot_rows = [row for row in breakdown.by_model if row.kind == "model"]
+    assert [row.model_id for row in slot_rows] == unknown_ids
+    # searched slots: tokens 0.0035 + fee 0.01 = 0.0135. Unsearched: 0.0035.
+    assert [row.usd for row in slot_rows] == [
+        Decimal("0.0135"),
+        Decimal("0.0135"),
+        Decimal("0.0035"),
+        Decimal("0.0035"),
+    ]
+
+
+def test_the_measured_fee_term_reads_the_SETTING_and_scales_with_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#105 defect B. The measured fee must be the CONFIGURED value, not a
+    number baked into the code.
+
+    Measures the DELTA across five fee values, three of them sub-cent-sensitive.
+    This is the measured-side partner of the long-standing estimate-side test
+    ``test_search_fee_raises_estimate_by_fee_times_searching_slots``, and it
+    exists because a test that pins one fee value against one expected total
+    cannot tell "reads the setting" from "returns that constant". Adversarial
+    review demonstrated exactly that: replacing the config read with a literal
+    ``Decimal("0.01")`` — a live money change at a default that says the fee is
+    off — left the whole suite green.
+
+    So this measures the DELTA over an otherwise identical run, across
+    several fee values and searching-slot counts. Only an implementation
+    that actually multiplies the setting by the number of searching calls
+    satisfies every assertion.
+
+    Turns RED when: the fee is hardcoded, read from the wrong setting, scaled
+    by the wrong factor, or sign-flipped.
+    """
+    from product_app import config
+
+    monkeypatch.setattr(config.settings, "debate_model_id", "x/unknown-debate", raising=False)
+    monkeypatch.setattr(config.settings, "synthesis_model_id", "x/unknown-synth", raising=False)
+    unknown_ids = ["x/unknown-1", "x/unknown-2", "x/unknown-3", "x/unknown-4"]
+
+    def _total(*, fee: float, searching: int) -> Decimal:
+        monkeypatch.setattr(config.settings, "cost_web_search_request_fee_usd", fee)
+        answers = [
+            _answer(
+                slot=i + 1,
+                model_id=mid,
+                provider_path=ProviderPath.OPENROUTER_SEARCH,
+                token_usage=_usage(1000, 500),
+                searched=i < searching,
+            )
+            for i, mid in enumerate(unknown_ids)
+        ]
+        run = _run(
+            initial_answers=answers,
+            debate_call_usages=[(1, _usage(1000, 500)), (2, _usage(1000, 500))],
+            synthesis_call_usages=[_usage(1000, 500) for _ in range(5)],
+            estimate=_estimate("0.4000"),
+            model_ids=unknown_ids,
+        )
+        total, _breakdown, source = _actual_cost(run)  # type: ignore[arg-type]
+        assert source == "measured"
+        return total
+
+    # Same run, several fee values. The gap must be the fee times the searching
+    # slots -- 4 x (0.05 - 0.0) and 2 x (0.05 - 0.0).
+    assert _total(fee=0.05, searching=4) - _total(fee=0.0, searching=4) == Decimal("0.20")
+    assert _total(fee=0.05, searching=2) - _total(fee=0.0, searching=2) == Decimal("0.10")
+    # A THIRD value, so "multiply by 0.05" is not enough either.
+    assert _total(fee=0.02, searching=4) - _total(fee=0.0, searching=4) == Decimal("0.08")
+    # THE SUB-CENT DELTA, and the one that matters: $0.007 is the measured
+    # charge, so this is the real-world $0.028/run gap the provider ledger
+    # showed. Every other value here is a whole number of cents, and an
+    # implementation that rounds the fee to cents would satisfy all of them
+    # while charging nothing at the actual price.
+    assert _total(fee=0.007, searching=4) - _total(fee=0.0, searching=4) == Decimal("0.028")
+    assert _total(fee=0.007, searching=1) - _total(fee=0.0, searching=1) == Decimal("0.007")
+    # At the shipped default the measured total must be the token cost alone.
+    assert _total(fee=0.0, searching=4) == Decimal("0.0385")
 
 
 # --- issue #110: a billed Layer-B judge call must never be invisible -------

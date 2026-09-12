@@ -2848,20 +2848,40 @@ def _actual_cost(
     # "measured" while its ``is None`` skip dropped a BILLED call the pipeline
     # had recorded in between; see :class:`BillingSnapshot`.
     try:
+        # #105 defect B. OpenRouter charges a FLAT per-request fee on a
+        # ``:online`` call, on top of the tokens. ``measured_call_cost_usd`` is
+        # purely linear in tokens by design, so the flat term is added HERE,
+        # to the slot that incurred it, where the wire outcome is known.
+        #
+        # Added per SEARCHING CALL, not per run and not per priced call. Only
+        # the four initial answers can ever carry it: the debate, synthesis and
+        # judge stages go through ``call_with_prompt``, which never appends
+        # ``:online`` (a second-pass analysis does not want a fresh web
+        # search), so no fee is possible there. The 2026-09-10 provider ledger
+        # is the measurement: across two runs, exactly the 8 initial-answer
+        # generations carried ``cost_web_search`` = $0.007 and the other 19
+        # generations carried none.
+        #
+        # ``str()`` first so a float setting becomes an exact Decimal, same as
+        # the estimate side does with this setting.
+        search_request_fee = Decimal(str(settings.cost_web_search_request_fee_usd))
         per_model_initial_named: list[tuple[str, str, Decimal]] = []
         for answer in sorted(initial_answers, key=lambda a: a.slot_number):
             usage = answer.token_usage
             if usage is None:
                 continue
+            slot_cost = measured_call_cost_usd(
+                model_id=answer.model_id,
+                prompt_tokens=usage.prompt_tokens,
+                completion_tokens=usage.completion_tokens,
+            )
+            if answer.searched:
+                slot_cost += search_request_fee
             per_model_initial_named.append(
                 (
                     answer.model_id,
                     answer.display_name or answer.model_id,
-                    measured_call_cost_usd(
-                        model_id=answer.model_id,
-                        prompt_tokens=usage.prompt_tokens,
-                        completion_tokens=usage.completion_tokens,
-                    ),
+                    slot_cost,
                 )
             )
 
