@@ -71,7 +71,7 @@ kill_timeout = "5s"
   # posts is typed "Bot" and refused. There is deliberately still no maximum
   # window length: #357 ran ~3 days and issue #105 needs ~7, so no number
   # separates them; "is anybody still watching" does.
-  OPENROUTER_LIVE_EXECUTION_ENABLED = "true"
+  OPENROUTER_LIVE_EXECUTION_ENABLED = "false"
   # #290 / ADR-0093 / ADR-0095 / ADR-0096. Each ELIGIBLE answer slot critiques
   # the others in both rounds, and in round 2 reports where it now stands on
   # its OWN answer with rationale and sources.
@@ -80,7 +80,26 @@ kill_timeout = "5s"
   # feature toggle: a peer run makes two debate calls PER ELIGIBLE CRITIC (up
   # to eight, not two), so `_estimate_bound_usd` rises with it and more catalog
   # mixes need a confirmation click. It flips back with
-  # OPENROUTER_LIVE_EXECUTION_ENABLED via `make close-window`.
+  # OPENROUTER_LIVE_EXECUTION_ENABLED -- but NOT automatically, and NOT by
+  # `make close-window`. `close_live_window.py` touches only the live-execution
+  # flag and the window declaration, never this one: `grep -n PEER_CRITIQUE
+  # scripts/close_live_window.py` exits 1 (verified 2026-09-11). The claim that
+  # it flips back automatically was here and was FALSE.
+  #
+  # DELIBERATELY LEFT "true" while live execution is off, which is safe but is
+  # NOT the end state. It costs nothing today -- peer critique multiplies debate
+  # calls only INSIDE a live posture, and with the flag above false no provider
+  # call is made at all. Flipping it here would immediately falsify the landing
+  # subhead (`templates/workspace.html`), which is STATIC and claims the models
+  # "critique each other's answers and sources" -- the peer shape. Unlike
+  # `main.py`'s `_app_description`, that subhead reads no flag, and
+  # `e2e/tests/invariants/landing-cta-reachable.spec.ts` pins it whole AND
+  # asserts `not.toContain("moderator")`, so it stays green on the falsehood and
+  # would go RED on the correction. That is the ADR-0099 defect, sign-flipped.
+  #
+  # The residual risk this leaves: re-enabling live execution turns peer
+  # critique back on with it, at up to eight critic calls instead of two. No
+  # gate couples the flags. Read this comment before re-opening a window.
   PEER_CRITIQUE_ENABLED = "true"
   # issue #27: keep the feedback-event SQLite trail on the persistent volume
   # (mounted at /data below), NOT the ephemeral rootfs default (.data/…) which
