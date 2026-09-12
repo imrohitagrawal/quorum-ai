@@ -141,9 +141,13 @@ jobs:
             "1. Open the \`Check production's money-spending posture\` step above. It prints" \
             "   every host it probed, the \`live_readiness.state\` each returned, how many" \
             "   windows are declared, and which instant is uncovered." \
-            "2. If this was NOT intended: set \`OPENROUTER_LIVE_EXECUTION_ENABLED = \"false\"\`" \
-            "   in \`fly.toml\` and deploy. Check \`fly secrets list\` too — DEPLOY.md tells" \
-            "   operators to set the flag as a secret, which no file in this repo can see." \
+            "2. If this was NOT intended: run \`make close-window\` — it performs the whole" \
+            "   revert of \`OPENROUTER_LIVE_EXECUTION_ENABLED\`, flipping it alone when the" \
+            "   window has already lapsed and doing both edits when one still covers now" \
+            "   (#460, ADR-0111). Then commit, deploy, and verify" \
+            "   \`/status.live_execution\` yourself. Check \`fly secrets list\` too —" \
+            "   DEPLOY.md tells operators to set the flag as a secret, which no file in" \
+            "   this repo can see and which overrides fly.toml." \
             "3. If it WAS intended: declare it in \`configs/live-execution-windows.json\`" \
             "   with an owner, a reason, a \`mode\` (\`time_boxed\` or \`standing\`), whether the" \
             "   \`judge\` is part of it, and — for \`time_boxed\` — when you will switch it off." \

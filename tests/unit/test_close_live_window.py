@@ -230,6 +230,225 @@ def test_main_refuses_when_nothing_is_open(closer: ModuleType, tmp_path: Path, c
     assert windows_file.read_text(encoding="utf-8") == before
 
 
+def test_main_flips_the_flag_when_the_window_ALREADY_LAPSED(
+    closer: ModuleType, tmp_path: Path, capsys: Any
+) -> None:
+    """#460, and the most likely real incident: the window expired on its own
+    while the flag stayed ``"true"``.
+
+    That is exactly the 2026-09-11 shape — the window lapsed at 07:51:25Z and
+    production kept serving a spend-capable posture for 21.6-25.5h past its
+    own expiry (bracketed by the watchdog's last failure at
+    2026-09-12T05:30:30Z and its first success at 09:22:51Z). Before this
+    fix the script refused (exit 1) and changed NOTHING, leaving the flag
+    ``"true"``, so the purpose-built revert tool did nothing in the case where
+    it was most needed and its own message even named the situation ("the
+    window that sanctioned it has already lapsed on its own").
+
+    Only ONE edit is correct here, and the window file must NOT be touched:
+    nothing covers ``now``, so there is no ``expires_at`` to stamp, and
+    rewriting a lapsed entry's expiry would falsify the record of when the
+    window actually ended.
+
+    RED IF: the script refuses on a lapsed window while the flag is still on,
+    or flips the flag but also rewrites the lapsed window's ``expires_at``.
+    """
+    fly, windows_file = _write_fixture(
+        tmp_path, flag_value="true", windows=[_window(opened=_EXPIRED_START, expires=_EXPIRED_END)]
+    )
+    windows_before = windows_file.read_text(encoding="utf-8")
+    rc = closer.main(
+        ["--fly-toml", str(fly), "--windows-file", str(windows_file), "--now", _NOW_ISO]
+    )
+    assert rc == 0
+    assert 'OPENROUTER_LIVE_EXECUTION_ENABLED = "false"' in fly.read_text(encoding="utf-8")
+    # The lapsed declaration is a historical record; it must survive verbatim.
+    assert windows_file.read_text(encoding="utf-8") == windows_before
+    # Assert the message names the REAL expiry instant, not just that it uses
+    # the word "lapsed". The wording is what tells an operator which of the
+    # three absence causes they are in, so pin the datum rather than the phrase.
+    out = capsys.readouterr().out
+    assert "2026-08-19T17:00:00Z" in out
+    assert "expired at" in out
+
+
+def test_main_still_refuses_a_standing_window_even_though_the_flag_is_on(
+    closer: ModuleType, tmp_path: Path, capsys: Any
+) -> None:
+    """The boundary the #460 fix must NOT cross.
+
+    A standing window has no ``expires_at`` and legitimately sanctions a live
+    posture, so a flag reading ``"true"`` beside one is not a stranded flag —
+    ending a standing window is a policy decision, which this script's own
+    docstring says it never makes. The lapsed-window fix keys on "no window
+    covers now AND none is standing", not merely "no window covers now".
+
+    RED IF: the #460 fix flips the flag whenever nothing covers ``now``,
+    which would silently end a standing window's sanction.
+    """
+    fly, windows_file = _write_fixture(
+        tmp_path,
+        flag_value="true",
+        windows=[_window(opened=_OPEN_START, expires=None, mode="standing")],
+    )
+    rc = closer.main(
+        ["--fly-toml", str(fly), "--windows-file", str(windows_file), "--now", _NOW_ISO]
+    )
+    assert rc == 1
+    assert 'OPENROUTER_LIVE_EXECUTION_ENABLED = "true"' in fly.read_text(encoding="utf-8")
+    # The two refusals must be DISTINGUISHABLE. Adversarial review showed that
+    # making the standing refusal print the lapsed/already-off text instead
+    # survived the whole suite, because nothing read this message. ``capsys``
+    # was requested here and never used — the dead fixture parameter was
+    # exactly where this assertion belonged.
+    #
+    # A first version asserted only ``"standing" in err`` and STILL survived
+    # that mutation, because the word appears later in the same message. So
+    # assert the clause that is unique to this branch, and assert the OTHER
+    # refusal's text is absent — the point is that an operator can tell them
+    # apart, which one shared substring does not establish.
+    err = capsys.readouterr().err
+    assert "POLICY decision" in err
+    assert "nothing to revert" not in err
+
+
+def test_main_refuses_an_unrecognised_window_mode_and_leaves_the_flag_ALONE(
+    closer: ModuleType, tmp_path: Path, capsys: Any
+) -> None:
+    """A mode that is neither ``time_boxed`` nor ``standing`` makes the WHOLE
+    FILE untrusted, so nothing may be concluded from it — including "no window
+    sanctions this".
+
+    That is the declaration file's own README stance ("an unrecognised mode
+    makes the whole file untrusted rather than [being] silently ignored") and
+    ``find_open_windows`` already mirrors it by refusing to treat such an entry
+    as closeable. Before this test, ``has_standing_window`` did NOT: it matched
+    ``mode == "standing"`` exactly, so a wrongly-cased ``"Standing"`` was
+    invisible to it, fell through into the #460 lapsed-revert branch, and the
+    flag was flipped — SILENTLY ENDING A STANDING SANCTION, which is the one
+    thing that branch must never do.
+
+    RED IF: an unrecognised mode is treated as "no window", which lets the
+    lapsed revert fire on a file nobody should be drawing conclusions from.
+    """
+    fly, windows_file = _write_fixture(
+        tmp_path,
+        flag_value="true",
+        windows=[
+            {**_window(opened=_OPEN_START, expires=None, mode="standing"), "mode": "Standing"}
+        ],
+    )
+    rc = closer.main(
+        ["--fly-toml", str(fly), "--windows-file", str(windows_file), "--now", _NOW_ISO]
+    )
+    assert rc == 2
+    assert 'OPENROUTER_LIVE_EXECUTION_ENABLED = "true"' in fly.read_text(encoding="utf-8")
+    assert "unrecognised" in capsys.readouterr().err
+
+
+def test_main_refuses_a_standing_window_sitting_beside_a_LAPSED_one(
+    closer: ModuleType, tmp_path: Path
+) -> None:
+    """The MIXED payload, which is the shape the shipped file takes the moment
+    a standing window is added beside the entries that have already expired.
+
+    Adversarial review defeated the single-window fixtures with
+    ``not any(mode == time_boxed ...)``: green on all 266 tests, and on this
+    exact payload it reported "NO window sanctioning it" and flipped the flag
+    while a standing window still stood.
+
+    RED IF: ``has_standing_window`` is derived from the absence of a
+    ``time_boxed`` entry, or from anything else that a lapsed sibling defeats.
+    """
+    fly, windows_file = _write_fixture(
+        tmp_path,
+        flag_value="true",
+        windows=[
+            _window(opened=_EXPIRED_START, expires=_EXPIRED_END),
+            _window(opened=_OPEN_START, expires=None, mode="standing"),
+        ],
+    )
+    rc = closer.main(
+        ["--fly-toml", str(fly), "--windows-file", str(windows_file), "--now", _NOW_ISO]
+    )
+    assert rc == 1
+    assert 'OPENROUTER_LIVE_EXECUTION_ENABLED = "true"' in fly.read_text(encoding="utf-8")
+
+
+def test_main_says_NO_WINDOW_DECLARED_rather_than_inventing_a_lapse(
+    closer: ModuleType, tmp_path: Path, capsys: Any
+) -> None:
+    """An empty declaration with the flag on is the #357 accidental-``true``
+    shape: no window ever existed, so nothing lapsed.
+
+    Flipping the flag is still right — nothing sanctions the posture — but the
+    message must not assert a lapse that never happened, and must not tell the
+    operator that "the lapsed entry is the record of when the window ended"
+    when there is no entry. Getting this wrong points them away from the real
+    cause, which per ``fly.toml`` may be a ``fly secrets set`` override that no
+    tracked file records.
+
+    RED IF: the success message claims a window lapsed in a state where none is
+    declared.
+    """
+    fly, windows_file = _write_fixture(tmp_path, flag_value="true", windows=[])
+    rc = closer.main(
+        ["--fly-toml", str(fly), "--windows-file", str(windows_file), "--now", _NOW_ISO]
+    )
+    assert rc == 0
+    assert 'OPENROUTER_LIVE_EXECUTION_ENABLED = "false"' in fly.read_text(encoding="utf-8")
+    out = capsys.readouterr().out
+    assert "no window is declared" in out
+    assert "lapsed" not in out
+
+
+def test_main_says_NOT_YET_STARTED_for_a_future_only_window(
+    closer: ModuleType, tmp_path: Path, capsys: Any
+) -> None:
+    """A window that has not opened yet has not lapsed either. Same reasoning
+    as the empty case: flip the flag, describe what was actually found.
+
+    RED IF: a future window is reported as having lapsed.
+    """
+    fly, windows_file = _write_fixture(
+        tmp_path, flag_value="true", windows=[_window(opened=_FUTURE_START, expires=_FUTURE_END)]
+    )
+    rc = closer.main(
+        ["--fly-toml", str(fly), "--windows-file", str(windows_file), "--now", _NOW_ISO]
+    )
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "has not started yet" in out
+    assert "lapsed" not in out
+
+
+def test_the_lapsed_revert_tells_the_operator_to_DEPLOY_and_verify(
+    closer: ModuleType, tmp_path: Path, capsys: Any
+) -> None:
+    """Editing a tracked file changes NOTHING in production until it is
+    deployed, and ``fly secrets set`` can override ``fly.toml``'s ``[env]``
+    entirely — so a green exit here is not a closed posture.
+
+    The pre-existing two-edit path already ends with "Commit both files
+    together, deploy, then verify /status.live_execution yourself." The #460
+    path was built for the incident and shipped without it, which is a false
+    completion signal at the worst moment.
+
+    RED IF: the one-edit success path stops telling the operator to deploy and
+    verify.
+    """
+    fly, windows_file = _write_fixture(
+        tmp_path, flag_value="true", windows=[_window(opened=_EXPIRED_START, expires=_EXPIRED_END)]
+    )
+    rc = closer.main(
+        ["--fly-toml", str(fly), "--windows-file", str(windows_file), "--now", _NOW_ISO]
+    )
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "deploy" in out.lower()
+    assert "/status.live_execution" in out
+
+
 def test_main_closes_an_open_window_and_flips_the_flag(closer: ModuleType, tmp_path: Path) -> None:
     """The end-to-end case #407 exists for. RED IF: either file is left
     unedited, or the resulting state would still fail the shipped gate

@@ -29,9 +29,11 @@ kill_timeout = "5s"
   OPENROUTER_APP_URL = "https://quorum.stackclimb.com"
   # OFF. Re-open only with `make close-window`'s counterpart: a covering entry
   # in configs/live-execution-windows.json in the SAME pull request. Closing is
-  # `make close-window`, which flips this AND expires the window atomically —
-  # flipping this alone is REFUSED, because a window still covering `now` may
-  # not be committed with the flag off (#407).
+  # `make close-window`. While a window still COVERS `now` it flips this AND
+  # expires the window atomically — flipping this alone is REFUSED, because a
+  # window still covering `now` may not be committed with the flag off (#407).
+  # Once the window has LAPSED, flipping this alone IS the correct revert and
+  # the same command does it (#460, ADR-0111).
   #
   # This is the ONLY switch that lets real money be spent: providers.py:670 is
   # `openrouter_live_execution_enabled and openrouter_key`, and the key is

@@ -101,7 +101,11 @@ open-work-write:
 # window still covering `now` may not be committed while the flag is off. This
 # performs both edits atomically: flag -> "false" in fly.toml AND the open
 # window's expires_at -> now, so the two-part deduction is never needed again
-# under incident pressure. Refuses loudly if nothing is currently open.
+# under incident pressure. When nothing covers `now` and nothing is standing,
+# it flips the flag ALONE and leaves the declaration file untouched (#460,
+# ADR-0111) -- the lapsed case, which is the likelier incident. It refuses
+# loudly when the flag already reads off, when a `standing` window is
+# declared, and when any window's `mode` is unrecognised.
 close-window: check-python
 	$(PYTHON) scripts/close_live_window.py
 
