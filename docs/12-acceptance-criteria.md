@@ -270,10 +270,17 @@ Given a query is accepted, when it moves through submission, provider calls, fal
 
 Given OpenRouter charges a flat per-request web-search plugin fee (~$0.02/request) that is separate from token cost, when a query's cost is estimated and later measured, then the system intentionally does NOT account for that fee: `cost_web_search_request_fee_usd` is permanently `0.0` by decision, the fee is never surfaced to the user or on the UI (at `0.0` it folds invisibly into the total estimate — no separate line item), and the cost guardrail remains fail-safe without it because the pre-run estimate already runs at or above the measured token cost (measured live run 2026-07-17: estimate $0.0199 ≥ actual $0.0149). The per-slot plumbing (server + client) is retained only as a dormant repo-tracking hook, not a pending activation.
 
-**SUPERSEDED IN PART — 2026-09-12 (issue #105, CHG-006, ADR-0110).** The
-criterion's DECISION still holds: the fee is `0.0` and nothing is surfaced. Three
-of its statements above do not, and are corrected here rather than silently left
-standing:
+**SUPERSEDED — 2026-09-13 (issue #105, CHG-007, ADR-0113). THE DECISION ABOVE NO
+LONGER HOLDS: the fee is PRICED, at the measured $0.007.** The criterion's text is
+kept verbatim because it is the dated record of what was accepted on 2026-07-17;
+what follows is what replaced it.
+
+The reversal, in one line: `0.0` is certainly wrong and `0.007` is measured, and
+the error sat in the unsafe direction — the daily ceiling is keyed on the estimate,
+and the estimate was $0.028 light on every searching run.
+
+Three of the statements above were already refuted on 2026-09-12 (CHG-006,
+ADR-0110), and are corrected here rather than silently left standing:
 
 - **"~$0.02/request" is wrong.** The measured charge is **$0.007** flat. Of the 27
   generation rows in the owner's OpenRouter export for 2026-09-10, exactly 8 carry
@@ -287,13 +294,24 @@ standing:
   ADR-0110 extends it to the MEASURED path, and activation is now an open
   product-owner decision, not a closed won't-activate.
 
-Also note "never surfaced to the user or on the UI" is true only AT `0.0`: at
-$0.007 the cheapest searching slot's card moves from `<$0.001` to about `$0.007`.
+The fourth statement — "never surfaced to the user or on the UI" — was true only
+AT `0.0`. It is now false by design: the cheapest searching slot's card moves from
+`<$0.001` to about `$0.007`, because `perModelEstimateText` renders `<$0.001`
+below the display quantum and no searching slot can round that low at $0.007.
+
+**What activation cost**, measured under the real production posture (peer critique
+AND the judge on, both read from `GET /status`, not inferred from `fly.toml`): the
+per-account daily envelope went from 5 runs to 4; 62 of 1820 shipped-catalog mixes
+moved to `require_confirmation`; 2 became outright `block`. The envelope drop is
+the ceiling becoming CORRECT — it had been admitting a run it could not afford —
+and `DAILY_CAP_USD` was deliberately NOT raised to compensate.
 
 - Requirement: NFR-002
 - Decision: accepted 2026-07-17 (issue #18); see CHG-005. **Rationale superseded
-  2026-09-12 by CHG-006; the exclusion itself is pending re-decision.** See
-  ADR-0110 and `config.py cost_web_search_request_fee_usd`
+  2026-09-12 by CHG-006, and the exclusion itself REVERSED 2026-09-13 by CHG-007
+  — the fee is now priced at $0.007.** See ADR-0113 (the activation), ADR-0110
+  (the measured-path plumbing it depends on) and
+  `config.py cost_web_search_request_fee_usd`
 - Test: existing #18 mechanism tests (behaviour unchanged at `0.0`).
   `tests/unit/test_cost_search_fee.py` pins the estimate side;
   `tests/unit/test_actual_cost_source.py::test_the_measured_fee_term_reads_the_SETTING_and_scales_with_it`

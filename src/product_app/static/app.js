@@ -1386,15 +1386,16 @@
     // so ``searchFlags`` defaults to all-ON — but keying off it per slot means
     // this stays exact if a per-slot search toggle ever ships (issue #20). A
     // searching slot's prompt carries the injected web-search context AND the
-    // flat per-request web-search plugin fee (issue #18). NOTE (#105, ADR-0110,
-    // superseding the older #18 note here): ``web_search_request_fee_usd`` is
-    // still 0.0, so ``fee`` below is still always 0 and nothing fee-related is
-    // shown today — but it is no longer "permanently" 0.0 by decision. The real
-    // charge is $0.007 and activation is an open product-owner decision. If it
-    // is activated, this stops being invisible: ``fmtUsd`` renders ``<$0.001``
+    // flat per-request web-search plugin fee. NOTE (#105, CHG-007, ADR-0113,
+    // superseding the older #18 note here): the fee IS PRICED, at the measured
+    // $0.007, since 2026-09-13. So ``fee`` below is non-zero for a searching
+    // slot and IS user-visible — ``perModelEstimateText`` renders ``<$0.001``
     // below the display quantum, and at $0.007 no searching slot can round that
-    // low, so the cheapest slot's card would change. Both terms mirror the
-    // server's ``_estimate_from_slots``.
+    // low, so the cheapest slot's card reads about ``$0.007`` rather than
+    // ``<$0.001``. That is a correction: the card used to tell the user a
+    // searching slot was free. AC-037's "never surfaced to the user" no longer
+    // holds and is superseded. Both terms mirror the server's
+    // ``_estimate_from_slots``.
     const searchOn = (i) => (searchFlags ? !!searchFlags[i] : true);
 
     return modelIds.map((modelId, i) => {

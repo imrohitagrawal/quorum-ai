@@ -670,7 +670,7 @@ def test_estimate_time_block_still_records_blocked_and_pages_sentry() -> None:
 #: `_DEFAULT_PRICE_PER_1K` fallback -- 4x/2.5x too high. With that catalog row
 #: added (see ``catalog_fetcher.py``), this constant is the real, deterministic
 #: price again.
-PINNED_DEFAULT_MIX_UNIT_USD = Decimal("0.0547")
+PINNED_DEFAULT_MIX_UNIT_USD = Decimal("0.0827")
 
 
 @contextmanager
@@ -826,7 +826,19 @@ def test_daily_cap_admits_the_number_of_runs_its_dollar_value_pays_for() -> None
         expected_runs = int((DAILY_CAP_USD / unit).to_integral_value(rounding=ROUND_FLOOR))
         # floor(DAILY_CAP_USD / unit) -- literals on both sides (rule 7a), so a
         # move in EITHER the cap or the unit price is caught, not absorbed.
-        assert expected_runs == 7, f"default-mix unit price moved: {unit}"
+        # 7 -> 4, and this is A DELIBERATE PRODUCT DECISION, not a side effect
+        # (#105 defect A, CHG-007, ADR-0113, decided by the product owner on
+        # 2026-09-13). The `:online` per-request fee is now priced at the
+        # measured $0.007, so the default-mix unit price rose $0.0547 -> $0.0827
+        # and the $0.40 cap pays for four runs instead of seven.
+        #
+        # The drop is the ceiling becoming CORRECT, not a regression: before
+        # this, the estimate the cap is keyed on was $0.028 light on every
+        # searching run, so the cap was admitting a seventh run it could not
+        # actually afford. `DAILY_CAP_USD` was deliberately NOT raised to restore
+        # the old count — doing so would re-create the under-protection that had
+        # been accidental.
+        assert expected_runs == 4, f"default-mix unit price moved: {unit}"
 
         completed = 0
         rejection = None

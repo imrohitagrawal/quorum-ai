@@ -469,7 +469,13 @@ class Settings(BaseSettings):
     #: came from OpenRouter's docs, not from a bill, and is roughly 3x the
     #: charge actually levied. Do not reinstate it.
     #:
-    #: DEFAULT 0.0 — still off, but no longer on its original reasoning.
+    #: ACTIVATED 2026-09-13 at the MEASURED $0.007 (issue #105 defect A, CHG-007,
+    #: ADR-0113). The value is dated deliberately: it is a PROVIDER price, read
+    #: from the owner's OpenRouter activity export for 2026-09-10, not from our
+    #: own arithmetic, and nothing in this repo detects it going stale
+    #: (DEBT-014). Re-measure it from a fresh export before relying on it again.
+    #:
+    #: The history, because the reasoning matters more than the number:
     #: The 2026-07-17 decision (AC-037 in docs/12-acceptance-criteria.md,
     #: CHG-005 in docs/19-change-control-log.md, issue #18) accepted the
     #: exclusion because the pre-run estimate was measured running ABOVE the
@@ -478,10 +484,21 @@ class Settings(BaseSettings):
     #: approved at an estimate of $0.076 while its measured TOKEN cost alone
     #: was $0.0938 — the estimate ran BELOW, on the 2026-07-17 comparison's own
     #: token-for-token terms. (Including the fee the true charge was $0.121763.)
-    #: AC-037 and CHG-005 therefore need revising, and ACTIVATION IS A
-    #: PRODUCT-OWNER DECISION (CHG-005 records the exclusion as one).
+    #: The product owner took that decision on 2026-09-13 and activated the fee.
+    #: The deciding argument: `0.0` is CERTAINLY wrong and `0.007` is MEASURED,
+    #: so preferring `0.0` to avoid staleness risk had it backwards — and the
+    #: error sat in the unsafe direction, under-charging a safety ceiling.
     #:
-    #: THE CONSEQUENCE FIGURES ARE DELIBERATELY NOT REPEATED HERE. They depend
+    #: WHAT ACTIVATION COST, measured under the REAL production posture (peer
+    #: critique AND the judge on, both read from ``GET /status``): the
+    #: per-account daily envelope went from 5 runs to 4, 62 of 1820
+    #: shipped-catalog mixes moved to ``require_confirmation``, and 2 became
+    #: outright ``block``. The envelope drop is the ceiling becoming CORRECT, not
+    #: a regression, and ``DAILY_CAP_USD`` was deliberately NOT raised to
+    #: compensate: doing so would re-create the under-protection that had been
+    #: accidental.
+    #:
+    #: THE FULL CONSEQUENCE FIGURES ARE DELIBERATELY NOT REPEATED HERE. They depend
     #: on the peer-critique and judge postures and on whether prices come from
     #: the live catalog or the static table, and a transcribed copy of them in
     #: this comment was wrong twice. Run the sweep at decision time — it prints
@@ -521,7 +538,7 @@ class Settings(BaseSettings):
     #: ``COST_WEB_SEARCH_REQUEST_FEE_USD`` appears in no deploy config and no
     #: workflow — only in ``.env.example`` and here. Changing this default
     #: therefore changes production, local and CI together.
-    cost_web_search_request_fee_usd: float = 0.0
+    cost_web_search_request_fee_usd: float = 0.007
     #: Output-token floor for a single initial answer.
     cost_initial_output_tokens: int = 700
     #: How much each initial answer lengthens per token of query (longer,

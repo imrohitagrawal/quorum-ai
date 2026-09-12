@@ -115,6 +115,7 @@ ways, so the record shows what was believed on a date and what replaced it.
 | [ADR-0109](adr/0109-the-trust-number-says-what-it-measured.md) | The trust number says what it measured | Architecture | Accepted — 2026-09-09 |
 | [ADR-0110](adr/0110-the-measured-receipt-can-carry-a-flat-per-request-fee.md) | The measured receipt can carry a flat per-request fee, keyed on the wire | Architecture | Accepted — 2026-09-12 |
 | [ADR-0112](adr/0112-a-failed-slot-records-whether-it-could-have-been-billed.md) | A failed slot records whether it could have been billed | Architecture | Accepted — 2026-09-12 |
+| [ADR-0113](adr/0113-the-online-search-fee-is-priced.md) | The `:online` search fee is priced | Architecture | Accepted — 2026-09-13 |
 
 **This index was itself stale** until 2026-07-30: ADR-0002 had existed since
 2026-07-19 and was never listed here. A hand-maintained index is a derived fact
