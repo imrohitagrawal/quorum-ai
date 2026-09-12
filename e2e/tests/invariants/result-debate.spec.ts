@@ -2,6 +2,7 @@ import { test, expect, Page } from "@playwright/test";
 import {
   driveToResult,
   goldenCompletedResp,
+  goldenRespWithMarkdownCritiques,
   goldenRespWithTemplatedDebate,
   RAW_MARKDOWN_PATTERNS,
 } from "../../fixtures/golden-run";
@@ -394,6 +395,115 @@ test.describe("the result view carries the panel's reasoning", () => {
         viewText,
         `the result view is rendering position_movements again (found "${movementOnly}")`,
       ).not.toContain(movementOnly);
+    }
+  });
+});
+
+// ---- ADR-0107: the reader gets the critiques, not the prompt's digest -----
+//
+// `DebateOutput.critique_text` is `debate.py::_peer_digest`: every critique put
+// through `_one_line` — headings, blank lines and bullets collapsed into a
+// single run of spaces — and cut to SYNTHESIS_DEBATE_EXCERPT_MAX_CHARS / n,
+// about a quarter of each critique at four critics. Both properties exist for a
+// PROMPT (a token budget; a prompt-injection defence for a line-delimited list
+// a model parses) and neither applies to a browser.
+//
+// The round card rendered that digest AND, directly below it, the full
+// per-critic text through setProse — so the flattened, truncated restatement
+// sat on top of the correct rendering of the same words. These tests pin the
+// fix and its boundary: the digest is gone where the full records exist, and
+// still shown where they do not.
+test.describe("ADR-0107 — the round card shows the critiques, not the digest", () => {
+  test.skip(({ browserName }) => browserName !== "chromium", "chromium-only gate");
+
+  test("the peer shape renders each critic in full and drops the digest", async ({ page }) => {
+    // TURNS RED IF: renderTranscriptRound goes back to appending
+    // `.transcript-round-body` unconditionally.
+    await driveToResult(page, goldenRespWithMarkdownCritiques());
+    const cards = page.locator("#result-debate .transcript-round");
+    const n = await cards.count();
+    // Positive partner FIRST: every assertion below is about absence.
+    expect(n, "no round cards — the checks below would be vacuous").toBeGreaterThan(0);
+    await expect(
+      page.locator("#result-debate .transcript-critic-body"),
+      "the full per-critic text must be what is rendered",
+    ).toHaveCount(n * 4);
+    await expect(
+      page.locator("#result-debate .transcript-round-body"),
+      "the flattened digest must not sit above the full critiques",
+    ).toHaveCount(0);
+  });
+
+  test("no raw markdown mark survives from the flattened digest", async ({ page }) => {
+    // THE STRING BELOW IS MEASURED, NOT GUESSED. Rendering the digest and
+    // dumping `#result-debate` innerText produced, verbatim:
+    //
+    //   Slot 1: ## Critic 1 reading Where it agrees: the recommendation holds.
+    //   1. The export slice is
+    //
+    // Two things that matters for. The `##` is a LITERAL in a text node --
+    // `_one_line` moved the heading off line-start, and the renderer's heading
+    // pattern is line-start anchored, so it passes the mark straight through.
+    // And the row is cut mid-sentence at "The export slice is".
+    //
+    // An earlier version of this test asserted on
+    // "## Critic 1 reading **Where it agrees:**" and stayed GREEN under the
+    // mutation, because the inline renderer HAD converted the `**` — a
+    // negative check that could not fail. It is written against the measured
+    // string now, and the mutation proof records that it goes red.
+    await driveToResult(page, goldenRespWithMarkdownCritiques());
+    const debate = page.locator("#result-debate");
+    await expect(debate).toBeVisible();
+    const text = await debate.innerText();
+    expect(text.length, "the debate section must hold text at all").toBeGreaterThan(50);
+    expect(
+      text,
+      "the flattened digest row reached the reader, literal '##' and all",
+    ).not.toContain("Slot 1: ## Critic 1 reading");
+    expect(
+      text,
+      "no raw heading mark may survive in a text node on this surface",
+    ).not.toContain("##");
+    // Positive partner: the critique's real WORDS are present and COMPLETE --
+    // it is the flattening and the truncation that are gone, not the content.
+    // "output alone." is the last sentence of each critique, which the digest
+    // cut off entirely.
+    expect(text).toContain("Where it agrees");
+    expect(text, "the full critique must reach its final sentence").toContain(
+      "output alone.",
+    );
+  });
+
+  test("the moderator shape still shows its round body", async ({ page }) => {
+    // The boundary. Without this, deleting the round body unconditionally would
+    // pass both tests above while erasing the only text a moderator-shaped run
+    // has. goldenCompletedResp() carries no `slot_critiques`.
+    await driveToResult(page);
+    const cards = page.locator("#result-debate .transcript-round");
+    const n = await cards.count();
+    expect(n, "no round cards to inspect").toBeGreaterThan(0);
+    await expect(
+      page.locator("#result-debate .transcript-round-body"),
+      "a run with no per-critic records must still render its round critique",
+    ).toHaveCount(n);
+  });
+
+  test("a critic is named by its model, not its raw id slug", async ({ page }) => {
+    // #290 readout: the card printed `critic_model_id` verbatim, so a reader
+    // saw "anthropic/claude-haiku-4.5" where every other model label in the UI
+    // reads "Claude Haiku 4.5". TURNS RED IF: the label stops going through
+    // displayNameForModel.
+    await driveToResult(page, goldenRespWithMarkdownCritiques());
+    const slotLabels = page.locator("#result-debate .transcript-critic-slot");
+    const count = await slotLabels.count();
+    expect(count, "no critic labels to inspect").toBeGreaterThan(0);
+    const texts = await slotLabels.allTextContents();
+    expect(
+      texts.some((t) => t.includes("Claude Haiku 4.5")),
+      `no critic label carried the catalog short name; got ${JSON.stringify(texts)}`,
+    ).toBe(true);
+    for (const t of texts) {
+      expect(t, "a raw vendor/model-id slug reached the label").not.toContain("/");
     }
   });
 });

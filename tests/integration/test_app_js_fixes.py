@@ -699,3 +699,53 @@ def test_pr01_f3_change_event_filter_survives_dataset_rename() -> None:
     assert out["calls"] == 1, (
         f"F3 regression: handler skipped a slot select without data-model-slot set: {out!r}"
     )
+
+
+def test_every_stage_state_has_a_live_round_placeholder() -> None:
+    """RED WHEN: a StageState the server can emit has no placeholder entry.
+
+    ADR-0108 review found this live. The round-boundary callback marks
+    ``debate_round_1`` COMPLETED at the real boundary, which is a moment BEFORE
+    ``record_debate_outputs`` writes that round's ``DebateOutput``. During that
+    window ``renderLiveDebate`` has no round-1 entry and falls back to
+    ``renderLiveDebatePlaceholder(1, "completed")`` -- and neither placeholder
+    map had a ``completed`` key, so both lookups fell through to their
+    ``"pending"`` default. For the whole of round 2 the stage strip said round 1
+    was complete while the card below it said **"This round has not started
+    yet."** The fix for round 2's marker had made round 1's card lie.
+
+    The lookups are ``MAP[state] || "pending"``, so a missing key is SILENT --
+    which is why this is pinned structurally rather than by a rendering test.
+    Every value the server can put in ``QueryRunStageProgress.state`` must have
+    an entry in both maps.
+    """
+    import re
+    from pathlib import Path
+
+    from product_app.query_run_orchestration import StageState
+
+    app_js = Path(__file__).resolve().parents[2] / "src/product_app/static/app.js"
+    source = app_js.read_text(encoding="utf-8")
+
+    def keys_of(map_name: str) -> set[str]:
+        start = source.index(f"const {map_name} = {{")
+        body = source[start : source.index("\n  };", start)]
+        # Strip comments so a key named in prose cannot satisfy the check
+        # (AGENTS.md rule 8: assert structure, not substrings).
+        body = re.sub(r"//[^\n]*", "", body)
+        return set(re.findall(r"^\s{4}(\w+):", body, re.MULTILINE))
+
+    server_states = {s.value for s in StageState}
+    # Positive partner: the enum and both maps must be non-empty, or every
+    # subset check below is trivially satisfied.
+    assert len(server_states) >= 5, server_states
+
+    for map_name in ("LIVE_ROUND_PLACEHOLDER_STATE", "LIVE_ROUND_PLACEHOLDER_BODY"):
+        found = keys_of(map_name)
+        assert found, f"{map_name}: parsed no keys — the scan broke"
+        missing = server_states - found
+        assert not missing, (
+            f"{map_name} has no entry for {sorted(missing)}; the lookup is "
+            f'`MAP[state] || "pending"`, so those states silently render as '
+            f"'This round has not started yet.'"
+        )

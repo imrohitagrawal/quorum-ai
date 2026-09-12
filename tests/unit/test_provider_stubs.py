@@ -110,14 +110,25 @@ def test_provider_events_are_non_secret_and_record_source_count() -> None:
 
 
 def test_citation_coverage_scores_against_target() -> None:
-    # WP-C / F-03: both arguments are counted in ANSWERS. 4 of 5 answers
-    # sourced clears the 0.80 bar; 3 of 5 does not.
-    passing = calculate_citation_coverage(answer_count=5, sourced_answer_count=4)
-    failing = calculate_citation_coverage(answer_count=5, sourced_answer_count=3)
+    """RED WHEN: the target stops being "at most one unsourced answer".
 
-    assert passing.sourced_answer_ratio == Decimal("0.8")
+    ADR-0106. This used to assert at ``answer_count=5`` -- a shape the product
+    REFUSES, because ``validate_model_slots`` admits exactly four slots -- while
+    being named in the traceability matrix as TEST-NFR-003's evidence. A bar
+    demonstrated only on an impossible run is not evidence about this product,
+    so the case is now a real one: four answers, one unsourced.
+    """
+    passing = calculate_citation_coverage(answer_count=4, sourced_answer_count=3)
+    failing = calculate_citation_coverage(answer_count=4, sourced_answer_count=2)
+
+    # The bar is stated with LITERALS on both sides, never against the constant
+    # that defines it (AGENTS.md rule 7a): asserting `>= target_ratio` would
+    # still pass if the rule and the reported bar moved together.
+    assert passing.sourced_answer_ratio == Decimal("0.75")
+    assert passing.target_ratio == Decimal("0.75")
     assert passing.target_met
-    assert failing.sourced_answer_ratio == Decimal("0.6")
+    assert failing.sourced_answer_ratio == Decimal("0.50")
+    assert failing.target_ratio == Decimal("0.75")
     assert not failing.target_met
 
 

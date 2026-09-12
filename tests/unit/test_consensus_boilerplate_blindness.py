@@ -102,7 +102,6 @@ _COVERAGE = CitationCoverage(
     answer_count=1,
     sourced_answer_count=0,
     sourced_answer_ratio=Decimal("0.00"),
-    target_ratio=Decimal("0.80"),
     target_met=False,
 )
 

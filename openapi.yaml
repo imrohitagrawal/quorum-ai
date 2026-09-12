@@ -394,20 +394,25 @@ components:
           type: string
           pattern: ^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$
           title: Sourced Answer Ratio
+        target_met:
+          type: boolean
+          title: Target Met
         target_ratio:
           type: string
           pattern: ^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$
           title: Target Ratio
-          default: '0.80'
-        target_met:
-          type: boolean
-          title: Target Met
+          description: 'The share of answers that had to carry a primary source, this run.
+
+
+            Derived from ``answer_count``: 1.00, 0.50, 0.67, 0.75 at n = 1..4.'
+          readOnly: true
       type: object
       required:
       - answer_count
       - sourced_answer_count
       - sourced_answer_ratio
       - target_met
+      - target_ratio
       title: CitationCoverage
       description: 'How much of the panel''s output carries a primary source.
 
@@ -420,11 +425,15 @@ components:
 
         of "material claims", so the numerator and denominator did not share units
 
-        and a run of four long, fully-sourced answers scored ~12% against an 80%
+        and a run of four long, fully-sourced answers scored ~12% against the 80%
 
-        target. Every run was therefore labelled provisional and the recommendation
+        target OF THE TIME. Every run was therefore labelled provisional and the
 
-        always said "pause for human review".
+        recommendation always said "pause for human review". (That percentage
+
+        target is itself gone -- ADR-0106 replaced it with a count rule. The 80%
+
+        here is a historical figure, not a bar this code still applies.)
 
 
         What this metric does NOT claim: that each individual assertion inside an

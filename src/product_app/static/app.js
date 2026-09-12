@@ -1591,6 +1591,14 @@
     pending: "pending",
     failed: "failed",
     skipped: "skipped",
+    // ADR-0108 made this reachable. The round-boundary callback marks
+    // `debate_round_1` COMPLETED at the real boundary, which is BEFORE
+    // `record_debate_outputs` writes the round's DebateOutput -- so for the
+    // whole of round 2 the strip says round 1 is complete while this card has
+    // no round-1 entry to render. Without a "completed" key the lookup fell
+    // through to "pending" and the body read "This round has not started yet.",
+    // i.e. the fix for round 2's marker made round 1's card lie instead.
+    completed: "complete",
   };
 
   const LIVE_ROUND_PLACEHOLDER_BODY = {
@@ -1605,6 +1613,11 @@
     pending: "This round has not started yet.",
     failed: "This round did not complete.",
     skipped: "This round was skipped.",
+    // ADR-0108: the marker moves at the real round boundary, which is a moment
+    // BEFORE the round's DebateOutput is recorded. Says what is true in that
+    // window -- the round is done and its text is on its way -- rather than
+    // falling through to "has not started yet", which is the opposite of true.
+    completed: "This round has finished; its critique is being recorded.",
   };
 
   // Map a run status to the header pill's visible text + colour state. The
@@ -1796,9 +1809,36 @@
     stateEl.className = "live-round-state";
     stateEl.textContent = "complete";
     header.append(pill, stateEl);
+    // Same rule as the transcript card: prefer the per-critic text, which is
+    // full and unflattened, over the prompt-shaped digest. This surface was the
+    // one showing ONLY the digest, so it is where the wall of text was most
+    // visible during a run.
+    const critiques = Array.isArray(round.slot_critiques) ? round.slot_critiques : [];
     const body = document.createElement("div");
     body.className = "live-round-body";
-    setProse(body, round.critique_text);
+    if (critiques.length) {
+      for (const critique of critiques) {
+        if (!critique) continue;
+        const item = document.createElement("div");
+        item.className = "live-round-critic";
+        const who = document.createElement("span");
+        who.className = "live-round-critic-slot";
+        // The catalog's short label, not the raw `vendor/model-id` slug. The
+        // id is what the payload carries; displayNameForModel is what the rest
+        // of the UI already shows a user.
+        who.textContent = `Slot ${critique.critic_slot_number} — ${
+          displayNameForModel(critique.critic_model_id) || critique.critic_model_id || "unknown model"
+        }`;
+        item.appendChild(who);
+        const prose = document.createElement("div");
+        prose.className = "live-round-critic-body";
+        setProse(prose, String(critique.critique_text || "").trim(), "");
+        item.appendChild(prose);
+        body.appendChild(item);
+      }
+    } else {
+      setProse(body, round.critique_text);
+    }
     card.append(header, body);
     return card;
   }
@@ -3244,7 +3284,40 @@
         // the user KEEPS, so a stale claim here outlives the screen it came
         // from — this was the third and least visible of its three render
         // sites.
-        if (r.critique_text) push(mdUntrustedBlock(String(r.critique_text).trim()), "");
+        // Prefer the per-critic records over the digest, for the same reason
+        // the screen does: the digest is flattened and cut to a PROMPT budget,
+        // and the exported file is the copy the user keeps.
+        const critiques = Array.isArray(r.slot_critiques) ? r.slot_critiques : [];
+        if (critiques.length) {
+          for (const c of critiques) {
+            if (!c) continue;
+            const who = mdEscapeInline(
+              displayNameForModel(c.critic_model_id) || c.critic_model_id || "unknown model",
+            );
+            // A HEADING, not bold. `mdUntrustedBlock` escapes `<` and DEMOTES
+            // any ATX heading in model text, but it deliberately does not touch
+            // `*` -- model bold has to survive verbatim. So a bold marker is
+            // forgeable: a critic writing `**Slot 4 — Gemini 2.5 Flash**` in its
+            // own prose emits a row byte-identical to this one, for a model that
+            // did not write it, and it lands ABOVE that model's real row.
+            //
+            // That risk is NEW here. Before this change the export pushed the
+            // round DIGEST, every row flattened by `_one_line`, whose docstring
+            // states the purpose exactly: "a row is only identifiable as one row
+            // because it is on its own line". Dropping the flattening for
+            // readability removed the defence, and ADR-0107's own
+            // PROSE_ATTRIBUTION_INSTRUCTION asks every critic to write the other
+            // models' display names -- so the forging material is supplied.
+            //
+            // `####` cannot be forged: a model's own `####` is demoted to
+            // `#####` on the way through, so app rows and model rows can never
+            // collide at the same level.
+            push(`#### Slot ${c.critic_slot_number} — ${who}`, "");
+            if (c.critique_text) push(mdUntrustedBlock(String(c.critique_text).trim()), "");
+          }
+        } else if (r.critique_text) {
+          push(mdUntrustedBlock(String(r.critique_text).trim()), "");
+        }
       }
     }
 
@@ -4073,6 +4146,46 @@
   // bands the server can emit alongside a numeric score (build_trust_score);
   // anything else fails the verified guard and falls back to the unverified
   // treatment (fail closed).
+  // NEUTRAL names for the seven Layer-A signals (#290 readout).
+  //
+  // `TRUST_WHY` below is the only signal-key -> English map that existed, and
+  // every string in it is a FAILURE phrasing ("Not every answer came from a
+  // live model"), unusable for saying what a run got RIGHT. So the panel could
+  // list what fell short and never what was checked, and the headline number
+  // had nothing to stand on.
+  //
+  // Written to the same rules as the rest of this surface: app-authored
+  // constants, no digits, no raw signal identifiers, and none of the advisory
+  // label words the invariant spec bans. They are deliberately statements of
+  // what PASSING looks like, so one map reads correctly under a tick.
+  const TRUST_SIGNAL_LABELS = {
+    citation_marker_grounding: "Citation markers point at a listed source",
+    live_ratio: "Every answer came from a live model",
+    citation_coverage_ratio: "Every answer carried a primary source",
+    completeness: "Every model slot produced a usable answer",
+    disagreement_integrity: "Dissent was preserved, not flattened",
+    uncertainty_surfaced: "Open uncertainty was flagged",
+    decision_support_framing_present: "Framed as decision support",
+  };
+  // What the number IS, in one sentence, and what it is not.
+  //
+  // The reported defect: "of 100 — high trust" names no scale and says nothing
+  // about what was examined, so a reader cannot tell whether it is a claim
+  // about the ANSWER (it is not) or about the checks this product ran on the
+  // run's own output (it is).
+  //
+  // VERIFIED BRANCH ONLY. The unverified treatment must carry no digit at all
+  // and none of the label words, and it already states its own limits; adding
+  // this there would break those invariants for no gain, since the unexplained
+  // headline only ever appears on the verified branch.
+  const TRUST_BASIS =
+    "A weighted blend of seven automated checks on this run's own output. It is not a judgement of whether the answer is correct.";
+  const TRUST_MET_LEAD = "Checks fully met:";
+  // Renders ONLY beneath the met list, so the shortfall bullets cannot read as
+  // items under "Checks fully met:". No digit and none of the banned advisory
+  // words, so it stays legal if it ever reaches the unverified branch.
+  const TRUST_SHORTFALL_LEAD = "Checks that fell short:";
+
   const TRUST_BAND_LABELS = {
     low: "low trust",
     moderate: "moderate trust",
@@ -4122,6 +4235,13 @@
     box.removeAttribute("data-state");
     box.removeAttribute("data-band");
 
+    // Set when the "Checks fully met" list renders, so the shortfall list
+    // below can label itself. Without a label the two lists are visually
+    // identical -- same padding, font and colour -- and the container's 8px
+    // row gap is the SAME between the heading and its list as between that
+    // list and the next, so proximity gives no grouping signal and the
+    // failure bullets read as items under "Checks fully met:".
+    let metListRendered = false;
     const ev = result && result.evaluation;
     // D-14: an absent / null / malformed evaluation ⇒ hidden, zero text. (An
     // em-dash would read as "nothing wrong found"; silence is honest here.)
@@ -4183,6 +4303,44 @@
         ),
       );
       box.appendChild(scoreLine);
+      // WHAT THE NUMBER MEANS, then WHAT IT LOOKED AT. Both textContent via
+      // mkEl (D-15) — never setProse, which is for provider prose.
+      box.appendChild(mkEl("p", "result-trust-score-basis", TRUST_BASIS));
+      // The checks this run passed OUTRIGHT, above the ones that fell short.
+      //
+      // NOT a complete account of the composite, and this comment used to
+      // claim it was. The shortfall list is `.slice(0, 3)`, so with four or
+      // more sub-1.0 signals -- reachable on the verified branch -- a signal
+      // appears in NEITHER list. What a reader gets is the passing set in full
+      // and the worst few shortfalls: the explanation the bare headline was
+      // missing, not an audit of the arithmetic.
+      //
+      // Driven off the SERVED contributions array, never a hardcoded list of
+      // seven: when `citation_marker_grounding` is unknown the server drops it
+      // and renormalises the rest, so a run can legitimately carry six.
+      const served =
+        ev.trust && ev.trust.diagnostics && Array.isArray(ev.trust.diagnostics.contributions)
+          ? ev.trust.diagnostics.contributions
+          : [];
+      const met = served.filter(
+        (c) =>
+          c &&
+          typeof c.signal === "string" &&
+          Object.prototype.hasOwnProperty.call(TRUST_SIGNAL_LABELS, c.signal) &&
+          Number.isFinite(Number(c.value)) &&
+          Number(c.value) >= 1.0,
+      );
+      if (met.length) {
+        box.appendChild(mkEl("p", "result-trust-score-met-lead", TRUST_MET_LEAD));
+        const metList = mkEl("ul", "result-trust-score-met");
+        for (const c of met) {
+          metList.appendChild(
+            mkEl("li", "result-trust-score-met-item", TRUST_SIGNAL_LABELS[c.signal]),
+          );
+        }
+        box.appendChild(metList);
+        metListRendered = true;
+      }
     } else {
       // R4: the standing disclosure is always the first line.
       box.appendChild(mkEl("p", "result-trust-score-disclosure", TRUST_DISCLOSURE));
@@ -4234,6 +4392,14 @@
       .sort((a, b) => Number(a.value) - Number(b.value))
       .slice(0, 3);
     if (whys.length) {
+      // Only when the met list is above it: on the unverified branch this list
+      // stands alone and needs no disambiguation, and adding a line there would
+      // move visual baselines for no reason.
+      if (metListRendered) {
+        box.appendChild(
+          mkEl("p", "result-trust-score-why-lead", TRUST_SHORTFALL_LEAD),
+        );
+      }
       const list = mkEl("ul", "result-trust-score-why");
       for (const c of whys) {
         list.appendChild(mkEl("li", "result-trust-score-why-item", TRUST_WHY[c.signal]));
@@ -5083,10 +5249,34 @@
     }
     card.appendChild(head);
 
-    const body = mkEl("div", "transcript-round-body");
-    const text = String(round.critique_text || "").trim();
-    setProse(body, text, "This round did not produce a critique summary.");
-    card.appendChild(body);
+    // THE DIGEST IS NOT SHOWN WHEN THE FULL CRITIQUES ARE.
+    //
+    // `critique_text` is `debate.py::_peer_digest` — each critic flattened by
+    // `_one_line` (headings, blank lines and bullets collapsed into one run of
+    // spaces) and cut to SYNTHESIS_DEBATE_EXCERPT_MAX_CHARS / n, which at four
+    // critics discards about three quarters of each. Both properties exist for
+    // a PROMPT: the bound is a token budget, and the flattening is a
+    // prompt-injection defence for a line-delimited list a MODEL reads. A
+    // browser has neither constraint, and applying them to a display produced
+    // the wall of text — literal `##` and `- ` marks in a single paragraph,
+    // cut mid-sentence.
+    //
+    // Below this card, `slot_critiques[].critique_text` is already rendered per
+    // critic, in full, through setProse. So the digest was a lossy, flattened
+    // restatement sitting directly above the correct rendering of the same
+    // words. It is kept ONLY for the moderator/fallback shape, where there are
+    // no per-critic records and it is the only text there is.
+    //
+    // `_peer_digest` itself is deliberately UNCHANGED: it still feeds round 2's
+    // prompt and the synthesis excerpt, where the bound and the sanitisation
+    // are load-bearing.
+    const critiquesForBody = Array.isArray(round.slot_critiques) ? round.slot_critiques : [];
+    if (!critiquesForBody.length) {
+      const body = mkEl("div", "transcript-round-body");
+      const text = String(round.critique_text || "").trim();
+      setProse(body, text, "This round did not produce a critique summary.");
+      card.appendChild(body);
+    }
 
     // ADR-0096: the PER-CRITIC detail, in full.
     //
@@ -5112,7 +5302,14 @@
           mkEl(
             "span",
             "transcript-critic-slot",
-            `Slot ${critique.critic_slot_number} — ${critique.critic_model_id || "unknown model"}`,
+            // #290 readout: the catalog short label ("Claude Haiku 4.5"), not
+            // the raw `vendor/model-id` slug. `SlotCritique` carries only
+            // `critic_model_id`, and displayNameForModel resolves it the same
+            // way every other model label in this UI is resolved — falling back
+            // to a prettified slug, then to the id, so nothing is invented.
+            `Slot ${critique.critic_slot_number} — ${
+              displayNameForModel(critique.critic_model_id) || critique.critic_model_id || "unknown model"
+            }`,
           ),
         );
         // PER CRITIC, not per round. A round carries one `debate_mode`, so a
@@ -5596,17 +5793,34 @@
         ? `<span class="session-trail-status">${escapeHtml(statusLabel)}</span>`
         : "";
       btn.innerHTML =
-        `<span class="session-trail-question" title="${escapeHtml(e.question)}">${escapeHtml(e.question)}</span>` +
+        `<span class="session-trail-question" title="${escapeHtml(e.question)}">${escapeHtml(truncateTrailQuestion(e.question))}</span>` +
         statusTag +
         `<span class="session-trail-time mono">${escapeHtml(trailTimeLabel(e.timestamp))}</span>`;
-      btn.addEventListener("click", () => restoreTrailRun(e.runId));
+      btn.addEventListener("click", () => restoreTrailRun(e));
       host.appendChild(btn);
     }
     const clearBtn = el("session-trail-clear");
     if (clearBtn) clearBtn.hidden = false;
   }
 
-  function restoreTrailRun(runId) {
+  /**
+   * Restore a finished run from the session trail.
+   *
+   * Takes the trail ENTRY, not a bare run id. It used to take the id and then
+   * label the restored run with `state.liveQueryText` -- which is set only on
+   * SUBMIT (see proceedWithRun). So clicking an earlier entry showed that run's
+   * answer under the MOST RECENT run's question, and because this function also
+   * wrote the value back, restoring A and then B labelled B with A's question.
+   * The same wrong value reached the transcript heading, the "Follow up"
+   * prefill and the exported file's `**Question:**` line.
+   *
+   * The entry already carries the question and is already in scope at the click
+   * handler; nothing new is fetched, stored or sent. `sessionTrail` stays
+   * in-memory and never enters an API payload -- the question is user prose and
+   * the result endpoint deliberately does not carry `query_text`.
+   */
+  function restoreTrailRun(entry) {
+    const runId = entry && entry.runId;
     if (!runId) return;
     // Defense in depth alongside the disabled attribute in renderSessionTrail:
     // never let a trail click hijack a run that is actively in flight.
@@ -5619,8 +5833,14 @@
     api(`/v1/query-runs/${runId}`, { method: "GET" })
       .then((result) => {
         state.lastResult = result;
-        const res = result.result || {};
-        const question = state.liveQueryText || (res && res.model_answers && res.model_answers.length && res.model_answers[0].answer_text ? res.model_answers[0].answer_text.slice(0, 120) : "") || "";
+        // THIS run's own question. There is no fallback on purpose: the old one
+        // sliced the first model's ANSWER to 120 chars and printed it under
+        // "You asked", which is reachable today (goToActiveRun starts polling
+        // without ever setting liveQueryText, so an entry can carry an empty
+        // question). An unknown question renders the house "—" treatment in
+        // renderResult, which is honest; a model's answer presented as the
+        // user's question is not.
+        const question = entry.question ? String(entry.question) : "";
         state.liveQueryText = question;
         renderResult(result);
         setView("result");
@@ -7932,7 +8152,12 @@
       const liveCount = Number(result.live_count ?? (result.result && result.result.live_count) ?? 0);
       const trailStatus = demoMode && liveCount === 0 ? "simulated" : result.status;
       appendSessionTrailEntry({
-        question: truncateTrailQuestion(state.liveQueryText),
+        // The FULL question, not the 80-char display form. Restoring this run
+        // has to put the user's own words back under "You asked", and a
+        // truncated copy would print an ellipsised question into the result
+        // view and into the exported file. Truncation is a RENDER concern and
+        // now happens in renderSessionTrail.
+        question: state.liveQueryText ? String(state.liveQueryText).trim() : "",
         runId: result.query_run_id || result.correlation_id,
         timestamp: Date.now(),
         status: trailStatus,

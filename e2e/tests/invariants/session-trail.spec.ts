@@ -213,6 +213,87 @@ test.describe("PR8 — Conversation trail UI", () => {
     expect(questions.some((q) => q.includes("Second question here?"))).toBe(true);
   });
 
+  // ---- restoring an earlier run must restore ITS question -----------------
+  //
+  // `restoreTrailRun` used to take a bare run id and label the restored run
+  // with `state.liveQueryText`, which is set only on SUBMIT. So clicking the
+  // FIRST entry re-rendered run 1's answers under run 2's question — the UI
+  // said "You asked" above a question the user had not asked of that run. It
+  // then wrote the value back, so restoring A and then B labelled B with A's.
+  //
+  // The two tests below are each other's partner (AGENTS.md rule 7). The first
+  // alone would pass a fix that always rendered the OLDEST entry's question;
+  // the second alone would pass the original defect unchanged. Neither means
+  // anything without the other.
+  //
+  // TURNS RED IF: restoreTrailRun stops receiving the entry, or falls back to
+  // `state.liveQueryText` / the first model's answer text.
+
+  async function driveTwoRunsThenRestore(page: Page, which: "first" | "second") {
+    await boot(page);
+    const runIds = [
+      "11111111-1111-4111-8111-111111111111",
+      "22222222-2222-4222-8222-222222222222",
+    ];
+    let createCount = 0;
+    await Promise.all([
+      page.route("**/v1/query-runs/estimate", (r) => r.fulfill(fulfil(costEstimateEnvelope()))),
+      page.route("**/v1/query-runs/warnings", (r) => r.fulfill(fulfil({ warnings: [] }))),
+      page.route("**/v1/query-runs/active", (r) => r.fulfill(fulfil({ query_run_id: null }))),
+    ]);
+    await page.route(/\/v1\/query-runs$/, (r) => {
+      if (r.request().method() !== "POST") return r.continue();
+      const id = runIds[Math.min(createCount, runIds.length - 1)];
+      createCount += 1;
+      return r.fulfill(fulfil({ ...goldenCreateResp(), query_run_id: id, correlation_id: `corr-${id}` }));
+    });
+    await page.route(/\/v1\/query-runs\/[0-9a-f-]{36}$/, (r) => {
+      const url = r.request().url();
+      const id = runIds.find((rid) => url.includes(rid)) ?? runIds[0];
+      return r.fulfill(fulfil({ ...goldenCompletedResp(), query_run_id: id, correlation_id: `corr-${id}` }));
+    });
+
+    await page.getByRole("textbox").first().fill("First question here?");
+    await page.locator("#run-now").click();
+    await expect(page.locator("#result-verdict[data-consensus]")).toBeVisible({ timeout: 20000 });
+    await page.locator("#result-next-run").click();
+    await expect(page.locator("#query-text")).toBeVisible({ timeout: 10000 });
+    await page.getByRole("textbox").first().fill("Second question here?");
+    await page.locator("#run-now").click();
+    await expect(page.locator("#result-verdict[data-consensus]")).toBeVisible({ timeout: 20000 });
+    await expect(page.locator(".session-trail-entry")).toHaveCount(2);
+
+    // Newest first, so index 0 is run 2 and index 1 is run 1.
+    const wanted = which === "first" ? "First question here?" : "Second question here?";
+    await page
+      .locator(".session-trail-entry")
+      .filter({ hasText: wanted.slice(0, 20) })
+      .first()
+      .click();
+    await expect(page.locator("#result-verdict[data-consensus]")).toBeVisible({ timeout: 20000 });
+    return wanted;
+  }
+
+  test("restoring the EARLIER run shows that run's own question", async ({ page }) => {
+    const wanted = await driveTwoRunsThenRestore(page, "first");
+    // Positive partner FIRST (#131): the equality below means nothing until the
+    // question element is proven to hold something at all.
+    await expect(page.locator("#result-question")).not.toBeEmpty();
+    await expect(page.locator("#result-question")).toHaveText(wanted);
+    await expect(
+      page.locator("#result-question"),
+      "the most recent run's question must not leak onto an earlier run",
+    ).not.toHaveText("Second question here?");
+  });
+
+  test("restoring the LATER run shows that run's own question", async ({ page }) => {
+    // The partner: a fix that always rendered the oldest entry would pass the
+    // test above and fail here.
+    const wanted = await driveTwoRunsThenRestore(page, "second");
+    await expect(page.locator("#result-question")).not.toBeEmpty();
+    await expect(page.locator("#result-question")).toHaveText(wanted);
+  });
+
   // Found by adversarial review of the fix above (same PR, same file/
   // mechanism — self-fixed here rather than filed separately). Before this
   // fix, the trail was ALWAYS empty during a live run (every submission
