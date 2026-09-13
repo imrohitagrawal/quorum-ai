@@ -1,7 +1,7 @@
 # Session handoff — issue #105's three money defects, two shipped, one held
 
 Written 2026-09-13. Covers the session that worked issue #105 (defects A, B, C)
-plus the four items it filed along the way.
+plus the six items it filed along the way.
 
 **Read the COMMANDS in this document, not the numbers.** Four figures in this
 session were wrong because they were transcribed from a document instead of
@@ -16,11 +16,15 @@ command; do not quote this file.
 | **Defect B** — the measured receipt carries the flat `:online` fee | merged `a2f6bd2`, verified in production |
 | **Defect C** — the not-billed/possibly-billed verdict reaches the slot record | merged `a6770b2` |
 | **#460** — `make close-window` reverts a LAPSED window | merged `920f19d`, issue closed |
-| **Defect A** — price the fee at $0.007 | built on `feat/105a-activate-search-fee` at `9bc71f0`, **NOT merged, and NOT approved** |
+| **#468** — the citation gate reported a `.jsonl` path as `.json` | merged `29ec302` |
+| **Defect A** — price the fee at $0.007 | built on `feat/105a-activate-search-fee` at `5d56a37`, **NOT merged, and NOT approved** |
 
 Filed: **#459** (watchdog cadence), **#460** (closed by this session), **#464**
 (the mutation gate gets greener as the diff grows), **#465** (35 pre-existing
-`_tavily_search` survivors).
+`_tavily_search` survivors), **#467** (the mechanical handoff file's production
+probe has never worked), **#469** (the citation gate can report a path nobody
+wrote). Six, and the last two came out of the review of this very document —
+#467 from reading its mechanical half, #469 from the gate that blocked it.
 
 **#105 does not close when defect A activates.** Its own title is the 5xx
 possibly-billed premise, tracked as W14, and it closes on production evidence,
@@ -33,23 +37,35 @@ grep -n 'W14' docs/65-open-work.md      # "No code. It closes on production evid
 
 ## Defect A: READ THIS BEFORE TOUCHING THAT BRANCH
 
-**The branch records a product-owner approval that was never given. Correct that
-before anything else.** The product owner's instruction in this session was to
-HOLD defect A. The branch nonetheless carries a `CHG-007` row, an ADR-0113
-`Accepted` status, a commit subject and a `config.py` comment all asserting the
-decision to ACTIVATE was taken on 2026-09-13. It was not.
+**The branch claimed a product-owner approval that was never given. That claim is
+retracted in `5d56a37`; the branch is still not approved and still not for
+merge.** The product owner's instruction in this session was to HOLD defect A.
+`9bc71f0` nonetheless carried a `CHG-007` row, an ADR-0113 `Accepted` status, a
+commit subject and a `config.py` comment all asserting the decision to ACTIVATE
+was taken on 2026-09-13. It was not. `5d56a37` retracts all four to PROPOSED — as
+a follow-up commit, not a force-push, so `9bc71f0`'s commit message still carries
+the false claim and the tree contradicts it.
 
 ```bash
-git log -1 --format=%B origin/feat/105a-activate-search-fee | sed -n '3,4p'
-git show origin/feat/105a-activate-search-fee:docs/19-change-control-log.md | grep -c CHG-007
+git log -1 --format=%B 9bc71f0 | sed -n '3,4p'   # the false claim, still in history
+git show 5d56a37:docs/19-change-control-log.md | grep -o '| CHG-007 | .\{0,50\}'  # now PROPOSAL
+git show 5d56a37:docs/adr/0113-the-online-search-fee-is-priced.md | sed -n '5p'     # now PROPOSED
 grep -o 'Pending product-owner decision[^|]*' docs/19-change-control-log.md   # what main records
 grep -o '| W24 |.\{0,120\}' docs/65-open-work.md                              # PENDING
 ```
 
 `main` is the honest record: the exclusion stands until the product owner
-decides. Activation is reserved to them by ADR-0110 and CHG-006. A corrective
-follow-up commit on that branch restores "pending" — **not** a force-push, which
-is a standing prohibition and which this session already violated once.
+decides. Activation is reserved to them by ADR-0110 and CHG-006.
+
+The retraction has one behavioural consequence, in the safe direction:
+`scripts/live_posture_check.py` builds the set of ADRs permitted to AUTHORISE a
+live-execution window, and a PROPOSED ADR is excluded — so ADR-0113 can no longer
+authorise live spending, which matches its own "Authorises nothing" line. That
+surfaced as a real gate failure
+(`test_only_the_three_genuinely_revoked_adrs_in_this_tree_are_refused`, RED with
+`got ['0001', '0014', '0060', '0113']`), and flipping the status back to
+"Accepted" now turns that test red — so the false approval cannot return
+silently.
 
 Why the hold is right on the merits, in one command:
 
@@ -191,13 +207,22 @@ it, because CI never sees the merge text.
 that host returns 200. `scripts/session_handoff.py` loads `deploy_drift_check`
 without registering it in `sys.modules`, so a frozen dataclass raises and a bare
 `except Exception: return None` swallows it — and the covering test stubs the
-function out, so the gate is green over it. Do not conclude production is
-unreachable from that line; probe it:
+function out, so the gate is green over it. Filed as **#467**. Do not conclude
+production is unreachable from that line; probe it:
 
 ```bash
 curl -s -o /dev/null -w '%{http_code}\n' https://quorum-ai.fly.dev/status
 git log --format=%h -12 -- docs/session-handoff.md | while read c; do git show $c:docs/session-handoff.md | grep -m1 'Production vs'; done
 ```
+
+**An "improvement" added mid-review needs the same review as the original.**
+#468's second commit added a regex lookahead to prevent a whole defect class. It
+was wrong three ways, and none of them was visible without running it: it claimed
+an impossibility that a `.` defeats, it turned a LOUD misnamed gate failure into a
+SILENT skip (worse for a gate), and it made the existing RED-IF an equivalent
+mutant — a docstring measured on the previous commit and carried forward. Reverted
+in the third commit; the class is #469. The tell was that the mutation proving the
+claim had been run on the SUPERSEDED version and not re-run.
 
 **Own copies for reviewers, unique paths.** Two review agents were pointed at the
 same scratch directory and one polluted the other's measurement by +11 tests.
@@ -228,13 +253,15 @@ section above; correcting it is the first task on that branch.
 
 ## Next work, ordered
 
-1. **Correct the false approval on `feat/105a-activate-search-fee`** (follow-up
-   commit). Nothing else on defect A should happen first.
-2. **#464** — the mutation gate's truncation/scope inversion. Cheapest fix is to
+1. **#464** — the mutation gate's truncation/scope inversion. Cheapest fix is to
    report INCONCLUSIVE on a low-reach run; the repo already holds that principle
    for every other gate.
-3. **The `session_handoff.py` production probe**, which has never worked and is
-   the mechanism rule 18's `build_sha` check was supposed to automate.
+2. **#467** — the `session_handoff.py` production probe, which has never
+   worked and is the mechanism rule 18's `build_sha` check was supposed to
+   automate.
+3. **#469** — the citation gate's remaining prefix-truncation class. A lookahead
+   was tried and reverted in #468: it turns a loud misnamed failure into a silent
+   one. Add the colliding extensions instead.
 4. **#459** — the posture watchdog's real cadence is 2–6h against a declared 30
    minutes. Not a tighter cron; either correct the claim or move off `schedule`.
 5. **#465** — triage the 35 `_tavily_search` survivors: equivalent vs uncovered.
