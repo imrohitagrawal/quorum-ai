@@ -521,7 +521,17 @@ class Settings(BaseSettings):
     #: ``COST_WEB_SEARCH_REQUEST_FEE_USD`` appears in no deploy config and no
     #: workflow — only in ``.env.example`` and here. Changing this default
     #: therefore changes production, local and CI together.
-    cost_web_search_request_fee_usd: float = 0.0
+    #: DEBT-015: constrained, because a bad value here is NOT uniformly
+    #: fail-safe. A small negative fee keeps a receipt labelled ``measured``
+    #: while UNDER-reporting it into the money ledger (measured: ``-0.0001``
+    #: on the shipped four-slot mix served $0.0191 against a correct $0.0195),
+    #: and ``_actual_cost``'s catch-all swallows the cause, so there is no log
+    #: line. ``ge=0`` not ``gt=0`` -- ``0.0`` is the shipped default and means
+    #: "no fee", so zero stays legal. ``allow_inf_nan=False`` closes the same
+    #: hole as the sibling field above: ``float("inf") >= 0`` is ``True``, so a
+    #: bound alone does not exclude it, and every comparison against ``nan`` is
+    #: ``False`` so a bound cannot reject it at all.
+    cost_web_search_request_fee_usd: float = Field(default=0.0, ge=0, allow_inf_nan=False)
     #: Output-token floor for a single initial answer.
     cost_initial_output_tokens: int = 700
     #: How much each initial answer lengthens per token of query (longer,
