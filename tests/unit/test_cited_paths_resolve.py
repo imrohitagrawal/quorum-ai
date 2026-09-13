@@ -72,8 +72,14 @@ ROOT = Path(__file__).resolve().parents[2]
 #: A repo-relative path with a known source extension. Anchored on the leading
 #: directory so ordinary prose ("src/ layout", "the tests directory") is not a
 #: candidate, and a trailing extension so bare directory names are skipped.
+#: `jsonl` MUST precede `json` in the alternation. Python's `|` takes the first
+#: branch that matches, not the longest, and there is no boundary after the
+#: group -- so with `json` first, a cited `.jsonl` path matched only its `.json`
+#: prefix and the gate then reported a file nobody had cited as missing. Ordering
+#: it first makes `.jsonl` citations CHECKED rather than mis-reported; a broken
+#: `.jsonl` path is still caught, which it could not be before.
 _CITATION = re.compile(
-    r"\b((?:docs|src|tests|scripts|e2e|profiles)/[\w./-]+\.(?:md|py|ts|mjs|yml|yaml|json|css|html))"
+    r"\b((?:docs|src|tests|scripts|e2e|profiles)/[\w./-]+\.(?:md|py|ts|mjs|yml|yaml|jsonl|json|css|html))"
 )
 
 #: Only prose-bearing files. A path inside real code is already checked by the
@@ -275,6 +281,32 @@ def test_the_extractor_finds_a_citation_and_ignores_ordinary_prose() -> None:
 
     # Directory mentions and bare words must not be treated as citations.
     assert _CITATION.findall("the src/ layout and the tests directory") == []
+
+
+def test_a_jsonl_citation_is_extracted_whole_and_still_checked() -> None:
+    """BOTH directions of the `jsonl`-before-`json` ordering.
+
+    RED IF: `jsonl` is removed from the alternation, or moved after `json` --
+    either way a cited `.jsonl` path is truncated to a `.json` path that was
+    never written, and the gate reports a phantom broken citation while a
+    genuinely broken `.jsonl` path goes unnoticed.
+    """
+    # Direction 1: the false positive is gone. A real `.jsonl` file in the repo
+    # is extracted with its full extension, so it resolves.
+    real = "docs/analysis/2026-09-10-telemetry-tokens.jsonl"
+    assert (ROOT / real).exists(), "precondition: this fixture path is a real file"
+    assert _CITATION.findall(f"read {real} for the judge rows") == [real]
+
+    # Direction 2: the genuine case the check must still catch IS still caught.
+    # A broken `.jsonl` citation extracts whole, so the caller can see it is
+    # missing -- before this ordering it extracted as `.json` and the gate
+    # complained about the wrong path.
+    broken = "docs/analysis/no-such-telemetry.jsonl"
+    assert not (ROOT / broken).exists(), "precondition: this path must not exist"
+    assert _CITATION.findall(f"read {broken} for nothing") == [broken]
+
+    # And plain `.json` is unaffected by putting `jsonl` first.
+    assert _CITATION.findall("see docs/a.json here") == ["docs/a.json"]
 
 
 def test_a_path_relative_to_a_known_working_directory_resolves() -> None:
