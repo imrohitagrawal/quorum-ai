@@ -114,6 +114,7 @@ ways, so the record shows what was believed on a date and what replaced it.
 | [ADR-0108](adr/0108-round-two-is-announced-when-it-starts.md) | Round 2 is announced when it starts, not when it has finished | Architecture | Accepted — 2026-09-09 |
 | [ADR-0109](adr/0109-the-trust-number-says-what-it-measured.md) | The trust number says what it measured | Architecture | Accepted — 2026-09-09 |
 | [ADR-0110](adr/0110-the-measured-receipt-can-carry-a-flat-per-request-fee.md) | The measured receipt can carry a flat per-request fee, keyed on the wire | Architecture | Accepted — 2026-09-12 |
+| [ADR-0111](adr/0111-a-lapsed-live-window-is-a-one-edit-revert.md) | A lapsed live-execution window is a one-edit revert, not a refusal | Architecture | Accepted — 2026-09-12 |
 | [ADR-0112](adr/0112-a-failed-slot-records-whether-it-could-have-been-billed.md) | A failed slot records whether it could have been billed | Architecture | Accepted — 2026-09-12 |
 
 **This index was itself stale** until 2026-07-30: ADR-0002 had existed since
