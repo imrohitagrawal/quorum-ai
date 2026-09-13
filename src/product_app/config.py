@@ -460,7 +460,19 @@ class Settings(BaseSettings):
     #: search enabled; search-disabled slots omit it. Tunable via
     #: ``COST_WEB_SEARCH_REQUEST_FEE_USD``.
     #:
-    #: THE REAL PRICE IS $0.007, MEASURED. The owner's OpenRouter activity
+    #: THE REAL PRICE IS $0.0014 PER SEARCH RESULT, and $0.007 is ``5 x 0.0014``
+    #: at OpenRouter's DEFAULT result count -- which this module never sets (no
+    #: ``max_results``, no ``plugins``, no ``web_search_options`` anywhere in
+    #: ``src/``). Measured 2026-09-14 via ``GET /api/v1/generation`` on all 8
+    #: charged generations: 5 results each, engine ``exa``, one distinct rate
+    #: across four vendors. Write the pin as the arithmetic, not as an opaque
+    #: 0.007, because the number that can move underneath us is the RESULT COUNT
+    #: and a rise in it is the UNSAFE direction for a ceiling keyed on the
+    #: estimate. Evidence:
+    #: docs/analysis/2026-09-14-openrouter-generation-metadata.jsonl, gated by
+    #: tests/test_doc_gate_consistency.py Part D4. See DEBT-014.
+    #:
+    #: THE REAL PRICE IS $0.007 PER SEARCHING SLOT, MEASURED. The owner's OpenRouter activity
     #: export for 2026-09-10 (docs/analysis/2026-09-10-openrouter-activity.csv)
     #: has 27 generation rows; exactly 8 carry a ``cost_web_search`` and every
     #: one of them is exactly ``0.007``, in two batches of four — one per answer

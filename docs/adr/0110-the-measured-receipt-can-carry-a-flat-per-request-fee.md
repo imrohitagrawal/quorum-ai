@@ -41,6 +41,25 @@ Three further facts, each measured rather than assumed:
 - **The fee is $0.007 flat, on exactly the four initial-answer calls per run.**
   Of the 27 ledger rows, **8** carry a non-empty `cost_web_search`, every one of
   them exactly `0.007`, falling in two batches of four — one per answer model.
+
+  **MECHANISM CORRECTED 2026-09-14, and the decision below is unaffected.** The
+  word "flat" is true of what we are charged but false of WHY. DEBT-014's
+  unperformed check has since been performed — `GET /api/v1/generation`, with the
+  owner's key, on all 8 of those generations. The endpoint carries no web-search
+  cost field, but it carries `num_search_results` and `web_search_engine`:
+  every one of the 8 used **5 results** on engine **`exa`**, so the rate is
+  **$0.0014 per search result** and $0.007 is `5 x $0.0014`. Identical across
+  four vendors, which is also what refutes any per-model reading of the fee.
+
+  The flatness is therefore a coincidence of OpenRouter's DEFAULT result count,
+  which this repo never sets (no `max_results`, no `plugins`, no
+  `web_search_options` in `src/`). The design below — a flat term added once per
+  SEARCHING slot — remains exactly right for our configuration, because our
+  configuration does not vary. What changes is the staleness risk: it lives in
+  the result COUNT as much as in the price, and a rise in the default is the
+  UNSAFE direction for a ceiling keyed on the estimate. Evidence:
+  `docs/analysis/2026-09-14-openrouter-generation-metadata.jsonl`, gated by
+  `tests/test_doc_gate_consistency.py` Part D4.
   The other **19** generations — the twelve debate critiques across the three
   rounds the two runs ran between them, the five synthesis sections, and the two
   judge calls — carry **none**. This matches the code: debate, synthesis and

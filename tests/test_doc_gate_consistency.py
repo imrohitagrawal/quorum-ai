@@ -2697,3 +2697,149 @@ def test_no_covered_doc_names_a_non_default_model_anywhere() -> None:
         f"_DEFAULT_SLOT_SPEC_DOCS with a stated reason rather than loosening "
         f"this check."
     )
+
+
+# ---------------------------------------------------------------------------
+# Part D4 — a PROVIDER price, pinned against the provider's own metadata
+# (#105 / DEBT-014 session, 2026-09-14).
+#
+# The `:online` web-search fee sat in the register as "$0.007 flat", measured
+# from 8 rows of one OpenRouter export. DEBT-014 recorded the residual risk as
+# "OpenRouter can change it without notice and no gate would notice", and said
+# the alternative was UNVERIFIED because `GET /api/v1/generation` "appears
+# nowhere in this repo, so nobody here has measured what it returns".
+#
+# It has now been measured, with the owner's key, on all 8 charged generations.
+# The endpoint carries NO web-search cost field — but it carries
+# `num_search_results` and `web_search_engine`, and those turn $0.007 from an
+# opaque constant into arithmetic: 5 results x $0.0014. The per-result rate is
+# the real price; the "flat" appearance is a coincidence of OpenRouter's DEFAULT
+# result count, which this repo never sets.
+#
+# That is what makes it gate-able offline, and why it belongs in Part D rather
+# than staying prose: the derivation now lives in two committed files, so the
+# rate is a number DERIVABLE FROM THE TREE. Before the metadata was committed it
+# was not, which is exactly why DEBT-014 could only hedge.
+#
+# What this catches: a new evidence row at a different rate, or an edit to the
+# rate in the register, without the other moving. What it deliberately does NOT
+# do is assert the config DEFAULT equals the rate — the fee ships at `0.0`
+# pending a product-owner decision, so pinning that would pin the wrong thing
+# and would red the moment the decision is taken.
+# ---------------------------------------------------------------------------
+
+GENERATION_METADATA = (
+    REPO_ROOT / "docs" / "analysis" / "2026-09-14-openrouter-generation-metadata.jsonl"
+)
+ACTIVITY_EXPORT = REPO_ROOT / "docs" / "analysis" / "2026-09-10-openrouter-activity.csv"
+
+#: The per-result rate the register states, as a STRING, so the test compares
+#: the doc's own characters rather than a float it rounded itself.
+DOCUMENTED_PER_RESULT_RATE = "0.0014"
+
+
+def _generation_metadata_rows() -> list[dict[str, object]]:
+    import json
+
+    text = GENERATION_METADATA.read_text(encoding="utf-8")
+    return [json.loads(line) for line in text.splitlines() if line.strip()]
+
+
+def test_the_committed_generation_metadata_is_not_empty() -> None:
+    """The positive partner for every derivation below.
+
+    Each assertion after this one is a "no row disagrees" check, which is
+    trivially true over an empty file. This is the floor that refuses that.
+
+    RED IF: the metadata file is deleted, emptied, or loses its search fields.
+    """
+    rows = _generation_metadata_rows()
+    assert len(rows) == 8, f"expected the 8 charged generations, got {len(rows)}"
+    for row in rows:
+        assert row["num_search_results"], f"row {row['id']} has no search-result count"
+        assert row["cost_web_search_from_export"], f"row {row['id']} has no export fee"
+
+
+def test_the_web_search_fee_is_one_rate_per_search_result() -> None:
+    """$0.007 is not a flat fee: it is 5 results x $0.0014, and the 5 is an
+    UPSTREAM DEFAULT this repo never sets.
+
+    That distinction is the whole finding. A flat fee is stable against provider
+    configuration; a per-result rate is not, so the staleness risk DEBT-014
+    describes lives in the result COUNT, not only in the price.
+
+    RED IF: a generation is added whose fee divided by its result count differs
+    from the others -- which is what an upstream change to either the rate or the
+    default result count would look like.
+    """
+    from decimal import Decimal
+
+    rows = _generation_metadata_rows()
+    rates = {
+        Decimal(str(row["cost_web_search_from_export"])) / Decimal(str(row["num_search_results"]))
+        for row in rows
+    }
+    assert len(rates) == 1, f"expected one per-result rate across all rows, got {rates}"
+    assert rates.pop() == Decimal(DOCUMENTED_PER_RESULT_RATE), (
+        "the per-result rate derived from the committed metadata no longer equals "
+        f"the {DOCUMENTED_PER_RESULT_RATE} the register states"
+    )
+
+
+def test_the_register_states_the_per_result_rate_the_metadata_derives() -> None:
+    """Ties the PROSE to the DATA, which is the only reason this is a gate.
+
+    Without this, the register could say any rate at all while the evidence
+    beside it says another -- the exact drift Part D exists for.
+
+    RED IF: DEBT-014's row stops naming the derived per-result rate.
+    """
+    register = (REPO_ROOT / "docs" / "63-technical-debt-register.md").read_text(encoding="utf-8")
+    debt_014 = [ln for ln in register.splitlines() if ln.startswith("| DEBT-014 ")]
+    assert len(debt_014) == 1, f"expected exactly one DEBT-014 row, got {len(debt_014)}"
+    assert DOCUMENTED_PER_RESULT_RATE in debt_014[0], (
+        f"DEBT-014's row does not state the {DOCUMENTED_PER_RESULT_RATE} per-result "
+        "rate that the committed generation metadata derives"
+    )
+
+
+def test_every_measured_generation_used_the_same_search_engine() -> None:
+    """A second provider-configuration variable, pinned for the same reason.
+
+    The fee is charged by whatever engine OpenRouter routes to. All 8 charged
+    generations used ``exa``; a different engine is a plausible route to a
+    different rate, so a change here should be visible rather than silent.
+
+    RED IF: a generation is added that used a different search engine.
+    """
+    engines = {row["web_search_engine"] for row in _generation_metadata_rows()}
+    assert engines == {"exa"}, f"expected only 'exa', got {engines}"
+
+
+def test_the_generation_metadata_carries_no_account_identifiers() -> None:
+    """The endpoint returns routing and account fields. They are not in here, and
+    this refuses to let them be added later.
+
+    The response also carries ``app_id``, ``workspace_id``, ``session_id``,
+    ``request_id``, ``external_user``, ``http_referer``, ``user_agent``,
+    ``origin`` and ``upstream_id``. None is needed to derive a price, and a
+    committed file is public forever.
+
+    RED IF: a future refresh of this evidence dumps the raw response instead of
+    the whitelisted fields.
+    """
+    forbidden = {
+        "app_id",
+        "workspace_id",
+        "session_id",
+        "request_id",
+        "external_user",
+        "http_referer",
+        "user_agent",
+        "origin",
+        "upstream_id",
+        "preset_id",
+    }
+    for row in _generation_metadata_rows():
+        leaked = forbidden & set(row)
+        assert not leaked, f"row {row['id']} carries account identifiers: {leaked}"
