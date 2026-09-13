@@ -521,7 +521,31 @@ class Settings(BaseSettings):
     #: ``COST_WEB_SEARCH_REQUEST_FEE_USD`` appears in no deploy config and no
     #: workflow — only in ``.env.example`` and here. Changing this default
     #: therefore changes production, local and CI together.
-    cost_web_search_request_fee_usd: float = 0.0
+    #: DEBT-015: constrained, because a bad value here is NOT uniformly
+    #: fail-safe. A small NEGATIVE fee keeps a receipt labelled ``measured``
+    #: while UNDER-reporting it, by exactly ``slots x fee`` -- four searching
+    #: slots on the shipped mix under-report by ``4 x fee`` -- and that figure
+    #: reaches the money ledger via ``_log_estimate_accuracy`` ->
+    #: ``reconcile_run_charge`` -> ``reconcile_charge_for_run``. Worse, it is
+    #: silent on BOTH rails at small magnitudes: ``estimate()`` does not raise
+    #: at ``-0.0001``, so the run begins, and ``_actual_cost``'s catch-all
+    #: swallows the cause when a larger magnitude does trip it. See DEBT-015 in
+    #: docs/63-technical-debt-register.md for the measured dollar figures, which
+    #: depend on the token counts and so are not one pair.
+    #:
+    #: ``ge=0`` not ``gt=0`` -- ``0.0`` is the shipped default and means "no
+    #: fee", so zero stays legal; ``gt=0`` makes the default itself invalid and
+    #: the app fails at import.
+    #:
+    #: ``allow_inf_nan=False`` is load-bearing for ``+inf`` ALONE, and only that.
+    #: ``float("inf") >= 0`` is ``True``, so the bound admits it. The bound
+    #: DOES reject ``nan`` and ``-inf`` on its own -- pydantic evaluates ``ge``
+    #: as "refuse unless ``x >= 0``", and ``nan >= 0`` is ``False``, so the
+    #: comparison failing is precisely why ``nan`` is refused. An earlier
+    #: revision of this comment claimed the opposite ("a bound cannot reject it
+    #: at all"); that inverted the consequence and was refuted by dropping
+    #: ``allow_inf_nan=False`` and watching only the ``inf`` case go red.
+    cost_web_search_request_fee_usd: float = Field(default=0.0, ge=0, allow_inf_nan=False)
     #: Output-token floor for a single initial answer.
     cost_initial_output_tokens: int = 700
     #: How much each initial answer lengthens per token of query (longer,
