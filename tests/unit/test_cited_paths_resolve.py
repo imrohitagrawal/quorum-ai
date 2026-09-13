@@ -72,14 +72,24 @@ ROOT = Path(__file__).resolve().parents[2]
 #: A repo-relative path with a known source extension. Anchored on the leading
 #: directory so ordinary prose ("src/ layout", "the tests directory") is not a
 #: candidate, and a trailing extension so bare directory names are skipped.
-#: `jsonl` MUST precede `json` in the alternation. Python's `|` takes the first
-#: branch that matches, not the longest, and there is no boundary after the
-#: group -- so with `json` first, a cited `.jsonl` path matched only its `.json`
-#: prefix and the gate then reported a file nobody had cited as missing. Ordering
-#: it first makes `.jsonl` citations CHECKED rather than mis-reported; a broken
-#: `.jsonl` path is still caught, which it could not be before.
+#: Two defects in one alternation, and the second is the general form of the
+#: first. Python's `|` takes the FIRST branch that matches, not the longest, and
+#: there was no boundary after the group -- so a listed extension that is a
+#: PREFIX of the cited one truncated the match, and the gate then reported a path
+#: nobody had written. `.jsonl` matched as `.json`; `.tsx` and `.mdx` would match
+#: as `.ts` and `.md`.
+#:
+#: Both parts are needed and they do different jobs. `jsonl` in the list makes
+#: `.jsonl` citations CHECKED (a broken one is now caught; before, it could not
+#: be, because it was rewritten into a different path first). The trailing
+#: `(?![\w])` makes truncation IMPOSSIBLE for any extension, listed or not: an
+#: unlisted long extension now falls out of scope, exactly as `.csv` and `.txt`
+#: already do, instead of being mis-reported as a shorter one. No `.tsx`, `.mdx`
+#: or `.pyi` file is tracked today (`git ls-files "*.tsx"` -> 0), so that half is
+#: prevention, not a live fix.
 _CITATION = re.compile(
-    r"\b((?:docs|src|tests|scripts|e2e|profiles)/[\w./-]+\.(?:md|py|ts|mjs|yml|yaml|jsonl|json|css|html))"
+    r"\b((?:docs|src|tests|scripts|e2e|profiles)/[\w./-]+"
+    r"\.(?:md|py|ts|mjs|yml|yaml|jsonl|json|css|html)(?![\w]))"
 )
 
 #: Only prose-bearing files. A path inside real code is already checked by the
@@ -307,6 +317,31 @@ def test_a_jsonl_citation_is_extracted_whole_and_still_checked() -> None:
 
     # And plain `.json` is unaffected by putting `jsonl` first.
     assert _CITATION.findall("see docs/a.json here") == ["docs/a.json"]
+
+
+def test_no_listed_extension_can_truncate_a_longer_one() -> None:
+    """The general form of the `.jsonl` defect, prevented rather than patched.
+
+    RED IF: the trailing `(?![\\w])` is dropped from the extension group -- then a
+    cited `.tsx` or `.mdx` path is reported as a `.ts` or `.md` path that was
+    never written, which is the same phantom-citation failure `.jsonl` produced.
+
+    These extensions are not tracked in this repo today (`git ls-files "*.tsx"`
+    -> 0), so this is prevention. It is asserted on the extractor directly rather
+    than through the repo scan, which would have nothing to find.
+    """
+    # A longer extension is OUT OF SCOPE -- not silently rewritten to a shorter
+    # one. Out of scope is correct and honest here: `.csv` and `.txt` citations
+    # are already unchecked, and a phantom path is strictly worse than a skip.
+    assert _CITATION.findall("see e2e/tests/x.tsx here") == []
+    assert _CITATION.findall("see docs/x.mdx here") == []
+    assert _CITATION.findall("see src/x.pyi here") == []
+
+    # The positive partner, so this cannot pass by matching nothing at all:
+    # the exact-length extensions still match.
+    assert _CITATION.findall("see e2e/tests/x.ts here") == ["e2e/tests/x.ts"]
+    assert _CITATION.findall("see docs/x.md here") == ["docs/x.md"]
+    assert _CITATION.findall("see src/x.py here") == ["src/x.py"]
 
 
 def test_a_path_relative_to_a_known_working_directory_resolves() -> None:
