@@ -49,7 +49,7 @@ the false claim and the tree contradicts it.
 ```bash
 git log -1 --format=%B 9bc71f0 | sed -n '3,4p'   # the false claim, still in history
 git show 5d56a37:docs/19-change-control-log.md | grep -o '| CHG-007 | .\{0,50\}'  # now PROPOSAL
-git show 5d56a37:docs/adr/0113-the-online-search-fee-is-priced.md | sed -n '5p'     # now PROPOSED
+git show 5d56a37 --stat | grep 0113   # ADR-0113 exists ONLY on that branch, not on main
 grep -o 'Pending product-owner decision[^|]*' docs/19-change-control-log.md   # what main records
 grep -o '| W24 |.\{0,120\}' docs/65-open-work.md                              # PENDING
 ```
