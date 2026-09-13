@@ -2,13 +2,19 @@
 
 ## Status
 
-Accepted — 2026-09-13. Product-owner decision, recorded as CHG-007.
+PROPOSED — 2026-09-13. **The product-owner decision has NOT been taken.**
+An earlier revision of this file said "Accepted ... Product-owner decision".
+That was false: the instruction in that session was to HOLD defect A. `main`
+records the truth — `grep -o 'Pending product-owner decision[^|]*'
+docs/19-change-control-log.md` — and W24 in `docs/65-open-work.md` is PENDING.
+This branch must not be merged until the product owner decides.
 
 **Authorises nothing.** No `**Authorises:**` line; it may not be cited to sanction
 a live-execution posture or a paid run.
 
-**Supersedes AC-037 and CHG-005.** ADR-0110 shipped the mechanism dormant and
-refused to take this decision; this is the decision.
+**Would supersede AC-037 and CHG-005** if accepted. ADR-0110 shipped the
+mechanism dormant and reserved this decision to the product owner; this ADR
+PROPOSES it and does not take it.
 
 ## Context
 

@@ -469,7 +469,12 @@ class Settings(BaseSettings):
     #: came from OpenRouter's docs, not from a bill, and is roughly 3x the
     #: charge actually levied. Do not reinstate it.
     #:
-    #: ACTIVATED 2026-09-13 at the MEASURED $0.007 (issue #105 defect A, CHG-007,
+    #: PROPOSED (NOT APPROVED) at the MEASURED $0.007 on this unmerged branch
+    #: (issue #105 defect A, CHG-007, ADR-0113 — both PROPOSED). The
+    #: product-owner decision this change requires has NOT been taken; see
+    #: CHG-006 and ADR-0110, which reserve it to them. DO NOT MERGE on the
+    #: strength of this comment. Superseded wording here claimed activation
+    #: was decided on 2026-09-13; it was not (issue #105 defect A,
     #: ADR-0113). The value is dated deliberately: it is a PROVIDER price, read
     #: from the owner's OpenRouter activity export for 2026-09-10, not from our
     #: own arithmetic, and nothing in this repo detects it going stale
@@ -484,7 +489,8 @@ class Settings(BaseSettings):
     #: approved at an estimate of $0.076 while its measured TOKEN cost alone
     #: was $0.0938 — the estimate ran BELOW, on the 2026-07-17 comparison's own
     #: token-for-token terms. (Including the fee the true charge was $0.121763.)
-    #: The product owner took that decision on 2026-09-13 and activated the fee.
+    #: The product owner has NOT yet taken that decision; this branch only
+    #: proposes it.
     #: The deciding argument: `0.0` is CERTAINLY wrong and `0.007` is MEASURED,
     #: so preferring `0.0` to avoid staleness risk had it backwards — and the
     #: error sat in the unsafe direction, under-charging a safety ceiling.

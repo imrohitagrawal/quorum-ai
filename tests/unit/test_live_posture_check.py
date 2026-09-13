@@ -3057,9 +3057,10 @@ def test_only_the_three_genuinely_revoked_adrs_in_this_tree_are_refused(
         status = _re.search(r"^## Status\s*\n+([^\n]+)", path.read_text(encoding="utf-8"), _re.M)
         if status and not posture._adr_status_is_live(status.group(1)):
             refused.append(path.name.split("-")[0])
-    assert sorted(refused) == ["0001", "0014", "0060"], (
-        f"expected exactly ADR-0001 (Superseded), ADR-0014 (Proposed) and "
-        f"ADR-0060 (Reverted) to be refused; got {sorted(refused)}"
+    assert sorted(refused) == ["0001", "0014", "0060", "0113"], (
+        f"expected exactly ADR-0001 (Superseded), ADR-0014 (Proposed), "
+        f"ADR-0060 (Reverted) and ADR-0113 (PROPOSED) to be refused; "
+        f"got {sorted(refused)}"
     )
 
 
