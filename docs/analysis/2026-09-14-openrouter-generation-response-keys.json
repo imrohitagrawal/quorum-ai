@@ -1,0 +1,327 @@
+{
+  "what": "The KEY LIST of OpenRouter's per-generation metadata response, with no values. Positive partner for DEBT-014's claim that the response carries no web-search cost field: the whitelisted rows in 2026-09-14-openrouter-generation-metadata.jsonl cannot evidence absence, this can.",
+  "endpoint": "GET https://openrouter.ai/api/v1/generation?id=<generation id>  (authenticated; free -- it is metadata, not a completion)",
+  "measured_on": "2026-09-14",
+  "responses": 8,
+  "generation_ids": [
+    "gen-1789020954-8vlNQwtrMMuHgY3uOSxI",
+    "gen-1789020954-Ao8spWoC42zsCbDfPWDt",
+    "gen-1789020954-PzgzHeojXF1K7HQ3kPxA",
+    "gen-1789020954-gAh0JtFQ4O0YhLCmStzO",
+    "gen-1789021308-79je7vXCXyi5uQcjo3oW",
+    "gen-1789021308-TSxUCNrsS1N7leY70BhW",
+    "gen-1789021308-xRX97dzMLNdsOZFBVe2T",
+    "gen-1789021308-zP5rYtLhdDKOr4BTKOId"
+  ],
+  "envelope": "each response is {\"data\": {...}}; the keys below are paths under `data`, `[]` marks a list element",
+  "keys": {
+    "api_type": {
+      "present_in": 8,
+      "json_types": [
+        "str"
+      ]
+    },
+    "app_id": {
+      "present_in": 8,
+      "json_types": [
+        "int"
+      ]
+    },
+    "cache_discount": {
+      "present_in": 8,
+      "json_types": [
+        "null"
+      ]
+    },
+    "cancelled": {
+      "present_in": 8,
+      "json_types": [
+        "bool"
+      ]
+    },
+    "created_at": {
+      "present_in": 8,
+      "json_types": [
+        "str"
+      ]
+    },
+    "data_region": {
+      "present_in": 8,
+      "json_types": [
+        "str"
+      ]
+    },
+    "external_user": {
+      "present_in": 8,
+      "json_types": [
+        "null"
+      ]
+    },
+    "finish_reason": {
+      "present_in": 8,
+      "json_types": [
+        "str"
+      ]
+    },
+    "generation_time": {
+      "present_in": 8,
+      "json_types": [
+        "int"
+      ]
+    },
+    "http_referer": {
+      "present_in": 8,
+      "json_types": [
+        "null"
+      ]
+    },
+    "id": {
+      "present_in": 8,
+      "json_types": [
+        "str"
+      ]
+    },
+    "is_byok": {
+      "present_in": 8,
+      "json_types": [
+        "bool"
+      ]
+    },
+    "latency": {
+      "present_in": 8,
+      "json_types": [
+        "int"
+      ]
+    },
+    "model": {
+      "present_in": 8,
+      "json_types": [
+        "str"
+      ]
+    },
+    "moderation_latency": {
+      "present_in": 8,
+      "json_types": [
+        "null"
+      ]
+    },
+    "native_finish_reason": {
+      "present_in": 8,
+      "json_types": [
+        "str"
+      ]
+    },
+    "native_tokens_cached": {
+      "present_in": 8,
+      "json_types": [
+        "int"
+      ]
+    },
+    "native_tokens_completion": {
+      "present_in": 8,
+      "json_types": [
+        "int"
+      ]
+    },
+    "native_tokens_completion_images": {
+      "present_in": 8,
+      "json_types": [
+        "int",
+        "null"
+      ]
+    },
+    "native_tokens_prompt": {
+      "present_in": 8,
+      "json_types": [
+        "int"
+      ]
+    },
+    "native_tokens_reasoning": {
+      "present_in": 8,
+      "json_types": [
+        "int"
+      ]
+    },
+    "num_fetches": {
+      "present_in": 8,
+      "json_types": [
+        "null"
+      ]
+    },
+    "num_input_audio_prompt": {
+      "present_in": 8,
+      "json_types": [
+        "null"
+      ]
+    },
+    "num_media_completion": {
+      "present_in": 8,
+      "json_types": [
+        "int"
+      ]
+    },
+    "num_media_prompt": {
+      "present_in": 8,
+      "json_types": [
+        "null"
+      ]
+    },
+    "num_search_results": {
+      "present_in": 8,
+      "json_types": [
+        "int"
+      ]
+    },
+    "origin": {
+      "present_in": 8,
+      "json_types": [
+        "str"
+      ]
+    },
+    "preset_id": {
+      "present_in": 8,
+      "json_types": [
+        "null"
+      ]
+    },
+    "provider_name": {
+      "present_in": 8,
+      "json_types": [
+        "str"
+      ]
+    },
+    "provider_responses[].endpoint_id": {
+      "present_in": 8,
+      "json_types": [
+        "str"
+      ]
+    },
+    "provider_responses[].id": {
+      "present_in": 8,
+      "json_types": [
+        "str"
+      ]
+    },
+    "provider_responses[].is_byok": {
+      "present_in": 8,
+      "json_types": [
+        "bool"
+      ]
+    },
+    "provider_responses[].latency": {
+      "present_in": 8,
+      "json_types": [
+        "int"
+      ]
+    },
+    "provider_responses[].model_permaslug": {
+      "present_in": 8,
+      "json_types": [
+        "str"
+      ]
+    },
+    "provider_responses[].provider_name": {
+      "present_in": 8,
+      "json_types": [
+        "str"
+      ]
+    },
+    "provider_responses[].status": {
+      "present_in": 8,
+      "json_types": [
+        "int"
+      ]
+    },
+    "request_id": {
+      "present_in": 8,
+      "json_types": [
+        "str"
+      ]
+    },
+    "response_cache_source_id": {
+      "present_in": 8,
+      "json_types": [
+        "null"
+      ]
+    },
+    "router": {
+      "present_in": 8,
+      "json_types": [
+        "null"
+      ]
+    },
+    "service_tier": {
+      "present_in": 8,
+      "json_types": [
+        "null",
+        "str"
+      ]
+    },
+    "session_id": {
+      "present_in": 8,
+      "json_types": [
+        "null"
+      ]
+    },
+    "streamed": {
+      "present_in": 8,
+      "json_types": [
+        "bool"
+      ]
+    },
+    "tokens_completion": {
+      "present_in": 8,
+      "json_types": [
+        "int"
+      ]
+    },
+    "tokens_prompt": {
+      "present_in": 8,
+      "json_types": [
+        "int"
+      ]
+    },
+    "total_cost": {
+      "present_in": 8,
+      "json_types": [
+        "float"
+      ]
+    },
+    "upstream_id": {
+      "present_in": 8,
+      "json_types": [
+        "str"
+      ]
+    },
+    "upstream_inference_cost": {
+      "present_in": 8,
+      "json_types": [
+        "int"
+      ]
+    },
+    "usage": {
+      "present_in": 8,
+      "json_types": [
+        "float"
+      ]
+    },
+    "user_agent": {
+      "present_in": 8,
+      "json_types": [
+        "str"
+      ]
+    },
+    "web_search_engine": {
+      "present_in": 8,
+      "json_types": [
+        "str"
+      ]
+    },
+    "workspace_id": {
+      "present_in": 8,
+      "json_types": [
+        "str"
+      ]
+    }
+  }
+}

@@ -41,6 +41,46 @@ Three further facts, each measured rather than assumed:
 - **The fee is $0.007 flat, on exactly the four initial-answer calls per run.**
   Of the 27 ledger rows, **8** carry a non-empty `cost_web_search`, every one of
   them exactly `0.007`, falling in two batches of four — one per answer model.
+
+  **MEASURED AGAIN 2026-09-14, and the decision below is unaffected.** DEBT-014's
+  unperformed check has since been performed — `GET /api/v1/generation`, with
+  the owner's key, on all 8 of those generations. The response carries **no
+  web-search cost field** (its key list, values omitted, is committed at
+  `docs/analysis/2026-09-14-openrouter-generation-response-keys.json`; the
+  keys the provider documents as charges are `total_cost`, `usage` — "the
+  OpenRouter charge, matching the generation's total cost" — and
+  `upstream_inference_cost`, BYOK-only and otherwise 0 or null; none is a
+  separated web-search fee). It
+  carries `num_search_results` — **5** on every row — and `web_search_engine` —
+  **`exa`** on every row. OpenRouter's published schedule (free, unauthenticated:
+  `curl -s https://openrouter.ai/docs/llms-full.txt | grep -n "per request. This
+  includes up to"`, read 2026-09-14) prices exa's default `auto` mode at
+  **$0.007 per request, including up to 10 results**, then $0.001 per additional
+  result. So the 5 results contribute $0 and the fee is flat on our route, which
+  is what the ledger shows. Independent corroboration, on all 8 rows:
+  `total_cost` minus (native prompt tokens × `pricing.prompt` + native
+  completion tokens × `pricing.completion`) is exactly `0.007000`, with prices
+  from the free catalog (`curl -s https://openrouter.ai/api/v1/models`),
+  matching each row's `model` to the catalog's `canonical_slug` and taking the
+  non-`:batch` id because the export's `variant` column is `standard` on all 8
+  rows (three of the four model strings are catalog ids verbatim;
+  `anthropic/claude-4.5-haiku-20251001` is not, and prices as
+  `anthropic/claude-haiku-4.5`). Every `:batch` sibling gives a residual
+  between `0.0073` and `0.0107`, never `0.007000`.
+
+  **An earlier revision of this annotation (same day, withdrawn) divided the fee
+  by the result count and called the quotient a "$0.0014 per-result rate".** The
+  rows cannot distinguish a flat fee from a per-result one — every row has the
+  same count — and the schedule says flat. That framing is gone from every file
+  it reached.
+
+  Where the staleness risk actually lives: the exa **mode** (`deep` $0.012,
+  `deep-reasoning` $0.015 — 2.14× `auto`) and the **engine** (parallel basic
+  $0.005; native search is provider passthrough), plus a repricing of any of
+  them. This repo sets neither — the request body carries no `plugins` and no
+  `web_search_options` — and nothing pins them. Rows:
+  `docs/analysis/2026-09-14-openrouter-generation-metadata.jsonl`, tied to the
+  export row-for-row by `tests/test_doc_gate_consistency.py` Part D4.
   The other **19** generations — the twelve debate critiques across the three
   rounds the two runs ran between them, the five synthesis sections, and the two
   judge calls — carry **none**. This matches the code: debate, synthesis and
@@ -133,15 +173,27 @@ so the two never both land on one number.
   primitive and is deliberately linear in tokens; the flat term belongs where
   the wire outcome is known, not inside a token-pricing function used by four
   other call sites that can never carry a fee.
-- **Read the fee back from the provider response.** Rejected as **UNVERIFIED
-  rather than as undesirable.** The completion body is not known to carry a
-  per-call fee breakdown, and OpenRouter's `GET /api/v1/generation` endpoint
-  appears nowhere in this repo, so nobody here has measured what it returns.
-  AGENTS.md rule 8c is explicit that gating on an upstream's behaviour is worth
-  only as much as your measurement of it, and there is none. The check that
-  would settle it is one free authenticated `curl` to
-  `https://openrouter.ai/api/v1/generation?id=<gen-id>`; until someone runs it,
-  this alternative is unassessed, not refuted.
+- **Read the fee back from the provider response.** Rejected, and the two
+  halves of it now stand differently (2026-09-14). The **generation endpoint**
+  half is MEASURED: `GET /api/v1/generation` carries no fee field (key list
+  above), and it is keyed on a generation id, which exists only after a call
+  (the published reference queries it as `?id=<generation id>`; the status it
+  returns with no id was observed in the author's session and is not recorded
+  in the tree — UNVERIFIED here), so it cannot serve the pre-run estimate at
+  all. A pinned number is therefore unavoidable for the estimate; the fee is
+  reconciled afterwards from the activity export's `cost_web_search`. The
+  **completion response** half is still UNMEASURED. OpenRouter documents usage
+  as always included with no opt-in (`stream_options.include_usage` is
+  deprecated and has no effect, per the same free doc; ADR-0084 measured usage
+  arriving on 24 of 24 calls with it never sent), and the documented usage
+  schema carries `cost`, a `cost_details` block (`upstream_inference_cost`,
+  `upstream_inference_prompt_cost`, `upstream_inference_completions_cost`, and
+  `server_tool_cost` — "metered server-tool execution cost, billed in USD")
+  and `server_tool_use.web_search_requests` — a search COUNT. The doc does not
+  say whether an exa web-search charge lands in `server_tool_cost` or is folded
+  into `cost`. Nobody here has read a `:online` completion's usage frame for a
+  fee; AGENTS.md rule 8c applies to that half exactly as before: unassessed,
+  not refuted.
 - **Add a `ProviderPath.OPENROUTER_SEARCH_ONLINE` enum member.** Rejected: the
   enum is consumed by the UI, source attribution and the honesty gate; widening
   it to carry a billing fact would couple four surfaces to one cost concern.

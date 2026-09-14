@@ -460,7 +460,7 @@ class Settings(BaseSettings):
     #: search enabled; search-disabled slots omit it. Tunable via
     #: ``COST_WEB_SEARCH_REQUEST_FEE_USD``.
     #:
-    #: THE REAL PRICE IS $0.007, MEASURED. The owner's OpenRouter activity
+    #: THE REAL PRICE IS $0.007 PER SEARCHING CALL, MEASURED. The owner's OpenRouter activity
     #: export for 2026-09-10 (docs/analysis/2026-09-10-openrouter-activity.csv)
     #: has 27 generation rows; exactly 8 carry a ``cost_web_search`` and every
     #: one of them is exactly ``0.007``, in two batches of four — one per answer
@@ -468,6 +468,29 @@ class Settings(BaseSettings):
     #: results × 5 results = ~$0.02/request" figure this comment used to quote
     #: came from OpenRouter's docs, not from a bill, and is roughly 3x the
     #: charge actually levied. Do not reinstate it.
+    #:
+    #: WHY IT IS FLAT, AND WHAT COULD MOVE IT (measured 2026-09-14, DEBT-014).
+    #: ``GET /api/v1/generation`` was called on all 8 charged generations. The
+    #: response carries no web-search cost field (its key list, values omitted,
+    #: is docs/analysis/2026-09-14-openrouter-generation-response-keys.json),
+    #: but it carries ``num_search_results`` (5 on every row) and
+    #: ``web_search_engine`` (``exa`` on every row). OpenRouter's published
+    #: schedule prices exa's default ``auto`` mode at $0.007 PER REQUEST,
+    #: INCLUDING up to 10 results, then $0.001 per additional result — so the 5
+    #: results contribute $0 and the fee is flat on our route. An earlier
+    #: revision of this comment wrote the pin as ``5 x 0.0014``; that quotient
+    #: divides by a quantity nobody bills, and is withdrawn. What the schedule
+    #: DOES vary is the exa MODE (``deep`` $0.012, ``deep-reasoning`` $0.015)
+    #: and the ENGINE (parallel basic $0.005; native search is provider
+    #: passthrough). This module sets neither — the request body built in
+    #: providers.py carries no ``plugins`` and no ``web_search_options`` — and
+    #: nothing in the tree pins them; that is the staleness risk DEBT-014
+    #: records. Independent check, on all 8 rows: ``total_cost`` minus native
+    #: tokens x catalog price is exactly 0.007000 (free catalog, matched on
+    #: ``canonical_slug``, non-``:batch`` id — ADR-0110 names the procedure).
+    #: Rows: docs/analysis/2026-09-14-openrouter-generation-metadata.jsonl,
+    #: tied to the export row-for-row by tests/test_doc_gate_consistency.py
+    #: Part D4.
     #:
     #: DEFAULT 0.0 — still off, but no longer on its original reasoning.
     #: The 2026-07-17 decision (AC-037 in docs/12-acceptance-criteria.md,
