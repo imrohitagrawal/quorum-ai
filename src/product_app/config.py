@@ -485,8 +485,9 @@ class Settings(BaseSettings):
     #: passthrough). This module sets neither — the request body built in
     #: providers.py carries no ``plugins`` and no ``web_search_options`` — and
     #: nothing in the tree pins them; that is the staleness risk DEBT-014
-    #: records. Independent check: on every row with a live catalog price,
-    #: ``total_cost`` minus native tokens x catalog price is exactly 0.007000.
+    #: records. Independent check, on all 8 rows: ``total_cost`` minus native
+    #: tokens x catalog price is exactly 0.007000 (free catalog, matched on
+    #: ``canonical_slug``, non-``:batch`` id — ADR-0110 names the procedure).
     #: Rows: docs/analysis/2026-09-14-openrouter-generation-metadata.jsonl,
     #: tied to the export row-for-row by tests/test_doc_gate_consistency.py
     #: Part D4.

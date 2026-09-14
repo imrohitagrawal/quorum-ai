@@ -57,6 +57,7 @@ import re
 import shutil
 from collections.abc import Iterator
 from dataclasses import dataclass
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -2740,7 +2741,8 @@ def test_no_covered_doc_names_a_non_default_model_anywhere() -> None:
 # $0.015) and the ENGINE (parallel basic $0.005; native search is provider
 # passthrough). This repo sets neither: the OpenRouter request body carries
 # `model`, `messages` and `stream`, plus `max_tokens`, `response_format` and
-# `reasoning` only when given (providers.py, the `payload = {` literal) — no
+# `reasoning` only when given (providers.py, the `payload: dict[str, object] = {`
+# literal) — no
 # `plugins`, no `web_search_options`. Those two levers are the residual
 # staleness risk. Nothing in this tree pins them; the engine test below is the
 # one that would notice an engine change in a refreshed export.
@@ -2778,14 +2780,88 @@ SCHEDULE_INCLUDED_RESULTS = 10
 #: decimals — cut, not rounded: ``0.0099329`` is exported as ``0.009932``.
 _EXPORT_COST_QUANTUM = "0.000001"
 
-#: One priced-per-unit statement in prose: ``$0.007 per request``,
-#: ``0.0014 per result``, ``$0.001 per additional result``. The dollar sign is
-#: optional and a decimal point is required, so "8 per run" is not a price.
+#: One priced-per-unit statement in prose, in the "<amount> per <unit>" word
+#: order and its common spellings: ``$0.007 per request``, ``0.0014 per-result``,
+#: ``0.0014/result``, ``$0.0014 per each result``, ``$.007 per request``,
+#: ``$0.001 per additional result``. The dollar sign is optional and a decimal
+#: point is required, so "8 per run" is not a price. What it does NOT see is
+#: the reversed order — 'a "per-result rate" of $0.0014' — which is how the
+#: register's own withdrawal sentence is phrased, deliberately.
+#: ``test_the_fee_statement_parser_sees_the_spellings_the_gate_must_catch`` is
+#: the positive partner that pins this list.
 _FEE_STATEMENT = re.compile(
-    r"\$?(?P<amount>\d+\.\d+)\s+(?:flat\s+)?per\s+"
-    r"(?P<unit>(?:searching\s+|search\s+|additional\s+)?(?:request|result|call|slot))\b",
+    r"\$?(?P<amount>\d*\.\d+)\s*"
+    r"(?:(?:flat\s+)?per[\s-]+(?:each\s+)?|/)\s*"
+    r"(?P<unit>(?:searching\s+|search[\s-]+|additional\s+)?(?:request|result|call|slot))s?\b",
     re.IGNORECASE,
 )
+
+#: Every key the endpoint returned, on all 8 responses (paths under ``data``,
+#: ``[]`` marks a list element). Pinned as a WHOLE SET so that a refreshed key
+#: list gaining any key of any name goes red and its author re-affirms the
+#: absence claim — a filter on the substring "cost" would let a fee key named
+#: ``fees`` or ``plugin_charges`` through.
+EXPECTED_GENERATION_RESPONSE_KEYS = frozenset(
+    {
+        "api_type",
+        "app_id",
+        "cache_discount",
+        "cancelled",
+        "created_at",
+        "data_region",
+        "external_user",
+        "finish_reason",
+        "generation_time",
+        "http_referer",
+        "id",
+        "is_byok",
+        "latency",
+        "model",
+        "moderation_latency",
+        "native_finish_reason",
+        "native_tokens_cached",
+        "native_tokens_completion",
+        "native_tokens_completion_images",
+        "native_tokens_prompt",
+        "native_tokens_reasoning",
+        "num_fetches",
+        "num_input_audio_prompt",
+        "num_media_completion",
+        "num_media_prompt",
+        "num_search_results",
+        "origin",
+        "preset_id",
+        "provider_name",
+        "provider_responses[].endpoint_id",
+        "provider_responses[].id",
+        "provider_responses[].is_byok",
+        "provider_responses[].latency",
+        "provider_responses[].model_permaslug",
+        "provider_responses[].provider_name",
+        "provider_responses[].status",
+        "request_id",
+        "response_cache_source_id",
+        "router",
+        "service_tier",
+        "session_id",
+        "streamed",
+        "tokens_completion",
+        "tokens_prompt",
+        "total_cost",
+        "upstream_id",
+        "upstream_inference_cost",
+        "usage",
+        "user_agent",
+        "web_search_engine",
+        "workspace_id",
+    }
+)
+
+#: The keys the provider documents as charges (``llms-full.txt``, the
+#: ``openrouter_generation`` metadata table: ``usage`` is "The OpenRouter
+#: charge, matching the generation's total cost"; ``upstream_inference_cost``
+#: is BYOK-only, else 0 or null). None is a separated web-search fee.
+DOCUMENTED_CHARGE_KEYS = frozenset({"total_cost", "usage", "upstream_inference_cost"})
 
 
 def _generation_metadata_rows() -> list[dict[str, object]]:
@@ -2809,11 +2885,16 @@ def _charged_export_rows() -> dict[str, dict[str, str]]:
     }
 
 
-def _generation_response_keys() -> dict[str, dict[str, object]]:
+def _generation_response_key_list() -> dict[str, object]:
     import json
 
-    body = json.loads(GENERATION_RESPONSE_KEYS.read_text(encoding="utf-8"))
-    keys: dict[str, dict[str, object]] = body["keys"]
+    body: dict[str, object] = json.loads(GENERATION_RESPONSE_KEYS.read_text(encoding="utf-8"))
+    return body
+
+
+def _generation_response_keys() -> dict[str, dict[str, object]]:
+    keys = _generation_response_key_list()["keys"]
+    assert isinstance(keys, dict), f"the key list's 'keys' is {type(keys).__name__}, not a dict"
     return keys
 
 
@@ -2822,6 +2903,18 @@ def _present_in(entry: dict[str, object]) -> int:
     value = entry["present_in"]
     assert isinstance(value, int), f"present_in is {value!r}, not an int"
     return value
+
+
+def _fee_statements(text: str) -> list[tuple[Decimal, str]]:
+    """Every "<amount> per <unit>" statement in ``text``, amount as a Decimal so
+    ``$.007`` and ``$0.007`` compare equal, unit with one space between words."""
+    return [
+        (
+            Decimal(match.group("amount")),
+            " ".join(part for part in re.split(r"[\s-]+", match.group("unit").lower()) if part),
+        )
+        for match in _FEE_STATEMENT.finditer(text)
+    ]
 
 
 def _debt_014_row() -> str:
@@ -2883,8 +2976,9 @@ def test_every_searching_generation_paid_one_flat_fee_within_the_included_result
     per-additional-result term would have started, which is the only reading
     under which "flat" is the whole story.
 
-    RED IF: a row's fee differs from the register's flat fee, or a row reports
-    more search results than the schedule includes in it.
+    RED IF: a row's fee differs from the register's flat fee, a row reports
+    more search results than the schedule includes in it, or a row's count is
+    not a non-negative integer ("up to 10" includes zero).
     """
     from decimal import Decimal
 
@@ -2895,9 +2989,13 @@ def test_every_searching_generation_paid_one_flat_fee_within_the_included_result
     )
     for row in rows:
         count = row["num_search_results"]
-        assert isinstance(count, int) and 1 <= count <= SCHEDULE_INCLUDED_RESULTS, (
-            f"{row['id']} reports {count!r} search results; the schedule's flat fee covers "
-            f"1..{SCHEDULE_INCLUDED_RESULTS}, beyond which a per-result term applies"
+        assert isinstance(count, int) and count >= 0, (
+            f"{row['id']}: num_search_results is {count!r}, not a non-negative integer"
+        )
+        assert count <= SCHEDULE_INCLUDED_RESULTS, (
+            f"{row['id']} reports {count} search results; the schedule includes up to "
+            f"{SCHEDULE_INCLUDED_RESULTS} in the flat fee, beyond which $0.001 per additional "
+            "result applies"
         )
 
 
@@ -2913,22 +3011,51 @@ def test_the_register_prices_the_fee_per_request_and_never_per_result() -> None:
     per-additional-result term.
 
     RED IF: the row prices the fee per request at anything but $0.007, states
-    any per-result rate other than "$0.001 per additional result", or stops
-    stating a per-request fee at all.
+    a per-result price in any "<amount> per <unit>" spelling the parser sees
+    other than "$0.001 per additional result", or stops stating a per-request
+    fee at all. The reversed order ('a rate of $X') is not parsed — see
+    ``_FEE_STATEMENT`` and its partner test.
     """
-    statements = [
-        (match.group("amount"), " ".join(match.group("unit").lower().split()))
-        for match in _FEE_STATEMENT.finditer(_debt_014_row())
-    ]
+    statements = _fee_statements(_debt_014_row())
     per_request = {amount for amount, unit in statements if unit.endswith("request")}
-    assert per_request == {DOCUMENTED_FLAT_FEE_USD}, (
+    assert per_request == {Decimal(DOCUMENTED_FLAT_FEE_USD)}, (
         f"DEBT-014's row prices the fee per request as {per_request or 'nothing'}; "
         f"the export shows {DOCUMENTED_FLAT_FEE_USD}"
     )
     per_result = {(amount, unit) for amount, unit in statements if unit.endswith("result")}
-    assert per_result <= {("0.001", "additional result")}, (
+    assert per_result <= {(Decimal("0.001"), "additional result")}, (
         f"DEBT-014's row states a per-result rate the evidence does not support: {per_result}"
     )
+
+
+def test_the_fee_statement_parser_sees_the_spellings_the_gate_must_catch() -> None:
+    """The positive partner for the register gate: the parser reads every
+    spelling of "<amount> per <unit>" the gate claims to catch, reads the flat
+    fee and the schedule's additional-result term as themselves, and reads
+    nothing from the numbers in the row that are not prices.
+
+    RED IF: the parser stops seeing a spelling listed here (a forged
+    per-result rate in that spelling would then pass the gate), or starts
+    seeing a price in a non-price number.
+    """
+    seen = {
+        "$0.007 per request": [(Decimal("0.007"), "request")],
+        "**$0.007 per request**": [(Decimal("0.007"), "request")],
+        "$0.007 FLAT PER REQUEST": [(Decimal("0.007"), "request")],
+        "$.007 per request": [(Decimal("0.007"), "request")],
+        "$0.001 per additional result": [(Decimal("0.001"), "additional result")],
+        "$0.0014 per result": [(Decimal("0.0014"), "result")],
+        "a $0.0014 per-result rate": [(Decimal("0.0014"), "result")],
+        "0.0014 per-result": [(Decimal("0.0014"), "result")],
+        "0.0014/result": [(Decimal("0.0014"), "result")],
+        "$0.0014 per each result": [(Decimal("0.0014"), "result")],
+        "0.0014 per results": [(Decimal("0.0014"), "result")],
+        "0.0014 per search-result": [(Decimal("0.0014"), "search result")],
+    }
+    for text, want in seen.items():
+        assert _fee_statements(text) == want, f"{text!r} parsed as {_fee_statements(text)}"
+    for text in ("8 per run", "2.14× `auto`", "is exactly 0.007000.", "cost $0.0000."):
+        assert _fee_statements(text) == [], f"{text!r} parsed as a price"
 
 
 def test_every_measured_generation_used_the_same_search_engine() -> None:
@@ -2950,23 +3077,40 @@ def test_the_endpoint_response_carries_no_web_search_cost_field() -> None:
     The committed rows are a whitelist, so by construction they cannot show
     what the response does NOT carry. The key list can: every key of every
     response is listed with how many responses carried it, values omitted. So
-    this asserts the cost-bearing keys are exactly the two totals, the only
-    web-search key is the engine name, and the whitelist names nothing the
+    this pins the key set as a WHOLE (any key of any name added on a refresh
+    goes red), checks the keys the provider documents as charges are present
+    and that none of them is a separated web-search fee (the only keys naming
+    search are the result count and the engine name), ties the key list's own
+    provenance to the rows, and checks the whitelist names nothing the
     response lacks.
 
-    RED IF: the key list is deleted or emptied, a refreshed response carries a
-    new cost or web-search key, a key is listed as present on more responses
-    than exist, or the metadata whitelists a field the response does not have.
+    RED IF: the key list is deleted or emptied, a refreshed response carries
+    any key not in EXPECTED_GENERATION_RESPONSE_KEYS (or loses one), the key
+    list's ``responses`` or ``generation_ids`` disagree with the rows, a key
+    is listed as present on more responses than exist, or the metadata
+    whitelists a field the response does not have.
     """
+    body = _generation_response_key_list()
     keys = _generation_response_keys()
     rows = _generation_metadata_rows()
     assert keys, "the response key list is empty"
+    assert set(keys) == EXPECTED_GENERATION_RESPONSE_KEYS, (
+        f"the key list changed: gained {set(keys) - EXPECTED_GENERATION_RESPONSE_KEYS}, "
+        f"lost {EXPECTED_GENERATION_RESPONSE_KEYS - set(keys)} — re-affirm the absence claim "
+        "in DEBT-014 and update the pinned set deliberately"
+    )
+    assert body["responses"] == len(rows), (
+        f"the key list says it covers {body['responses']} responses; there are {len(rows)} rows"
+    )
+    assert isinstance(body["generation_ids"], list)
+    assert set(body["generation_ids"]) == {row["id"] for row in rows}, (
+        "the key list's generation ids are not the rows' ids"
+    )
     assert all(1 <= _present_in(entry) <= len(rows) for entry in keys.values()), (
         "a key claims presence on more responses than there are rows"
     )
-    for anchor in ("total_cost", "num_search_results", "web_search_engine"):
+    for anchor in DOCUMENTED_CHARGE_KEYS | {"num_search_results", "web_search_engine"}:
         assert _present_in(keys[anchor]) == len(rows), f"{anchor} is not on every response"
-    assert {key for key in keys if "cost" in key} == {"total_cost", "upstream_inference_cost"}
     assert {key for key in keys if "search" in key} == {"num_search_results", "web_search_engine"}
     whitelisted = {field for row in rows for field in row}
     assert len({frozenset(row) for row in rows}) == 1, "rows do not share one field set"

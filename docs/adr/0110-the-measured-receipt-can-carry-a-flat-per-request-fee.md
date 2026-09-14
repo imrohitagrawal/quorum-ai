@@ -47,16 +47,24 @@ Three further facts, each measured rather than assumed:
   the owner's key, on all 8 of those generations. The response carries **no
   web-search cost field** (its key list, values omitted, is committed at
   `docs/analysis/2026-09-14-openrouter-generation-response-keys.json`; the
-  cost-bearing keys are `total_cost` and `upstream_inference_cost` only). It
+  keys the provider documents as charges are `total_cost`, `usage` — "the
+  OpenRouter charge, matching the generation's total cost" — and
+  `upstream_inference_cost`, BYOK-only and otherwise 0 or null; none is a
+  separated web-search fee). It
   carries `num_search_results` — **5** on every row — and `web_search_engine` —
   **`exa`** on every row. OpenRouter's published schedule (free, unauthenticated:
   `curl -s https://openrouter.ai/docs/llms-full.txt | grep -n "per request. This
   includes up to"`, read 2026-09-14) prices exa's default `auto` mode at
   **$0.007 per request, including up to 10 results**, then $0.001 per additional
   result. So the 5 results contribute $0 and the fee is flat on our route, which
-  is what the ledger shows. Independent corroboration, on every row with a live
-  catalog price: `total_cost` minus native tokens × catalog price is exactly
-  `0.007000`.
+  is what the ledger shows. Independent corroboration, on all 8 rows:
+  `total_cost` minus (native prompt tokens × `pricing.prompt` + native
+  completion tokens × `pricing.completion`) is exactly `0.007000`, with prices
+  from the free catalog (`curl -s https://openrouter.ai/api/v1/models`),
+  matching each row's `model` to the catalog's `canonical_slug` and taking the
+  non-`:batch` id because the export's `variant` column is `standard` on all 8
+  rows (so `anthropic/claude-4.5-haiku-20251001` prices as
+  `anthropic/claude-haiku-4.5`; its `:batch` sibling would leave `0.010579`).
 
   **An earlier revision of this annotation (same day, withdrawn) divided the fee
   by the result count and called the quotient a "$0.0014 per-result rate".** The
@@ -166,14 +174,21 @@ so the two never both land on one number.
 - **Read the fee back from the provider response.** Rejected, and the two
   halves of it now stand differently (2026-09-14). The **generation endpoint**
   half is MEASURED: `GET /api/v1/generation` carries no fee field (key list
-  above), and it needs a generation id that exists only after a call — `400`
-  without one — so it cannot serve the pre-run estimate at all. A pinned number
-  is therefore unavoidable for the estimate; the fee is reconciled afterwards
-  from the activity export's `cost_web_search`. The **completion response**
-  half is still UNMEASURED: `providers.py` deliberately does not send
-  `stream_options.include_usage` (ADR-0084), and nobody here has looked at what
-  a `:online` completion's usage frame carries. AGENTS.md rule 8c applies to
-  that half exactly as it did before: unassessed, not refuted.
+  above), and it is keyed on a generation id, which exists only after a call
+  (the published reference queries it as `?id=<generation id>`; the status it
+  returns with no id was observed in the author's session and is not recorded
+  in the tree — UNVERIFIED here), so it cannot serve the pre-run estimate at
+  all. A pinned number is therefore unavoidable for the estimate; the fee is
+  reconciled afterwards from the activity export's `cost_web_search`. The
+  **completion response** half is still UNMEASURED. OpenRouter documents usage
+  as always included with no opt-in (`stream_options.include_usage` is
+  deprecated and has no effect, per the same free doc; ADR-0084 measured usage
+  arriving on 24 of 24 calls with it never sent), and the documented usage
+  schema carries `cost`, `cost_details.upstream_inference_cost` and
+  `server_tool_use.web_search_requests` — a search COUNT — but no per-search
+  fee field. Nobody here has read a `:online` completion's usage frame for a
+  fee; AGENTS.md rule 8c applies to that half exactly as before: unassessed,
+  not refuted.
 - **Add a `ProviderPath.OPENROUTER_SEARCH_ONLINE` enum member.** Rejected: the
   enum is consumed by the UI, source attribution and the honesty gate; widening
   it to carry a billing fact would couple four surfaces to one cost concern.
