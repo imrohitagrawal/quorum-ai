@@ -63,8 +63,10 @@ Three further facts, each measured rather than assumed:
   from the free catalog (`curl -s https://openrouter.ai/api/v1/models`),
   matching each row's `model` to the catalog's `canonical_slug` and taking the
   non-`:batch` id because the export's `variant` column is `standard` on all 8
-  rows (so `anthropic/claude-4.5-haiku-20251001` prices as
-  `anthropic/claude-haiku-4.5`; its `:batch` sibling would leave `0.010579`).
+  rows (three of the four model strings are catalog ids verbatim;
+  `anthropic/claude-4.5-haiku-20251001` is not, and prices as
+  `anthropic/claude-haiku-4.5`). Every `:batch` sibling gives a residual
+  between `0.0073` and `0.0107`, never `0.007000`.
 
   **An earlier revision of this annotation (same day, withdrawn) divided the fee
   by the result count and called the quotient a "$0.0014 per-result rate".** The
@@ -184,9 +186,12 @@ so the two never both land on one number.
   as always included with no opt-in (`stream_options.include_usage` is
   deprecated and has no effect, per the same free doc; ADR-0084 measured usage
   arriving on 24 of 24 calls with it never sent), and the documented usage
-  schema carries `cost`, `cost_details.upstream_inference_cost` and
-  `server_tool_use.web_search_requests` — a search COUNT — but no per-search
-  fee field. Nobody here has read a `:online` completion's usage frame for a
+  schema carries `cost`, a `cost_details` block (`upstream_inference_cost`,
+  `upstream_inference_prompt_cost`, `upstream_inference_completions_cost`, and
+  `server_tool_cost` — "metered server-tool execution cost, billed in USD")
+  and `server_tool_use.web_search_requests` — a search COUNT. The doc does not
+  say whether an exa web-search charge lands in `server_tool_cost` or is folded
+  into `cost`. Nobody here has read a `:online` completion's usage frame for a
   fee; AGENTS.md rule 8c applies to that half exactly as before: unassessed,
   not refuted.
 - **Add a `ProviderPath.OPENROUTER_SEARCH_ONLINE` enum member.** Rejected: the

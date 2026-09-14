@@ -57,6 +57,7 @@ import re
 import shutil
 from collections.abc import Iterator
 from dataclasses import dataclass
+from datetime import date
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -2784,16 +2785,28 @@ _EXPORT_COST_QUANTUM = "0.000001"
 #: order and its common spellings: ``$0.007 per request``, ``0.0014 per-result``,
 #: ``0.0014/result``, ``$0.0014 per each result``, ``$.007 per request``,
 #: ``$0.001 per additional result``. The dollar sign is optional and a decimal
-#: point is required, so "8 per run" is not a price. What it does NOT see is
-#: the reversed order — 'a "per-result rate" of $0.0014' — which is how the
-#: register's own withdrawal sentence is phrased, deliberately.
-#: ``test_the_fee_statement_parser_sees_the_spellings_the_gate_must_catch`` is
-#: the positive partner that pins this list.
+#: point is required, so "8 per run" is not a price. A regex over prose can
+#: never enumerate every spelling; KNOWN MISSES, pinned by the partner test so
+#: the gap is visible rather than silent: the reversed order ('a "per-result
+#: rate" of $0.0014' — how the register's own withdrawal sentence is phrased,
+#: deliberately), a number word ("per one result"), and "per search" with no
+#: unit. ``test_the_fee_statement_parser_sees_the_spellings_the_gate_must_catch``
+#: pins both lists.
 _FEE_STATEMENT = re.compile(
     r"\$?(?P<amount>\d*\.\d+)\s*"
-    r"(?:(?:flat\s+)?per[\s-]+(?:each\s+)?|/)\s*"
-    r"(?P<unit>(?:searching\s+|search[\s-]+|additional\s+)?(?:request|result|call|slot))s?\b",
+    r"(?:(?:flat\s+)?per[\s-]+(?:each\s+)?|/)\s*(?:\*\*\s*)?"
+    r"(?P<unit>(?:searching\s+|search[\s-]+|additional[\s-]+)?(?:request|result|call|slot))s?\b",
     re.IGNORECASE,
+)
+
+#: The per-request rates OpenRouter's published schedule states for the
+#: engines and modes it prices per request (exa auto/instant/fast $0.007,
+#: exa deep $0.012, exa deep-reasoning $0.015, parallel turbo/fast $0.001,
+#: parallel basic/advanced and perplexity $0.005; read 2026-09-14). The
+#: register may quote any of these verbatim without tripping the gate; it may
+#: not price OUR fee at anything but the first.
+PUBLISHED_PER_REQUEST_RATES_USD = frozenset(
+    Decimal(rate) for rate in ("0.007", "0.012", "0.015", "0.001", "0.005")
 )
 
 #: Every key the endpoint returned, on all 8 responses (paths under ``data``,
@@ -2989,7 +3002,7 @@ def test_every_searching_generation_paid_one_flat_fee_within_the_included_result
     )
     for row in rows:
         count = row["num_search_results"]
-        assert isinstance(count, int) and count >= 0, (
+        assert isinstance(count, int) and not isinstance(count, bool) and count >= 0, (
             f"{row['id']}: num_search_results is {count!r}, not a non-negative integer"
         )
         assert count <= SCHEDULE_INCLUDED_RESULTS, (
@@ -3010,22 +3023,31 @@ def test_the_register_prices_the_fee_per_request_and_never_per_result() -> None:
     only amount that may be stated per result is the schedule's published
     per-additional-result term.
 
-    RED IF: the row prices the fee per request at anything but $0.007, states
-    a per-result price in any "<amount> per <unit>" spelling the parser sees
-    other than "$0.001 per additional result", or stops stating a per-request
-    fee at all. The reversed order ('a rate of $X') is not parsed — see
-    ``_FEE_STATEMENT`` and its partner test.
+    RED IF: the row stops stating $0.007 per request, states a per-request
+    amount that is not one the published schedule lists, states a per-result
+    price in any spelling the parser sees other than "$0.001 per additional
+    result", or prices anything per call or per slot. The spellings the parser
+    does NOT see are listed at ``_FEE_STATEMENT`` and pinned by its partner
+    test.
     """
     statements = _fee_statements(_debt_014_row())
     per_request = {amount for amount, unit in statements if unit.endswith("request")}
-    assert per_request == {Decimal(DOCUMENTED_FLAT_FEE_USD)}, (
-        f"DEBT-014's row prices the fee per request as {per_request or 'nothing'}; "
-        f"the export shows {DOCUMENTED_FLAT_FEE_USD}"
+    assert Decimal(DOCUMENTED_FLAT_FEE_USD) in per_request, (
+        f"DEBT-014's row no longer states {DOCUMENTED_FLAT_FEE_USD} per request; "
+        f"it states {per_request or 'nothing'}"
+    )
+    assert per_request <= PUBLISHED_PER_REQUEST_RATES_USD, (
+        f"DEBT-014's row states a per-request amount the published schedule does not list: "
+        f"{per_request - PUBLISHED_PER_REQUEST_RATES_USD}"
     )
     per_result = {(amount, unit) for amount, unit in statements if unit.endswith("result")}
     assert per_result <= {(Decimal("0.001"), "additional result")}, (
         f"DEBT-014's row states a per-result rate the evidence does not support: {per_result}"
     )
+    other = {
+        (amount, unit) for amount, unit in statements if not unit.endswith(("request", "result"))
+    }
+    assert not other, f"DEBT-014's row prices something the evidence does not support: {other}"
 
 
 def test_the_fee_statement_parser_sees_the_spellings_the_gate_must_catch() -> None:
@@ -3051,11 +3073,24 @@ def test_the_fee_statement_parser_sees_the_spellings_the_gate_must_catch() -> No
         "$0.0014 per each result": [(Decimal("0.0014"), "result")],
         "0.0014 per results": [(Decimal("0.0014"), "result")],
         "0.0014 per search-result": [(Decimal("0.0014"), "search result")],
+        "$0.0014 per **result**": [(Decimal("0.0014"), "result")],
+        "$0.0014 per additional-result": [(Decimal("0.0014"), "additional result")],
+        "$0.005/request": [(Decimal("0.005"), "request")],
+        "$0.010 per call": [(Decimal("0.010"), "call")],
     }
     for text, want in seen.items():
         assert _fee_statements(text) == want, f"{text!r} parsed as {_fee_statements(text)}"
     for text in ("8 per run", "2.14× `auto`", "is exactly 0.007000.", "cost $0.0000."):
         assert _fee_statements(text) == [], f"{text!r} parsed as a price"
+    known_misses = (
+        'a "per-result rate" of $0.0014',
+        "$0.0014 per one result",
+        "$0.0014 per search",
+    )
+    for text in known_misses:
+        assert _fee_statements(text) == [], (
+            f"{text!r} is now parsed — good; move it into `seen` and out of the known misses"
+        )
 
 
 def test_every_measured_generation_used_the_same_search_engine() -> None:
@@ -3086,8 +3121,9 @@ def test_the_endpoint_response_carries_no_web_search_cost_field() -> None:
 
     RED IF: the key list is deleted or emptied, a refreshed response carries
     any key not in EXPECTED_GENERATION_RESPONSE_KEYS (or loses one), the key
-    list's ``responses`` or ``generation_ids`` disagree with the rows, a key
-    is listed as present on more responses than exist, or the metadata
+    list's ``responses`` or ``generation_ids`` disagree with the rows (count
+    or membership), its ``measured_on`` predates the newest row, a key is
+    listed as present on more responses than exist, or the metadata
     whitelists a field the response does not have.
     """
     body = _generation_response_key_list()
@@ -3103,8 +3139,15 @@ def test_the_endpoint_response_carries_no_web_search_cost_field() -> None:
         f"the key list says it covers {body['responses']} responses; there are {len(rows)} rows"
     )
     assert isinstance(body["generation_ids"], list)
+    assert len(body["generation_ids"]) == len(rows), "the key list repeats a generation id"
     assert set(body["generation_ids"]) == {row["id"] for row in rows}, (
         "the key list's generation ids are not the rows' ids"
+    )
+    measured_on = body["measured_on"]
+    assert isinstance(measured_on, str)
+    latest_row = max(str(row["created_at"])[:10] for row in rows)
+    assert date.fromisoformat(measured_on) >= date.fromisoformat(latest_row), (
+        f"the key list says it was measured on {measured_on}, before the newest row ({latest_row})"
     )
     assert all(1 <= _present_in(entry) <= len(rows) for entry in keys.values()), (
         "a key claims presence on more responses than there are rows"
