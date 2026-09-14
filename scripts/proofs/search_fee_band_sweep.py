@@ -120,7 +120,8 @@ def main(argv: list[str] | None = None) -> int:
     print(f"fee: {OFF} -> {MEASURED_FEE}")
     print(
         f"POSTURE: peer_critique_enabled={config.settings.peer_critique_enabled} "
-        f"judge_configured={judge_configured()}"
+        f"judge_configured={judge_configured()} "
+        f"judge_model_id={config.settings.quorum_eval_judge_model_id or '(unset)'}"
     )
     print(f"PRICES:  {price_source}")
     print()

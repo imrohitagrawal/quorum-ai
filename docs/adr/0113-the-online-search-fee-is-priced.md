@@ -57,27 +57,44 @@ risk of a provider price had it backwards — it chose a known error over a date
 measurement, in the direction that under-protects a safety device.
 
 **`DAILY_CAP_USD` is deliberately NOT raised.** The per-account envelope drops from
-5 default-mix runs to 4, and that is the ceiling becoming correct rather than a
-regression: it had been admitting a fifth run on an estimate that was light.
+4 default-mix runs to 3 on the static price table (5 to 3 on live catalog prices,
+measured 2026-09-15 under production's judge — see the table below), and that is
+the ceiling becoming correct rather than a regression: it had been admitting runs
+on an estimate that was light.
 Raising the cap to restore the old count would re-create, deliberately, the
 under-protection that had been accidental.
 
 ## What it cost, with its posture
 
-**Production runs peer critique AND the judge on** — read from `GET /status`, not
-inferred from `fly.toml`, which sets only the first. Every figure below is under
-that posture, with the static offline-reproducible price table:
+**Production runs peer critique AND the judge on, and the judge is
+`openai/gpt-4.1-mini`** — the posture flags read from `GET /status`, the judge
+model from the tree's own telemetry (`docs/analysis/2026-09-10-telemetry-tokens.jsonl`,
+4 of 4 `judge` rows). Every figure below is under that posture, with the static
+offline-reproducible price table:
 
 | measure | at `0.0` | at `0.007` |
 |---|---|---|
-| point estimate, shipped default mix | $0.0675 | $0.0955 |
-| per-account runs admitted (`DAILY_CAP_USD` $0.40) | 5 | **4** |
-| mixes changing guardrail band (of 1820) | — | **62** |
-| …to `require_confirmation` | — | 60 |
-| …to `block` | — | **2** |
+| point estimate, shipped default mix | $0.0960 | $0.1240 |
+| per-account runs admitted (`DAILY_CAP_USD` $0.40) | 4 | **3** |
+| mixes changing guardrail band (of 1820) | — | **75** |
+| …to `require_confirmation` | — | 66 |
+| …to `block` | — | **9** |
 | `search=False` control | — | **0 of 1820** |
 
-Re-derive with `uv run python scripts/proofs/search_fee_band_sweep.py`, which prints
+On the live catalog (free `GET /api/v1/models`, 442 models on 2026-09-15, drifts
+with their pricing): point estimate $0.0756 → $0.1036, runs admitted **5 → 3**,
+**106** mixes change band (82 to `require_confirmation`, 24 to `block`).
+
+**CORRECTED 2026-09-15.** The 2026-09-13 revision of this table (and of CHG-007,
+`config.py` and `.env.example`) said $0.0675 → $0.0955, **5 → 4** runs and **62**
+band changes (60 / 2). Those figures reproduce only with the judge set to
+`openai/gpt-4o-mini`, which production does not run; the sweep printed
+`judge_configured=True` and never the model id, which is how the number
+escaped — the same class of error the paragraph below warns about, with the
+judge ON but wrong instead of OFF. The sweep now prints the judge model id, and
+the product owner's approval was re-confirmed on the corrected figures.
+
+Re-derive with `PEER_CRITIQUE_ENABLED=true QUORUM_EVAL_JUDGE_API_KEY=sk-x QUORUM_EVAL_JUDGE_MODEL_ID=openai/gpt-4.1-mini uv run python scripts/proofs/search_fee_band_sweep.py --fallback-prices`, which prints
 its posture and price source before any number. **Other postures give materially
 different figures** — peer-critique-off reports 299 changing band and 64 to `block`
 — which is why no figure is transcribed into `config.py`. An earlier draft of
@@ -99,12 +116,13 @@ telling the user a searching slot was free.
 - **Price it from OpenRouter's rate card (~$0.02).** Rejected: measured against the
   bill, the card is ~3x high. Pricing the documentation is what produced AC-037's
   wrong figure in the first place.
-- **Raise `DAILY_CAP_USD` to keep 5 runs.** Rejected; see Decision. It would
+- **Raise `DAILY_CAP_USD` to keep the old run count.** Rejected; see Decision. It would
   deliberately restore an under-protection.
-- **Read the fee back from the response per call.** Unassessed rather than
-  rejected — the completion body is not known to carry a per-call fee and
-  `GET /api/v1/generation` appears nowhere in this repo, so nobody here has
-  measured it (AGENTS.md rule 8c). Named in DEBT-014 as the durable fix.
+- **Read the fee back from the response per call.** Measured and rejected for
+  the estimate on 2026-09-14 (DEBT-014, ADR-0110): `GET /api/v1/generation`
+  carries no web-search cost field and is keyed on a post-call generation id, so
+  it cannot serve the pre-run estimate; the fee is reconciled afterwards from the
+  activity export. Reading it off the completion response stays UNMEASURED.
 - **Activate on the estimate only, not the measured path.** Rejected: it would
   reproduce the original defect on the receipt. ADR-0110 already shipped the
   measured plumbing precisely so both move together.
@@ -138,10 +156,11 @@ telling the user a searching slot was free.
 `tests/unit/test_search_fee_is_activated.py` pins the activated value with a
 literal on both sides (rule 7a) and, more importantly, the behaviour: the fee
 reaches the point estimate AND the fail-safe bound, and turning it off lowers a
-four-searching-slot estimate by exactly `$0.028`. Before this, **no test asserted
-the default at all** — the only thing that would have noticed a change was
-`.env.example` drifting out of step, which is how `0.0` survived eight weeks past
-the evidence that refuted it.
+four-searching-slot estimate by exactly `$0.028`. Until DEBT-015 (2026-09-13)
+**no test asserted the default at all** — the only thing that would have noticed
+a change was `.env.example` drifting out of step, which is how `0.0` survived
+eight weeks past the evidence that refuted it; DEBT-015 then pinned it at `0.0`,
+and this change moves that pin to `0.007`.
 
 The eight re-baselined figures are the second proof, and the stronger one: each
 moved by exactly +$0.028 and nothing else moved.

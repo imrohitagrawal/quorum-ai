@@ -519,11 +519,15 @@ class Settings(BaseSettings):
     #: error sat in the unsafe direction, under-charging a safety ceiling.
     #:
     #: WHAT ACTIVATION COST, measured under the REAL production posture (peer
-    #: critique AND the judge on, both read from ``GET /status``): the
-    #: per-account daily envelope went from 5 runs to 4, 62 of 1820
-    #: shipped-catalog mixes moved to ``require_confirmation``, and 2 became
-    #: outright ``block``. The envelope drop is the ceiling becoming CORRECT, not
-    #: a regression, and ``DAILY_CAP_USD`` was deliberately NOT raised to
+    #: critique AND the judge on, both read from ``GET /status``; judge model
+    #: ``openai/gpt-4.1-mini``, read from the 2026-09-10 telemetry): on the
+    #: static price table the per-account daily envelope went from 4 runs to 3
+    #: and 75 of 1820 shipped-catalog mixes changed band (66 to
+    #: ``require_confirmation``, 9 to ``block``); on live catalog prices, 5 runs
+    #: to 3 and 106 mixes (82 / 24). An earlier revision said 5 -> 4 and 62; it
+    #: was measured with a judge production does not run (ADR-0113 records the
+    #: correction). The envelope drop is the ceiling becoming CORRECT, not a
+    #: regression, and ``DAILY_CAP_USD`` was deliberately NOT raised to
     #: compensate: doing so would re-create the under-protection that had been
     #: accidental.
     #:
@@ -559,7 +563,8 @@ class Settings(BaseSettings):
     #: ACTIVATION WAS NOT A ONE-VALUE CHANGE. Eight tests pinned the pre-fee
     #: arithmetic — the exact partition split, four "byte-identical posture"
     #: bound pins, and the daily-cap envelope test — and each was re-baselined
-    #: by exactly +$0.028 in the activation change; ADR-0113 lists all eight.
+    #: by exactly +$0.028 in the activation change; the activation commit
+    #: (9bc71f0) lists each pair.
     #:
     #: There is also no ``fly.toml`` entry for this: the env-var spelling
     #: ``COST_WEB_SEARCH_REQUEST_FEE_USD`` appears in no deploy config and no

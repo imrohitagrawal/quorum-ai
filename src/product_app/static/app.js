@@ -1388,7 +1388,7 @@
     // searching slot's prompt carries the injected web-search context AND the
     // flat per-request web-search plugin fee. NOTE (#105, CHG-007, ADR-0113,
     // superseding the older #18 note here): the fee IS PRICED, at the measured
-    // $0.007, since 2026-09-13. So ``fee`` below is non-zero for a searching
+    // $0.007, since 2026-09-15. So ``fee`` below is non-zero for a searching
     // slot and IS user-visible — ``perModelEstimateText`` renders ``<$0.001``
     // below the display quantum, and at $0.007 no searching slot can round that
     // low, so the cheapest slot's card reads about ``$0.007`` rather than
