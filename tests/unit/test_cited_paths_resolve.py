@@ -72,8 +72,26 @@ ROOT = Path(__file__).resolve().parents[2]
 #: A repo-relative path with a known source extension. Anchored on the leading
 #: directory so ordinary prose ("src/ layout", "the tests directory") is not a
 #: candidate, and a trailing extension so bare directory names are skipped.
+#: `jsonl` MUST precede `json`. Python's `|` takes the FIRST branch that matches,
+#: not the longest, and nothing anchors the end of the group -- so with `json`
+#: first, a cited `.jsonl` path matched only its `.json` prefix. The gate then
+#: went RED naming `docs/.../x.json`, a path nobody had written, while the real
+#: `.jsonl` file sat there. That is a MISNAMED report, not a missed one: the old
+#: regex did fail the assertion, just on the wrong path. Ordering `jsonl` first
+#: makes the reported path the cited one.
+#:
+#: A TRAILING `(?![\w])` WAS TRIED HERE AND REVERTED, deliberately. It would stop
+#: a listed extension truncating a longer cited one (`.tsx` -> `.ts`), but it does
+#: so by making the citation match NOTHING, which turns a loud misnamed failure
+#: into a silent skip -- strictly worse for a gate. It also does not deliver what
+#: it appears to: a `.` satisfies the lookahead, so `docs/notes.jsonl.gz` still
+#: truncates to `docs/notes.jsonl`. The remaining prefix-truncation class (`.tsx`,
+#: `.mdx`, `.pyi`, and any dot-suffixed path) is therefore left LOUD and tracked
+#: in issue #469 rather than silenced here. No `.tsx`, `.mdx` or `.pyi` file is
+#: tracked today (`git ls-files "*.tsx"` -> 0), so nothing is broken by leaving it.
 _CITATION = re.compile(
-    r"\b((?:docs|src|tests|scripts|e2e|profiles)/[\w./-]+\.(?:md|py|ts|mjs|yml|yaml|json|css|html))"
+    r"\b((?:docs|src|tests|scripts|e2e|profiles)/[\w./-]+"
+    r"\.(?:md|py|ts|mjs|yml|yaml|jsonl|json|css|html))"
 )
 
 #: Only prose-bearing files. A path inside real code is already checked by the
@@ -275,6 +293,44 @@ def test_the_extractor_finds_a_citation_and_ignores_ordinary_prose() -> None:
 
     # Directory mentions and bare words must not be treated as citations.
     assert _CITATION.findall("the src/ layout and the tests directory") == []
+
+
+def test_a_jsonl_citation_is_extracted_whole_and_still_checked() -> None:
+    """BOTH directions of the `jsonl`-before-`json` ordering.
+
+    RED IF: `jsonl` is removed from the alternation, or moved after `json` --
+    either way a cited `.jsonl` path is truncated to a `.json` path that was
+    never written, so the gate reports a phantom path instead of the cited one.
+    Both halves were run: each turns this test red. (Note the failure mode is a
+    MISNAMED report, not a missed one -- the old regex still failed the
+    assertion, just on a path nobody wrote.)
+    """
+    # Direction 1: the false positive is gone. A real `.jsonl` file in the repo
+    # is extracted with its full extension, so it resolves.
+    real = "docs/analysis/2026-09-10-telemetry-tokens.jsonl"
+    assert (ROOT / real).exists(), "precondition: this fixture path is a real file"
+    assert _CITATION.findall(f"read {real} for the judge rows") == [real]
+
+    # Direction 2: the genuine case the check must still catch IS still caught.
+    # A broken `.jsonl` citation extracts whole, so the caller can see it is
+    # missing -- before this ordering it extracted as `.json` and the gate
+    # complained about the wrong path.
+    broken = "docs/analysis/no-such-telemetry.jsonl"
+    assert not (ROOT / broken).exists(), "precondition: this path must not exist"
+    assert _CITATION.findall(f"read {broken} for nothing") == [broken]
+
+    # And plain `.json` is unaffected by putting `jsonl` first.
+    assert _CITATION.findall("see docs/a.json here") == ["docs/a.json"]
+
+    # A DOTTED filename must survive extraction whole. Pinned because every
+    # other fixture in this file uses a dot-free filename, which left the
+    # interior `.` in the path character class unpinned: dropping it passed the
+    # entire file while silently losing 217 of the repo's 5063 citations (64
+    # distinct paths), including EVERY `e2e/tests/**/*.spec.ts`. Found by
+    # adversarial review writing that mutant and watching it pass.
+    dotted = "e2e/tests/invariants/readiness-no-flash.spec.ts"
+    assert (ROOT / dotted).exists(), "precondition: this fixture path is a real file"
+    assert _CITATION.findall(f"see {dotted} here") == [dotted]
 
 
 def test_a_path_relative_to_a_known_working_directory_resolves() -> None:

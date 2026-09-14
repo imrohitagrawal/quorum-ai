@@ -2,19 +2,17 @@
 
 ## Status
 
-PROPOSED — 2026-09-13. **The product-owner decision has NOT been taken.**
-An earlier revision of this file said "Accepted ... Product-owner decision".
-That was false: the instruction in that session was to HOLD defect A. `main`
-records the truth — `grep -o 'Pending product-owner decision[^|]*'
-docs/19-change-control-log.md` — and W24 in `docs/65-open-work.md` is PENDING.
-This branch must not be merged until the product owner decides.
+Accepted — 2026-09-15. **Product-owner decision, taken in session on 2026-09-15**
+(CHG-007 records it, with the session reference). An earlier revision of this
+file said "Accepted — 2026-09-13"; that was false — the decision had not been
+taken then — and the file carried a PROPOSED status with a retraction from
+2026-09-13 until the decision was actually taken.
 
 **Authorises nothing.** No `**Authorises:**` line; it may not be cited to sanction
-a live-execution posture or a paid run.
+a live-execution posture or a paid run. It prices a fee; it opens no window.
 
-**Would supersede AC-037 and CHG-005** if accepted. ADR-0110 shipped the
-mechanism dormant and reserved this decision to the product owner; this ADR
-PROPOSES it and does not take it.
+**Supersedes AC-037 and CHG-005.** ADR-0110 shipped the mechanism dormant and
+reserved this decision to the product owner; this ADR records it.
 
 ## Context
 

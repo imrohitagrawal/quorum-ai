@@ -460,7 +460,7 @@ class Settings(BaseSettings):
     #: search enabled; search-disabled slots omit it. Tunable via
     #: ``COST_WEB_SEARCH_REQUEST_FEE_USD``.
     #:
-    #: THE REAL PRICE IS $0.007, MEASURED. The owner's OpenRouter activity
+    #: THE REAL PRICE IS $0.007 PER SEARCHING CALL, MEASURED. The owner's OpenRouter activity
     #: export for 2026-09-10 (docs/analysis/2026-09-10-openrouter-activity.csv)
     #: has 27 generation rows; exactly 8 carry a ``cost_web_search`` and every
     #: one of them is exactly ``0.007``, in two batches of four — one per answer
@@ -469,16 +469,40 @@ class Settings(BaseSettings):
     #: came from OpenRouter's docs, not from a bill, and is roughly 3x the
     #: charge actually levied. Do not reinstate it.
     #:
-    #: PROPOSED (NOT APPROVED) at the MEASURED $0.007 on this unmerged branch
-    #: (issue #105 defect A, CHG-007, ADR-0113 — both PROPOSED). The
-    #: product-owner decision this change requires has NOT been taken; see
-    #: CHG-006 and ADR-0110, which reserve it to them. DO NOT MERGE on the
-    #: strength of this comment. Superseded wording here claimed activation
-    #: was decided on 2026-09-13; it was not (issue #105 defect A,
-    #: ADR-0113). The value is dated deliberately: it is a PROVIDER price, read
-    #: from the owner's OpenRouter activity export for 2026-09-10, not from our
-    #: own arithmetic, and nothing in this repo detects it going stale
-    #: (DEBT-014). Re-measure it from a fresh export before relying on it again.
+    #: WHY IT IS FLAT, AND WHAT COULD MOVE IT (measured 2026-09-14, DEBT-014).
+    #: ``GET /api/v1/generation`` was called on all 8 charged generations. The
+    #: response carries no web-search cost field (its key list, values omitted,
+    #: is docs/analysis/2026-09-14-openrouter-generation-response-keys.json),
+    #: but it carries ``num_search_results`` (5 on every row) and
+    #: ``web_search_engine`` (``exa`` on every row). OpenRouter's published
+    #: schedule prices exa's default ``auto`` mode at $0.007 PER REQUEST,
+    #: INCLUDING up to 10 results, then $0.001 per additional result — so the 5
+    #: results contribute $0 and the fee is flat on our route. An earlier
+    #: revision of this comment wrote the pin as ``5 x 0.0014``; that quotient
+    #: divides by a quantity nobody bills, and is withdrawn. What the schedule
+    #: DOES vary is the exa MODE (``deep`` $0.012, ``deep-reasoning`` $0.015)
+    #: and the ENGINE (parallel basic $0.005; native search is provider
+    #: passthrough). This module sets neither — the request body built in
+    #: providers.py carries no ``plugins`` and no ``web_search_options`` — and
+    #: nothing in the tree pins them; that is the staleness risk DEBT-014
+    #: records. Independent check, on all 8 rows: ``total_cost`` minus native
+    #: tokens x catalog price is exactly 0.007000 (free catalog, matched on
+    #: ``canonical_slug``, non-``:batch`` id — ADR-0110 names the procedure).
+    #: Rows: docs/analysis/2026-09-14-openrouter-generation-metadata.jsonl,
+    #: tied to the export row-for-row by tests/test_doc_gate_consistency.py
+    #: Part D4.
+    #:
+    #: ACTIVATED at the MEASURED $0.007 — product-owner decision taken
+    #: 2026-09-15 (issue #105 defect A; CHG-007 and ADR-0113, both Accepted),
+    #: superseding AC-037 and CHG-005. An earlier revision of this comment on
+    #: the activation branch said the decision was taken on 2026-09-13; it was
+    #: not, and the branch carried a retraction until the decision was taken.
+    #: The value is dated deliberately: it is a PROVIDER price, read from the
+    #: owner's OpenRouter activity export for 2026-09-10, and nothing in this
+    #: repo detects it going stale — DEBT-014 records the levers that could
+    #: move it, including that OpenRouter now marks the ``:online`` suffix
+    #: deprecated in favour of its ``openrouter:web_search`` server tool.
+    #: Re-measure it from a fresh export whenever the decision is revisited.
     #:
     #: The history, because the reasoning matters more than the number:
     #: The 2026-07-17 decision (AC-037 in docs/12-acceptance-criteria.md,
@@ -489,8 +513,7 @@ class Settings(BaseSettings):
     #: approved at an estimate of $0.076 while its measured TOKEN cost alone
     #: was $0.0938 — the estimate ran BELOW, on the 2026-07-17 comparison's own
     #: token-for-token terms. (Including the fee the true charge was $0.121763.)
-    #: The product owner has NOT yet taken that decision; this branch only
-    #: proposes it.
+    #: The product owner took that decision on 2026-09-15 (CHG-007).
     #: The deciding argument: `0.0` is CERTAINLY wrong and `0.007` is MEASURED,
     #: so preferring `0.0` to avoid staleness risk had it backwards — and the
     #: error sat in the unsafe direction, under-charging a safety ceiling.
@@ -533,18 +556,40 @@ class Settings(BaseSettings):
     #: the ``:online`` suffix (``InitialModelAnswer.searched``). At 0.0 both
     #: paths add exactly nothing.
     #:
-    #: ACTIVATION IS NOT A ONE-VALUE CHANGE. Eight tests pin the pre-fee
-    #: arithmetic and go RED at 0.007 — the exact partition split, four
-    #: "byte-identical posture" bound pins, and the daily-cap envelope test,
-    #: which reports "the pinned static catalog's default-mix price moved to
-    #: 0.0827". ADR-0110 lists all eight by name. None of them is wrong; each
-    #: must be re-measured in the PR that activates the fee.
+    #: ACTIVATION WAS NOT A ONE-VALUE CHANGE. Eight tests pinned the pre-fee
+    #: arithmetic — the exact partition split, four "byte-identical posture"
+    #: bound pins, and the daily-cap envelope test — and each was re-baselined
+    #: by exactly +$0.028 in the activation change; ADR-0113 lists all eight.
     #:
     #: There is also no ``fly.toml`` entry for this: the env-var spelling
     #: ``COST_WEB_SEARCH_REQUEST_FEE_USD`` appears in no deploy config and no
     #: workflow — only in ``.env.example`` and here. Changing this default
     #: therefore changes production, local and CI together.
-    cost_web_search_request_fee_usd: float = 0.007
+    #: DEBT-015: constrained, because a bad value here is NOT uniformly
+    #: fail-safe. A small NEGATIVE fee keeps a receipt labelled ``measured``
+    #: while UNDER-reporting it, by exactly ``slots x fee`` -- four searching
+    #: slots on the shipped mix under-report by ``4 x fee`` -- and that figure
+    #: reaches the money ledger via ``_log_estimate_accuracy`` ->
+    #: ``reconcile_run_charge`` -> ``reconcile_charge_for_run``. Worse, it is
+    #: silent on BOTH rails at small magnitudes: ``estimate()`` does not raise
+    #: at ``-0.0001``, so the run begins, and ``_actual_cost``'s catch-all
+    #: swallows the cause when a larger magnitude does trip it. See DEBT-015 in
+    #: docs/63-technical-debt-register.md for the measured dollar figures, which
+    #: depend on the token counts and so are not one pair.
+    #:
+    #: ``ge=0`` not ``gt=0`` -- ``0.0`` means "no fee" and was the shipped
+    #: default until 2026-09-15, so zero stays legal (an operator can switch
+    #: the fee off by value); ``gt=0`` would make that setting fail at import.
+    #:
+    #: ``allow_inf_nan=False`` is load-bearing for ``+inf`` ALONE, and only that.
+    #: ``float("inf") >= 0`` is ``True``, so the bound admits it. The bound
+    #: DOES reject ``nan`` and ``-inf`` on its own -- pydantic evaluates ``ge``
+    #: as "refuse unless ``x >= 0``", and ``nan >= 0`` is ``False``, so the
+    #: comparison failing is precisely why ``nan`` is refused. An earlier
+    #: revision of this comment claimed the opposite ("a bound cannot reject it
+    #: at all"); that inverted the consequence and was refuted by dropping
+    #: ``allow_inf_nan=False`` and watching only the ``inf`` case go red.
+    cost_web_search_request_fee_usd: float = Field(default=0.007, ge=0, allow_inf_nan=False)
     #: Output-token floor for a single initial answer.
     cost_initial_output_tokens: int = 700
     #: How much each initial answer lengthens per token of query (longer,

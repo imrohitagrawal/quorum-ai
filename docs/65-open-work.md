@@ -118,7 +118,7 @@ caught by any automated check and 10 of 16 by adversarial review
 | W21 | A redirect carries the API key off the guarded base | DONE | `ABSENT src/product_app/providers.py :: urlopen = CREDENTIAL_OPENER.open` | — | W18 |
 | W22 | The Tavily search call sends its key to a configured base with no scheme guard | DONE | `PRESENT src/product_app/providers.py :: url=f"{settings.tavily_api_base_url.rstrip('/')}/search"` | — | — |
 | W23 | The mutation gate cannot run when a changed function is covered by a schemathesis case | UNPINNED | `—` | — | — |
-| W24 | The `:online` web-search fee is measured at $0.007 but priced at `0.0`, so every searching run's receipt and its daily-cap booking are $0.028 light — activation is a product-owner decision (CHG-006, ADR-0110) | DONE | `ABSENT src/product_app/config.py :: cost_web_search_request_fee_usd: float = 0.007` | #105 | — |
+|  W24 | The `:online` web-search fee is measured at $0.007 and was priced at `0.0`, so every searching run's receipt and its daily-cap booking were $0.028 light — ACTIVATED 2026-09-15 by product-owner decision (CHG-007, ADR-0113) | DONE | `ABSENT src/product_app/config.py :: Field(default=0.007, ge=0, allow_inf_nan=False)` | #105 | —  |
 
 **STOP** marks a row that cannot be finished without a human decision — a money,
 cost or safety guardrail value that only real measurement could justify. Do not
