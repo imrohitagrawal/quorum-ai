@@ -2813,7 +2813,15 @@ def _generation_response_keys() -> dict[str, dict[str, object]]:
     import json
 
     body = json.loads(GENERATION_RESPONSE_KEYS.read_text(encoding="utf-8"))
-    return body["keys"]
+    keys: dict[str, dict[str, object]] = body["keys"]
+    return keys
+
+
+def _present_in(entry: dict[str, object]) -> int:
+    """How many responses carried a key, as the key list records it."""
+    value = entry["present_in"]
+    assert isinstance(value, int), f"present_in is {value!r}, not an int"
+    return value
 
 
 def _debt_014_row() -> str:
@@ -2953,11 +2961,11 @@ def test_the_endpoint_response_carries_no_web_search_cost_field() -> None:
     keys = _generation_response_keys()
     rows = _generation_metadata_rows()
     assert keys, "the response key list is empty"
-    assert all(1 <= int(entry["present_in"]) <= len(rows) for entry in keys.values()), (
+    assert all(1 <= _present_in(entry) <= len(rows) for entry in keys.values()), (
         "a key claims presence on more responses than there are rows"
     )
     for anchor in ("total_cost", "num_search_results", "web_search_engine"):
-        assert int(keys[anchor]["present_in"]) == len(rows), f"{anchor} is not on every response"
+        assert _present_in(keys[anchor]) == len(rows), f"{anchor} is not on every response"
     assert {key for key in keys if "cost" in key} == {"total_cost", "upstream_inference_cost"}
     assert {key for key in keys if "search" in key} == {"num_search_results", "web_search_engine"}
     whitelisted = {field for row in rows for field in row}
