@@ -170,7 +170,7 @@ asserting it are corrected here), and `_extract_citations`' FLAT annotation
 read is carried across faithfully but not fixed — settling that shape needs a
 live `:online` call, which is spend.
 
-**W2 — peer critique (#290, closed 2026-09-15). BUILT, shipping DEFAULT-OFF in
+**W2 — peer critique (#290, closure decided 2026-09-15). BUILT, shipping DEFAULT-OFF in
 `config.py` and switched ON in production by `fly.toml`.** ADR-0093's
 shape is implemented in full (decisions 1, 1a, 1b, 2, 3, 4, 5) behind
 `settings.peer_critique_enabled`, which defaults to `false`. ADR-0095 records
@@ -180,15 +180,20 @@ PER ELIGIBLE CRITIC. The bound now reads the same flag, so the ceiling holds in
 both postures — measured on four identical slots, `debate_round_1` goes
 `$0.0052` -> `$0.0208`, a ratio of exactly 4.0000: one call per slot.
 
-**#290 CLOSED 2026-09-15 — peer critique has run in production.** W2's row
+**#290 — peer critique has run in production; closure decided by the product
+owner 2026-09-15 and effected by the merge of the change that carries this
+paragraph.** W2's row
 reads DONE because the mechanism is in the tree, and the run this paragraph
 used to wait for has happened, four times: the 2026-09-03 live window ran with
 `PEER_CRITIQUE_ENABLED=true`, and `docs/analysis/2026-09-10-telemetry-tokens.jsonl`
 carries four runs with peer-shaped debate rounds — `1cb95597` (2026-09-06),
 `2e2d3c2e` (2026-09-08) and `5a9c2d63` (2026-09-10) dispatched `debate_round_1`
 AND `debate_round_2` to all four slot models, and `fcca9510` (2026-09-10)
-dispatched round 1 to all four and was cut short before round 2. The moderator
-shape would show only `settings.debate_model_id`. Re-derive:
+dispatched round 1 to all four while its round 2 ran entirely on templated
+fallback critiques and made no provider call, so it left no round-2 telemetry
+rows — the run completed, `cost_source` measured (ADR-0110;
+`docs/analysis/2026-09-10-window-measurements.md`). The moderator shape would
+show only `settings.debate_model_id`. Re-derive:
 `python3 -c` over that file, grouping `stage` by `query_run_id` and counting
 distinct `model_id`. The two 2026-09-10 runs' cost is reconciled against the
 provider bill in CHG-006. Production still runs `PEER_CRITIQUE_ENABLED = "true"`
@@ -249,7 +254,8 @@ field rather than nulling it. So the post-#290 sweep can group by run and round
 instead of inferring from `model_id`. The RUN has now happened — four
 peer-shaped runs between 2026-09-06 and 2026-09-10 (see W2 above) — so the
 per-model numbers the design exposes are derivable from that telemetry. W3 has
-not yet re-derived them, and that is W3's work; #290 closed 2026-09-15.
+not yet re-derived them, and that is W3's work; #290's closure was decided
+2026-09-15.
 
 **W4 — variable panel size.** `Field(ge=1, le=4)` appears at three sites
 (`debate.py` twice, `providers.py` once) and they move together. **No longer
@@ -719,10 +725,11 @@ re-measure it. Nothing compared the sentence to the commit log. That is the
 failure mode rule 1a exists for.
 
 **W3 is still STOP**, but not for this reason: it is deferred by the product
-owner's decision in ADR-0081, independently of any measurement. **W2 remains
-PENDING because it is unbuilt**, not because it is blocked — ADR-0093 records
-the shape, and its decision 3 (a `kind="critique"` receipt row) needs the
-owner's sign-off before that part ships.
+owner's decision in ADR-0081, independently of any measurement. **W2 is BUILT
+and has run in production** (four peer-shaped runs, see the W2 paragraph above);
+the sentence that stood here until 2026-09-15 said it was unbuilt and was
+overtaken. Whether ADR-0093's decision 3 (a `kind="critique"` receipt row)
+shipped is not re-derived here.
 
 W4 no longer waits on anything (W10 is done), and no longer overlaps W1
 either: W1 has landed and left `Field(ge=1, le=4)` in `providers.py`
