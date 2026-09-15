@@ -56,7 +56,8 @@ defect of their own (rule 12), so the owner's instruction "merge only if round
 5 is clean" was not met. Round 5 left **two REQUIRED_CONTRACT findings, both
 prose, and two advisory**:
 
-1. ADR-0113 lines ~41-43 and ~128, and `tests/unit/test_search_fee_is_activated.py`
+1. ADR-0113 lines ~41-43 and ~128, and the activation test module
+   (`test_search_fee_is_activated.py` under `tests/unit/`, on the branch only)
    lines ~33-34, still say in the PRESENT tense that OpenRouter's rate card
    implies ~$0.02/request, "3x the charge". The schedule read 2026-09-14 prices
    exa `auto` at $0.007 per request (DEBT-014 on main; CHG-007 on the branch
