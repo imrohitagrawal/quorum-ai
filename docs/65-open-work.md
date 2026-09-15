@@ -229,7 +229,8 @@ Measured headroom today, judge-ON: a default question's bound is **0.1134**
 against a `0.15` line — about **3.7 cents**. That margin is the number to watch;
 W13 (#268) is a change that would eat into it. `SOFT_THRESHOLD_USD <
 DAILY_CAP_USD < HARD_LIMIT_USD` is mandatory or the confirmation band is dead
-code. When W2 lands, re-measure and bring a number back with its measurement.
+code. W2 has landed and run (see the W2 paragraph); re-measure against that
+telemetry and bring a number back with its measurement.
 
 **The numbers are now pre-computed — see ADR-0094.** A hermetic sweep over all
 **715** four-slot mixes of the shipped catalog (C(13,4); the often-quoted "495"
@@ -241,8 +242,8 @@ shift is +$0.03 exactly, because synthesis runs on one fixed model so its delta
 is constant across every mix — which restores today's 251/715 confirmations and
 220/715 blocks bit-for-bit. **This is still STOP.** The debate constant is the
 number #290 most invalidates (one debate call per run becomes eight, from four
-models), so it is deliberately NOT set ahead of the feature. **W3 is the next
-action after W2** — re-measure with `finish_reason` in place, re-run the sweep,
+models), so it was deliberately NOT set ahead of the feature; the feature has
+now landed and run. **W3 is the next action after W2** — re-measure with `finish_reason` in place, re-run the sweep,
 and land both token constants and all three thresholds in ONE pull request.
 
 `finish_reason` is now IN PLACE (ADR-0093 decision 5, shipped with W2): the
@@ -727,9 +728,10 @@ failure mode rule 1a exists for.
 **W3 is still STOP**, but not for this reason: it is deferred by the product
 owner's decision in ADR-0081, independently of any measurement. **W2 is BUILT
 and has run in production** (four peer-shaped runs, see the W2 paragraph above);
-the sentence that stood here until 2026-09-15 said it was unbuilt and was
-overtaken. Whether ADR-0093's decision 3 (a `kind="critique"` receipt row)
-shipped is not re-derived here.
+the sentence this change replaces said it was unbuilt; that was overtaken on
+2026-09-03 (`5aed777`, `_build_peer_round`) and stood until this change merged.
+ADR-0093's decision 3 (a `kind="critique"` receipt row) shipped: the row is
+built in `src/product_app/costs.py` (grep `kind="critique"`).
 
 W4 no longer waits on anything (W10 is done), and no longer overlaps W1
 either: W1 has landed and left `Field(ge=1, le=4)` in `providers.py`
