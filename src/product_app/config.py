@@ -518,18 +518,15 @@ class Settings(BaseSettings):
     #: so preferring `0.0` to avoid staleness risk had it backwards — and the
     #: error sat in the unsafe direction, under-charging a safety ceiling.
     #:
-    #: WHAT ACTIVATION COST, measured under the REAL production posture (peer
-    #: critique AND the judge on, both read from ``GET /status``; judge model
-    #: ``openai/gpt-4.1-mini``, read from the 2026-09-10 telemetry): on the
-    #: static price table the per-account daily envelope went from 4 runs to 3
-    #: and 75 of 1820 shipped-catalog mixes changed band (66 to
-    #: ``require_confirmation``, 9 to ``block``); on live catalog prices, 5 runs
-    #: to 3 and 106 mixes (82 / 24). An earlier revision said 5 -> 4 and 62; it
-    #: was measured with a judge production does not run (ADR-0113 records the
-    #: correction). The envelope drop is the ceiling becoming CORRECT, not a
-    #: regression, and ``DAILY_CAP_USD`` was deliberately NOT raised to
-    #: compensate: doing so would re-create the under-protection that had been
-    #: accidental.
+    #: WHAT ACTIVATION COST: the per-account daily envelope on the shipped mix
+    #: drops from 5 runs to 3 under the real production posture (peer critique
+    #: AND the judge on, live catalog prices, measured 2026-09-15). THE FIGURES
+    #: LIVE IN ONE PLACE — ADR-0113, "What it cost" — with the command and the
+    #: POSTURE line pasted verbatim; three transcribed copies of them were wrong
+    #: in three different ways, so none is repeated here. The envelope drop is
+    #: the ceiling becoming CORRECT, not a regression, and ``DAILY_CAP_USD`` was
+    #: deliberately NOT raised to compensate: doing so would re-create the
+    #: under-protection that had been accidental.
     #:
     #: THE FULL CONSEQUENCE FIGURES ARE DELIBERATELY NOT REPEATED HERE. They depend
     #: on the peer-critique and judge postures and on whether prices come from

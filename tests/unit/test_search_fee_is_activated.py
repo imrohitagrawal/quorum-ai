@@ -1,6 +1,6 @@
 """#105 defect A: the `:online` per-request web-search fee is PRICED.
 
-Until 2026-09-13 `cost_web_search_request_fee_usd` was `0.0` by an accepted
+Until 2026-09-15 `cost_web_search_request_fee_usd` was `0.0` by an accepted
 decision (AC-037, CHG-005, issue #18). That decision rested on a measurement —
 "the pre-run estimate already runs at or above the measured token cost (est
 $0.0199 >= actual $0.0149)" — which made the exclusion fail-safe.

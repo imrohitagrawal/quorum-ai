@@ -57,49 +57,61 @@ risk of a provider price had it backwards — it chose a known error over a date
 measurement, in the direction that under-protects a safety device.
 
 **`DAILY_CAP_USD` is deliberately NOT raised.** The per-account envelope drops from
-4 default-mix runs to 3 on the static price table (5 to 3 on live catalog prices,
-measured 2026-09-15 under production's judge — see the table below), and that is
+5 default-mix runs to 3 (live catalog prices, production's judge, measured
+2026-09-15 — the table below is the only place the figures live), and that is
 the ceiling becoming correct rather than a regression: it had been admitting runs
 on an estimate that was light.
 Raising the cap to restore the old count would re-create, deliberately, the
 under-protection that had been accidental.
 
-## What it cost, with its posture
+## What it cost, with its posture — THE ONLY PLACE THESE FIGURES LIVE
+
+**Do not copy the numbers below into any other file.** CHG-006, CHG-007,
+ADR-0110, `config.py`, `.env.example` and `docs/12` point here. Three successive
+revisions of this table were wrong — judge OFF (ADR-0110's first draft), judge
+`openai/gpt-4o-mini` (2026-09-13, which production does not run), and judge
+priced at the unknown-model fallback (the first 2026-09-15 correction: production's
+judge is not in the offline price table, so `--fallback-prices` priced it at
+2.58× its real price and a nonsense judge id reproduced the "production" figures
+byte for byte). Each error was reintroduced by transcription; one table, with its
+command and its posture line pasted verbatim, is the remedy. The sweep now
+**refuses** to run when the configured judge is not in the price table it was
+told to use (`tests/unit/test_search_fee_band_sweep_refuses_an_unpriced_judge.py`).
 
 **Production runs peer critique AND the judge on, and the judge is
 `openai/gpt-4.1-mini`** — the posture flags read from `GET /status`, the judge
 model from the tree's own telemetry (`docs/analysis/2026-09-10-telemetry-tokens.jsonl`,
-4 of 4 `judge` rows). Every figure below is under that posture, with the static
-offline-reproducible price table:
+4 of 4 `judge` rows). **There is no honest offline figure for that posture**:
+the judge is not in `_FALLBACK_CATALOG`, so the only price source that prices
+production's judge is the live catalog, which drifts. Measured 2026-09-15:
 
-| measure | at `0.0` | at `0.007` |
+```
+$ PEER_CRITIQUE_ENABLED=true QUORUM_EVAL_JUDGE_API_KEY=sk-x \
+  QUORUM_EVAL_JUDGE_MODEL_ID=openai/gpt-4.1-mini PYTHONPATH=src \
+  python scripts/proofs/search_fee_band_sweep.py
+POSTURE: peer_critique_enabled=True judge_configured=True judge_model_id=openai/gpt-4.1-mini
+PRICES:  LIVE OpenRouter catalog, 440 models — drifts with their pricing, and falls back to the static table offline
+```
+
+| measure (live catalog, 2026-09-15) | at `0.0` | at `0.007` |
 |---|---|---|
-| point estimate, shipped default mix | $0.0960 | $0.1240 |
-| per-account runs admitted (`DAILY_CAP_USD` $0.40) | 4 | **3** |
-| mixes changing guardrail band (of 1820) | — | **75** |
-| …to `require_confirmation` | — | 66 |
-| …to `block` | — | **9** |
+| point estimate, shipped default mix | $0.0756 | $0.1036 |
+| per-account runs admitted (`DAILY_CAP_USD` $0.40) | 5 | **3** |
+| mixes changing guardrail band (of 1820) | — | **106** |
+| …to `require_confirmation` | — | 82 |
+| …to `block` | — | **24** |
 | `search=False` control | — | **0 of 1820** |
 
-On the live catalog (free `GET /api/v1/models`, 442 models on 2026-09-15, drifts
-with their pricing): point estimate $0.0756 → $0.1036, runs admitted **5 → 3**,
-**106** mixes change band (82 to `require_confirmation`, 24 to `block`).
+The `search=False` lane changing nothing is the positive partner proving the
+fee reaches only searching slots. **The product owner was shown these figures
+on 2026-09-15 and re-confirmed the activation**; the earlier record had said
+5 → 4 runs and 62 mixes (CHG-007 carries the correction).
 
-**CORRECTED 2026-09-15.** The 2026-09-13 revision of this table (and of CHG-007,
-`config.py` and `.env.example`) said $0.0675 → $0.0955, **5 → 4** runs and **62**
-band changes (60 / 2). Those figures reproduce only with the judge set to
-`openai/gpt-4o-mini`, which production does not run; the sweep printed
-`judge_configured=True` and never the model id, which is how the number
-escaped — the same class of error the paragraph below warns about, with the
-judge ON but wrong instead of OFF. The sweep now prints the judge model id, and
-the product owner's approval was re-confirmed on the corrected figures.
-
-Re-derive with `PEER_CRITIQUE_ENABLED=true QUORUM_EVAL_JUDGE_API_KEY=sk-x QUORUM_EVAL_JUDGE_MODEL_ID=openai/gpt-4.1-mini uv run python scripts/proofs/search_fee_band_sweep.py --fallback-prices`, which prints
-its posture and price source before any number. **Other postures give materially
-different figures** — peer-critique-off reports 299 changing band and 64 to `block`
-— which is why no figure is transcribed into `config.py`. An earlier draft of
-ADR-0110 published a "production" number measured with the judge OFF; that is the
-mistake this table exists to prevent repeating.
+**Other postures give materially different figures**, which is why nothing is
+transcribed: the same command with `PEER_CRITIQUE_ENABLED=false` (judge
+unchanged, live catalog, same day) reports 20 mixes changing band, all 20
+`require_confirmation` → `block`, and runs admitted 5 → 4. Quote no band figure
+without the POSTURE and PRICES lines it was measured under.
 
 **The fee is now user-visible**, which AC-037 said it never would be. `app.js`'s
 `perModelEstimateText` renders `<$0.001` below the display quantum, and at $0.007 no

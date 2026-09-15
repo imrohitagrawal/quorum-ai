@@ -255,11 +255,21 @@ into "needs confirmation", and makes **2** of 1820 mixes unrunnable. The control
 lane changing nothing is the positive partner proving the fee reaches only
 searching slots — it was 0 in every posture measured.
 
+**CORRECTED 2026-09-15 — the table above is NOT production's figure.** It was
+measured with the judge set to `openai/gpt-4o-mini`; production's judge is
+`openai/gpt-4.1-mini` (4 of 4 judge rows in
+`docs/analysis/2026-09-10-telemetry-tokens.jsonl`), which the static price table
+does not price at all, so no `--fallback-prices` run can state production's
+figure — the sweep now refuses to try. The table is kept as the dated record of
+what this ADR published; the current figures live in ONE place, ADR-0113 §"What
+it cost", and are not repeated here.
+
 **Other postures give materially different numbers**, and that is the point of
 the script rather than a table: with peer critique off the same sweep reports 299
 mixes changing band and 64 reaching `block`, and with live-catalog prices instead
-of the static table it reports 61 and 43. None of those is production. Do not
-quote a band figure without the posture it was measured under.
+of the static table it reports 61 and 43. None of those was measured under
+production's judge either (see the correction above). Do not quote a band figure
+without the posture it was measured under.
 
 **Activation is NOT a one-value change.** Eight tests pin the pre-fee arithmetic
 and must be re-measured in the activating PR. Measured over exactly these five

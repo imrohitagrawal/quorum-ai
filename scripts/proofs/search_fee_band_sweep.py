@@ -23,8 +23,10 @@ silently reproduces the ``--fallback-prices`` figures instead. Pass
 ``--fallback-prices`` for a figure that is reproducible offline forever.
 
 Every run prints its POSTURE and its PRICE SOURCE before any number, because a
-band figure without its posture is worthless. An earlier version printed a bogus
-judge field that always read ``n/a``, and that is exactly how a "production"
+band figure without its posture is worthless — and it REFUSES to run when the
+configured judge is not in the price table it was told to use, because a judge
+priced at the unknown-model fallback makes every number an artefact. An earlier
+version printed a bogus judge field that always read ``n/a``, and that is exactly how a "production"
 figure measured with the judge OFF reached an ADR — production runs the judge
 ON, and turning it on moves both the band counts and the daily envelope.
 
@@ -124,6 +126,21 @@ def main(argv: list[str] | None = None) -> int:
         f"judge_model_id={config.settings.quorum_eval_judge_model_id or '(unset)'}"
     )
     print(f"PRICES:  {price_source}")
+    # REFUSE, do not guess. ``costs.py`` prices any model id missing from the
+    # price index at the unknown-model fallback (``_DEFAULT_PRICE_PER_1K_*``),
+    # silently. On 2026-09-15 that produced a "production" table whose judge
+    # line was 2.58x the real price, reproducible byte-for-byte with a
+    # nonsense judge id, and it reached an ADR and a change-control row. A
+    # figure whose judge is priced at a fallback is not a figure; stop here.
+    judge_id = config.settings.quorum_eval_judge_model_id
+    if judge_configured() and judge_id not in openrouter_model_catalog_service.price_index():
+        print(
+            f"REFUSED: judge model {judge_id!r} is not in the price table ({price_source}); "
+            "it would be priced at the unknown-model fallback and every figure below would "
+            "be an artefact of that fallback, not of production. Use the live catalog, or a "
+            "judge id the static table prices."
+        )
+        return 2
     print()
 
     lanes = ((True, "search ON (every slot searching)"), (False, "search OFF (control)"))

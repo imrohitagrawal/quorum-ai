@@ -79,8 +79,9 @@ DEFAULT_MODEL_IDS = [
 #: cited, and asserted nowhere. A number no gate compares to the tree goes stale
 #: in silence. Positive control that the grep-for-assertions actually works:
 #: the POINT figure IS asserted -- `PINNED_DEFAULT_MIX_UNIT_USD =
-#: Decimal("0.0547")` below, and once more in
-#: `tests/integration/test_ledger_live_versus_simulated.py`.
+#: Decimal("0.0827")` below (0.0547 before the 2026-09-15 fee activation);
+#: `tests/integration/test_ledger_live_versus_simulated.py` asserts its own
+#: fixture literal independently.
 #:
 #: The other 20 files are deliberately NOT edited, and they split 16 / 4:
 #:   * 16 carry the same boilerplate landmark -- "this file's own fixture mix
@@ -828,7 +829,7 @@ def test_daily_cap_admits_the_number_of_runs_its_dollar_value_pays_for() -> None
         # move in EITHER the cap or the unit price is caught, not absorbed.
         # 7 -> 4, and this is A DELIBERATE PRODUCT DECISION, not a side effect
         # (#105 defect A, CHG-007, ADR-0113, decided by the product owner on
-        # 2026-09-13). The `:online` per-request fee is now priced at the
+        # 2026-09-15). The `:online` per-request fee is now priced at the
         # measured $0.007, so the default-mix unit price rose $0.0547 -> $0.0827
         # and the $0.40 cap pays for four runs instead of seven.
         #

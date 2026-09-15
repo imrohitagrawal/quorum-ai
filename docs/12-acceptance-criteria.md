@@ -299,15 +299,14 @@ AT `0.0`. It is now false by design: the cheapest searching slot's card moves fr
 `<$0.001` to about `$0.007`, because `perModelEstimateText` renders `<$0.001`
 below the display quantum and no searching slot can round that low at $0.007.
 
-**What activation cost**, measured under the real production posture (peer critique
-AND the judge on, both read from `GET /status`, not inferred from `fly.toml`): the
-per-account daily envelope went from 4 runs to 3 on the static price table (5 to 3
-on live prices), and 75 of 1820 shipped-catalog mixes changed band (66 to
-`require_confirmation`, 9 to `block`) — measured under the judge model production
-actually runs (ADR-0113 names it and records the 2026-09-15 correction of the
-earlier 5 → 4 / 62 figures, which were measured with a different judge). The envelope drop is
-the ceiling becoming CORRECT — it had been admitting a run it could not afford —
-and `DAILY_CAP_USD` was deliberately NOT raised to compensate.
+**What activation cost**: under the real production posture (peer critique AND the
+judge on, live catalog prices, measured 2026-09-15) the per-account daily envelope
+on the shipped mix drops from 5 runs to 3. The figures live in ONE place —
+ADR-0113 §"What it cost", with the command and posture line pasted verbatim — and
+are deliberately not repeated here; three transcribed copies were wrong in three
+different ways. The envelope drop is the ceiling becoming CORRECT — it had been
+admitting runs it could not afford — and `DAILY_CAP_USD` was deliberately NOT
+raised to compensate.
 
 - Requirement: NFR-002
 - Decision: accepted 2026-07-17 (issue #18); see CHG-005. **Rationale superseded
@@ -318,9 +317,11 @@ and `DAILY_CAP_USD` was deliberately NOT raised to compensate.
 - Test: existing #18 mechanism tests, now running at the activated `0.007`.
   `tests/unit/test_cost_search_fee.py` pins the estimate side;
   `tests/unit/test_actual_cost_source.py::test_the_measured_fee_term_reads_the_SETTING_and_scales_with_it`
-  pins the measured side. Neither asserts the default is `0.0` — only
-  `tests/test_doc_gate_consistency.py::test_env_example_values_match_the_real_defaults`
-  catches that, indirectly
+  pins the measured side. The default itself is pinned with a literal on both
+  sides by `tests/unit/test_search_fee_is_activated.py::test_the_shipped_default_is_the_MEASURED_provider_fee`
+  and `tests/unit/test_search_fee_field_validation.py::test_the_shipped_default_is_unchanged_by_adding_the_constraint`
+  (both `0.007`); `tests/test_doc_gate_consistency.py::test_env_example_values_match_the_real_defaults`
+  ties `.env.example` to it
 
 ## Release 2: Trust & Evaluation
 
