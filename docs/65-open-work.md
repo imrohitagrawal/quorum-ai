@@ -98,7 +98,7 @@ caught by any automated check and 10 of 16 by adversarial review
 |----|------|-------|----------|-------|------------|
 | W1 | Stream the provider call (was "B2") | DONE | `ABSENT src/product_app/providers.py :: "stream": True` | — | — |
 | W2 | Peer critique: the answer models critique each other, two rounds (built; ships default-off) | DONE | `ABSENT src/product_app/debate.py :: def _build_peer_round(` | #290 | W1 |
-| W3 | Re-set the money constants against a measured bound — **STOP** | DONE | `PRESENT src/product_app/costs.py :: DAILY_CAP_USD = Decimal("0.20")` | — | W2 |
+| W3 | Re-set the money constants against a measured bound — ladder moved 2026-09-07 (ADR-0102); token constants remain (W13/#268) | DONE | `PRESENT src/product_app/costs.py :: DAILY_CAP_USD = Decimal("0.20")` | — | W2 |
 | W4 | Variable panel size N ∈ {2,3,4} | PENDING | `PRESENT src/product_app/model_slots.py :: if len(model_ids) != EXPECTED_SLOT_COUNT:` | — | — (W10 done) |
 | W5 | Quick-answer N=1 mode | UNPINNED | `—` | — | W4 |
 | W6 | A panel of one reports strong consensus | DONE | `ABSENT src/product_app/synthesis_consensus.py :: if len(stance) == 1:` | #383 | — |
@@ -218,33 +218,47 @@ receipt to `estimated`. **That blocker is now discharged** — see the W1 note
 below: two live windows measured the streamed path, most recently three runs
 that all came back `measured` with no failed steps.
 
-**W3 — the money constants. STOP, and DEFERRED by decision (ADR-0081).**
-The product owner decided 2026-08-28: **the three constants do not move until
-#290 is built and its cost is measured.** `SOFT_THRESHOLD_USD = 0.15`,
-`HARD_LIMIT_USD = 0.25`, `DAILY_CAP_USD = 0.20` stay as they are. The earlier
-approved shape (`SOFT ≈ 0.20 / DAILY_CAP ≈ 0.60 / HARD ≈ 0.75`) prices a feature
-that does not exist, on a projection that is not measured.
+**W3 — the money constants. MOVED on 2026-09-07 (ADR-0102); ADR-0081's
+deferral is discharged.** ADR-0081 (2026-08-28) held the ladder at
+0.15 / 0.20 / 0.25 until #290 was built and its cost measured. Both have
+happened: W2 shipped on 2026-09-03 (`5aed777`), and ADR-0102 (Accepted
+2026-09-06; `0b6b0b4`, 2026-09-07) measured the first real critique run,
+raised `DEBATE_ROUND_MAX_TOKENS` 2000 → 4000 together with
+`cost_debate_output_tokens_cap`, and moved the ladder to
+`SOFT_THRESHOLD_USD = 0.30`, `DAILY_CAP_USD = 0.40`, `HARD_LIMIT_USD = 0.50`,
+with `GLOBAL_DAILY_CEILING_USD` held at 5.00. The row's needle names the OLD
+`DAILY_CAP_USD = Decimal("0.20")` line, so the row derives DONE for exactly
+that reason. Re-derive:
+`grep -n -E '^(SOFT_THRESHOLD_USD|HARD_LIMIT_USD|DAILY_CAP_USD|GLOBAL_DAILY_CEILING_USD) ' src/product_app/costs.py`.
+Until 2026-09-16 this block still quoted the 0.15 ladder as current and told a
+reader to hold it; it had been stale since `0b6b0b4`.
 
-Measured headroom today, judge-ON: a default question's bound is **0.1134**
-against a `0.15` line — about **3.7 cents**. That margin is the number to watch;
-W13 (#268) is a change that would eat into it. `SOFT_THRESHOLD_USD <
-DAILY_CAP_USD < HARD_LIMIT_USD` is mandatory or the confirmation band is dead
-code. W2 has landed and run (see the W2 paragraph); re-measure against that
-telemetry and bring a number back with its measurement.
+Measured headroom today (2026-09-16; live catalog, 441 models; production
+posture, peer critique ON and the judge `openai/gpt-4.1-mini` ON; the search fee
+at its shipped 0.0): the default mix on ADR-0102's own query bounds at
+**0.1830** (point estimate 0.0755) against the **0.30** line — **ALLOW, about
+11.7 cents** of headroom; ADR-0102 measured 0.1827 for the same shape. With the
+$0.007 search fee the parked #105 branch would activate, the bound is 0.2110 —
+about 8.9 cents. That margin is the number to watch; W13 (#268) is a change
+that would eat into it. `SOFT_THRESHOLD_USD < DAILY_CAP_USD < HARD_LIMIT_USD`
+is mandatory or the confirmation band is dead code. Re-derive with
+`cost_estimation_service._estimate_bound_usd` and `_threshold_for` on the
+four default slots (the sweep script's `_band` helper is the same call), with
+the posture set in the environment and printed beside the number.
 
-**The numbers are now pre-computed — see ADR-0094.** A hermetic sweep over all
-**715** four-slot mixes of the shipped catalog (C(13,4); the often-quoted "495"
-is stale, from a twelve-model catalog) established the whole target set:
-`cost_debate_output_tokens` 400 -> 1700, `SYNTHESIS_SECTION_MAX_TOKENS`
-3000 -> 6000, and `SOFT`/`DAILY_CAP`/`HARD` 0.15/0.20/0.25 -> 0.18/0.27/0.28,
-with `GLOBAL_DAILY_CEILING_USD` held at 5.00 by owner constraint. The threshold
-shift is +$0.03 exactly, because synthesis runs on one fixed model so its delta
-is constant across every mix — which restores today's 251/715 confirmations and
-220/715 blocks bit-for-bit. **This is still STOP.** The debate constant is the
-number #290 most invalidates (one debate call per run becomes eight, from four
-models), so it was deliberately NOT set ahead of the feature; the feature has
-now landed and run. **W3 is the next action after W2** — re-measure with `finish_reason` in place, re-run the sweep,
-and land both token constants and all three thresholds in ONE pull request.
+**ADR-0094's pre-computed targets were overtaken, not landed.** Its hermetic
+sweep over all **715** four-slot mixes (C(13,4); the often-quoted "495" is
+stale, from a twelve-model catalog) proposed `cost_debate_output_tokens`
+400 → 1700, `SYNTHESIS_SECTION_MAX_TOKENS` 3000 → 6000 and a ladder of
+0.18 / 0.27 / 0.28. ADR-0102 then moved the ladder further and by a different
+mechanism (the measured cap), and the two token constants have NOT moved:
+`config.py` still ships `cost_debate_output_tokens: int = 400` and
+`synthesis.py` still `SYNTHESIS_SECTION_MAX_TOKENS = 3000`. That is the open
+remainder of W3, and it is the same concern as W13 (#268): the debate output
+is priced at 400 tokens against an enforced 4000 cap. Re-measure with
+`finish_reason` in place against the peer-shaped telemetry, re-run the sweep
+at cap 4000, and land both token constants with their measurement in ONE pull
+request. Nothing in this paragraph authorises a live window or a paid run.
 
 `finish_reason` is now IN PLACE (ADR-0093 decision 5, shipped with W2): the
 durable token stream carries `query_run_id`, `stage` and a bounded
@@ -725,8 +739,8 @@ first of those windows closed, and a session then recommended spending money to
 re-measure it. Nothing compared the sentence to the commit log. That is the
 failure mode rule 1a exists for.
 
-**W3 is still STOP**, but not for this reason: it is deferred by the product
-owner's decision in ADR-0081, independently of any measurement. **W2 is BUILT
+**W3's deferral is discharged** — ADR-0102 moved the ladder on 2026-09-07 (see
+the W3 paragraph; its remainder is the two token constants). **W2 is BUILT
 and has run in production** (four peer-shaped runs, see the W2 paragraph above);
 the sentence this change replaces said it was unbuilt; that was overtaken on
 2026-09-03 (`5aed777`, `_build_peer_round`) and stood until this change merged.
