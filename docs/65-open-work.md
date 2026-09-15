@@ -170,7 +170,8 @@ asserting it are corrected here), and `_extract_citations`' FLAT annotation
 read is carried across faithfully but not fixed — settling that shape needs a
 live `:online` call, which is spend.
 
-**W2 — peer critique (#290). BUILT, and shipping DEFAULT-OFF.** ADR-0093's
+**W2 — peer critique (#290, closed 2026-09-15). BUILT, shipping DEFAULT-OFF in
+`config.py` and switched ON in production by `fly.toml`.** ADR-0093's
 shape is implemented in full (decisions 1, 1a, 1b, 2, 3, 4, 5) behind
 `settings.peer_critique_enabled`, which defaults to `false`. ADR-0095 records
 why the flag exists and it is not caution: `_estimate_bound_usd` calls itself a
@@ -179,13 +180,22 @@ PER ELIGIBLE CRITIC. The bound now reads the same flag, so the ceiling holds in
 both postures — measured on four identical slots, `debate_round_1` goes
 `$0.0052` -> `$0.0208`, a ratio of exactly 4.0000: one call per slot.
 
-**#290 stays OPEN, and W2's row reads DONE only in the mechanical sense that
-the mechanism is in the tree.** The State cell is DERIVED from the needle, so it
-says what the tree says and nothing more. Done in this repository's sense means
-running in production, and with the flag off nothing peer-shaped runs. What
-closes both is the next package: a declared live-execution window with
-`PEER_CRITIQUE_ENABLED=true`, which is also what produces the measurement W3 has
-been waiting for. The needle was REPLACED for this row — the old one pinned
+**#290 CLOSED 2026-09-15 — peer critique has run in production.** W2's row
+reads DONE because the mechanism is in the tree, and the run this paragraph
+used to wait for has happened, four times: the 2026-09-03 live window ran with
+`PEER_CRITIQUE_ENABLED=true`, and `docs/analysis/2026-09-10-telemetry-tokens.jsonl`
+carries four runs with peer-shaped debate rounds — `1cb95597` (2026-09-06),
+`2e2d3c2e` (2026-09-08) and `5a9c2d63` (2026-09-10) dispatched `debate_round_1`
+AND `debate_round_2` to all four slot models, and `fcca9510` (2026-09-10)
+dispatched round 1 to all four and was cut short before round 2. The moderator
+shape would show only `settings.debate_model_id`. Re-derive:
+`python3 -c` over that file, grouping `stage` by `query_run_id` and counting
+distinct `model_id`. The two 2026-09-10 runs' cost is reconciled against the
+provider bill in CHG-006. Production still runs `PEER_CRITIQUE_ENABLED = "true"`
+(`fly.toml`, `/status`), with live execution off since that window lapsed. What
+#290 asked for is built, shipped and exercised; the per-model measurement W3
+wants is now derivable from that telemetry and is W3's work, not #290's. The
+needle was REPLACED for this row — the old one pinned
 `model_id=settings.debate_model_id,`, a literal the moderator call sites still
 carry, so it would have read PENDING for a reason that is no longer the reason.
 
@@ -236,9 +246,10 @@ durable token stream carries `query_run_id`, `stage` and a bounded
 belong to an answer slot — the initial answers and, under the flag, each critic.
 A call belonging to no slot (the moderator, synthesis, the judge) OMITS that
 field rather than nulling it. So the post-#290 sweep can group by run and round
-instead of inferring from `model_id`. What is still missing is
-the RUN — no peer-shaped call has ever been made, so every per-model number the
-design exposes remains UNVERIFIED. W3's window is what produces them.
+instead of inferring from `model_id`. The RUN has now happened — four
+peer-shaped runs between 2026-09-06 and 2026-09-10 (see W2 above) — so the
+per-model numbers the design exposes are derivable from that telemetry. W3 has
+not yet re-derived them, and that is W3's work; #290 closed 2026-09-15.
 
 **W4 — variable panel size.** `Field(ge=1, le=4)` appears at three sites
 (`debate.py` twice, `providers.py` once) and they move together. **No longer
