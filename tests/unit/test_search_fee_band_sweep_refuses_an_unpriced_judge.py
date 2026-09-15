@@ -16,18 +16,19 @@ from __future__ import annotations
 import importlib.util
 import sys
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
-def _load_sweep():
+def _load_sweep() -> ModuleType:
     spec = importlib.util.spec_from_file_location(
         "search_fee_band_sweep", REPO_ROOT / "scripts" / "proofs" / "search_fee_band_sweep.py"
     )
+    assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
     sys.modules.setdefault("search_fee_band_sweep", module)
     spec.loader.exec_module(module)
     return module
