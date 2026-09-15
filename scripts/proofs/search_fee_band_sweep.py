@@ -98,6 +98,24 @@ def main(argv: list[str] | None = None) -> int:
         help="force the static _FALLBACK_CATALOG price table (offline-reproducible).",
     )
     args = parser.parse_args(argv)
+    # Restore what this run found, on EVERY exit path -- the refusal, the
+    # control-failure return, an exception. ``_band``/``_point`` mutate the
+    # process-global fee setting and ``--fallback-prices`` overrides the
+    # catalog singleton's ``price_index``; before 2026-09-15 the restore lived
+    # in the ``__main__`` block only, so a test calling ``main()`` left the
+    # static table in place for the rest of the process, and it restored the
+    # fee to a hard-coded 0.0, which is no longer the shipped default.
+    fee_before = config.settings.cost_web_search_request_fee_usd
+    had_override = "price_index" in vars(openrouter_model_catalog_service)
+    try:
+        return _run(args)
+    finally:
+        config.settings.cost_web_search_request_fee_usd = fee_before
+        if not had_override:
+            vars(openrouter_model_catalog_service).pop("price_index", None)
+
+
+def _run(args: argparse.Namespace) -> int:
 
     if args.fallback_prices:
         # Point the price index at the static table so the result never depends
@@ -169,9 +187,4 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    try:
-        sys.exit(main())
-    finally:
-        # _band/_point mutate a process-global setting; undo it on EVERY exit
-        # path, including the control-failure return and any exception.
-        config.settings.cost_web_search_request_fee_usd = OFF
+    sys.exit(main())

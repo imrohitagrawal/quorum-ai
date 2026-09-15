@@ -519,8 +519,8 @@ class Settings(BaseSettings):
     #: error sat in the unsafe direction, under-charging a safety ceiling.
     #:
     #: WHAT ACTIVATION COST: the per-account daily envelope on the shipped mix
-    #: drops from 5 runs to 3 under the real production posture (peer critique
-    #: AND the judge on, live catalog prices, measured 2026-09-15). THE FIGURES
+    #: SHRINKS under the real production posture (peer critique AND the judge
+    #: on, live catalog prices, measured 2026-09-15). THE FIGURES
     #: LIVE IN ONE PLACE — ADR-0113, "What it cost" — with the command and the
     #: POSTURE line pasted verbatim; three transcribed copies of them were wrong
     #: in three different ways, so none is repeated here. The envelope drop is

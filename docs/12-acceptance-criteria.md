@@ -301,7 +301,7 @@ below the display quantum and no searching slot can round that low at $0.007.
 
 **What activation cost**: under the real production posture (peer critique AND the
 judge on, live catalog prices, measured 2026-09-15) the per-account daily envelope
-on the shipped mix drops from 5 runs to 3. The figures live in ONE place —
+on the shipped mix shrinks. The figures live in ONE place —
 ADR-0113 §"What it cost", with the command and posture line pasted verbatim — and
 are deliberately not repeated here; three transcribed copies were wrong in three
 different ways. The envelope drop is the ceiling becoming CORRECT — it had been

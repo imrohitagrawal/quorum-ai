@@ -146,19 +146,26 @@ telling the user a searching slot was free.
   point estimate.
 - The measured receipt rises by the same $0.028 through ADR-0110's plumbing, so the
   estimate and the receipt move together and the run stops being under-reported.
-- **Eight pinned test figures re-baselined, each by exactly +$0.028.** That
-  uniformity is the evidence the change is surgical: 0.2669→0.2949, 0.0746→0.1026,
-  0.1287→0.1567, 0.0548→0.0828, 2.5396→2.5676, 0.0547→0.0827, and the two by-stage
-  and by-model rows. No debate, synthesis or judge line moved, because those stages
-  never append `:online`.
+- **Every re-baselined test literal moved by exactly the fee times the searching
+  slots it covers, and nothing else moved.** Enumerate them from the diff rather
+  than from this sentence (`git diff 5497e55..HEAD -- tests | grep -E
+  'Decimal\("[0-9]'`): the whole-run figures each moved by exactly +$0.028 (four
+  searching slots) — 0.2669→0.2949, 0.3003→0.3283, 0.0746→0.1026, 0.0269→0.0549,
+  0.1287→0.1567, 0.1621→0.1901, 0.0548→0.0828, 0.1313→0.1593, 0.0547→0.0827,
+  0.0094→0.0374, 2.5396→2.5676 — and the four per-model rows of the exact
+  partition each moved by +$0.007 (one slot: 0.0068→0.0138, 0.0067→0.0137 ×3),
+  which sum to the same +$0.028. No debate, synthesis or judge line moved,
+  because those stages never append `:online`.
 - **Confirmation tokens minted before the deploy are invalidated** — but not by the
   estimate change: the token table is an in-process dict with a 5-minute TTL, so a
   deploy restarts it regardless.
-- 2 of 1820 catalog mixes become unrunnable. A `block` costs an operator an
-  expensive option, not money.
-- **W24 on the open-work board flips to DONE by its own needle**, which was written
-  as `ABSENT … = 0.007` precisely so activation would move it. Its first version
-  pinned `= 0.0`, a substring of `= 0.007`, and could not have noticed.
+- Some catalog mixes move from `require_confirmation` to `block` — the count
+  lives only in the §"What it cost" table above, under its POSTURE and PRICES
+  lines; do not transcribe it here. A `block` costs an operator an expensive
+  option, not money.
+- **W24 on the open-work board derives DONE from its own needle**, which names
+  the activated `Field(default=0.007, …)` literal as ABSENT in the open form,
+  precisely so activation moves it.
 - **The value is a PROVIDER price and nothing detects it going stale** (DEBT-014).
   It is date-stamped in `config.py`. Re-measure from a fresh export before relying
   on it again; a single export of 8 generations is the whole evidence base.
@@ -170,9 +177,11 @@ literal on both sides (rule 7a) and, more importantly, the behaviour: the fee
 reaches the point estimate AND the fail-safe bound, and turning it off lowers a
 four-searching-slot estimate by exactly `$0.028`. Until DEBT-015 (2026-09-13)
 **no test asserted the default at all** — the only thing that would have noticed
-a change was `.env.example` drifting out of step, which is how `0.0` survived
-eight weeks past the evidence that refuted it; DEBT-015 then pinned it at `0.0`,
-and this change moves that pin to `0.007`.
+a change was `.env.example` drifting out of step, which is how `0.0` stood
+unchallenged for eight weeks (2026-07-17 to 2026-09-10) and then five more days
+after the export refuted it; DEBT-015 then pinned it at `0.0`, and this change
+moves that pin to `0.007`.
 
-The eight re-baselined figures are the second proof, and the stronger one: each
-moved by exactly +$0.028 and nothing else moved.
+The re-baselined literals are the second proof, and the stronger one: each moved
+by exactly the fee times the searching slots it covers (listed under
+Consequences, derived from the diff) and nothing else moved.

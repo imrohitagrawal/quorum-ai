@@ -12,8 +12,8 @@ safety device keyed on the estimate — was under-protecting by $0.028 on every
 searching run. Under-charging a ceiling is the unsafe direction.
 
 These tests pin the activated value and the behaviour it buys, so it cannot
-silently drift back to `0.0` the way it silently stayed there for eight weeks
-after the evidence arrived.
+silently drift back to `0.0` the way it stood unchallenged for eight weeks before
+the evidence arrived and five days after.
 """
 
 from __future__ import annotations
