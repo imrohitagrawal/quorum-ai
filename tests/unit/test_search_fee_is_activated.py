@@ -50,8 +50,8 @@ def test_the_shipped_default_is_the_MEASURED_provider_fee() -> None:
     Deliberately a literal rather than a reference to the setting (rule 7a: never
     assert a bound against the constant that defines it). Before this, NO test
     asserted the default at all — the only thing that would have noticed a change
-    was `.env.example` drifting out of step, which is why `0.0` survived eight
-    weeks past the evidence that refuted it.
+    was `.env.example` drifting out of step, which is why `0.0` stood unchallenged
+    for eight weeks before the evidence arrived and five days after.
 
     Turns RED when: the default is changed without a decision, in either
     direction.

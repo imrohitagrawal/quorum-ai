@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import importlib.util
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from types import ModuleType
 
@@ -36,11 +37,39 @@ def _load_sweep() -> ModuleType:
     return module
 
 
-def _assert_restored(sweep: ModuleType, fee_before: float) -> None:
-    """``main()`` mutates two process globals; both must be back on every exit path."""
+_ABSENT = object()
+
+
+#: A fee no code path sets: the sweep ends at MEASURED_FEE (0.007), which is
+#: also the shipped default, so a missing restore would be invisible against
+#: the default. Measured 2026-09-15: the "no fee restore" mutant survived until
+#: the tests started from this value instead.
+DISTINCTIVE_FEE = 0.0123
+
+
+def _globals_before(sweep: ModuleType, monkeypatch: pytest.MonkeyPatch) -> tuple[float, object]:
+    """The two process globals ``main()`` mutates, as they are before the call.
+
+    The catalog singleton may already carry an instance-level ``price_index``
+    override left by an earlier test in the same process; ``main()`` must put
+    back whatever it found, not a clean slate — so the contract is "after equals
+    before", by identity, not "no override". The fee is set to a value the
+    sweep never ends at, so "not restored" cannot pass by coincidence.
+    """
+    monkeypatch.setattr(sweep.config.settings, "cost_web_search_request_fee_usd", DISTINCTIVE_FEE)
+    return (
+        sweep.config.settings.cost_web_search_request_fee_usd,
+        vars(sweep.openrouter_model_catalog_service).get("price_index", _ABSENT),
+    )
+
+
+def _assert_restored(sweep: ModuleType, before: tuple[float, object]) -> None:
+    fee_before, override_before = before
     assert sweep.config.settings.cost_web_search_request_fee_usd == fee_before
-    assert "price_index" not in vars(sweep.openrouter_model_catalog_service), (
-        "main() left the static price table overriding the catalog singleton"
+    override_after = vars(sweep.openrouter_model_catalog_service).get("price_index", _ABSENT)
+    assert override_after is override_before, (
+        "main() did not put the catalog singleton's price_index back the way it found it: "
+        f"before={override_before!r} after={override_after!r}"
     )
 
 
@@ -52,9 +81,9 @@ def test_the_sweep_refuses_a_judge_the_static_table_cannot_price(
     monkeypatch.setattr(sweep, "judge_configured", lambda: True)
     monkeypatch.setattr(sweep.config.settings, "quorum_eval_judge_model_id", judge_id)
     assert judge_id not in {entry.model_id for entry in sweep._FALLBACK_CATALOG}
-    fee_before = sweep.config.settings.cost_web_search_request_fee_usd
+    before = _globals_before(sweep, monkeypatch)
     rc = sweep.main(["--fallback-prices"])
-    _assert_restored(sweep, fee_before)
+    _assert_restored(sweep, before)
     out = capsys.readouterr().out
     assert rc == 2, out
     assert "REFUSED: judge model" in out and judge_id in out, out
@@ -70,11 +99,36 @@ def test_the_sweep_runs_for_a_judge_the_static_table_prices(
     assert priced in {entry.model_id for entry in sweep._FALLBACK_CATALOG}
     monkeypatch.setattr(sweep, "judge_configured", lambda: True)
     monkeypatch.setattr(sweep.config.settings, "quorum_eval_judge_model_id", priced)
-    fee_before = sweep.config.settings.cost_web_search_request_fee_usd
+    before = _globals_before(sweep, monkeypatch)
     rc = sweep.main(["--fallback-prices"])
-    _assert_restored(sweep, fee_before)
+    _assert_restored(sweep, before)
     out = capsys.readouterr().out
     assert rc == 0, out
     assert "REFUSED" not in out
     assert f"judge_model_id={priced}" in out
     assert "change band" in out
+
+
+def test_the_sweep_preserves_an_override_a_caller_already_installed(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The full suite runs this file after tests that leave an instance-level
+    ``price_index`` on the catalog singleton. ``main()`` must hand that exact
+    object back, not delete it — measured 2026-09-15: the first version of
+    ``_assert_restored`` demanded "no override" and went red in the full suite
+    while green alone.
+
+    RED IF: ``main()`` pops a pre-existing override, or replaces it with its own.
+    """
+    sweep = _load_sweep()
+    priced = "openai/gpt-4o-mini"
+    monkeypatch.setattr(sweep, "judge_configured", lambda: True)
+    monkeypatch.setattr(sweep.config.settings, "quorum_eval_judge_model_id", priced)
+    installed: Callable[[], dict[str, object]] = lambda: {}  # noqa: E731 - identity is the point
+    monkeypatch.setitem(vars(sweep.openrouter_model_catalog_service), "price_index", installed)
+    before = _globals_before(sweep, monkeypatch)
+    assert before[1] is installed
+    rc = sweep.main(["--fallback-prices"])
+    capsys.readouterr()
+    assert rc == 0
+    _assert_restored(sweep, before)

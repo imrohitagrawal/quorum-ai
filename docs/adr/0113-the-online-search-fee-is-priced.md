@@ -56,9 +56,9 @@ CERTAINLY wrong; `0.007` is MEASURED.** Preferring `0.0` to avoid the staleness
 risk of a provider price had it backwards — it chose a known error over a dated
 measurement, in the direction that under-protects a safety device.
 
-**`DAILY_CAP_USD` is deliberately NOT raised.** The per-account envelope drops from
-5 default-mix runs to 3 (live catalog prices, production's judge, measured
-2026-09-15 — the table below is the only place the figures live), and that is
+**`DAILY_CAP_USD` is deliberately NOT raised.** The per-account envelope shrinks
+(live catalog prices, production's judge, measured 2026-09-15 — the table below
+is the only place the figures live), and that is
 the ceiling becoming correct rather than a regression: it had been admitting runs
 on an estimate that was light.
 Raising the cap to restore the old count would re-create, deliberately, the
@@ -149,12 +149,13 @@ telling the user a searching slot was free.
 - **Every re-baselined test literal moved by exactly the fee times the searching
   slots it covers, and nothing else moved.** Enumerate them from the diff rather
   than from this sentence (`git diff 5497e55..HEAD -- tests | grep -E
-  'Decimal\("[0-9]'`): the whole-run figures each moved by exactly +$0.028 (four
-  searching slots) — 0.2669→0.2949, 0.3003→0.3283, 0.0746→0.1026, 0.0269→0.0549,
+  'Decimal\("[0-9]'`): nine whole-run figures each moved by exactly +$0.028
+  (four searching slots) — 0.2669→0.2949, 0.3003→0.3283, 0.0746→0.1026,
   0.1287→0.1567, 0.1621→0.1901, 0.0548→0.0828, 0.1313→0.1593, 0.0547→0.0827,
-  0.0094→0.0374, 2.5396→2.5676 — and the four per-model rows of the exact
-  partition each moved by +$0.007 (one slot: 0.0068→0.0138, 0.0067→0.0137 ×3),
-  which sum to the same +$0.028. No debate, synthesis or judge line moved,
+  2.5396→2.5676; two `initial_answers` STAGE rows also moved by +$0.028, because
+  all four searching slots sit in that stage — 0.0269→0.0549, 0.0094→0.0374; and
+  the four per-model rows of the exact partition each moved by +$0.007 (one
+  slot: 0.0068→0.0138, 0.0067→0.0137 ×3), which sum to the same +$0.028. No debate, synthesis or judge line moved,
   because those stages never append `:online`.
 - **Confirmation tokens minted before the deploy are invalidated** — but not by the
   estimate change: the token table is an in-process dict with a 5-minute TTL, so a

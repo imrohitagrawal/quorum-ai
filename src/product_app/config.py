@@ -534,7 +534,8 @@ class Settings(BaseSettings):
     #: this comment was wrong twice. Run the sweep at decision time — it prints
     #: its own posture and price source before any number:
     #:     uv run python scripts/proofs/search_fee_band_sweep.py [--fallback-prices]
-    #: ADR-0110 records what it showed under the real production posture.
+    #: ADR-0113 "What it cost" is the only current record; ADR-0110's own
+    #: table is a dated record measured under a judge production does not run.
     #:
     #: One correction to what this comment used to claim. The three per-call
     #: CONFIRM/BLOCK bands do NOT key off the point estimate —
@@ -557,11 +558,9 @@ class Settings(BaseSettings):
     #: the ``:online`` suffix (``InitialModelAnswer.searched``). At 0.0 both
     #: paths add exactly nothing.
     #:
-    #: ACTIVATION WAS NOT A ONE-VALUE CHANGE. Eight tests pinned the pre-fee
-    #: arithmetic — the exact partition split, four "byte-identical posture"
-    #: bound pins, and the daily-cap envelope test — and each was re-baselined
-    #: by exactly +$0.028 in the activation change; the activation commit
-    #: (9bc71f0) lists each pair.
+    #: ACTIVATION WAS NOT A ONE-VALUE CHANGE. Pinned test literals across six
+    #: files were re-baselined by exactly the fee times the searching slots
+    #: each covers; ADR-0113's Consequences enumerates them from the diff.
     #:
     #: There is also no ``fly.toml`` entry for this: the env-var spelling
     #: ``COST_WEB_SEARCH_REQUEST_FEE_USD`` appears in no deploy config and no

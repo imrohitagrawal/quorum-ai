@@ -89,6 +89,9 @@ def sweep(*, query: str, search: bool) -> tuple[int, Counter[tuple[str, str]]]:
     return len(mixes), transitions
 
 
+_NO_OVERRIDE = object()
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--query", default=DEFAULT_QUERY)
@@ -105,14 +108,22 @@ def main(argv: list[str] | None = None) -> int:
     # in the ``__main__`` block only, so a test calling ``main()`` left the
     # static table in place for the rest of the process, and it restored the
     # fee to a hard-coded 0.0, which is no longer the shipped default.
+    # Put back the VALUE that was there, not merely "an override": pytest's
+    # monkeypatch leaves an instance attribute holding the bound method behind
+    # after earlier tests, and a first version of this block kept the sweep's
+    # own table in that case (measured 2026-09-15: green alone, red in the
+    # full suite).
     fee_before = config.settings.cost_web_search_request_fee_usd
-    had_override = "price_index" in vars(openrouter_model_catalog_service)
+    singleton_attrs = vars(openrouter_model_catalog_service)
+    override_before = singleton_attrs.get("price_index", _NO_OVERRIDE)
     try:
         return _run(args)
     finally:
         config.settings.cost_web_search_request_fee_usd = fee_before
-        if not had_override:
-            vars(openrouter_model_catalog_service).pop("price_index", None)
+        if override_before is _NO_OVERRIDE:
+            singleton_attrs.pop("price_index", None)
+        else:
+            singleton_attrs["price_index"] = override_before
 
 
 def _run(args: argparse.Namespace) -> int:
