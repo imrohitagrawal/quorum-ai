@@ -85,15 +85,25 @@ prose, and two advisory**:
 4. (advisory) `tests/integration/test_query_run_cost_guardrails.py` comment
    "a seventh run it could not afford" — it was three runs (5th–7th).
 
-**To finish (one bounded round):** apply 1–4 in the worktree, `make quality`,
-one three-lens review on the result, and if ZERO REQUIRED_CONTRACT survive:
+**To finish (one bounded round):** FIRST merge `origin/main` into
+`feat/105a-activate-search-fee` in the worktree (`git merge origin/main`, no
+rebase, no force). The branch is behind: `0e5fb94` does not contain `e05950b`,
+which rewrote `docs/65-open-work.md`, and the branch edits that same file (the
+W24 row). `git merge-tree --write-tree 0e5fb94 origin/main` reported a clean
+merge on 2026-09-17; if it conflicts, keep main's W3 block and the branch's W24
+row. Every figure above (`18 red`, `4499 passed`) was measured on the
+unmerged tree, so treat it as a claim until re-run (AGENTS.md rules 17 and
+17d). Then apply 1–4, and on the MERGED tree run `make quality`, `make validate`
+and `make diff-cover DIFF_BASE=origin/main`, then one three-lens review on the
+result, and if ZERO REQUIRED_CONTRACT survive:
 `git push origin feat/105a-activate-search-fee` (follow-up commits, no force),
 `gh pr create` with `docs/analysis/2026-09-15-pr105-body-draft.md` as the body's
 shape (it carries the five-round record; fill in the final round and gates), wait for the six required contexts, `make close-guard`
 with `EXPECT_CLOSE=""` (activation closes nothing; #105's W14 stays open),
 squash-merge, verify the Deploy JOB and `/status.build_sha`, then remove the
-worktree and delete the branch local + remote. If anything survives, stop and
-ask; do not run a sixth round on your own.
+worktree and delete the branch local + remote. If `main` moves again before
+the push (it will once this handoff merges), merge it in again and re-gate.
+If anything survives, stop and ask; do not run a sixth round on your own.
 
 **Do not transcribe the consequence figures anywhere.** They live in ONE
 place, ADR-0113 §"What it cost" (live catalog, 2026-09-15: point estimate

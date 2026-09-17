@@ -1,7 +1,7 @@
 # Session Handoff
 
 ## Date/time
-2026-09-17T18:15:30+05:30
+2026-09-17T18:26:31+05:30
 
 ## Open work
 `docs/65-open-work.md` — the source of truth for what is open, what blocks what,
@@ -99,9 +99,9 @@ M docs/analysis/2026-09-15-pr105-body-draft.md
 
 ## Diff stat
 ```text
-docs/analysis/2026-09-15-pr105-body-draft.md | 10 +++++-----
- docs/analysis/2026-09-15-session-handoff.md  | 11 ++++++-----
- 2 files changed, 11 insertions(+), 10 deletions(-)
+docs/analysis/2026-09-15-pr105-body-draft.md |  2 +-
+ docs/analysis/2026-09-15-session-handoff.md  | 18 ++++++++++++++----
+ 2 files changed, 15 insertions(+), 5 deletions(-)
 ```
 
 ## Completed in this session
