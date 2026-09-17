@@ -125,7 +125,7 @@ posture and the ADR says so.
   peer-shaped run had happened, and the telemetry shows FOUR (2026-09-06,
   09-08, 09-10 ×2; three with both rounds to all four models, `fcca9510` round
   1 only). The board now says so.
-- **#448, #458, #467, #268, W23 → #464, #459** — NOT started. #458's doc half:
+- **#448, #458, #447 (piece 1 only), #467, #268, W23 → #464, #459** — NOT started. #458's doc half:
   `docs/10` FR-008 and `docs/faq` say peer critique is enabled in production
   and `/status` confirms `peer_critique_enabled: true` today, so those lines are
   not stale; the code-and-gate half (coupling to the window, the landing
@@ -147,10 +147,11 @@ posture and the ADR says so.
 ## 3a. The root prompt file
 
 `CONTINUE-105-BACKLOG-ULTRACODE-PROMPT.md` stays at root, untracked, as the
-executable procedure for items 4–10 (#448, #458, #467, #268, W23 → #464,
-#459). Its items 1–3 are done or parked as recorded above. Two corrections were
-made to it in place on 2026-09-14: its `grep -c "0.0014"` line (the bare
-pattern matches a token price `0.00000014`) — one correction, nothing else. Its §7 claim
+executable procedure for items 4–10 (#448, #458, #447 piece 1, #467, #268,
+W23 → #464, #459). Its items 1–3 are done or parked as recorded above. One
+correction was made to it in place on 2026-09-14, and nothing else: its
+`grep -c "0.0014"` line (the bare pattern matches a token price
+`0.00000014`). Its §7 claim
 that the W3 block is stale is now discharged by `e05950b`; its §2 claim that
 #105/W24 is "purely the human's" decision is discharged — the decision is
 taken and recorded, and §2 above says what remains.
