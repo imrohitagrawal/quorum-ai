@@ -18,14 +18,20 @@ Slice 4b `e520824` · Slice 5 `e762a79` · Slice 6 `bcee421` · Slice 7
 `fe254b4` · S4 (golden-set harness) `6a412f8`.
 
 **AC-037** (`Web-search plugin fee is an accepted cost-accounting
-exclusion`) has no row of its own in the table below — but it is not
-UI-invisible, and the note below states that precisely rather than
-implying zero effect. AC-037's own text: the fee "is never surfaced to
-the user or on the UI **(at 0.0 it folds invisibly into the total
-estimate — no separate line item)**." That parenthetical means the
-decision *does* affect what the user sees: the total cost figure
-rendered on the cost-gate/estimate views (AC-009/010/027, already in
-this table) is ~$0.02 lower than it would be if the fee were priced in.
+exclusion`) **was SUPERSEDED on 2026-09-15** (CHG-007, ADR-0113): the
+`:online` web-search fee is priced at the measured `$0.007` per searching
+call, so it now reaches the rendered total. It has no row of its own in the
+table below — but it is not UI-invisible, and the note below states that
+precisely rather than implying zero effect. AC-037's own text, kept as the
+dated record of what was accepted on 2026-07-17: the fee "is never surfaced
+to the user or on the UI **(at 0.0 it folds invisibly into the total
+estimate — no separate line item)**." That parenthetical meant the decision
+*did* affect what the user saw: while the fee was excluded, the total cost
+figure rendered on the cost-gate/estimate views (AC-009/010/027, already in
+this table) was lower than it would be with the fee priced in — by `$0.028`
+on the four-searching-slot default mix, not the `~$0.02` this note used to
+quote from the rate card (the measured charge is `$0.007` per call, CHG-006).
+Since the activation that gap is `$0.00`: the fee is in the figure.
 There is no dedicated UI element for the fee itself — nothing to point a
 crosswalk row at — so it stays excluded from the row count, but the
 correct framing is "folded into an existing total, not a separate

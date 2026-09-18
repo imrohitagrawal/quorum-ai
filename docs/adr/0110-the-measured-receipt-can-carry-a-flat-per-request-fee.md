@@ -14,9 +14,11 @@ does not take". **That decision was taken on 2026-09-15 and the default is now
 `0.007` (CHG-007, ADR-0113); this Status line records what ADR-0110 itself did,
 not the value shipping today.**
 
-**Supersedes the RATIONALE of CHG-005 / AC-037, not their decision.** The
-exclusion still stands; the reason recorded for it in 2026-07-17 is refuted
-below. See CHG-006 in `docs/19-change-control-log.md`.
+**Supersedes the RATIONALE of CHG-005 / AC-037, not their decision.** When this
+ADR was accepted the exclusion still stood and only the reason recorded for it
+on 2026-07-17 was refuted below. See CHG-006 in `docs/19-change-control-log.md`.
+**The exclusion itself was reversed on 2026-09-15 (CHG-007, ADR-0113): the fee
+is priced at $0.007.**
 
 ## Context
 
@@ -319,8 +321,11 @@ re-measure the envelope before updating this constant`.
   indirectly, by
   `tests/test_doc_gate_consistency.py::test_env_example_values_match_the_real_defaults`,
   which compares `.env.example` values against the live defaults. Nothing
-  enforces AC-037's wording: `grep -rn AC-037 tests/ scripts/ e2e/` finds
-  nothing.
+  enforced AC-037's wording when this ADR was written: `grep -rn AC-037 tests/
+  scripts/ e2e/` found nothing. It now returns two comment lines in
+  `tests/unit/test_search_fee_is_activated.py`, added by the 2026-09-15
+  activation; they cite AC-037 as superseded history and still enforce none of
+  its wording.
 - **There is no `fly.toml` entry to change.** `COST_WEB_SEARCH_REQUEST_FEE_USD`
   appears in no deploy config, workflow or script — only in `.env.example`. So
   activation means editing the `config.py` default itself, which changes
