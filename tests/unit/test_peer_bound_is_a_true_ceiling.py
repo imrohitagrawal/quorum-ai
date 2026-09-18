@@ -178,13 +178,17 @@ def test_the_shipped_posture_is_byte_identical(monkeypatch: pytest.MonkeyPatch) 
         estimate = _bound(mp, peer=False)
     breakdown = estimate.breakdown
     assert breakdown is not None, "the estimate produced no breakdown to read"
-    # LITERALS on both sides (rule 7a), measured 2026-09-03 on the shipped
-    # catalog with the query at the top of this file.
+    # LITERALS on both sides (rule 7a). Measured 2026-09-03 at 0.0548 on the
+    # shipped catalog with the query at the top of this file; RE-MEASURED at
+    # 0.0828 after the 2026-09-15 search-fee activation (CHG-007), which adds
+    # $0.007 to each of the four searching slots.
     assert estimate.estimated_cost_usd == Decimal("0.0828")
-    # RE-MEASURED 2026-09-06 (ADR-0102): DEBATE_ROUND_MAX_TOKENS 2000 -> 4000
-    # moved the bound 0.1043 -> 0.1313. The POINT estimate is unchanged at
-    # 0.0548 — the cap prices the fail-safe ceiling, not the typical run — and
-    # that asymmetry is the sanity check that the right number moved.
+    # Two moves, in order. ADR-0102 (2026-09-06): DEBATE_ROUND_MAX_TOKENS
+    # 2000 -> 4000 moved the BOUND 0.1043 -> 0.1313 and left the POINT estimate
+    # at 0.0548 — the cap prices the fail-safe ceiling, not the typical run, and
+    # that asymmetry was the sanity check that the right number moved. The
+    # 2026-09-15 activation then moved BOTH by the same $0.028: point
+    # 0.0548 -> 0.0828, bound 0.1313 -> 0.1593.
     assert _max_cost(estimate) == Decimal("0.1593")
     # The peer branch's honest system-prompt pricing must NOT reach this path.
     # Correcting the moderator's flat 350 would move every figure in ADR-0094's

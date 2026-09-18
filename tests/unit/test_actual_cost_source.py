@@ -333,7 +333,8 @@ def test_measured_total_adds_the_flat_search_fee_once_per_SEARCHING_call(
     that omits it entirely passes row 0 and fails the rest.
 
     The fee is monkeypatched to ``0.01`` — neither the shipped default
-    (``0.0``) nor the measured provider price (``0.007``) — so no row can pass
+    (``0.007`` since the 2026-09-15 activation, ``0.0`` before it) nor any
+    other value the tree carries — so no row can pass
     as an artifact of either, and both sides of every assertion are literals
     (rule 7a: never assert a bound against the constant that defines it).
     Row ``(4, "0.0665")`` uses the real ``0.007`` precisely because every other

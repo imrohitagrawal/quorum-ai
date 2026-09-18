@@ -111,8 +111,10 @@ DEFAULT_MODEL_IDS = [
 #: alone leaves it False) and nothing else, against `_FALLBACK_CATALOG` and a
 #: 33-character query:
 #:   judge OFF                        -> point 0.0547, bound 0.1043  (pre-activation)
-#:   judge ON, `openai/gpt-5-mini`    -> point 0.0638, bound 0.1134
-#: Both bounds stay under `SOFT_THRESHOLD_USD` (0.15), so the BAND is ALLOW
+#:   judge ON, `openai/gpt-5-mini`    -> point 0.0638, bound 0.1134  (pre-activation)
+#: Both bounds stay under `SOFT_THRESHOLD_USD` (0.15 when this was written;
+#: ADR-0102 moved it to 0.30 on 2026-09-07, so the margin is wider now), so the
+#: BAND is ALLOW
 #: either way and no test in this file changes its verdict. The judge-ON pair
 #: matches ADR-0064's own table row for 33 chars, independently.
 #:
@@ -781,7 +783,8 @@ def test_daily_cap_admits_the_number_of_runs_its_dollar_value_pays_for() -> None
     the envelope, not the price. THEN the 2026-09-15 search-fee activation moved
     the price: the unit is 0.0827, so the envelope is floor(0.40 / 0.0827) = 4 --
     which is what this test asserts today. The default mix stays in ALLOW
-    (max_cost_usd 0.1043 pre-activation, 0.1593 since), so the loop
+    (max_cost_usd 0.1043 under ADR-0028, 0.1313 after ADR-0102 raised the
+    debate cap, 0.1593 since the 2026-09-15 activation), so the loop
     below's confirmation round-trip stays a no-op for every admitted run,
     same as pre-ADR-0028.
 
