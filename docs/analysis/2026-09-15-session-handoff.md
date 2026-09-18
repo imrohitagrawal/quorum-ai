@@ -16,7 +16,7 @@ cd /Users/rohitagrawal/Projects/quorum-ai
 git status --porcelain            # expect only CONTINUE-105-BACKLOG-ULTRACODE-PROMPT.md (untracked)
 git rev-parse --short origin/main # expect e05950b or later
 curl -s https://quorum.stackclimb.com/status | jq '{build_sha,live_execution,peer_critique_enabled}'
-git worktree list                 # expect quorum-ai (main) and quorum-wt-105a (feat/105a-activate-search-fee @ 0e5fb94); the handoff worktree is removed in this PR's close-out
+git worktree list                 # expect only quorum-ai (main); the handoff worktree is removed in this PR's close-out
 gh issue list --state open --limit 100 --json number | jq length   # expect 10
 ```
 
@@ -35,100 +35,47 @@ or `PEER_CRITIQUE_ENABLED`.
 |---|---|---|---|
 | PR #471 rework: the `:online` fee is FLAT per request; DEBT-014 measured; response key list committed; Part D4 ties evidence to the export | `5497e55` | Deploy job `success` (run 34886130740; two concurrent runs cancelled) | `/status.build_sha` = `5497e55…` read after the deploy |
 | #290 closed (PR #472): board says peer critique has run in production, W3 money block records ADR-0102; live-run prompt archived | `e05950b` | Deploy job `success` (run 35022287018; two concurrent runs cancelled) | `/status.build_sha` = `e05950b…` read after the deploy |
+| #105 activation (PR #473): the `:online` web-search fee is priced at the measured $0.007 — one `Field` default; CHG-007 and ADR-0113 record the product owner's 2026-09-15 decision | `ef4a716` | DEPLOY_105 | STATUS_105 |
 
 `git branch -r` should no longer show `docs/debt-014-generation-endpoint-measured`
 or `docs/290-peer-critique-built-close`.
 
-## 2. What is PARKED — the #105 activation branch, and exactly what is left
+## 2. The #105 activation — MERGED, and what it cost to finish
 
-`feat/105a-activate-search-fee` at **`0e5fb94`**, in worktree
-`/Users/rohitagrawal/Projects/quorum-wt-105a`, **local only, never pushed this
-session** (the remote still holds the 2026-09-13 tip `5d56a37`).
+`feat/105a-activate-search-fee` merged as **`ef4a716`** (PR #473) after
+eleven three-lens review rounds. The whole behavioural change is one line:
+`cost_web_search_request_fee_usd` `0.0` → `Field(default=0.007, ge=0,
+allow_inf_nan=False)`. The product owner took the decision on 2026-09-15;
+CHG-007 and ADR-0113 record it. No live-execution window was opened and
+neither flag was flipped.
 
-**The decision is TAKEN.** The product owner approved activating the fee at
-$0.007 on 2026-09-15, in session, and re-confirmed it after being shown the
-corrected cost (see §4). CHG-007 and ADR-0113 on the branch record it as
-Accepted with the session reference. Do not write PROPOSED again.
+**What that means in production:** every searching run's estimate, fail-safe
+bound, receipt and daily-cap booking now carry $0.028 (4 × $0.007). The
+per-account daily envelope drops from 5 runs to 3. Those figures live in ONE
+place — ADR-0113 §"What it cost" — with the command and its posture line
+pasted verbatim. Do not transcribe them; three transcriptions were wrong in
+three different ways during this session (judge OFF, wrong judge, judge
+priced at the unknown-model fallback). The band sweep now REFUSES to run when
+the configured judge is not in the price table it was told to use.
 
-**Gates on `0e5fb94` are green**: `make quality` EXIT=0 (4499 passed),
-`make validate`, `make diff-cover` (1 executable line, 100%),
-`make api-contract` (52 executed). Reverting the default to 0.0
-(`Field(default=0.007, …)` → `default=0.0` in `config.py`) turns **18 tests red
-in the full suite** and none green — 4 in `test_search_fee_is_activated.py`,
-3 in `test_open_work_matches_reality.py` (the W24 needle flips), 2 each in
-`test_bound_covers_the_judge.py`, `test_estimate_prices_the_judge.py` and
-`test_peer_bound_is_a_true_ceiling.py`, 1 each in `test_cost_breakdown.py`,
-`test_search_fee_field_validation.py`, `test_mutation_copy_completeness.py`,
-`test_query_run_cost_guardrails.py` and `test_doc_gate_consistency.py`
-(measured 2026-09-16, file restored byte-exact). All measured on this box;
-re-run before trusting.
+**What the eleven rounds cost, and why — the lesson worth carrying.** The code
+never changed after round 1 and **no round ever found a money defect**.
+Everything after round 1 was the decision RECORD: sentences that were true
+while the fee was `0.0` and false at `0.007`. Rounds 2-4 each introduced a
+defect while fixing one. The turn came at round 8, when the review stopped
+chasing the diff and swept the whole repo for the class: that enumerated 9
+blocking plus 6 advisory at once, and rounds 9-11 then ran 8, 1 and 2, each
+fix proven by mutation. **If you change a shipped money constant again,
+run the sweep FIRST** — enumerate every present-tense sentence that the change
+falsifies — instead of discovering them one review round at a time.
 
-**Why it is parked.** Five three-lens review rounds. The fee change itself
-(one `Field(default=0.007, ge=0, allow_inf_nan=False)` line) never changed
-after round 1 and no round found a money defect. Every round after that was
-about the decision RECORD, and fix rounds 2, 3 and 4 each introduced a
-defect of their own (rule 12), so the owner's instruction "merge only if round
-5 is clean" was not met. Round 5 left **two REQUIRED_CONTRACT findings, both
-prose, and two advisory**:
-
-1. ADR-0113 lines ~41-43 and ~128, and the activation test module
-   (`test_search_fee_is_activated.py` under `tests/unit/`, on the branch only)
-   lines ~33-34, still say in the PRESENT tense that OpenRouter's rate card
-   implies ~$0.02/request, "3x the charge". The schedule read 2026-09-14 prices
-   exa `auto` at $0.007 per request (DEBT-014 on main; CHG-007 on the branch
-   cites it as corroboration). Rewrite as: the ~$0.02 was the July rate-card
-   reading AC-037 carried; the current schedule matches the bill.
-2. `docs/12-acceptance-criteria.md` line ~294 ("activation is now an open
-   product-owner decision") and ADR-0110's Status block still describe the
-   decision as open in the present tense. Rewrite as "was then open; taken
-   2026-09-15 (CHG-007)".
-3. (advisory) ADR-0113 §Consequences "every re-baselined literal moved by …
-   and nothing else moved" over-reaches for two literals; soften.
-4. (advisory) `tests/integration/test_query_run_cost_guardrails.py` comment
-   "a seventh run it could not afford" — it was three runs (5th–7th).
-5. After the merge below, `docs/65-open-work.md`'s W3 headroom paragraph goes
-   false: it says the headroom was measured with "the search fee at its shipped
-   0.0" and calls #105 "the parked #105 branch", while the merged tree ships
-   `Field(default=0.007, …)` and its own W24 row reads ACTIVATED. Rewrite that
-   sentence in the same pull request: state the fee-ON bound (0.2110 on
-   2026-09-16) as current and label 0.1830 as the pre-activation measurement,
-   keeping both dates. Verified on the merged tree
-   (`git merge-tree --write-tree 0e5fb94 origin/main` → `2337b5d`; its
-   `config.py` blob is the branch's).
-
-**To finish (one bounded round):** FIRST merge `origin/main` into
-`feat/105a-activate-search-fee` in the worktree (`git merge origin/main`, no
-rebase, no force). The branch is behind: `0e5fb94` does not contain `e05950b`,
-which rewrote `docs/65-open-work.md`, and the branch edits that same file (the
-W24 row). `git merge-tree --write-tree 0e5fb94 origin/main` reported a clean
-merge on 2026-09-17; if it conflicts, keep main's W3 block and the branch's W24
-row. Every figure above (`18 red`, `4499 passed`) was measured on the
-unmerged tree, so treat it as a claim until re-run (AGENTS.md rules 17 and
-17d). Then apply 1–5, and on the MERGED tree run the full rule-14 local set serially
-(`make quality && make validate`, `make diff-cover DIFF_BASE=origin/main`,
-`make api-contract`, `make openapi-check`, `make security-scan`), then one
-three-lens review on the result, and if ZERO REQUIRED_CONTRACT survive:
-`git push origin feat/105a-activate-search-fee` (follow-up commits, no force),
-`gh pr create` with `docs/analysis/2026-09-15-pr105-body-draft.md` as the body's
-shape (it points at the branch's commit bodies for the review record rather than
-restating it; fill in the final round and the gates you just ran), wait for the
-six required contexts, `make close-guard`
-with `EXPECT_CLOSE=""` (activation closes nothing; #105's W14 stays open),
-squash-merge, verify the Deploy JOB and `/status.build_sha`, then remove the
-worktree and delete the branch local + remote. If `main` moves again before
-the push (it will once this handoff merges), merge it in again and re-gate.
-If anything survives, stop and ask; do not run a sixth round on your own.
-
-**Do not transcribe the consequence figures anywhere.** They live in ONE
-place, ADR-0113 §"What it cost" (live catalog, 2026-09-15: point estimate
-$0.0756 → $0.1036, runs 5 → 3, 106 mixes change band). Three transcriptions
-were wrong in three different ways this session (judge OFF; judge
-`gpt-4o-mini`; judge priced at the unknown-model fallback). The sweep now
-refuses to run when the configured judge is not in the price table it was
-told to use, and restores the globals it mutates; production's judge
-(`openai/gpt-4.1-mini`, 4 of 4 judge rows in the 2026-09-10 telemetry) is NOT
-in `_FALLBACK_CATALOG`, so there is no honest offline figure for production's
-posture and the ADR says so.
+**Recorded as debt, not fixed:** 24 files quote the pre-activation bound
+`0.1043` in dated or past-tense contexts; `tests/unit/test_cost_guardrails.py`
+is a designated historical record; `docs/analysis/01-bug-ledger.md` is a dated
+ledger; `test_the_shipped_posture_is_byte_identical` fails in some multi-file
+orders from pre-existing catalog collection-order dependence (green in the
+full suite, and on `main` before this branch); `app.js` names a server helper
+`_estimate_from_slots` that does not exist.
 
 ## 3. What the survey items look like now
 
@@ -143,7 +90,7 @@ posture and the ADR says so.
   tool** (recorded in DEBT-014's row on the branch; on main only in the PR
   body) — that is the largest staleness risk on the fee and belongs in a
   follow-up.
-- **#105/W24 (item 2)** — decided and built; parked at `0e5fb94`, see §2.
+- **#105/W24 (item 2)** — decided, built and MERGED (`ef4a716`, PR #473); see §2.
 - **#290 (item 3)** — closed by PR #472 (`e05950b`), four review rounds (the third escalated the board's stale W3 money block, rewritten at the owner's instruction; the fourth left only advisories, recorded in the PR). The prompt's "every claim refuted, close as
   stale" was HALF right: the mechanism was built, but the board said no
   peer-shaped run had happened, and the telemetry shows FOUR (2026-09-06,
@@ -172,13 +119,13 @@ posture and the ADR says so.
 
 `CONTINUE-105-BACKLOG-ULTRACODE-PROMPT.md` stays at root, untracked, as the
 executable procedure for items 4–10 (#448, #458, #447 piece 1, #467, #268,
-W23 → #464, #459). Its items 1–3 are done or parked as recorded above. One
+W23 → #464, #459). Its items 1–3 are all done, as recorded above. One
 correction was made to it in place on 2026-09-14, and nothing else: its
 `grep -c "0.0014"` line (the bare pattern matches a token price
 `0.00000014`). Its §7 claim
 that the W3 block is stale is now discharged by `e05950b`; its §2 claim that
-#105/W24 is "purely the human's" decision is discharged — the decision is
-taken and recorded, and §2 above says what remains.
+#105/W24 is "purely the human's" decision is discharged — the decision was
+taken, built and merged.
 
 ## 4. Traps measured this session (all reproduced)
 

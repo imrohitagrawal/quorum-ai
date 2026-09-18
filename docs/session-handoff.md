@@ -1,7 +1,7 @@
 # Session Handoff
 
 ## Date/time
-2026-09-18T13:56:02+05:30
+2026-09-19T01:21:10+05:30
 
 ## Open work
 `docs/65-open-work.md` — the source of truth for what is open, what blocks what,
@@ -11,7 +11,7 @@ line further down this file is the factory router's view of the lifecycle, not a
 work status.
 
 ## Latest narrative handoff
-`docs/analysis/2026-09-15-session-handoff.md` — read this for full context before editing. **(3 days old** — if a newer session ran since then and its narrative handoff was archived without a replacement being written, this may be stale; check `docs/archive/` for a newer one.)
+`docs/analysis/2026-09-15-session-handoff.md` — read this for full context before editing. **(4 days old** — if a newer session ran since then and its narrative handoff was archived without a replacement being written, this may be stale; check `docs/archive/` for a newer one.)
 
 This file is a mechanical snapshot (branch/git-status/skill-route/live state) —
 regenerated fresh every `make handoff`. The narrative above (what happened,
@@ -25,10 +25,10 @@ Run `make handoff` again for current numbers instead of trusting this file
 once it ages -- every value below is read from git/gh/`/status` at
 generation time, per #134.
 
-- **`origin/main` tip:** `e05950bc03ad`
-- **Last commit touching `src/`:** `5497e55a3065`
-- **Production vs. last `src/` commit:** unavailable: could not reach https://quorum-ai.fly.dev/status (last src/ commit is 5497e55)
-- **pytest collected (no execution):** 4516
+- **`origin/main` tip:** `ef4a716a7235`
+- **Last commit touching `src/`:** `ef4a716a7235`
+- **Production vs. last `src/` commit:** unavailable: could not reach https://quorum-ai.fly.dev/status (last src/ commit is ef4a716)
+- **pytest collected (no execution):** 4524
 - **e2e lane spec counts:** invariants: 20, ops: 2, degraded: 1
 - **Open issues:** 10
 - **Changed-lines coverage:** not computed here -- `make diff-cover` shares
@@ -36,7 +36,7 @@ generation time, per #134.
   concurrently (AGENTS.md rule 15), so this file does not run it. Run
   `make quality && make diff-cover DIFF_BASE=origin/main` for a current number.
 - **Remote branches not merged into `origin/main`:**
-- `feat/105a-activate-search-fee`
+- None (every remote branch merges into `main`)
 
 ## Current phase
 Operate, learn, and improve
@@ -93,15 +93,14 @@ Operate, learn, and improve
 
 ## Git status
 ```text
-M docs/analysis/2026-09-15-pr105-body-draft.md
+D  docs/analysis/2026-09-15-pr105-body-draft.md
  M docs/analysis/2026-09-15-session-handoff.md
 ```
 
 ## Diff stat
 ```text
-docs/analysis/2026-09-15-pr105-body-draft.md | 26 +++++++++++++++++-------
- docs/analysis/2026-09-15-session-handoff.md  | 30 ++++++++++++++++++++--------
- 2 files changed, 41 insertions(+), 15 deletions(-)
+docs/analysis/2026-09-15-session-handoff.md | 137 +++++++++-------------------
+ 1 file changed, 42 insertions(+), 95 deletions(-)
 ```
 
 ## Completed in this session
