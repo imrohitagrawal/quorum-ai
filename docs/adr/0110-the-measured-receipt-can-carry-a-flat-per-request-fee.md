@@ -277,8 +277,10 @@ of the static table it reports 61 and 43. None of those was measured under
 production's judge either (see the correction above). Do not quote a band figure
 without the posture it was measured under.
 
-**Activation is NOT a one-value change.** Eight tests pin the pre-fee arithmetic
-and must be re-measured in the activating PR. Measured over exactly these five
+**Activation was NOT a one-value change.** Eight tests pinned the pre-fee
+arithmetic and were re-measured in the activating change (2026-09-15; ADR-0113
+§Consequences enumerates the literals from the diff). Measured over exactly
+these five
 files — `test_cost_breakdown.py`, `test_peer_bound_is_a_true_ceiling.py`,
 `test_bound_covers_the_judge.py`, `test_estimate_prices_the_judge.py`,
 `tests/integration/test_query_run_cost_guardrails.py` — with
@@ -319,10 +321,16 @@ re-measure the envelope before updating this constant`.
 - **AC-037, CHG-005 and `docs/54-ac-to-test-map.md` need revising.** Their
   refuted rationale is annotated in this PR and CHG-006 records the
   supersession; the *decision* is the owner's.
-- **No test asserts the default is `0.0` directly.** The change is caught only
-  indirectly, by
+- **No test asserted the default directly when this ADR was written.** The
+  change was caught only indirectly, by
   `tests/test_doc_gate_consistency.py::test_env_example_values_match_the_real_defaults`,
-  which compares `.env.example` values against the live defaults. Nothing
+  which compares `.env.example` values against the live defaults. **That gap is
+  closed: the 2026-09-15 activation added two direct pins, and flipping the
+  default reds both plus the `.env.example` gate —
+  `test_search_fee_is_activated.py::test_the_shipped_default_is_the_MEASURED_provider_fee`
+  and
+  `test_search_fee_field_validation.py::test_the_shipped_default_is_unchanged_by_adding_the_constraint`,
+  neither of which reads `.env.example`.** Nothing
   enforced AC-037's wording when this ADR was written: `grep -rn AC-037 tests/
   scripts/ e2e/` found nothing. It now returns two lines in
   `tests/unit/test_search_fee_is_activated.py`, added by the 2026-09-15
