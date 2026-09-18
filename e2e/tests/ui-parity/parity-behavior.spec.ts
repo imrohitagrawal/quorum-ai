@@ -1265,8 +1265,11 @@ test.describe("UI parity — behaviour", () => {
     // Two shapes are legitimate: `~$0.NNN`, and `<$0.001` for a model whose
     // per-slot cost rounds below the display quantum. The second is deliberate
     // honesty in the renderer (app.js:1199 — "$0.000" would claim the model is
-    // free), and slot 4 hits it now that WP-G1 moved it to nvidia nano at
-    // $0.00005/1K input. The regex previously accepted only the first shape,
+    // free). Slot 4 hit it while the `:online` search fee was priced at 0.0 and
+    // WP-G1 had moved that slot to nvidia nano at $0.00005/1K input; since the
+    // 2026-09-15 activation every searching slot carries $0.007, so the first
+    // shape is what renders. Both stay accepted: this loop only rejects a
+    // missing or placeholder figure. The regex previously accepted only the first shape,
     // which is a hardcoded assumption that no slot is ever genuinely that
     // cheap. The `MATCHES the server` half of this test is what pins the value
     // itself; this loop only rejects a missing/placeholder figure.

@@ -492,7 +492,19 @@ class Settings(BaseSettings):
     #: tied to the export row-for-row by tests/test_doc_gate_consistency.py
     #: Part D4.
     #:
-    #: DEFAULT 0.0 — still off, but no longer on its original reasoning.
+    #: ACTIVATED at the MEASURED $0.007 — product-owner decision taken
+    #: 2026-09-15 (issue #105 defect A; CHG-007 and ADR-0113, both Accepted),
+    #: superseding AC-037 and CHG-005. An earlier revision of this comment on
+    #: the activation branch said the decision was taken on 2026-09-13; it was
+    #: not, and the branch carried a retraction until the decision was taken.
+    #: The value is dated deliberately: it is a PROVIDER price, read from the
+    #: owner's OpenRouter activity export for 2026-09-10, and nothing in this
+    #: repo detects it going stale — DEBT-014 records the levers that could
+    #: move it, including that OpenRouter now marks the ``:online`` suffix
+    #: deprecated in favour of its ``openrouter:web_search`` server tool.
+    #: Re-measure it from a fresh export whenever the decision is revisited.
+    #:
+    #: The history, because the reasoning matters more than the number:
     #: The 2026-07-17 decision (AC-037 in docs/12-acceptance-criteria.md,
     #: CHG-005 in docs/19-change-control-log.md, issue #18) accepted the
     #: exclusion because the pre-run estimate was measured running ABOVE the
@@ -501,16 +513,29 @@ class Settings(BaseSettings):
     #: approved at an estimate of $0.076 while its measured TOKEN cost alone
     #: was $0.0938 — the estimate ran BELOW, on the 2026-07-17 comparison's own
     #: token-for-token terms. (Including the fee the true charge was $0.121763.)
-    #: AC-037 and CHG-005 therefore need revising, and ACTIVATION IS A
-    #: PRODUCT-OWNER DECISION (CHG-005 records the exclusion as one).
+    #: The product owner took that decision on 2026-09-15 (CHG-007).
+    #: The deciding argument: `0.0` is CERTAINLY wrong and `0.007` is MEASURED,
+    #: so preferring `0.0` to avoid staleness risk had it backwards — and the
+    #: error sat in the unsafe direction, under-charging a safety ceiling.
     #:
-    #: THE CONSEQUENCE FIGURES ARE DELIBERATELY NOT REPEATED HERE. They depend
+    #: WHAT ACTIVATION COST: the per-account daily envelope on the shipped mix
+    #: SHRINKS under the real production posture (peer critique AND the judge
+    #: on, live catalog prices, measured 2026-09-15). THE FIGURES
+    #: LIVE IN ONE PLACE — ADR-0113, "What it cost" — with the command and the
+    #: POSTURE line pasted verbatim; three transcribed copies of them were wrong
+    #: in three different ways, so none is repeated here. The envelope drop is
+    #: the ceiling becoming CORRECT, not a regression, and ``DAILY_CAP_USD`` was
+    #: deliberately NOT raised to compensate: doing so would re-create the
+    #: under-protection that had been accidental.
+    #:
+    #: THE FULL CONSEQUENCE FIGURES ARE DELIBERATELY NOT REPEATED HERE. They depend
     #: on the peer-critique and judge postures and on whether prices come from
     #: the live catalog or the static table, and a transcribed copy of them in
     #: this comment was wrong twice. Run the sweep at decision time — it prints
     #: its own posture and price source before any number:
     #:     uv run python scripts/proofs/search_fee_band_sweep.py [--fallback-prices]
-    #: ADR-0110 records what it showed under the real production posture.
+    #: ADR-0113 "What it cost" is the only current record; ADR-0110's own
+    #: table is a dated record measured under a judge production does not run.
     #:
     #: One correction to what this comment used to claim. The three per-call
     #: CONFIRM/BLOCK bands do NOT key off the point estimate —
@@ -533,12 +558,9 @@ class Settings(BaseSettings):
     #: the ``:online`` suffix (``InitialModelAnswer.searched``). At 0.0 both
     #: paths add exactly nothing.
     #:
-    #: ACTIVATION IS NOT A ONE-VALUE CHANGE. Eight tests pin the pre-fee
-    #: arithmetic and go RED at 0.007 — the exact partition split, four
-    #: "byte-identical posture" bound pins, and the daily-cap envelope test,
-    #: which reports "the pinned static catalog's default-mix price moved to
-    #: 0.0827". ADR-0110 lists all eight by name. None of them is wrong; each
-    #: must be re-measured in the PR that activates the fee.
+    #: ACTIVATION WAS NOT A ONE-VALUE CHANGE. Pinned test literals across six
+    #: files were re-baselined by exactly the fee times the searching slots
+    #: each covers; ADR-0113's Consequences enumerates them from the diff.
     #:
     #: There is also no ``fly.toml`` entry for this: the env-var spelling
     #: ``COST_WEB_SEARCH_REQUEST_FEE_USD`` appears in no deploy config and no
@@ -556,9 +578,9 @@ class Settings(BaseSettings):
     #: docs/63-technical-debt-register.md for the measured dollar figures, which
     #: depend on the token counts and so are not one pair.
     #:
-    #: ``ge=0`` not ``gt=0`` -- ``0.0`` is the shipped default and means "no
-    #: fee", so zero stays legal; ``gt=0`` makes the default itself invalid and
-    #: the app fails at import.
+    #: ``ge=0`` not ``gt=0`` -- ``0.0`` means "no fee" and was the shipped
+    #: default until 2026-09-15, so zero stays legal (an operator can switch
+    #: the fee off by value); ``gt=0`` would make that setting fail at import.
     #:
     #: ``allow_inf_nan=False`` is load-bearing for ``+inf`` ALONE, and only that.
     #: ``float("inf") >= 0`` is ``True``, so the bound admits it. The bound
@@ -568,7 +590,7 @@ class Settings(BaseSettings):
     #: revision of this comment claimed the opposite ("a bound cannot reject it
     #: at all"); that inverted the consequence and was refuted by dropping
     #: ``allow_inf_nan=False`` and watching only the ``inf`` case go red.
-    cost_web_search_request_fee_usd: float = Field(default=0.0, ge=0, allow_inf_nan=False)
+    cost_web_search_request_fee_usd: float = Field(default=0.007, ge=0, allow_inf_nan=False)
     #: Output-token floor for a single initial answer.
     cost_initial_output_tokens: int = 700
     #: How much each initial answer lengthens per token of query (longer,

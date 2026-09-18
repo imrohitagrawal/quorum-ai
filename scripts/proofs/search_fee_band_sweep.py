@@ -23,8 +23,10 @@ silently reproduces the ``--fallback-prices`` figures instead. Pass
 ``--fallback-prices`` for a figure that is reproducible offline forever.
 
 Every run prints its POSTURE and its PRICE SOURCE before any number, because a
-band figure without its posture is worthless. An earlier version printed a bogus
-judge field that always read ``n/a``, and that is exactly how a "production"
+band figure without its posture is worthless — and it REFUSES to run when the
+configured judge is not in the price table it was told to use, because a judge
+priced at the unknown-model fallback makes every number an artefact. An earlier
+version printed a bogus judge field that always read ``n/a``, and that is exactly how a "production"
 figure measured with the judge OFF reached an ADR — production runs the judge
 ON, and turning it on moves both the band counts and the daily envelope.
 
@@ -87,6 +89,9 @@ def sweep(*, query: str, search: bool) -> tuple[int, Counter[tuple[str, str]]]:
     return len(mixes), transitions
 
 
+_NO_OVERRIDE = object()
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--query", default=DEFAULT_QUERY)
@@ -96,6 +101,32 @@ def main(argv: list[str] | None = None) -> int:
         help="force the static _FALLBACK_CATALOG price table (offline-reproducible).",
     )
     args = parser.parse_args(argv)
+    # Restore what this run found, on EVERY exit path -- the refusal, the
+    # control-failure return, an exception. ``_band``/``_point`` mutate the
+    # process-global fee setting and ``--fallback-prices`` overrides the
+    # catalog singleton's ``price_index``; before 2026-09-15 the restore lived
+    # in the ``__main__`` block only, so a test calling ``main()`` left the
+    # static table in place for the rest of the process, and it restored the
+    # fee to a hard-coded 0.0, which is no longer the shipped default.
+    # Put back the VALUE that was there, not merely "an override": pytest's
+    # monkeypatch leaves an instance attribute holding the bound method behind
+    # after earlier tests, and a first version of this block kept the sweep's
+    # own table in that case (measured 2026-09-15: green alone, red in the
+    # full suite).
+    fee_before = config.settings.cost_web_search_request_fee_usd
+    singleton_attrs = vars(openrouter_model_catalog_service)
+    override_before = singleton_attrs.get("price_index", _NO_OVERRIDE)
+    try:
+        return _run(args)
+    finally:
+        config.settings.cost_web_search_request_fee_usd = fee_before
+        if override_before is _NO_OVERRIDE:
+            singleton_attrs.pop("price_index", None)
+        else:
+            singleton_attrs["price_index"] = override_before
+
+
+def _run(args: argparse.Namespace) -> int:
 
     if args.fallback_prices:
         # Point the price index at the static table so the result never depends
@@ -120,9 +151,25 @@ def main(argv: list[str] | None = None) -> int:
     print(f"fee: {OFF} -> {MEASURED_FEE}")
     print(
         f"POSTURE: peer_critique_enabled={config.settings.peer_critique_enabled} "
-        f"judge_configured={judge_configured()}"
+        f"judge_configured={judge_configured()} "
+        f"judge_model_id={config.settings.quorum_eval_judge_model_id or '(unset)'}"
     )
     print(f"PRICES:  {price_source}")
+    # REFUSE, do not guess. ``costs.py`` prices any model id missing from the
+    # price index at the unknown-model fallback (``_DEFAULT_PRICE_PER_1K_*``),
+    # silently. On 2026-09-15 that produced a "production" table whose judge
+    # line was 2.58x the real price, reproducible byte-for-byte with a
+    # nonsense judge id, and it reached an ADR and a change-control row. A
+    # figure whose judge is priced at a fallback is not a figure; stop here.
+    judge_id = config.settings.quorum_eval_judge_model_id
+    if judge_configured() and judge_id not in openrouter_model_catalog_service.price_index():
+        print(
+            f"REFUSED: judge model {judge_id!r} is not in the price table ({price_source}); "
+            "it would be priced at the unknown-model fallback and every figure below would "
+            "be an artefact of that fallback, not of production. Use the live catalog, or a "
+            "judge id the static table prices."
+        )
+        return 2
     print()
 
     lanes = ((True, "search ON (every slot searching)"), (False, "search OFF (control)"))
@@ -151,9 +198,4 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    try:
-        sys.exit(main())
-    finally:
-        # _band/_point mutate a process-global setting; undo it on EVERY exit
-        # path, including the control-failure return and any exception.
-        config.settings.cost_web_search_request_fee_usd = OFF
+    sys.exit(main())

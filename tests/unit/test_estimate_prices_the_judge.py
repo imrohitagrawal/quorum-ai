@@ -43,7 +43,7 @@ QUERY = "Compare transparent model answers"
 #: The four-stage estimate for ``QUERY`` and the slots below, with NO judge.
 #: This is the pre-change figure and it must not move: a run with no judge
 #: configured is not affected by this work at all.
-ESTIMATE_JUDGE_OFF = Decimal("0.1287")
+ESTIMATE_JUDGE_OFF = Decimal("0.1567")
 
 #: The judge reserve, at the pinned fallback price. Deliberately the SAME
 #: literal ``test_bound_covers_the_judge.py`` pins for the bound, because the
@@ -62,7 +62,7 @@ JUDGE_TERM = Decimal("0.0334")
 
 #: ``ESTIMATE_JUDGE_OFF + JUDGE_TERM``, written out rather than computed so
 #: both sides of the assertion are literals (rule 7a).
-ESTIMATE_JUDGE_ON = Decimal("0.1621")
+ESTIMATE_JUDGE_ON = Decimal("0.1901")
 
 #: The judge's DISPLAYED row, which is ONE QUANTUM BELOW ``JUDGE_TERM``, and
 #: that is correct rather than a discrepancy. ``_reconcile_usd_lines`` is

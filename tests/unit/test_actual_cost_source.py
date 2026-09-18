@@ -332,10 +332,15 @@ def test_measured_total_adds_the_flat_search_fee_once_per_SEARCHING_call(
     2-4; one that adds it to every priced call (11, not 4) fails row 4; one
     that omits it entirely passes row 0 and fails the rest.
 
-    The fee is monkeypatched to ``0.01`` — neither the shipped default
-    (``0.0``) nor the measured provider price (``0.007``) — so no row can pass
-    as an artifact of either, and both sides of every assertion are literals
-    (rule 7a: never assert a bound against the constant that defines it).
+    Four rows monkeypatch the fee to ``0.01``, a value the tree carries
+    nowhere, and THOSE rows are what cannot pass as an artifact of a shipped
+    value. Measured on this tree: hardcoding the seam to the shipped ``0.007``
+    reds exactly the searching ``0.01`` rows (``0.01-1``, ``0.01-2``,
+    ``0.01-4``) and leaves the other three green — the ``0.007`` rows below and
+    the fee-independent ``0.01-0`` row. Both sides of every assertion are
+    literals (rule 7a: never assert a bound against the constant that defines
+    it).
+
     Row ``(4, "0.0665")`` uses the real ``0.007`` precisely because every other
     value here is a whole number of cents; see the note on that row.
 
@@ -508,7 +513,9 @@ def test_the_measured_fee_term_reads_the_SETTING_and_scales_with_it(
     # while charging nothing at the actual price.
     assert _total(fee=0.007, searching=4) - _total(fee=0.0, searching=4) == Decimal("0.028")
     assert _total(fee=0.007, searching=1) - _total(fee=0.0, searching=1) == Decimal("0.007")
-    # At the shipped default the measured total must be the token cost alone.
+    # With the fee forced OFF the measured total must be the token cost alone.
+    # (``0.0`` was the shipped default until the 2026-09-15 activation; the fee
+    # ships at ``0.007`` now, which the two assertions above pin.)
     assert _total(fee=0.0, searching=4) == Decimal("0.0385")
 
 

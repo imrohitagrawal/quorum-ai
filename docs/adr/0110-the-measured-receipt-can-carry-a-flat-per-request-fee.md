@@ -7,14 +7,18 @@ Accepted — 2026-09-12.
 **Authorises nothing.** No `**Authorises:**` line; it may not be cited to
 sanction a live-execution posture or a paid run.
 
-**Ships the mechanism, not the charge.** `cost_web_search_request_fee_usd`
-remains `0.0`, so this ADR changes no served figure. Activating it is a
-product-owner decision and is deliberately NOT taken here — see
-"The activation decision this ADR does not take".
+**Ships the mechanism, not the charge.** This ADR left
+`cost_web_search_request_fee_usd` at `0.0`, so it changed no served figure, and
+reserved activation to the product owner — see "The activation decision this ADR
+does not take". **That decision was taken on 2026-09-15 and the default is now
+`0.007` (CHG-007, ADR-0113); this Status line records what ADR-0110 itself did,
+not the value shipping today.**
 
-**Supersedes the RATIONALE of CHG-005 / AC-037, not their decision.** The
-exclusion still stands; the reason recorded for it in 2026-07-17 is refuted
-below. See CHG-006 in `docs/19-change-control-log.md`.
+**Supersedes the RATIONALE of CHG-005 / AC-037, not their decision.** When this
+ADR was accepted the exclusion still stood and only the reason recorded for it
+on 2026-07-17 was refuted below. See CHG-006 in `docs/19-change-control-log.md`.
+**The exclusion itself was reversed on 2026-09-15 (CHG-007, ADR-0113): the fee
+is priced at $0.007.**
 
 ## Context
 
@@ -209,7 +213,7 @@ The plan at issue #105 comment 5638578554 requires an order that never leaves
 the daily ceiling under-protected, because over-charging a ceiling is safe and
 under-charging it is not. That order is **B (this ADR) → A (activation) → C**:
 
-- B alone moves nothing — the fee is `0.0` on both paths.
+- B alone moved nothing — the fee was `0.0` on both paths at that point.
 - A raises the estimate, which is what the daily cap and the cumulative rail
   book, so the ceiling becomes *more* protective, never less.
 - C would LOWER what a failed run books, so it must come last and behind its own
@@ -221,10 +225,12 @@ under-charging it is not. That order is **B (this ADR) → A (activation) → C*
 
 ## The activation decision this ADR does not take
 
-`cost_web_search_request_fee_usd` stays `0.0`, so **no served figure moves in
-this change**. Activating it at the measured $0.007 is a product-owner decision,
-because CHG-005 recorded the exclusion as one and because the consequences are
-user-facing. Measured for this ADR so the decision can be taken on numbers.
+`cost_web_search_request_fee_usd` stayed `0.0` in this change, so **no served
+figure moved in it**. Activating it at the measured $0.007 was a product-owner
+decision, because CHG-005 recorded the exclusion as one and because the
+consequences are user-facing. Measured for this ADR so the decision could be
+taken on numbers. **That decision was taken on 2026-09-15 (CHG-007, ADR-0113)
+and the fee now ships at $0.007.**
 
 **Every figure below is re-derivable, and the posture is part of the figure.**
 Run `uv run python scripts/proofs/search_fee_band_sweep.py [--fallback-prices]`;
@@ -255,14 +261,26 @@ into "needs confirmation", and makes **2** of 1820 mixes unrunnable. The control
 lane changing nothing is the positive partner proving the fee reaches only
 searching slots — it was 0 in every posture measured.
 
+**CORRECTED 2026-09-15 — the table above is NOT production's figure.** It was
+measured with the judge set to `openai/gpt-4o-mini`; production's judge is
+`openai/gpt-4.1-mini` (4 of 4 judge rows in
+`docs/analysis/2026-09-10-telemetry-tokens.jsonl`), which the static price table
+does not price at all, so no `--fallback-prices` run can state production's
+figure — the sweep now refuses to try. The table is kept as the dated record of
+what this ADR published; the current figures live in ONE place, ADR-0113 §"What
+it cost", and are not repeated here.
+
 **Other postures give materially different numbers**, and that is the point of
 the script rather than a table: with peer critique off the same sweep reports 299
 mixes changing band and 64 reaching `block`, and with live-catalog prices instead
-of the static table it reports 61 and 43. None of those is production. Do not
-quote a band figure without the posture it was measured under.
+of the static table it reports 61 and 43. None of those was measured under
+production's judge either (see the correction above). Do not quote a band figure
+without the posture it was measured under.
 
-**Activation is NOT a one-value change.** Eight tests pin the pre-fee arithmetic
-and must be re-measured in the activating PR. Measured over exactly these five
+**Activation was NOT a one-value change.** Eight tests pinned the pre-fee
+arithmetic and were re-measured in the activating change (2026-09-15; ADR-0113
+§Consequences enumerates the literals from the diff). Measured over exactly
+these five
 files — `test_cost_breakdown.py`, `test_peer_bound_is_a_true_ceiling.py`,
 `test_bound_covers_the_judge.py`, `test_estimate_prices_the_judge.py`,
 `tests/integration/test_query_run_cost_guardrails.py` — with
@@ -303,12 +321,21 @@ re-measure the envelope before updating this constant`.
 - **AC-037, CHG-005 and `docs/54-ac-to-test-map.md` need revising.** Their
   refuted rationale is annotated in this PR and CHG-006 records the
   supersession; the *decision* is the owner's.
-- **No test asserts the default is `0.0` directly.** The change is caught only
-  indirectly, by
+- **No test asserted the default directly when this ADR was written.** The
+  change was caught only indirectly, by
   `tests/test_doc_gate_consistency.py::test_env_example_values_match_the_real_defaults`,
-  which compares `.env.example` values against the live defaults. Nothing
-  enforces AC-037's wording: `grep -rn AC-037 tests/ scripts/ e2e/` finds
-  nothing.
+  which compares `.env.example` values against the live defaults. **That gap is
+  closed: the 2026-09-15 activation added two direct pins, and flipping the
+  default reds both plus the `.env.example` gate —
+  `test_search_fee_is_activated.py::test_the_shipped_default_is_the_MEASURED_provider_fee`
+  and
+  `test_search_fee_field_validation.py::test_the_shipped_default_is_unchanged_by_adding_the_constraint`,
+  neither of which reads `.env.example`.** Nothing
+  enforced AC-037's wording when this ADR was written: `grep -rn AC-037 tests/
+  scripts/ e2e/` found nothing. It now returns two lines in
+  `tests/unit/test_search_fee_is_activated.py`, added by the 2026-09-15
+  activation; they cite AC-037 as superseded history and still enforce none of
+  its wording.
 - **There is no `fly.toml` entry to change.** `COST_WEB_SEARCH_REQUEST_FEE_USD`
   appears in no deploy config, workflow or script — only in `.env.example`. So
   activation means editing the `config.py` default itself, which changes
