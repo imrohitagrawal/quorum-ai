@@ -110,12 +110,14 @@ def test_judge_off_leaves_the_bound_byte_identical(monkeypatch: pytest.MonkeyPat
     # on both sides (rule 7a: never assert a bound against the constant that
     # defines it), so raising a price constant or adding an unconditional term
     # is caught rather than absorbed.
-    # RE-MEASURED 2026-09-06 (ADR-0102): 0.2249 -> 0.2669 when
-    # DEBATE_ROUND_MAX_TOKENS went 2000 -> 4000. "Byte-identical" below means
-    # identical ACROSS THE JUDGE SWITCH, not frozen against a debate-cap change.
-    assert first == Decimal("0.2669"), (
+    # Two moves, in order: ADR-0102 (2026-09-06) took it 0.2249 -> 0.2669 when
+    # DEBATE_ROUND_MAX_TOKENS went 2000 -> 4000, and the 2026-09-15 search-fee
+    # activation (CHG-007) took it 0.2669 -> 0.2949, $0.007 on each of the four
+    # searching slots. "Byte-identical" below means identical ACROSS THE JUDGE
+    # SWITCH, not frozen against a debate-cap or fee change.
+    assert first == Decimal("0.2949"), (
         f"the judge-OFF bound moved to {first}; it must stay byte-identical to the "
-        "post-ADR-0102 figure, or this change altered runs that have no judge"
+        "post-activation figure, or this change altered runs that have no judge"
     )
 
 
@@ -175,9 +177,9 @@ def test_the_judge_term_is_pinned_to_exact_literals(
     off = _bound(monkeypatch, judge=False)
     on = _bound(monkeypatch, judge=True)
     # RE-MEASURED 2026-09-06 (ADR-0102), cap 2000 -> 4000.
-    assert off == Decimal("0.2669")
-    assert on == Decimal("0.3003"), (
-        f"the judge-on bound moved to {on}; expected 0.2669 + 0.0334 = 0.3003"
+    assert off == Decimal("0.2949")
+    assert on == Decimal("0.3283"), (
+        f"the judge-on bound moved to {on}; expected 0.2949 + 0.0334 = 0.3283"
     )
     # THE INVARIANT THAT MATTERS: the debate cap moves the four-stage bound and
     # must leave the JUDGE term alone. It did — 0.0334 before and after.

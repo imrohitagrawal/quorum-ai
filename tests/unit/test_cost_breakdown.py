@@ -203,7 +203,7 @@ def test_exact_partition_pins_the_split() -> None:
       init_prompt    = 350 + 2000 + 250 = 2600  (all slots search=True)
       initial_i      = 0.001*2600/1000 + 0.005*825/1000 = 0.0026 + 0.004125
                      = 0.006725  (per model)
-      initial_total  = 4 * 0.006725 = 0.0269
+      initial_total  = 4 * (0.006725 + 0.007 fee) = 0.0549
       ctx4           = 4 * 825 = 3300
       debate_prompt  = 350 + 250 + 3300 = 3900
       debate_round   = 0.001*3900/1000 + 0.005*400/1000 = 0.0039 + 0.002 = 0.0059
@@ -216,7 +216,7 @@ def test_exact_partition_pins_the_split() -> None:
       synth_section  = 0.00025*4700/1000 + 0.002*3000/1000 = 0.001175 + 0.006
                      = 0.007175
       synthesis      = 5 * 0.007175 = 0.035875 -> 0.0359 (five section calls)
-      raw_total      = 0.0269 + 2*0.0059 + 0.0359 = 0.0746 -> total 0.0746
+      raw_total      = 0.0549 + 2*0.0059 + 0.0359 = 0.1026 -> total 0.1026
 
     Every number in this block is MEASURED by execution (``uv run pytest``),
     not hand-rederived -- see rule 8c on why an upstream's actual behaviour is
@@ -246,7 +246,7 @@ def test_exact_partition_pins_the_split() -> None:
     )
     breakdown = estimate.breakdown
     assert breakdown is not None
-    assert breakdown.total == Decimal("0.0746")
+    assert breakdown.total == Decimal("0.1026")
 
     # by_stage — initial_answers; two debate rounds at 0.0059 each;
     # synthesis (five sections), now priced from ``openai/gpt-5-mini``'s own
@@ -254,7 +254,7 @@ def test_exact_partition_pins_the_split() -> None:
     # (``uv run pytest`` — never hand-rederived, per rule 8c): synth_section
     # is 0.007175, so the five-section total is 0.035875 -> 0.0359.
     assert [(line.stage, line.usd) for line in breakdown.by_stage] == [
-        ("initial_answers", Decimal("0.0269")),
+        ("initial_answers", Decimal("0.0549")),
         ("debate_round_1", Decimal("0.0059")),
         ("debate_round_2", Decimal("0.0059")),
         ("synthesis", Decimal("0.0359")),
@@ -262,10 +262,10 @@ def test_exact_partition_pins_the_split() -> None:
 
     # by_model — fallback-a gets the extra quantum (largest remainder tie → lowest index).
     assert [(line.model_id, line.usd) for line in breakdown.by_model] == [
-        ("test/fallback-a", Decimal("0.0068")),
-        ("test/fallback-b", Decimal("0.0067")),
-        ("test/fallback-c", Decimal("0.0067")),
-        ("test/fallback-d", Decimal("0.0067")),
+        ("test/fallback-a", Decimal("0.0138")),
+        ("test/fallback-b", Decimal("0.0137")),
+        ("test/fallback-c", Decimal("0.0137")),
+        ("test/fallback-d", Decimal("0.0137")),
         ("synthesis", Decimal("0.0477")),
     ]
 

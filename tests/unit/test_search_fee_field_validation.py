@@ -13,8 +13,9 @@ when a larger magnitude does trip it. The measured dollar figures live in
 DEBT-015's register row; they depend on the token counts, so they are a family
 rather than one pair and are deliberately not restated here.
 
-``ge=0`` not ``gt=0``: ``0.0`` is the shipped default and means "no fee", so
-zero must stay legal -- ``gt=0`` makes the default itself invalid and the app
+``ge=0`` not ``gt=0``: ``0.0`` means "no fee" (and was the shipped default until
+the 2026-09-15 activation, CHG-007), so zero must stay legal -- ``gt=0`` makes that
+setting invalid and the app
 fails at import.
 
 ``allow_inf_nan=False`` is load-bearing for ``+inf`` ALONE. ``float("inf") >= 0``
@@ -74,9 +75,10 @@ def test_legitimate_search_fees_are_still_accepted(good: float) -> None:
     """The positive partner, without which every test above passes over a field
     that rejects EVERYTHING -- including the shipped default.
 
-    ``0.0`` is the shipped default (the fee is excluded pending a product-owner
-    decision) and ``0.007`` is the flat per-request fee measured on the provider
-    bill, so both must stay constructible. ``0.018`` is the highest
+    ``0.007`` is the shipped default since the 2026-09-15 activation (CHG-007) —
+    the flat per-request fee measured on the provider bill — and ``0.0`` means
+    "no fee" and was the default before it, so both must stay constructible.
+    ``0.018`` is the highest
     ``pricing.web_search`` any model in the live catalog publishes --
     ``perplexity/sonar-pro-search``, re-derived from
     ``GET https://openrouter.ai/api/v1/models``, free and unauthenticated -- so
@@ -92,7 +94,7 @@ def test_legitimate_search_fees_are_still_accepted(good: float) -> None:
 def test_the_shipped_default_is_unchanged_by_adding_the_constraint() -> None:
     """Constraining a field must not move its value. Pinned as a literal on
     both sides rather than compared to the constant that defines it."""
-    assert Settings(_env_file=None).cost_web_search_request_fee_usd == 0.0  # type: ignore[call-arg]
+    assert Settings(_env_file=None).cost_web_search_request_fee_usd == 0.007  # type: ignore[call-arg]
 
 
 def test_the_refusal_names_the_field_so_an_operator_can_act() -> None:

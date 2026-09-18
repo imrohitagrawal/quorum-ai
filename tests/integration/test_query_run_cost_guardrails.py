@@ -55,7 +55,9 @@ DEFAULT_MODEL_IDS = [
 #: network before the session-wide socket-blocking fixture armed?). That made
 #: every band assertion in this file non-deterministic depending on which
 #: other files ran first. With the catalog row in place, pricing is
-#: deterministic and MEASURED (2026-08-09) at:
+#: deterministic and MEASURED (2026-08-09, BEFORE the 2026-09-15 search-fee
+#: activation; at the fee shipping since then the pair is 0.0827 / 0.1593 and
+#: every band below is unchanged) at:
 #:   DEFAULT_MODEL_IDS: point 0.0547, bound 0.1043 -- ALLOW (unchanged band
 #:     from pre-ADR-0028, just a higher number: point +73%, bound +35%).
 #:
@@ -79,8 +81,9 @@ DEFAULT_MODEL_IDS = [
 #: cited, and asserted nowhere. A number no gate compares to the tree goes stale
 #: in silence. Positive control that the grep-for-assertions actually works:
 #: the POINT figure IS asserted -- `PINNED_DEFAULT_MIX_UNIT_USD =
-#: Decimal("0.0547")` below, and once more in
-#: `tests/integration/test_ledger_live_versus_simulated.py`.
+#: Decimal("0.0827")` below (0.0547 before the 2026-09-15 fee activation);
+#: `tests/integration/test_ledger_live_versus_simulated.py` asserts its own
+#: fixture literal independently.
 #:
 #: The other 20 files are deliberately NOT edited, and they split 16 / 4:
 #:   * 16 carry the same boilerplate landmark -- "this file's own fixture mix
@@ -107,9 +110,11 @@ DEFAULT_MODEL_IDS = [
 #: `QUORUM_EVAL_JUDGE_API_KEY` (`judge_configured()` needs BOTH -- a model id
 #: alone leaves it False) and nothing else, against `_FALLBACK_CATALOG` and a
 #: 33-character query:
-#:   judge OFF                        -> point 0.0547, bound 0.1043
-#:   judge ON, `openai/gpt-5-mini`    -> point 0.0638, bound 0.1134
-#: Both bounds stay under `SOFT_THRESHOLD_USD` (0.15), so the BAND is ALLOW
+#:   judge OFF                        -> point 0.0547, bound 0.1043  (pre-activation)
+#:   judge ON, `openai/gpt-5-mini`    -> point 0.0638, bound 0.1134  (pre-activation)
+#: Both bounds stay under `SOFT_THRESHOLD_USD` (0.15 when this was written;
+#: ADR-0102 moved it to 0.30 on 2026-09-07, so the margin is wider now), so the
+#: BAND is ALLOW
 #: either way and no test in this file changes its verdict. The judge-ON pair
 #: matches ADR-0064's own table row for 33 chars, independently.
 #:
@@ -187,7 +192,9 @@ def confirmed_request(
     """Build a create-request body that clears the cost guardrail.
 
     A no-op when the estimate is already ALLOW (the common case for
-    DEFAULT_MODEL_IDS under ADR-0028: MEASURED point 0.0547, bound 0.1043).
+    DEFAULT_MODEL_IDS under ADR-0028: MEASURED 2026-08-09, pre-activation,
+    point 0.0547, bound 0.1043; at the fee shipping since 2026-09-15 the pair
+    is 0.0827 / 0.1593 and the band is unchanged).
     For a mix/query that lands in CONFIRM, this fetches a real preview first
     and attaches its confirmation token -- the same round-trip a real client
     makes for a CONFIRM-band run. Used defensively by tests below that are
@@ -238,7 +245,8 @@ def test_normal_cost_query_is_accepted_with_cost_estimate() -> None:
     conservative fallback rate -- 4x/2.5x too high -- and non-deterministically
     at that, depending on a collection-time catalog-prewarm race. With that
     catalog row added, DEFAULT_MODEL_IDS is back in ALLOW: MEASURED point
-    0.0547, bound 0.1043 (up from pre-ADR-0028's 0.0317 / 0.0771, but still
+    0.0547, bound 0.1043 measured 2026-08-09 pre-activation (up from
+    pre-ADR-0028's 0.0317 / 0.0771, but still
     comfortably under SOFT_THRESHOLD_USD). The default, no-friction path is
     unaffected by this change.
     """
@@ -495,7 +503,8 @@ def test_abandoned_estimate_contributes_no_spend() -> None:
     """A preview the user walked away from must cost nothing.
 
     The shipped default mix stays in the ALLOW band under ADR-0028 (MEASURED
-    point 0.0547, bound 0.1043), so the preview records
+    point 0.0547, bound 0.1043, measured 2026-08-09 pre-activation), so the
+    preview records
     ``cost_estimate_previewed`` (the ALLOW-band preview event, see
     ``costs.py``'s event-type mapping) rather than
     ``cost_confirmation_required``. Neither event is spend-counted; the
@@ -523,7 +532,8 @@ def test_repeated_estimates_bill_only_the_run_that_started() -> None:
     """The multiplier is 1 + N (N = preview round-trips), not just 2x:
     "Back to edit" then re-preview must not add another charge.
 
-    The default mix stays in ALLOW under ADR-0028 (MEASURED: point 0.0547,
+    The default mix stays in ALLOW under ADR-0028 (MEASURED 2026-08-09, before
+    the 2026-09-15 search-fee activation: point 0.0547,
     bound 0.1043), so a plain create clears the guardrail on its own;
     confirmed_request() is used defensively here so the final create call
     must carry the confirmation token from the last preview — same round-trip
@@ -670,7 +680,7 @@ def test_estimate_time_block_still_records_blocked_and_pages_sentry() -> None:
 #: `_DEFAULT_PRICE_PER_1K` fallback -- 4x/2.5x too high. With that catalog row
 #: added (see ``catalog_fetcher.py``), this constant is the real, deterministic
 #: price again.
-PINNED_DEFAULT_MIX_UNIT_USD = Decimal("0.0547")
+PINNED_DEFAULT_MIX_UNIT_USD = Decimal("0.0827")
 
 
 @contextmanager
@@ -768,10 +778,13 @@ def test_daily_cap_admits_the_number_of_runs_its_dollar_value_pays_for() -> None
     ``openai/gpt-4o-mini`` -> ``openai/gpt-5-mini``, a deliberate quality
     decision (see the ADR) with an accepted, measured cost consequence. The
     unit moved 0.0317 -> 0.0547 and the admitted run count 6 -> 3. ADR-0102
-    doubled the cap, so the SAME unit now admits 7: floor(0.40 / 0.0547) = 7,
-    where floor(0.20 / 0.0547) was 3. The unit price is unchanged -- only the
-    envelope is. The
-    default mix stays in ALLOW (MEASURED max_cost_usd 0.1043), so the loop
+    doubled the cap, so on that 2026-08-09 unit price the SAME unit admitted 7:
+    floor(0.40 / 0.0547) = 7, where floor(0.20 / 0.0547) was 3. That ADR moved
+    the envelope, not the price. THEN the 2026-09-15 search-fee activation moved
+    the price: the unit is 0.0827, so the envelope is floor(0.40 / 0.0827) = 4 --
+    which is what this test asserts today. The default mix stays in ALLOW
+    (max_cost_usd 0.1043 under ADR-0028, 0.1313 after ADR-0102 raised the
+    debate cap, 0.1593 since the 2026-09-15 activation), so the loop
     below's confirmation round-trip stays a no-op for every admitted run,
     same as pre-ADR-0028.
 
@@ -826,7 +839,19 @@ def test_daily_cap_admits_the_number_of_runs_its_dollar_value_pays_for() -> None
         expected_runs = int((DAILY_CAP_USD / unit).to_integral_value(rounding=ROUND_FLOOR))
         # floor(DAILY_CAP_USD / unit) -- literals on both sides (rule 7a), so a
         # move in EITHER the cap or the unit price is caught, not absorbed.
-        assert expected_runs == 7, f"default-mix unit price moved: {unit}"
+        # 7 -> 4, and this is A DELIBERATE PRODUCT DECISION, not a side effect
+        # (#105 defect A, CHG-007, ADR-0113, decided by the product owner on
+        # 2026-09-15). The `:online` per-request fee is now priced at the
+        # measured $0.007, so the default-mix unit price rose $0.0547 -> $0.0827
+        # and the $0.40 cap pays for four runs instead of seven.
+        #
+        # The drop is the ceiling becoming CORRECT, not a regression: before
+        # this, the estimate the cap is keyed on was $0.028 light on every
+        # searching run, so the cap was admitting a seventh run it could not
+        # actually afford. `DAILY_CAP_USD` was deliberately NOT raised to restore
+        # the old count — doing so would re-create the under-protection that had
+        # been accidental.
+        assert expected_runs == 4, f"default-mix unit price moved: {unit}"
 
         completed = 0
         rejection = None
@@ -891,7 +916,8 @@ def test_capacity_rejection_neither_bills_nor_orphans_a_run() -> None:
     non-deterministic in a full-suite run — see
     ``tests/helpers.isolated_run_semaphore``.
 
-    The default mix stays in ALLOW under ADR-0028 (MEASURED: point 0.0547,
+    The default mix stays in ALLOW under ADR-0028 (MEASURED 2026-08-09, before
+    the 2026-09-15 search-fee activation: point 0.0547,
     bound 0.1043 -- see test_normal_cost_query_is_accepted_with_cost_estimate),
     so a plain create clears the guardrail on its own; confirmed_request() is
     used defensively so this test does not depend on staying in ALLOW
@@ -949,7 +975,8 @@ def test_thread_start_failure_neither_bills_nor_orphans_a_run(
       * no non-terminal run left behind (``_abandon_unstarted_run``);
       * the capacity permit is returned (the ``except BaseException`` handler).
 
-    The default mix stays in ALLOW under ADR-0028 (MEASURED: point 0.0547,
+    The default mix stays in ALLOW under ADR-0028 (MEASURED 2026-08-09, before
+    the 2026-09-15 search-fee activation: point 0.0547,
     bound 0.1043), so a plain create clears the guardrail on its own;
     confirmed_request() is used defensively here so the request must clear
     the cost guardrail with a confirmation token before it can reach the
@@ -1030,7 +1057,8 @@ def test_a_cap_crossed_between_estimate_and_charge_refuses_the_run(
     in-flight slot, or the caller is locked out for 30 minutes by
     ACTIVE_QUERY_EXISTS.
 
-    The default mix stays in ALLOW under ADR-0028 (MEASURED: point 0.0547,
+    The default mix stays in ALLOW under ADR-0028 (MEASURED 2026-08-09, before
+    the 2026-09-15 search-fee activation: point 0.0547,
     bound 0.1043), so a plain create clears the guardrail on its own;
     confirmed_request() is used defensively here so the request must clear
     the cost guardrail with a confirmation token to reach the atomic re-check
@@ -1078,7 +1106,8 @@ def test_a_ceiling_crossed_between_estimate_and_charge_degrades_the_run(
     daily cap above, which refuses -- the caller sees a completely different
     outcome and the difference is the point.
 
-    The default mix stays in ALLOW under ADR-0028 (MEASURED: point 0.0547,
+    The default mix stays in ALLOW under ADR-0028 (MEASURED 2026-08-09, before
+    the 2026-09-15 search-fee activation: point 0.0547,
     bound 0.1043), so a plain create clears the guardrail on its own;
     confirmed_request() is used defensively here so the request must clear
     the cost guardrail with a confirmation token to reach the atomic re-check
@@ -1120,7 +1149,8 @@ def test_a_ledger_that_goes_unmeterable_mid_request_degrades_the_run(
     be conflated: the flags drive different user-facing copy, and reporting a
     storage fault as a spend ceiling puts a false reason on screen.
 
-    The default mix stays in ALLOW under ADR-0028 (MEASURED: point 0.0547,
+    The default mix stays in ALLOW under ADR-0028 (MEASURED 2026-08-09, before
+    the 2026-09-15 search-fee activation: point 0.0547,
     bound 0.1043), so a plain create clears the guardrail on its own;
     confirmed_request() is used defensively here so the request must clear
     the cost guardrail with a confirmation token to reach the atomic re-check
@@ -1163,7 +1193,8 @@ def test_the_legacy_path_refuses_on_a_crossed_cap_exactly_like_production(
     whose tests pass while production overspends, and vice versa. Kept in step
     deliberately.
 
-    The default mix stays in ALLOW under ADR-0028 (MEASURED: point 0.0547,
+    The default mix stays in ALLOW under ADR-0028 (MEASURED 2026-08-09, before
+    the 2026-09-15 search-fee activation: point 0.0547,
     bound 0.1043), so a plain create clears the guardrail on its own;
     confirmed_request() is used defensively here so the request must clear
     the cost guardrail with a confirmation token to reach the atomic re-check

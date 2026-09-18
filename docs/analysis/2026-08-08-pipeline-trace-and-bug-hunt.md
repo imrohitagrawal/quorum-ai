@@ -78,7 +78,11 @@ ceiling; optionally keep ~1900 for the point estimate.
 
 ---
 
-## 2. The web-search per-request fee — MEASURED, but NOT a bug
+## 2. The web-search per-request fee
+
+**Dated record (2026-08-08).** The fee was priced at `0.0` then. It was
+activated at the measured $0.007 on 2026-09-15 (CHG-007, ADR-0113); everything
+below describes the pre-activation tree. — MEASURED, but NOT a bug
 
 Measured, n=12, identical every time:
 

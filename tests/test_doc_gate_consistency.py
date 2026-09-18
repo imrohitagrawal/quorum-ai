@@ -2755,9 +2755,13 @@ def test_no_covered_doc_names_a_non_default_model_anywhere() -> None:
 # 2026-09-14 on a `git archive` copy: `5 passed`.
 #
 # What this deliberately does NOT do is assert the config DEFAULT equals the
-# fee — the fee ships at `0.0` pending a product-owner decision (CHG-006), so
-# pinning that would pin the wrong thing and would red the moment the decision
-# is taken.
+# fee. When Part D4 was written the fee shipped at `0.0` pending a
+# product-owner decision (CHG-006), so pinning it here would have pinned the
+# wrong thing and gone red the moment the decision was taken. That decision was
+# taken on 2026-09-15 (CHG-007, ADR-0113) and the default now ships at
+# `0.007`; the pin lives where it belongs, in
+# `tests/unit/test_search_fee_is_activated.py`, and this Part still pins the
+# EVIDENCE rather than the config.
 # ---------------------------------------------------------------------------
 
 GENERATION_METADATA = (

@@ -3059,7 +3059,8 @@ def test_only_the_three_genuinely_revoked_adrs_in_this_tree_are_refused(
             refused.append(path.name.split("-")[0])
     assert sorted(refused) == ["0001", "0014", "0060"], (
         f"expected exactly ADR-0001 (Superseded), ADR-0014 (Proposed) and "
-        f"ADR-0060 (Reverted) to be refused; got {sorted(refused)}"
+        f"ADR-0060 (Reverted) to be refused — ADR-0113 was PROPOSED until the "
+        f"product owner accepted it on 2026-09-15 and is live again; got {sorted(refused)}"
     )
 
 

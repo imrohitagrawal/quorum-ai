@@ -178,20 +178,28 @@ def test_the_shipped_posture_is_byte_identical(monkeypatch: pytest.MonkeyPatch) 
         estimate = _bound(mp, peer=False)
     breakdown = estimate.breakdown
     assert breakdown is not None, "the estimate produced no breakdown to read"
-    # LITERALS on both sides (rule 7a), measured 2026-09-03 on the shipped
-    # catalog with the query at the top of this file.
-    assert estimate.estimated_cost_usd == Decimal("0.0548")
-    # RE-MEASURED 2026-09-06 (ADR-0102): DEBATE_ROUND_MAX_TOKENS 2000 -> 4000
-    # moved the bound 0.1043 -> 0.1313. The POINT estimate is unchanged at
-    # 0.0548 — the cap prices the fail-safe ceiling, not the typical run — and
-    # that asymmetry is the sanity check that the right number moved.
-    assert _max_cost(estimate) == Decimal("0.1313")
+    # LITERALS on both sides (rule 7a). Measured 2026-09-03 at 0.0548 on the
+    # shipped catalog with the query at the top of this file; RE-MEASURED at
+    # 0.0828 after the 2026-09-15 search-fee activation (CHG-007), which adds
+    # $0.007 to each of the four searching slots.
+    assert estimate.estimated_cost_usd == Decimal("0.0828")
+    # Two moves, in order. ADR-0102 (2026-09-06): DEBATE_ROUND_MAX_TOKENS
+    # 2000 -> 4000 moved the BOUND 0.1043 -> 0.1313 and left the POINT estimate
+    # at 0.0548 — the cap prices the fail-safe ceiling, not the typical run, and
+    # that asymmetry was the sanity check that the right number moved. The
+    # 2026-09-15 activation then moved BOTH by the same $0.028: point
+    # 0.0548 -> 0.0828, bound 0.1313 -> 0.1593.
+    assert _max_cost(estimate) == Decimal("0.1593")
     # The peer branch's honest system-prompt pricing must NOT reach this path.
     # Correcting the moderator's flat 350 would move every figure in ADR-0094's
     # measured 715-mix sweep, which the owner is holding — so it is filed, not
     # fixed here, and this literal is what keeps that promise.
     assert [line.usd for line in breakdown.by_stage] == [
-        Decimal("0.0094"),
+        # initial_answers 0.0094 -> 0.0374: the +$0.028 the four priced :online
+        # fees add (#105 defect A, CHG-007). The debate and synthesis lines are
+        # UNCHANGED, which is the point — those stages never append the :online
+        # suffix, so they can never carry the fee.
+        Decimal("0.0374"),
         Decimal("0.0052"),
         Decimal("0.0052"),
         Decimal("0.0350"),
@@ -350,7 +358,7 @@ def test_round_twos_prior_critique_is_priced_for_every_critic(
     with monkeypatch.context() as mp:
         mp.setattr(config.settings, "peer_critique_enabled", True)
         bound = _max_cost(cost_estimation_service.estimate(query_text=_QUERY, model_slots=slots))
-    assert bound == Decimal("2.5396"), (
+    assert bound == Decimal("2.5676"), (
         f"the fail-safe bound on the fixed price list is {bound}; charging round "
         "2's prior critique once at the moderator's rate gives $2.4086, which "
         "under-prices by $0.1240 the input every critic actually pays"
