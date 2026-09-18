@@ -89,8 +89,12 @@ dropped from this change for two reasons found in review, both verified:
    that in its own words — *"Do not restore an unqualified 'true ceiling'
    wording while these hold"* — and `max_cost_usd`'s own docstring says *"'real
    cost never exceeds it' is not a guarantee this figure can make"*. It bounds
-   OUTPUT only; the `:online` search fee is priced at `0.0` by accepted
-   decision and is unpriced in the bound.
+   OUTPUT only; and when this ADR was accepted the `:online` search fee was
+   priced at `0.0` by accepted decision and was unpriced in the bound.
+   **CORRECTED 2026-09-15: that exclusion was reversed (CHG-007, ADR-0113) —
+   the fee ships at $0.007 and IS in the bound, once per searching slot.** The
+   rejection above does not turn on it: `costs.py`'s own list of why the figure
+   is not an unqualified ceiling never named the fee, and still holds.
 
 **The live cost copy is already careful** — *"The 'up to' figure is what you're
 approving — the worst case this run is priced at"* — which is the deliberately

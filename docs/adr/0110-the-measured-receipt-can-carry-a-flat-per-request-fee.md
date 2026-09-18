@@ -213,7 +213,7 @@ The plan at issue #105 comment 5638578554 requires an order that never leaves
 the daily ceiling under-protected, because over-charging a ceiling is safe and
 under-charging it is not. That order is **B (this ADR) → A (activation) → C**:
 
-- B alone moves nothing — the fee is `0.0` on both paths.
+- B alone moved nothing — the fee was `0.0` on both paths at that point.
 - A raises the estimate, which is what the daily cap and the cumulative rail
   book, so the ceiling becomes *more* protective, never less.
 - C would LOWER what a failed run books, so it must come last and behind its own
@@ -225,10 +225,12 @@ under-charging it is not. That order is **B (this ADR) → A (activation) → C*
 
 ## The activation decision this ADR does not take
 
-`cost_web_search_request_fee_usd` stays `0.0`, so **no served figure moves in
-this change**. Activating it at the measured $0.007 is a product-owner decision,
-because CHG-005 recorded the exclusion as one and because the consequences are
-user-facing. Measured for this ADR so the decision can be taken on numbers.
+`cost_web_search_request_fee_usd` stayed `0.0` in this change, so **no served
+figure moved in it**. Activating it at the measured $0.007 was a product-owner
+decision, because CHG-005 recorded the exclusion as one and because the
+consequences are user-facing. Measured for this ADR so the decision could be
+taken on numbers. **That decision was taken on 2026-09-15 (CHG-007, ADR-0113)
+and the fee now ships at $0.007.**
 
 **Every figure below is re-derivable, and the posture is part of the figure.**
 Run `uv run python scripts/proofs/search_fee_band_sweep.py [--fallback-prices]`;
@@ -322,7 +324,7 @@ re-measure the envelope before updating this constant`.
   `tests/test_doc_gate_consistency.py::test_env_example_values_match_the_real_defaults`,
   which compares `.env.example` values against the live defaults. Nothing
   enforced AC-037's wording when this ADR was written: `grep -rn AC-037 tests/
-  scripts/ e2e/` found nothing. It now returns two comment lines in
+  scripts/ e2e/` found nothing. It now returns two lines in
   `tests/unit/test_search_fee_is_activated.py`, added by the 2026-09-15
   activation; they cite AC-037 as superseded history and still enforce none of
   its wording.

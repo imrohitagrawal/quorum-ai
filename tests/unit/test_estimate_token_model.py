@@ -330,8 +330,10 @@ def test_estimate_is_conservative_not_7x_low() -> None:
     pricier model, and this file does not pin the catalog (rule 13,
     ``_stable_catalog_price`` elsewhere): the estimate MEASURABLY depends on
     process-global catalog cache state left by whichever other modules pytest
-    happened to collect first (MEASURED 0.0547 running this file inside its
-    own guardrail batch, 0.1147 running this file alone). The old ``<= 0.04``
+    happened to collect first (MEASURED 2026-08-09, before the 2026-09-15
+    search-fee activation: 0.0547 running this file inside its own guardrail
+    batch, 0.1147 running this file alone; the fee adds $0.028 to the searching
+    default mix on top of either). The old ``<= 0.04``
     ceiling was already living with that variance before ADR-0028 (a ~3×
     multiple of the measured baseline); ADR-0028 raised the true cost enough
     that both measured figures clear it. Widened to a ceiling that
@@ -347,7 +349,9 @@ def test_estimate_is_conservative_not_7x_low() -> None:
     assert cost >= Decimal("0.0123")
     # And not absurdly conservative -- comfortably below the guardrail's own
     # hard-block threshold, wide enough to absorb this file's own
-    # collection-order variance (MEASURED 0.0547-0.1147).
+    # collection-order variance (MEASURED 2026-08-09 pre-activation,
+    # 0.0547-0.1147; the 2026-09-15 fee adds $0.028 to a four-searching-slot
+    # mix, so the range tops out well under this ceiling either way).
     #
     # DELIBERATELY NOT MOVED by ADR-0102. This bounds the POINT estimate, which
     # that ADR measured to be cap-INDEPENDENT (0.0548 at cap 2000 and at 4000),

@@ -508,7 +508,9 @@ def test_the_measured_fee_term_reads_the_SETTING_and_scales_with_it(
     # while charging nothing at the actual price.
     assert _total(fee=0.007, searching=4) - _total(fee=0.0, searching=4) == Decimal("0.028")
     assert _total(fee=0.007, searching=1) - _total(fee=0.0, searching=1) == Decimal("0.007")
-    # At the shipped default the measured total must be the token cost alone.
+    # With the fee forced OFF the measured total must be the token cost alone.
+    # (``0.0`` was the shipped default until the 2026-09-15 activation; the fee
+    # ships at ``0.007`` now, which the two assertions above pin.)
     assert _total(fee=0.0, searching=4) == Decimal("0.0385")
 
 
