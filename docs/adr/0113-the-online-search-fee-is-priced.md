@@ -38,9 +38,12 @@ The fee's size, measured from the provider's own bill rather than their rate car
 | shape | two batches of four — one per answer model, none on debate/synthesis/judge |
 | per run | **$0.028** |
 
-OpenRouter's published rate card implies ~$0.02/request, which AC-037 quoted. That
-is roughly **3x the charge actually levied**, which is why this ADR prices the
-measurement and not the documentation.
+The ~$0.02/request AC-037 quoted on 2026-07-17 came from the rate card of that
+day, never from a bill, and was roughly **3x the charge actually levied**. The
+published schedule read on 2026-09-14 (DEBT-014) agrees with the bill: exa's
+default `auto` mode is **$0.007 per request**, including up to 10 results. So
+card and ledger no longer disagree — but this ADR still prices the measurement,
+because the ledger is what we are charged and the schedule can move under us.
 
 **Why the error mattered more than its size.** `DAILY_CAP_USD` and the cumulative
 rail are keyed on the point estimate, so a $0.028 understatement per searching run
@@ -125,9 +128,11 @@ telling the user a searching slot was free.
   certainly-wrong value to a dated-correct one, and leaves a safety ceiling
   under-protecting in the meantime. The staleness risk is real and is carried as
   DEBT-014, with the value date-stamped in `config.py`.
-- **Price it from OpenRouter's rate card (~$0.02).** Rejected: measured against the
-  bill, the card is ~3x high. Pricing the documentation is what produced AC-037's
-  wrong figure in the first place.
+- **Price it from OpenRouter's published rate card.** Rejected as a METHOD, not
+  because the card is wrong today: the card AC-037 read in July implied ~$0.02,
+  ~3x the charge levied, and pricing the documentation is what produced AC-037's
+  wrong figure. The schedule read 2026-09-14 does match the bill at $0.007
+  (DEBT-014), and it is cited as corroboration — never as the source.
 - **Raise `DAILY_CAP_USD` to keep the old run count.** Rejected; see Decision. It would
   deliberately restore an under-protection.
 - **Read the fee back from the response per call.** Measured and rejected for

@@ -233,13 +233,14 @@ that reason. Re-derive:
 Until 2026-09-16 this block still quoted the 0.15 ladder as current and told a
 reader to hold it; it had been stale since `0b6b0b4`.
 
-Measured headroom today (2026-09-16; live catalog, 441 models; production
-posture, peer critique ON and the judge `openai/gpt-4.1-mini` ON; the search fee
-at its shipped 0.0): the default mix on ADR-0102's own query bounds at
-**0.1830** (point estimate 0.0755) against the **0.30** line — **ALLOW, about
-11.7 cents** of headroom; ADR-0102 measured 0.1827 for the same shape. With the
-$0.007 search fee the parked #105 branch would activate, the bound is 0.2110 —
-about 8.9 cents. That margin is the number to watch; W13 (#268) is a change
+Measured headroom (2026-09-16; live catalog, 441 models; production posture,
+peer critique ON and the judge `openai/gpt-4.1-mini` ON): with the `:online`
+search fee at the `$0.007` it ships at since the 2026-09-15 activation
+(CHG-007, ADR-0113), the default mix on ADR-0102's own query bounds at
+**0.2110** against the **0.30** line — **ALLOW, about 8.9 cents** of headroom.
+Before that activation, with the fee at `0.0`, the same shape bounded at
+**0.1830** (point estimate 0.0755, about 11.7 cents), and ADR-0102 measured
+0.1827 for it. That margin is the number to watch; W13 (#268) is a change
 that would eat into it. `SOFT_THRESHOLD_USD < DAILY_CAP_USD < HARD_LIMIT_USD`
 is mandatory or the confirmation band is dead code. Re-derive with
 `cost_estimation_service._estimate_bound_usd` and `_threshold_for` on the

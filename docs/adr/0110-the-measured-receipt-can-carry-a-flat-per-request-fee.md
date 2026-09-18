@@ -7,10 +7,12 @@ Accepted — 2026-09-12.
 **Authorises nothing.** No `**Authorises:**` line; it may not be cited to
 sanction a live-execution posture or a paid run.
 
-**Ships the mechanism, not the charge.** `cost_web_search_request_fee_usd`
-remains `0.0`, so this ADR changes no served figure. Activating it is a
-product-owner decision and is deliberately NOT taken here — see
-"The activation decision this ADR does not take".
+**Ships the mechanism, not the charge.** This ADR left
+`cost_web_search_request_fee_usd` at `0.0`, so it changed no served figure, and
+reserved activation to the product owner — see "The activation decision this ADR
+does not take". **That decision was taken on 2026-09-15 and the default is now
+`0.007` (CHG-007, ADR-0113); this Status line records what ADR-0110 itself did,
+not the value shipping today.**
 
 **Supersedes the RATIONALE of CHG-005 / AC-037, not their decision.** The
 exclusion still stands; the reason recorded for it in 2026-07-17 is refuted

@@ -30,8 +30,10 @@ from product_app.model_slots import DEFAULT_MODEL_IDS, ModelSlot
 #: OpenRouter activity export for 2026-09-10
 #: (``docs/analysis/2026-09-10-openrouter-activity.csv``) holds 27 generation
 #: rows; exactly 8 carry a ``cost_web_search`` and every one is this value, in
-#: two batches of four — one per answer model. OpenRouter's published rate card
-#: implies ~$0.02, which is roughly 3x the charge actually levied; do not use it.
+#: two batches of four — one per answer model. The rate card AC-037 read in July
+#: 2026 implied ~$0.02, roughly 3x the charge levied; the schedule read
+#: 2026-09-14 does match the bill at $0.007 (DEBT-014). Price from the ledger
+#: either way: the schedule can move under us and nothing here detects it.
 MEASURED_FEE_USD = 0.007
 
 _QUERY = "Compare durable storage options and justify the trade-offs."

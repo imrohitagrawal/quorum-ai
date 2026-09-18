@@ -291,8 +291,9 @@ ADR-0110), and are corrected here rather than silently left standing:
   BELOW the measured token cost, on this criterion's own token-for-token terms
   (including the fee, the true charge was $0.121763).
 - **The plumbing is no longer "per-slot, dormant, not a pending activation."**
-  ADR-0110 extends it to the MEASURED path, and activation is now an open
-  product-owner decision, not a closed won't-activate.
+  ADR-0110 extends it to the MEASURED path, and activation was then an open
+  product-owner decision rather than a closed won't-activate. That decision was
+  taken on 2026-09-15 (CHG-007, ADR-0113): the fee is priced at $0.007.
 
 The fourth statement — "never surfaced to the user or on the UI" — was true only
 AT `0.0`. It is now false by design: the cheapest searching slot's card moves from
