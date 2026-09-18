@@ -1,9 +1,11 @@
 # Session handoff — 2026-09-15 (the #471 rework, the #105 activation, the #290 close)
 
-**Written 2026-09-15 by the session that reworked PR #471, took the #105
-activation branch through five review rounds, and closed #290. Every number
-below is paired with the command that produced it; if a command disagrees with
-this file, this file is wrong.**
+**Written by the session that reworked PR #471, took the #105 activation branch
+through five review rounds, and closed #290. That session ran 2026-09-14 to
+2026-09-18; the work it describes is dated 2026-09-15, and some checks quoted
+below were re-run later, each with its own date. Every number is paired with the
+command that produced it; if a command disagrees with this file, this file is
+wrong.**
 
 Read `AGENTS.md` first. Then this. Do not start from the code.
 
@@ -84,6 +86,15 @@ prose, and two advisory**:
    and nothing else moved" over-reaches for two literals; soften.
 4. (advisory) `tests/integration/test_query_run_cost_guardrails.py` comment
    "a seventh run it could not afford" — it was three runs (5th–7th).
+5. After the merge below, `docs/65-open-work.md`'s W3 headroom paragraph goes
+   false: it says the headroom was measured with "the search fee at its shipped
+   0.0" and calls #105 "the parked #105 branch", while the merged tree ships
+   `Field(default=0.007, …)` and its own W24 row reads ACTIVATED. Rewrite that
+   sentence in the same pull request: state the fee-ON bound (0.2110 on
+   2026-09-16) as current and label 0.1830 as the pre-activation measurement,
+   keeping both dates. Verified on the merged tree
+   (`git merge-tree --write-tree 0e5fb94 origin/main` → `2337b5d`; its
+   `config.py` blob is the branch's).
 
 **To finish (one bounded round):** FIRST merge `origin/main` into
 `feat/105a-activate-search-fee` in the worktree (`git merge origin/main`, no
@@ -93,12 +104,15 @@ W24 row). `git merge-tree --write-tree 0e5fb94 origin/main` reported a clean
 merge on 2026-09-17; if it conflicts, keep main's W3 block and the branch's W24
 row. Every figure above (`18 red`, `4499 passed`) was measured on the
 unmerged tree, so treat it as a claim until re-run (AGENTS.md rules 17 and
-17d). Then apply 1–4, and on the MERGED tree run `make quality`, `make validate`
-and `make diff-cover DIFF_BASE=origin/main`, then one three-lens review on the
-result, and if ZERO REQUIRED_CONTRACT survive:
+17d). Then apply 1–5, and on the MERGED tree run the full rule-14 local set serially
+(`make quality && make validate`, `make diff-cover DIFF_BASE=origin/main`,
+`make api-contract`, `make openapi-check`, `make security-scan`), then one
+three-lens review on the result, and if ZERO REQUIRED_CONTRACT survive:
 `git push origin feat/105a-activate-search-fee` (follow-up commits, no force),
 `gh pr create` with `docs/analysis/2026-09-15-pr105-body-draft.md` as the body's
-shape (it carries the five-round record; fill in the final round and gates), wait for the six required contexts, `make close-guard`
+shape (it points at the branch's commit bodies for the review record rather than
+restating it; fill in the final round and the gates you just ran), wait for the
+six required contexts, `make close-guard`
 with `EXPECT_CLOSE=""` (activation closes nothing; #105's W14 stays open),
 squash-merge, verify the Deploy JOB and `/status.build_sha`, then remove the
 worktree and delete the branch local + remote. If `main` moves again before
