@@ -19,8 +19,14 @@ deleted) raises `AttributeError` or produces the wrong string.
 
 from __future__ import annotations
 
+import contextlib
+import http.server
 import importlib.util
+import json
+import socket
 import sys
+import threading
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -298,3 +304,78 @@ def test_last_src_commit_reports_origin_main_not_a_stale_local_head(
         "last_src_commit must come from origin/main, not the local checkout's "
         f"stale HEAD (commit A = {commit_a})"
     )
+
+
+# ---------------------------------------------------------------------------
+# #467: _fetch_prod_build_sha, driven for real. It had never once returned a
+# SHA: loading deploy_drift_check without registering it in sys.modules made
+# its @dataclass raise AttributeError, and a blanket except reported that as
+# "could not reach". The test above stubs this function out, so nothing
+# exercised it. These drive a real HTTP server on loopback.
+# ---------------------------------------------------------------------------
+
+
+@contextlib.contextmanager
+def _status_server(body: bytes) -> Iterator[str]:
+    class _Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self) -> None:  # noqa: N802 — the stdlib's name
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args: object) -> None:
+            return None
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), _Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_address[1]}/status"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_the_prod_probe_reads_a_real_build_sha(monkeypatch: pytest.MonkeyPatch) -> None:
+    """RED WHEN: ``_fetch_prod_build_sha`` cannot load its fetcher — which is
+    what happened on every generation before #467 (the module was never put in
+    ``sys.modules``, so its dataclass raised).
+    """
+    # Load fresh, so a copy cached by another test cannot mask the defect.
+    monkeypatch.delitem(sys.modules, "deploy_drift_check", raising=False)
+    sha = "0123456789abcdef0123456789abcdef01234567"
+    with _status_server(json.dumps({"build_sha": sha}).encode()) as url:
+        assert session_handoff._fetch_prod_build_sha(url) == sha
+
+
+def test_the_prod_probe_reports_an_unreachable_host_as_none() -> None:
+    """The partner: a closed port is a genuine network failure and reads None,
+    not an exception."""
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    assert session_handoff._fetch_prod_build_sha(f"http://127.0.0.1:{port}/status") is None
+
+
+def test_a_broken_fetcher_is_reported_as_broken_not_as_unreachable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """RED WHEN: a load error passes silently again, or stays cached.
+
+    That is how #467 hid through 12 of 12 generated handoffs: a load error read
+    as "could not reach". ADR-0045 keeps the handoff running (the value
+    degrades to None), so the cause must at least reach stderr.
+    """
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts" / "deploy_drift_check.py").write_text(
+        'raise RuntimeError("the fetcher itself is broken")\n', encoding="utf-8"
+    )
+    monkeypatch.setattr(session_handoff, "ROOT", tmp_path)
+    monkeypatch.delitem(sys.modules, "deploy_drift_check", raising=False)
+    assert session_handoff._fetch_prod_build_sha("http://127.0.0.1:9/status") is None
+    err = capsys.readouterr().err
+    assert "could not load deploy_drift_check" in err
+    assert "the fetcher itself is broken" in err
+    assert "deploy_drift_check" not in sys.modules

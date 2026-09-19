@@ -7,6 +7,7 @@ import datetime
 import importlib.util
 import re
 import subprocess
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -211,14 +212,36 @@ def _fetch_prod_build_sha(status_url: str = DEFAULT_STATUS_URL) -> str | None:
     (the common offline-dev case) would otherwise pay ~15s of retry sleeps
     for nothing. One attempt, and unreachable is reported honestly rather
     than guessed at (rule 17f: never fabricate a number).
+
+    #467: the module must be in ``sys.modules`` BEFORE it runs. Its
+    ``@dataclass`` looks its own module up there, and without the entry it
+    raised ``AttributeError`` on every call. The old blanket ``except`` hid
+    that, so every generated handoff said production was unreachable.
+
+    A load failure still degrades to ``None`` (ADR-0045: one value's failure
+    never aborts the handoff), but it now prints its real cause to stderr
+    instead of passing silently as a network failure, and leaves nothing
+    half-built in ``sys.modules``.
     """
-    spec = importlib.util.spec_from_file_location(
-        "deploy_drift_check", ROOT / "scripts" / "deploy_drift_check.py"
-    )
-    mod = importlib.util.module_from_spec(spec)
-    assert spec and spec.loader
+    name = "deploy_drift_check"
+    mod = sys.modules.get(name)
+    if mod is None:
+        spec = importlib.util.spec_from_file_location(
+            name, ROOT / "scripts" / "deploy_drift_check.py"
+        )
+        assert spec and spec.loader
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules[name] = mod
+        try:
+            spec.loader.exec_module(mod)  # type: ignore
+        except Exception as exc:  # noqa: BLE001 — ADR-0045: degrade, never abort
+            del sys.modules[name]
+            print(
+                f"session_handoff: could not load deploy_drift_check: {exc!r}",
+                file=sys.stderr,
+            )
+            return None
     try:
-        spec.loader.exec_module(mod)  # type: ignore
         return mod.fetch_build_sha(status_url, attempts=1)
     except Exception:
         return None
