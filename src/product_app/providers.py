@@ -745,8 +745,11 @@ class ProviderExecutionService:
         # was rejected, but the answer itself is real.
         if live_response is not None and live_response.answer_text:
             sources = live_response.sources or []
-            # #31: the ``:online`` variant frequently returns an answer with
-            # NO citation annotations (~0-3% coverage in the live run). When
+            # #31: the ``:online`` variant was measured returning answers with
+            # NO usable citation annotations (~0-3% coverage in the live run).
+            # The 2026-09-10 runs found annotations on 4 of 4 searching calls,
+            # in the nested shape the reader did not read until #447 piece 1,
+            # so that figure may have been the reader, not the provider. When
             # search was enabled for this slot but the model returned no
             # sources, run a REAL web search (Tavily) on the query and attach
             # its results — so the user gets real, clickable evidence rather
@@ -3431,9 +3434,11 @@ def _finish_reason_label(payload: object) -> str:
 #: ``{"source": "web", "url_citation": {"url": …}}`` has a truthy top-level
 #: key, so it labels ``flat``, while :func:`_extract_citations` — which also
 #: runs :func:`_sanitize_source_url` and iterates EVERY mapping, not just the
-#: first — extracts nothing from it. That counterexample is committed as a
-#: test rather than recounted here. Whether the reader works is answered by
-#: ``annotation_usable_count``, which MEASURES it instead of inferring it.
+#: first — extracted nothing from it until #447 piece 1 taught the reader the
+#: nested block. The committed counterexample is now a flat url the sanitiser
+#: refuses (``test_the_usable_count_is_measured_not_inferred_from_the_label``).
+#: Whether the reader works is answered by ``annotation_usable_count``, which
+#: MEASURES it instead of inferring it.
 #:
 #: * ``absent`` — no annotations reached the folded payload. Read it WITH
 #:   ``annotation_sites``: ``absent`` plus ``sites=none`` is a statement about
@@ -3441,14 +3446,17 @@ def _finish_reason_label(payload: object) -> str:
 #: * ``flat`` — the first distinct mapping has a truthy top-level ``url`` or
 #:   ``source``.
 #: * ``nested`` — it has a ``url_citation`` mapping. This is the shape
-#:   OpenRouter's documentation describes; **nobody here has observed the live
-#:   API send it**, which is the point of shipping the measurement.
+#:   OpenRouter's documentation describes, and the shape the 2026-09-10 paid
+#:   runs measured on 4 of 4 searching calls
+#:   (``docs/analysis/2026-09-10-window-measurements.md``).
 #: * ``other`` — neither. Load-bearing: without it an unexpected shape is filed
 #:   under one of the three above and the measurement reads clean.
 #:
 #: TIE-BREAK, stated because it is a judgement call: a mapping carrying BOTH
-#: reports ``flat``, because the flat key is the one this product's reader
-#: looks at first. No content is lost — ``content_chars`` searches
+#: reports ``flat``. That was chosen when the reader looked at the flat key
+#: first; since #447 piece 1 the reader prefers ``url_citation``, and the
+#: label keeps its precedence so earlier captures keep their meaning
+#: (ADR-0104's update). No content is lost — ``content_chars`` searches
 #: ``url_citation`` whichever label was assigned.
 ANNOTATION_SHAPE_ABSENT = "absent"
 ANNOTATION_SHAPE_FLAT = "flat"
@@ -4169,7 +4177,8 @@ def _sanitize_source_url(url: str) -> str | None:
        synthesis prompt (``synthesis._flatten_for_prompt``, applied to the
        title and the URL alike). A fragment is provider-chosen text that
        tells the prompt nothing and costs tokens.
-    2. ``_extract_citations`` dedups on the sanitized string, so keeping
+    2. ``_extract_citations`` dedups its markdown fallback on the sanitized
+       string (the annotations arm keeps duplicates), so keeping
        fragments would split one page into several bibliography rows and
        inflate the citation-coverage denominator.
 

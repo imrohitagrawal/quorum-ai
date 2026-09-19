@@ -99,7 +99,9 @@ The first version's table said `flat` meant *"our reader WORKS; ADR-0084
 refuted"*. Refuted by counterexample: the label tests key presence, while
 `_extract_citations` also runs `_sanitize_source_url` and iterates every
 mapping. **A `flat` label with zero extracted citations is committed as a test** —
-including `{"source": "web", "url_citation": {...}}`, a plausible real shape.
+originally `{"source": "web", "url_citation": {...}}`, a plausible real shape.
+Since #447 piece 1 the reader reads that shape, so the committed arm is now a
+flat url the sanitiser refuses (see the update under Consequences).
 
 `annotation_usable_count` now MEASURES it, by calling the product's own reader
 with `content=""` so the inline-markdown fallback is excluded. That is ADR-0084's

@@ -560,6 +560,27 @@ class TestNestedUrlCitationIsRead:
         )
         assert ref.url == "https://a.test/1"
 
+    def test_the_nested_url_and_title_win_over_flat_ones_beside_them(self) -> None:
+        """RED WHEN: the flat ``url`` or ``title`` is read before the nested one.
+
+        Review found both orders unpinned: no fixture put a flat url or title
+        beside a nested block. A hostile flat url here would otherwise replace
+        the real source.
+        """
+        from product_app.providers import _extract_citations
+
+        (ref,) = _extract_citations(
+            _annotated(
+                {
+                    "url": "http://169.254.169.254/latest",
+                    "title": "Flat",
+                    "url_citation": {"url": "https://a.test/1", "title": "Nested"},
+                }
+            ),
+            content="",
+        )
+        assert (ref.url, ref.title) == ("https://a.test/1", "Nested")
+
     def test_the_flat_shape_still_reads(self) -> None:
         """Positive partner: the flat keys keep working when no nested block is
         present, including a ``url_citation`` that is not a mapping."""
