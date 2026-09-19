@@ -558,4 +558,3 @@ def test_a_typical_setting_above_the_cap_is_clamped_to_the_cap(
             f"cost_judge_input_tokens={inp}, cost_judge_output_tokens={out}: displayed "
             f"judge term {got}, expected {expected}"
         )
-
