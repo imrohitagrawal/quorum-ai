@@ -215,10 +215,13 @@ def _fetch_prod_build_sha(status_url: str = DEFAULT_STATUS_URL) -> str | None:
 
     #467: the module must be in ``sys.modules`` BEFORE it runs. Its
     ``@dataclass`` looks its own module up there, and without the entry it
-    raised ``AttributeError`` on every call. The old blanket ``except`` turned
-    that into "could not reach", so every generated handoff said production
-    was unreachable. Loading now sits outside the ``try``: a broken load fails
-    loudly, and only the network read can report unreachable.
+    raised ``AttributeError`` on every call. The old blanket ``except`` hid
+    that, so every generated handoff said production was unreachable.
+
+    A load failure still degrades to ``None`` (ADR-0045: one value's failure
+    never aborts the handoff), but it now prints its real cause to stderr
+    instead of passing silently as a network failure, and leaves nothing
+    half-built in ``sys.modules``.
     """
     name = "deploy_drift_check"
     mod = sys.modules.get(name)
@@ -231,9 +234,13 @@ def _fetch_prod_build_sha(status_url: str = DEFAULT_STATUS_URL) -> str | None:
         sys.modules[name] = mod
         try:
             spec.loader.exec_module(mod)  # type: ignore
-        except BaseException:
+        except Exception as exc:  # noqa: BLE001 — ADR-0045: degrade, never abort
             del sys.modules[name]
-            raise
+            print(
+                f"session_handoff: could not load deploy_drift_check: {exc!r}",
+                file=sys.stderr,
+            )
+            return None
     try:
         return mod.fetch_build_sha(status_url, attempts=1)
     except Exception:

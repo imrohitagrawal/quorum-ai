@@ -1119,7 +1119,7 @@ publishing-check: check-python
 	$(PYTHON) scripts/validate_publishing_backbone.py
 
 handoff: check-python
-	$(PYTHON) scripts/session_handoff.py
+	UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python scripts/session_handoff.py
 
 skill-discover: check-python
 	$(PYTHON) scripts/discover_external_skills.py

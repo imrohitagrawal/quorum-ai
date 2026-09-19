@@ -359,13 +359,14 @@ def test_the_prod_probe_reports_an_unreachable_host_as_none() -> None:
     assert session_handoff._fetch_prod_build_sha(f"http://127.0.0.1:{port}/status") is None
 
 
-def test_a_broken_fetcher_fails_loudly_instead_of_reading_unreachable(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_a_broken_fetcher_is_reported_as_broken_not_as_unreachable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """RED WHEN: loading the fetcher goes back inside the blanket ``except``.
+    """RED WHEN: a load error passes silently again, or stays cached.
 
-    That is how #467 hid for 11 generations: a load error read as "could not
-    reach". Also pins that a failed load leaves no half-built module cached.
+    That is how #467 hid through 12 of 12 generated handoffs: a load error read
+    as "could not reach". ADR-0045 keeps the handoff running (the value
+    degrades to None), so the cause must at least reach stderr.
     """
     (tmp_path / "scripts").mkdir()
     (tmp_path / "scripts" / "deploy_drift_check.py").write_text(
@@ -373,6 +374,8 @@ def test_a_broken_fetcher_fails_loudly_instead_of_reading_unreachable(
     )
     monkeypatch.setattr(session_handoff, "ROOT", tmp_path)
     monkeypatch.delitem(sys.modules, "deploy_drift_check", raising=False)
-    with pytest.raises(RuntimeError, match="the fetcher itself is broken"):
-        session_handoff._fetch_prod_build_sha("http://127.0.0.1:9/status")
+    assert session_handoff._fetch_prod_build_sha("http://127.0.0.1:9/status") is None
+    err = capsys.readouterr().err
+    assert "could not load deploy_drift_check" in err
+    assert "the fetcher itself is broken" in err
     assert "deploy_drift_check" not in sys.modules
