@@ -2,7 +2,9 @@
 
 ## Status
 
-Accepted — 2026-08-22
+Accepted — 2026-08-22. Decision 4 (the same judge formula on both paths) is
+superseded by ADR-0114 (proposed 2026-09-20): the displayed estimate now prices
+a typical judge call, and the bound keeps the caps.
 
 ## Context
 
