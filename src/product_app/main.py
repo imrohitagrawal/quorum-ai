@@ -262,12 +262,18 @@ def _app_description(active_settings: Settings) -> str:
 
 
 def _landing_subhead(active_settings: Settings) -> str:
-    """The landing hero's subhead, describing the shape THIS process will run.
+    """The landing hero's subhead, following ``peer_critique_enabled``.
 
-    #458. It was static peer copy, so a deployment running the moderator shape
-    (the code default, and what CI serves) promised a mechanism that does not
-    run there. Same rule, and the same mechanism sentences, as
-    :func:`_app_description`. Returned as HTML: the dash is an entity.
+    #458. It was static peer copy, so a deployment with the flag off (the code
+    default, and what CI serves) promised a mechanism that does not run there.
+    Same rule, and the same mechanism sentences, as :func:`_app_description`.
+
+    It follows the FLAG, not what a given run does. With the flag on, a run
+    with no eligible critic still takes the moderator path
+    (``debate.py::_build_peer_round``). That includes every run while live
+    execution is off, because simulated slots are never eligible. Tying the
+    flag to the live window is #458's other half, left to the product owner.
+    Returned as HTML: the dash is an entity.
     """
     if active_settings.peer_critique_enabled:
         mechanism = "They critique each other's answers and sources, and each can revise its own."

@@ -81,9 +81,11 @@ It remains pinned BYTE-EXACT, for ADR-0032's original reason: a rewrite must be
 RED BY DEFAULT so an editor has to come back and re-approve the claim.
 
 **Update, 2026-09-19 (#458).** The sentence above was static, so a deployment
-running the moderator shape — the code default, and what CI serves — showed
-peer copy. The subhead now follows `peer_critique_enabled`, the same rule
-`_app_description` already followed (`main.py` `_landing_subhead`). With the flag
+with `peer_critique_enabled` off — the code default, and what CI serves —
+showed peer copy. The subhead now follows that flag, as `_app_description`
+already did (`main.py` `_landing_subhead`). It follows the flag, not the run: a
+run with no eligible critic still takes the moderator path, and while live
+execution is off that is every run. With the flag
 on it is the sentence above. With it off it is: "Four frontier AI models
 answer. A separate moderator model critiques their answers. A synthesis model
 writes the one answer - where they agree, where they don't, and exactly what to

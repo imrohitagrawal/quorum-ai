@@ -221,7 +221,7 @@ def test_api_description_matches_the_shape_this_process_will_run() -> None:
 def _landing_subhead(html: str) -> str:
     match = re.search(r'<p class="landing-subhead">(.*?)</p>', html, re.DOTALL)
     assert match is not None, "no .landing-subhead in the rendered workspace"
-    return " ".join(match.group(1).split()).lower()
+    return " ".join(match.group(1).split())
 
 
 def test_landing_subhead_matches_the_shape_this_process_will_run(
@@ -238,9 +238,10 @@ def test_landing_subhead_matches_the_shape_this_process_will_run(
     from product_app.main import _render_workspace_html
 
     monkeypatch.setattr(config.settings, "peer_critique_enabled", True)
-    peer_on = _landing_subhead(_render_workspace_html())
+    peer_on_exact = _landing_subhead(_render_workspace_html())
     monkeypatch.setattr(config.settings, "peer_critique_enabled", False)
-    peer_off = _landing_subhead(_render_workspace_html())
+    peer_off_exact = _landing_subhead(_render_workspace_html())
+    peer_on, peer_off = peer_on_exact.lower(), peer_off_exact.lower()
 
     # POSITIVE PARTNER FIRST (rule 7): both rendered a real sentence.
     for text in (peer_on, peer_off):
@@ -253,6 +254,21 @@ def test_landing_subhead_matches_the_shape_this_process_will_run(
     assert "moderator model" in peer_off
     assert "critique each other" not in peer_off
 
+    # Both sentences pinned WHOLE, as literals. CI serves the flag off, so the
+    # e2e spec's peer branch never runs there; this is the only CI check on
+    # the peer sentence production serves. RED IF either is reworded at all.
+    tail = (
+        " A synthesis model writes the one answer &mdash; where they agree, "
+        "where they don't, and exactly what to trust."
+    )
+    assert peer_on_exact == (
+        "Four frontier AI models answer. They critique each other's answers "
+        "and sources, and each can revise its own." + tail
+    )
+    assert peer_off_exact == (
+        "Four frontier AI models answer. A separate moderator model critiques their answers." + tail
+    )
+
 
 def test_the_served_landing_subhead_is_the_one_for_the_served_config() -> None:
     """RED IF: ``/ui`` serves a subhead other than the render for its settings.
@@ -263,9 +279,9 @@ def test_the_served_landing_subhead_is_the_one_for_the_served_config() -> None:
     from product_app.config import settings
     from product_app.main import _render_workspace_html
 
-    served = _landing_subhead(TestClient(app).get("/ui").text)
+    served = _landing_subhead(TestClient(app).get("/ui").text).lower()
     assert served.startswith("four frontier ai models answer.")
-    assert served == _landing_subhead(_render_workspace_html())
+    assert served == _landing_subhead(_render_workspace_html()).lower()
     expected = "critique each other's" if settings.peer_critique_enabled else "moderator model"
     assert expected in served
 

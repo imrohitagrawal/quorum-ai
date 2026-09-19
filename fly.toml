@@ -94,8 +94,10 @@ kill_timeout = "5s"
   # call is made at all. Since #458 the landing subhead follows this flag
   # (`main.py` `_landing_subhead`), and
   # `e2e/tests/invariants/landing-cta-reachable.spec.ts` picks the sentence it
-  # expects from `/status`, so flipping this no longer falsifies the landing.
-  # Flipping it is still a human decision, not made here.
+  # expects from `/status`. It follows the FLAG, not what runs: with live
+  # execution off, no slot is eligible to critique, so every run takes the
+  # moderator path while the landing shows the peer sentence. Flipping this is
+  # a human decision, not made here.
   #
   # The residual risk this leaves: re-enabling live execution turns peer
   # critique back on with it, at up to eight critic calls instead of two. No

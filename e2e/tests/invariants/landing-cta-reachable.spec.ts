@@ -174,7 +174,7 @@ test.describe("landing CTA is reachable on a phone (#222)", () => {
  * without this file going red, which is the anti-pattern AGENTS.md forbids in
  * its own words ("Never write a check that goes red when the bug is FIXED").
  *
- * #458 then made it follow the served config instead of either shape. Under
+ * #458 then made it follow the served flag instead of either shape. Under
  * `settings.peer_critique_enabled` each ELIGIBLE answer slot critiques the
  * others and may revise its own answer (`debate.py:_build_peer_round`), and NO
  * moderator call is made; with it off (the code default, and what CI serves)
@@ -199,8 +199,10 @@ test.describe("landing CTA is reachable on a phone (#222)", () => {
  * That is the point — this is a claim about the system, not decoration.
  */
 /*
- * #458: the subhead now follows the SERVED config, so this pins one of two
- * approved sentences, chosen by what `/status` says this server runs. Before,
+ * #458: the subhead now follows the served `peer_critique_enabled`, so this
+ * pins one of two approved sentences, chosen by the flag `/status` reports.
+ * CI serves the flag OFF, so in CI only the moderator branch runs here; the
+ * peer sentence is pinned byte-exact by `tests/unit/test_ui_honesty.py`. Before,
  * it pinned the peer sentence alone while CI serves the code default
  * (`peer_critique_enabled=False`), so it asserted peer copy under a moderator
  * config: green on the falsehood, and red on the correction.
