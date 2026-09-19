@@ -41,6 +41,7 @@ from urllib.error import URLError
 from urllib.request import Request
 
 import pytest
+from tests.repo_root import find_repo_root
 
 from product_app import config
 from product_app import credentialed_url as credentialed_url_module
@@ -48,7 +49,6 @@ from product_app import feedback_audit as feedback_audit_module
 from product_app import providers as providers_module
 from product_app.credentialed_url import tavily_search_url
 from product_app.providers import provider_execution_service
-from tests.repo_root import find_repo_root
 
 _MODEL_ID = "openai/gpt-4o-mini"
 
