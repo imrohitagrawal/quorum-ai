@@ -1219,7 +1219,8 @@ def status_snapshot() -> dict[str, object]:
         # ADR-0097. Peer critique replaces 2 moderator debate calls with up to
         # 8 critic calls at four models' prices, and until 2026-09-03 it was
         # reported NOWHERE — not here, not on /ready or /metrics, and not to
-        # the posture watchdog that polls this endpoint every 30 minutes. That
+        # the posture watchdog scheduled to poll this endpoint every 30 minutes
+        # (in practice hours apart; #459, see its header note). That
         # is the fault ADR-0013 named one subsystem over: a paid subsystem may
         # not be enabled invisibly.
         #

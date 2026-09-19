@@ -2,7 +2,8 @@
 
 TWO LAYERS, ASKING DIFFERENT QUESTIONS
     ``.github/workflows/live-posture-watchdog.yml`` asks what production is
-    DOING, every 30 minutes, by reading ``/ready``. It is the only half a Fly
+    DOING, on a schedule declared every 30 minutes (in practice hours apart;
+    #459, see the workflow's header note), by reading ``/ready``. It is the only half a Fly
     secret cannot bypass — ``DEPLOY.md:61,175,230`` instructs operators to set
     this very flag with ``fly secrets set``, which touches no tracked file.
 

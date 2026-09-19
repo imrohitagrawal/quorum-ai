@@ -19,8 +19,10 @@ the file at that commit, and nothing served the runtime value.
 **2. The posture watchdog could not see it.**
 `grep -n peer_critique scripts/live_posture_check.py` returned NOTHING. That
 script is scheduled every 30 minutes against what production actually serves
-(GitHub throttles scheduled workflows; that workflow records its own measured
-gaps as min 21.7 / median 53.4 / max 129.4 minutes), and it is
+(GitHub throttles scheduled workflows; that workflow recorded measured gaps of
+min 21.7 / median 53.4 / max 129.4 minutes, taken from a sibling lane. *Correction,
+2026-09-19, #459: this lane's own interval is hours, not minutes; the measured
+figures now live only in the workflow's header note.*), and it is
 the mechanism this repo built precisely so a paid posture cannot run
 unattended. It read `judge_enabled` and not this.
 
