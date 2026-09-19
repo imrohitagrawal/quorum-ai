@@ -48,11 +48,16 @@ name: Live-execution posture watchdog
 # feeling like theatre, BUILD THE SUCCESSOR; do not delete this. ADR-0071.
 #
 # CADENCE IS NOT DETECTION LATENCY. The cron below declares `*/30`, but GitHub
-# throttles scheduled workflows. Measured 2026-08-25 over the last 100 scheduled
-# runs of the sibling `*/30` lane (deploy-drift-watchdog, 2026-08-21T07:25Z ->
-# 2026-08-24T22:33Z, 87.1h): gaps min 21.7 / median 53.4 / max 129.4 minutes.
-# Budget ~1h typical and ~2h worst case. Against a three-day exposure that is
-# ample; a window that opens and closes inside one gap is never seen at all.
+# runs scheduled workflows best-effort. Measured 2026-09-19 on THIS workflow
+# (#459): 99 scheduled runs, 2026-09-04T00:52Z -> 2026-09-19T08:54Z, gaps
+# min 112 / median 225 / max 412 minutes, 0 of 98 under 35. Budget ~4h typical
+# and ~7h worst case. An earlier note here quoted the sibling drift lane on
+# 2026-08-25 (median 53 min); this lane is now about four times slower than
+# that. A window that opens and closes inside one gap is never seen at all.
+# Re-derive:
+#   gh run list --workflow=live-posture-watchdog.yml --limit 100 \
+#     --json createdAt,event --jq '[.[]|select(.event=="schedule")|.createdAt]'
+# then diff consecutive timestamps.
 #
 # ALERT VOLUME. On an alerting decision this opens ONE labelled issue if none is
 # open, and thereafter says nothing further — the job going red every cycle is
@@ -64,7 +69,7 @@ name: Live-execution posture watchdog
 
 on:
   schedule:
-    - cron: "*/30 * * * *" # every 30 minutes; see the latency note above
+    - cron: "*/30 * * * *" # declared every 30 min; runs every ~2-7h, see the note above
   workflow_dispatch:
 
 permissions:

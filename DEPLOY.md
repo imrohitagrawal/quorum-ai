@@ -71,12 +71,14 @@ owner, a reason, a `mode`, whether the `judge` is part of it, and `opened_at`:
 ]}
 ```
 
-`.github/workflows/live-posture-watchdog.yml` reads `/ready` and `/status` every
-30 minutes and opens a `live-posture` issue — and fails its job — whenever
+`.github/workflows/live-posture-watchdog.yml` reads `/ready` and `/status` on a
+schedule declared every 30 minutes, which GitHub actually runs every ~2–7 hours
+(median 3h45m, measured 2026-09-19, #459; the workflow's header note has the
+command). It opens a `live-posture` issue — and fails its job — whenever
 production reports a live posture that no declared window covers. **This is true
 whichever route the flag takes**, including the `fly secrets set` below, which
 changes no tracked file. Declaring the window is what keeps the watchdog quiet
-through legitimate work; skip it and the alert fires within the hour, on purpose.
+through legitimate work; skip it and the alert fires at its next run, on purpose.
 
 **Three things about the declaration are easy to get wrong. See ADR-0071.**
 

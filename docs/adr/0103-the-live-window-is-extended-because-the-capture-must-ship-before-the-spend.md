@@ -93,7 +93,10 @@ per rolling 24h regardless of how long the window is.
   `make close-window` closes it early.
 - **More calendar time is more opportunity for attendance to lapse.** The
   watchdog runs every 30 minutes and files an issue when it does; that is the
-  mitigation, and it is already proven on this window.
+  mitigation, and it is already proven on this window. *(Correction,
+  2026-09-19, #459: the schedule is declared every 30 minutes but runs every
+  ~2–7 hours, median 3h45m over 98 gaps; the watchdog workflow's header note
+  has the command.)*
 - **No spend ceiling moves.** `GLOBAL_DAILY_CEILING_USD` stays `5.00`, and the
   per-account and per-run rails ADR-0102 set stay where they are.
 - The extension is recorded in the window's own `reason` as well as here, so a
