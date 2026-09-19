@@ -613,8 +613,10 @@ class Settings(BaseSettings):
     #: clamps each typical figure to its cap, so the displayed figure can never
     #: exceed the bound's. The measurement behind both values, with its window
     #: and command, lives in ADR-0114 only.
-    cost_judge_input_tokens: int = Field(default=7300, ge=0)
-    cost_judge_output_tokens: int = Field(default=150, ge=0)
+    #: ``ge=1``: a judge call that runs costs something, so a zero would show a
+    #: $0.0000 judge row beside a judge that fires.
+    cost_judge_input_tokens: int = Field(default=7300, ge=1)
+    cost_judge_output_tokens: int = Field(default=150, ge=1)
     #: Output-token floor for one synthesis section call (the reconciled
     #: answer). Synthesis fans out into up to ``cost_synthesis_sections``
     #: independent live calls, each re-sending the full context.

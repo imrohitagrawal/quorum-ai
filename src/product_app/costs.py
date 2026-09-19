@@ -1972,8 +1972,15 @@ class CostEstimationService:
             if judge_typical:
                 # ADR-0114: the displayed figure uses the measured typical call,
                 # clamped so it can never exceed the reserve computed above.
+                # The query is in the judge prompt verbatim
+                # (``evaluation.build_judge_prompt``) and a query may be 20,000
+                # characters, so the typical figure carries ``query_tokens``
+                # too. Without it the displayed judge line did not move with
+                # query length at all, and under-showed a maximum-length query
+                # by about $0.002 (found in review).
                 judge_input_tokens = min(
-                    Decimal(settings.cost_judge_input_tokens), judge_input_tokens
+                    Decimal(settings.cost_judge_input_tokens) + query_tokens,
+                    judge_input_tokens,
                 )
                 judge_output_tokens = min(
                     Decimal(settings.cost_judge_output_tokens), judge_output_tokens

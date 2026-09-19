@@ -50,8 +50,10 @@ The over-estimate is not harmless. The per-account daily cap and cumulative
 rail admit a run on its displayed estimate (`costs.py`, `already_spent +
 estimated > DAILY_CAP_USD` and `cumulative + estimated > HARD_LIMIT_USD`), so
 an inflated judge line costs users runs. And #268 is about to raise the debate
-line to its measured value, which on its own would drop the default panel from
-3 to 2 runs a day.
+line to its measured value. At the value #268 proposes (2200 tokens) that alone
+would drop the default panel from 3 runs a day to 2: measured by stepping
+`cost_debate_output_tokens` on `ae072d1`, where 1950 is the first value giving
+2 runs.
 
 ## Decision
 
@@ -92,10 +94,17 @@ blocked by its band, before and after.
 ## Consequences
 
 - Users see a judge line close to what a judge call costs, and the default
-  panel gets one more run a day until #268's debate correction lands, which
-  takes it back to 3.
+  panel gets one more run a day (3 → 4) until #268's debate correction lands,
+  which takes it back to 3. Measured on this change: the first debate value
+  giving 2 runs a day moves from 1950 to 2460, so #268's proposed 2200 leaves
+  the panel at 3. Both figures were produced by stepping
+  `cost_debate_output_tokens` and reading `floor($0.40 / estimate)`; they are
+  live-price figures from 2026-09-20 and move with OpenRouter's prices.
 - The displayed judge line is a typical figure, so a single call can cost
-  more. The bound still covers the caps, and a measured run is reconciled to
+  more. It carries the query's own tokens, added before the clamp, because the
+  judge prompt holds the query verbatim; review found the first version flat
+  across query length, under-showing a 20,000-character query by about $0.002.
+  Both settings are `ge=1`: a judge that runs may not be displayed as free. The bound still covers the caps, and a measured run is reconciled to
   its real cost at run end.
 - **A reasoning judge would be under-shown.** 150 output tokens was measured
   on `gpt-4.1-mini`, which is not a reasoning model. A reasoning judge bills
@@ -124,7 +133,8 @@ blocked by its band, before and after.
   half of them. The rounded maxima cost $0.0007 more per run at the judge's
   list price ((7300 − 5554) × $0.0000004 + (150 − 129) × $0.0000016).
 - **Keep ADR-0064's single formula.** Leaves the judge line about 5 times the
-  measured cost, and with #268 lands the default panel at 2 runs a day.
+  measured cost, and with #268's proposed 2200-token debate value lands the
+  default panel at 2 runs a day.
 
 ## Related
 
