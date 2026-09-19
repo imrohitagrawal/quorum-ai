@@ -174,13 +174,16 @@ test.describe("landing CTA is reachable on a phone (#222)", () => {
  * without this file going red, which is the anti-pattern AGENTS.md forbids in
  * its own words ("Never write a check that goes red when the bug is FIXED").
  *
- * The direction is now reversed. Under `settings.peer_critique_enabled` each
- * ELIGIBLE answer slot critiques the others and may revise its own answer
- * (`debate.py:_build_peer_round`); NO moderator call is made on such a run.
+ * #458 then made it follow the served config instead of either shape. Under
+ * `settings.peer_critique_enabled` each ELIGIBLE answer slot critiques the
+ * others and may revise its own answer (`debate.py:_build_peer_round`), and NO
+ * moderator call is made; with it off (the code default, and what CI serves)
+ * a separate moderator call critiques all four. Pinning either sentence alone
+ * pins a falsehood in the other configuration.
  *
  * These assertions live in THIS file rather than a new spec on purpose:
- * adding a file to `e2e/tests/invariants/` moves the count AGENTS.md pins
- * (17), which `tests/test_doc_gate_consistency.py` turns red.
+ * adding a file to `e2e/tests/invariants/` moves the count AGENTS.md pins,
+ * which `tests/test_doc_gate_consistency.py` turns red.
  */
 /**
  * The subhead is pinned WHOLE, not by forbidden substrings.
@@ -191,17 +194,44 @@ test.describe("landing CTA is reachable on a phone (#222)", () => {
  * the test stayed GREEN on a hero that states the exact falsehood the whole
  * change exists to remove. A blacklist over open-ended English cannot work.
  *
- * Pinning the sentence makes any rewrite RED BY DEFAULT, so a future editor
+ * Pinning the sentences makes any rewrite RED BY DEFAULT, so a future editor
  * has to come back here, read ADR-0032, and re-approve the claim deliberately.
  * That is the point — this is a claim about the system, not decoration.
  */
-const EXPECTED_SUBHEAD =
-  "Four frontier AI models answer. They critique each other's answers and " +
-  "sources, and each can revise its own. A synthesis model writes the one " +
-  "answer — where they agree, where they don't, and exactly what to trust.";
+/*
+ * #458: the subhead now follows the SERVED config, so this pins one of two
+ * approved sentences, chosen by what `/status` says this server runs. Before,
+ * it pinned the peer sentence alone while CI serves the code default
+ * (`peer_critique_enabled=False`), so it asserted peer copy under a moderator
+ * config: green on the falsehood, and red on the correction.
+ */
+const TAIL =
+  " A synthesis model writes the one answer — where they agree, where they " +
+  "don't, and exactly what to trust.";
+const EXPECTED_SUBHEAD = {
+  peer:
+    "Four frontier AI models answer. They critique each other's answers and " +
+    "sources, and each can revise its own." + TAIL,
+  moderator:
+    "Four frontier AI models answer. A separate moderator model critiques " +
+    "their answers." + TAIL,
+};
+
+async function servedShape(page: import("@playwright/test").Page): Promise<"peer" | "moderator"> {
+  const response = await page.request.get("/status");
+  expect(response.ok()).toBe(true);
+  const flag = (await response.json()).peer_critique_enabled;
+  // RED IF: /status stops reporting the flag. Defaulting a missing field to
+  // either shape would let this spec assert the wrong sentence silently.
+  expect(typeof flag).toBe("boolean");
+  return flag ? "peer" : "moderator";
+}
 
 test.describe("landing copy describes the real pipeline (ADR-0032)", () => {
-  test("the subhead is exactly the approved sentence", async ({ page }) => {
+  test("the subhead is exactly the approved sentence for the served shape", async ({
+    page,
+  }) => {
+    const shape = await servedShape(page);
     await stubReadinessLive(page);
     await page.goto("/ui");
     await expect(page.locator(".landing-subhead")).toBeAttached();
@@ -210,23 +240,27 @@ test.describe("landing copy describes the real pipeline (ADR-0032)", () => {
       (await page.locator(".landing-subhead").textContent()) ?? ""
     ).replace(/\s+/g, " ").trim();
 
-    // RED IF: the subhead is reworded AT ALL. Deliberate: the previous version
-    // of this assertion was a three-phrase blacklist and review walked a false
-    // claim straight past it.
-    expect(actual).toBe(EXPECTED_SUBHEAD);
+    // RED IF: the subhead is reworded AT ALL, or states the other shape.
+    // Deliberate: the previous version of this assertion was a three-phrase
+    // blacklist and review walked a false claim straight past it.
+    expect(actual).toBe(EXPECTED_SUBHEAD[shape]);
 
-    // Belt and braces on the two claims that matter, so a failure message
-    // says WHICH property broke rather than just diffing a long string.
-    // RED IF: the subhead reverts to naming a moderator, which no longer runs
-    // on a peer run, or drops the synthesis stage.
-    expect(actual.toLowerCase()).toContain("critique each other's");
+    // Belt and braces on the claims that matter, so a failure message says
+    // WHICH property broke rather than just diffing a long string.
     expect(actual.toLowerCase()).toContain("synthesis model");
-    expect(actual.toLowerCase()).not.toContain("moderator");
+    if (shape === "peer") {
+      expect(actual.toLowerCase()).toContain("critique each other's");
+      expect(actual.toLowerCase()).not.toContain("moderator");
+    } else {
+      expect(actual.toLowerCase()).toContain("moderator model");
+      expect(actual.toLowerCase()).not.toContain("critique each other");
+    }
   });
 
-  test("no landing surface claims a moderator model audits the answers", async ({
+  test("no landing surface names the mechanism the served shape does not run", async ({
     page,
   }) => {
+    const shape = await servedShape(page);
     await stubReadinessLive(page);
     await page.goto("/ui");
     await expect(page.locator(".landing-hero")).toBeAttached();
@@ -240,21 +274,19 @@ test.describe("landing copy describes the real pipeline (ADR-0032)", () => {
     // the per-IP mint cap unraised, /ui serves a 429 page and this locator is
     // empty. That is exactly how a vacuous pass would look.
     expect(text.length).toBeGreaterThan(400);
-    expect(text).toContain("critique each other's");
+    expect(text).toContain(shape === "peer" ? "critique each other's" : "moderator model");
 
-    // RED IF: any moderator phrasing returns to the landing view. ADR-0099:
-    // under the peer shape no moderator call is made at all, so a landing that
-    // names one describes a pipeline the run does not execute. NOT a
-    // completeness claim — the subhead test above is what pins the wording.
-    // The h1 "Let four minds argue it out" is deliberately retained
-    // (ADR-0032 §5, unchanged by ADR-0099), so "argue" is not among these.
-    for (const banned of [
-      "moderator",
-      "audits them",
-      "a separate model reads",
-      "planned, not yet built",
-      "not yet built",
-    ]) {
+    // RED IF: the landing names the OTHER shape's mechanism. Under the peer
+    // shape no moderator call is made at all (ADR-0099); under the moderator
+    // shape the models never read each other. NOT a completeness claim — the
+    // subhead test above is what pins the wording. The h1 "Let four minds
+    // argue it out" is deliberately retained (ADR-0032 §5), so "argue" is not
+    // among these.
+    const otherShape =
+      shape === "peer"
+        ? ["moderator", "audits them", "a separate model reads"]
+        : ["critique each other", "revise its own"];
+    for (const banned of [...otherShape, "planned, not yet built", "not yet built"]) {
       expect(text).not.toContain(banned);
     }
   });

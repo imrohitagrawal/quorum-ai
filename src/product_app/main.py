@@ -261,6 +261,24 @@ def _app_description(active_settings: Settings) -> str:
     )
 
 
+def _landing_subhead(active_settings: Settings) -> str:
+    """The landing hero's subhead, describing the shape THIS process will run.
+
+    #458. It was static peer copy, so a deployment running the moderator shape
+    (the code default, and what CI serves) promised a mechanism that does not
+    run there. Same rule, and the same mechanism sentences, as
+    :func:`_app_description`. Returned as HTML: the dash is an entity.
+    """
+    if active_settings.peer_critique_enabled:
+        mechanism = "They critique each other's answers and sources, and each can revise its own."
+    else:
+        mechanism = "A separate moderator model critiques their answers."
+    return (
+        f"Four frontier AI models answer. {mechanism} A synthesis model writes the one "
+        "answer &mdash; where they agree, where they don't, and exactly what to trust."
+    )
+
+
 def _openapi_url(active_settings: Settings) -> str | None:
     """Return the raw schema route (``/openapi.json``), gated by the docs flag.
 
@@ -764,6 +782,7 @@ def _render_workspace_html() -> str:
         .replace("{{ stale_model_ids_json }}", stale_ids_json)
         .replace("{{ live_readiness_json }}", live_readiness_json)
         .replace("{{ cost_model_json }}", cost_model_json)
+        .replace("{{ landing_subhead }}", _landing_subhead(settings))
     )
     for slot_index in range(4):
         default_id = escape(default_ids[slot_index])

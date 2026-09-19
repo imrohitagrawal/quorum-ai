@@ -80,6 +80,18 @@ where they agree, where they don't, and exactly what to trust."
 It remains pinned BYTE-EXACT, for ADR-0032's original reason: a rewrite must be
 RED BY DEFAULT so an editor has to come back and re-approve the claim.
 
+**Update, 2026-09-19 (#458).** The sentence above was static, so a deployment
+running the moderator shape — the code default, and what CI serves — showed
+peer copy. The subhead now follows `peer_critique_enabled`, the same rule
+`_app_description` already followed (`main.py` `_landing_subhead`). With the flag
+on it is the sentence above. With it off it is: "Four frontier AI models
+answer. A separate moderator model critiques their answers. A synthesis model
+writes the one answer - where they agree, where they don't, and exactly what to
+trust." That moderator clause reuses `_app_description`'s wording. It drops the
+pre-ADR-0099 "over two rounds", because round 2 can be skipped
+(`debate.py::_should_skip_round_two`). Both sentences stay pinned byte-exact;
+the landing spec picks the one to expect from `/status`.
+
 ### 2. The stale roadmap chip becomes a real current limit
 
 "Peer critique ... planned, not yet built" -> "Sources are cited, but aren't
