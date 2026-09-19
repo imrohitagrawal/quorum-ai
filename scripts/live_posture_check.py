@@ -224,14 +224,13 @@ WHY IT READS ``/ready`` AND NOT ``/status.live_execution``
     drift from the spending behaviour.
 
 WHAT THIS CANNOT SEE — stated per AGENTS.md's "before adding a gate" rule
-    * The gap between scheduled runs. Measured 2026-09-19 over this watchdog's
-      own 99 scheduled runs (2026-09-04T00:52Z -> 2026-09-19T08:54Z, #459): gaps
-      min 112 / median 225 / max 412 minutes. A window that opens and closes
-      inside one gap is never observed at all. Against the 24-hour
-      re-affirmation cadence the worst measured gap is 29% of the interval, so
-      lapse detection still works — but the INSTANT an alert lands is
-      unpredictable within about 7h. (An earlier measurement here, of a sibling
-      lane on 2026-08-25, gave a median of 53.4 minutes.)
+    * The gap between scheduled runs. The cron declares every 30 minutes; the
+      real interval is hours, and its measured figures live only in the header
+      note of ``.github/workflows/live-posture-watchdog.yml`` (#459). A window
+      that opens and closes inside one gap is never observed at all, and the
+      INSTANT an alert lands is unpredictable by up to the worst gap recorded
+      there. Against the 24-hour re-affirmation cadence lapse detection still
+      works, but with far less margin than a 30-minute cadence suggests.
     * A flag set to ``"true"`` in ``main`` but not yet deployed — the exact shape
       of #351, which stranded ADR-0060's merge. Production has not begun
       spending, so this script is correctly silent. That case is covered by the
@@ -1444,7 +1443,7 @@ def refuse_undeclared_flag(
         this gate is offline and hermetic, and reaching the network to decide a
         merge would be a worse trade than the blind spot. A window that goes
         stale in production is caught by the watchdog at its next run, which
-        GitHub schedules every ~2-7 hours (#459).
+        is hours away in practice (#459, see the workflow's header note).
       * THE JUDGE, at all. ``fly.toml`` carries no judge configuration —
         measured as ``git grep -i judge origin/main -- fly.toml``, exit 1, scoped
         because this diff added the word to that file's comments. The judge is

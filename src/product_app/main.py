@@ -1220,7 +1220,7 @@ def status_snapshot() -> dict[str, object]:
         # 8 critic calls at four models' prices, and until 2026-09-03 it was
         # reported NOWHERE — not here, not on /ready or /metrics, and not to
         # the posture watchdog scheduled to poll this endpoint every 30 minutes
-        # (it runs every ~2-7 hours, #459). That
+        # (in practice hours apart; #459, see its header note). That
         # is the fault ADR-0013 named one subsystem over: a paid subsystem may
         # not be enabled invisibly.
         #

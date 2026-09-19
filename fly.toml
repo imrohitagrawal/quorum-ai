@@ -65,7 +65,8 @@ kill_timeout = "5s"
   # blocking lane. And whatever route the flag takes into production — including
   # `fly secrets set`, which no file here can see —
   # .github/workflows/live-posture-watchdog.yml reads /ready on a schedule
-  # declared every 30 minutes and run every ~2-7 hours (#459), and opens an
+  # declared every 30 minutes but run hours apart (#459, see its header note),
+  # and opens an
   # issue if the live posture outlives its declared window.
   #
   # ADR-0071: the declaration entry needs a `mode` ("time_boxed" or "standing")

@@ -21,8 +21,8 @@ the file at that commit, and nothing served the runtime value.
 script is scheduled every 30 minutes against what production actually serves
 (GitHub throttles scheduled workflows; that workflow recorded measured gaps of
 min 21.7 / median 53.4 / max 129.4 minutes, taken from a sibling lane. *Correction,
-2026-09-19, #459: this lane's own gaps measured min 112 / median 225 / max 412
-minutes, and the workflow's header note now records those.*), and it is
+2026-09-19, #459: this lane's own interval is hours, not minutes; the measured
+figures now live only in the workflow's header note.*), and it is
 the mechanism this repo built precisely so a paid posture cannot run
 unattended. It read `judge_enabled` and not this.
 

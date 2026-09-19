@@ -48,15 +48,17 @@ name: Live-execution posture watchdog
 # feeling like theatre, BUILD THE SUCCESSOR; do not delete this. ADR-0071.
 #
 # CADENCE IS NOT DETECTION LATENCY. The cron below declares `*/30`, but GitHub
-# runs scheduled workflows best-effort. Measured 2026-09-19 on THIS workflow
-# (#459): 99 scheduled runs, 2026-09-04T00:52Z -> 2026-09-19T08:54Z, gaps
-# min 112 / median 225 / max 412 minutes, 0 of 98 under 35. Budget ~4h typical
-# and ~7h worst case. An earlier note here quoted the sibling drift lane on
-# 2026-08-25 (median 53 min); this lane is now about four times slower than
-# that. A window that opens and closes inside one gap is never seen at all.
+# runs scheduled workflows best-effort. THIS NOTE IS THE ONE PLACE the real
+# interval is recorded (#459); everything else points here, so re-measure and
+# edit only this. Measured 2026-09-19 over this workflow's FULL scheduled
+# history: 181 runs, 2026-08-25T02:03Z -> 2026-09-19T16:23Z, 180 gaps, minutes
+# min 24 / median 193 / p90 328 / max 772 (12.9h); 1 of 180 under 35. Budget
+# about 3h typical and up to 13h worst case. The gaps drift over time (the 99
+# runs from 2026-09-04T00:52Z alone gave median 225 / max 412), so quote a
+# figure only with its window. A window that opens and closes inside one gap is never seen at all.
 # Re-derive:
-#   gh run list --workflow=live-posture-watchdog.yml --limit 100 \
-#     --json createdAt,event --jq '[.[]|select(.event=="schedule")|.createdAt]'
+#   gh run list --workflow=live-posture-watchdog.yml --event schedule \
+#     --limit 1000 --json createdAt --jq '[.[].createdAt]'
 # then diff consecutive timestamps.
 #
 # ALERT VOLUME. On an alerting decision this opens ONE labelled issue if none is
@@ -69,7 +71,7 @@ name: Live-execution posture watchdog
 
 on:
   schedule:
-    - cron: "*/30 * * * *" # declared every 30 min; runs every ~2-7h, see the note above
+    - cron: "*/30 * * * *" # declared every 30 min; the real interval is hours, see the note above
   workflow_dispatch:
 
 permissions:
