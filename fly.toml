@@ -64,8 +64,9 @@ kill_timeout = "5s"
   # tests/unit/test_live_execution_posture_declaration.py refuses the merge in a
   # blocking lane. And whatever route the flag takes into production — including
   # `fly secrets set`, which no file here can see —
-  # .github/workflows/live-posture-watchdog.yml reads /ready every 30 minutes
-  # and opens an issue if the live posture outlives its declared window.
+  # .github/workflows/live-posture-watchdog.yml reads /ready on a schedule
+  # declared every 30 minutes and run every ~2-7 hours (#459), and opens an
+  # issue if the live posture outlives its declared window.
   #
   # ADR-0071: the declaration entry needs a `mode` ("time_boxed" or "standing")
   # and a `judge` boolean, and a window running longer than 24h needs a HUMAN
