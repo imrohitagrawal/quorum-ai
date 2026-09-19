@@ -617,10 +617,11 @@ def test_the_typical_judge_settings_refuse_a_free_judge(
 
     from product_app.config import Settings
 
-    for field in ("cost_judge_input_tokens", "cost_judge_output_tokens"):
-        for bad in (0, -1):
-            with pytest.raises(ValidationError):
-                Settings(**{field: bad})
+    for bad in (0, -1):
+        with pytest.raises(ValidationError):
+            Settings(cost_judge_input_tokens=bad)
+        with pytest.raises(ValidationError):
+            Settings(cost_judge_output_tokens=bad)
     # POSITIVE PARTNER: the smallest legal value IS accepted, so the rule above
     # is a boundary and not a blanket refusal.
     assert Settings(cost_judge_input_tokens=1, cost_judge_output_tokens=1)
