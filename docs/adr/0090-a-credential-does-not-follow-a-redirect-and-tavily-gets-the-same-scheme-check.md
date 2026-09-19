@@ -210,3 +210,16 @@ follow-up: `feedback_audit._call_audit_model` should eventually dial through
 (one concern per PR) and this ADR's own "Two separate PRs" rejection above
 both cut against also touching the audit-report code path, which is tested
 and exercised independently of the two calls this PR does harden.
+
+**Update, 2026-09-19 (#448): done.** `feedback_audit.py` now binds its
+module-level name `urlopen` to `CREDENTIAL_OPENER.open`, the same shape as
+`providers.py`, so the audit call refuses a redirect too. The same failure
+posture this ADR chose applies: a redirected audit call becomes an
+`HTTPError`, which `_call_audit_model` already turns into `None` and the
+local-only report. If the audit endpoint ever redirects legitimately, the
+audit falls back rather than following it. Proof:
+`tests/unit/test_credential_transport_guard.py::test_a_redirect_never_delivers_the_key_from_the_audit_call`
+drives a real loopback `302`; the same file's
+`test_only_the_credential_free_catalog_fetch_uses_the_bare_urlopen` now fails
+if any module under `src/product_app` other than `catalog_fetcher.py` reaches
+the bare `urlopen`. That scan does not cover `scripts/`.

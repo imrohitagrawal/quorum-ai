@@ -31,7 +31,9 @@ handling copies every header — including ``Authorization``— to wherever a
 3xx response's ``Location`` names, with no same-origin check and no scheme
 check of its OWN, so a base that passes the check above but answers its
 first request with a redirect can still hand the credential to a cleartext
-or off-machine host. Both call sites dial through ``CREDENTIAL_OPENER`` instead of the bare
+or off-machine host. All three credential-bearing calls — ``providers.py``'s
+two, and ``feedback_audit._call_audit_model`` since #448 — dial through
+``CREDENTIAL_OPENER`` instead of the bare
 ``urlopen`` free function so that a redirect is refused outright — the same
 shape :class:`product_app.readiness._NoRedirect` already uses for the
 key-auth probe. This module builds its own equivalent handler rather than
@@ -178,7 +180,7 @@ class _NoRedirect(HTTPRedirectHandler):
     whatever host the redirect names, in cleartext if it names ``http``. A
     302 from a captive portal, a load balancer, or a typo'd base URL is
     enough. Returning ``None`` makes urllib raise ``HTTPError`` for the 3xx
-    instead of following it; both call sites already classify an
+    instead of following it; all three call sites already classify an
     ``HTTPError`` off ``urlopen`` as an unbilled/best-effort failure, so a
     refused redirect degrades exactly like any other transport error, never
     as a lie that the call succeeded.
@@ -188,12 +190,13 @@ class _NoRedirect(HTTPRedirectHandler):
         return None
 
 
-#: The opener both credentialed call sites in ``providers.py`` dial through
-#: (W21). Built once at import time — the policy never varies per call, and
-#: every existing test that doubles ``providers.urlopen`` still intercepts
-#: the call, since production code calls through the module-level name
-#: ``urlopen``, which is bound to ``CREDENTIAL_OPENER.open`` rather than to
-#: the bare ``urlopen`` free function; see ``providers.py`` for that binding.
+#: The opener every credential-bearing call dials through: the two in
+#: ``providers.py`` (W21) and the audit call in ``feedback_audit.py`` (#448).
+#: Built once at import time — the policy never varies per call. Each of those
+#: modules binds its own module-level name ``urlopen`` to
+#: ``CREDENTIAL_OPENER.open`` rather than to the bare ``urlopen`` free
+#: function, so a test that doubles ``providers.urlopen`` or
+#: ``feedback_audit.urlopen`` still intercepts the call.
 CREDENTIAL_OPENER = build_opener(_NoRedirect)
 
 
