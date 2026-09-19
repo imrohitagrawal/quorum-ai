@@ -4264,8 +4264,17 @@ def _extract_citations(
     for index, annotation in enumerate(annotations, start=1):
         if not isinstance(annotation, dict):
             continue
-        raw_url = annotation.get("url") or annotation.get("source") or ""
-        title = annotation.get("title") or f" citation {index}"
+        # #447 piece 1. OpenRouter documents, and the 2026-09-10 paid runs
+        # measured, a NESTED shape: {"type": "url_citation", "url_citation":
+        # {"url", "title", "content", ...}}. Reading only the flat keys turned
+        # 20 distinct annotations into zero sources. The nested block is read
+        # first; the flat keys remain the fallback for a provider that sends
+        # them. Passage ``content`` is deliberately not carried here (#447
+        # pieces 2-3 need an input bound first, see #268).
+        nested = annotation.get("url_citation")
+        block = nested if isinstance(nested, dict) else {}
+        raw_url = block.get("url") or annotation.get("url") or annotation.get("source") or ""
+        title = block.get("title") or annotation.get("title") or f" citation {index}"
         sanitized = _sanitize_source_url(raw_url)
         if sanitized is None:
             continue

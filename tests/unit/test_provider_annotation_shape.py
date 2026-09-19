@@ -501,17 +501,42 @@ def test_the_usable_count_is_measured_not_inferred_from_the_label(
 
     Both arms carry the SAME label and DIFFERENT usable counts, which is
     precisely what makes the inference invalid and the measurement necessary.
+
+    #447 piece 1 changed the unusable arm. It used to be
+    ``{"source": "web", "url_citation": {...}}``, unusable only because the
+    reader never looked inside ``url_citation``. The reader now does, so that
+    arm yields a source; the counterexample is kept with a URL the sanitiser
+    refuses.
     """
     unusable = _drive(
         monkeypatch,
         token_records,
-        [{"source": "web", "url_citation": {"url": _GOOD_URL, "content": "p"}}],
+        [{"url": "javascript:alert(1)", "title": "T"}],
     )
     usable = _drive(monkeypatch, token_records, [{"url": _GOOD_URL, "title": "T"}])
 
     assert unusable["annotation_shape"] == usable["annotation_shape"] == "flat"
     assert unusable["annotation_usable_count"] == 0
     assert usable["annotation_usable_count"] == 1
+
+
+def test_a_nested_annotation_is_usable(
+    monkeypatch: pytest.MonkeyPatch, token_records: _Collector
+) -> None:
+    """RED WHEN: the reader stops reading ``url_citation``.
+
+    The 2026-09-10 paid runs recorded ``nested`` and ``usable = 0`` on every
+    searching call (``docs/analysis/2026-09-10-window-measurements.md``).
+    This is that shape through the same capture path; after #447 piece 1 it
+    must yield the source.
+    """
+    record = _drive(
+        monkeypatch,
+        token_records,
+        [{"type": "url_citation", "url_citation": {"url": _GOOD_URL, "content": _PASSAGE}}],
+    )
+    assert record["annotation_shape"] == "nested"
+    assert record["annotation_usable_count"] == 1
 
 
 def test_the_usable_count_excludes_the_inline_markdown_fallback(
