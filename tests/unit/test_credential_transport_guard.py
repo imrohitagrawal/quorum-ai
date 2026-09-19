@@ -18,28 +18,35 @@ Both are closed by routing through ``product_app.credentialed_url``:
 ``chat_completions_url`` already gave ``_post_messages`` (ADR-0085), and
 ``CREDENTIAL_OPENER`` -- which both call sites now dial through under the
 module-level name ``urlopen`` -- refuses to follow any redirect at all.
-ADR-0090.
+ADR-0090. Since #448 the third call carrying the OpenRouter key,
+``feedback_audit._call_audit_model``, dials through the same opener; its
+tests are at the end of this file.
 
-RED when: either call site goes back to calling the bare ``urlopen`` free
-function, or ``tavily_search_url``'s scheme check is deleted or widened.
+RED when: any of the three call sites goes back to calling the bare
+``urlopen`` free function, or ``tavily_search_url``'s scheme check is deleted
+or widened.
 Every refusal/redirect-refusal test below has a positive partner proving the
 ordinary case still dials (rule 7).
 """
 
 from __future__ import annotations
 
+import ast
 import contextlib
 import socket
 import threading
 from collections.abc import Iterator
+from pathlib import Path
 from typing import Any
 from urllib.error import URLError
 from urllib.request import Request
 
 import pytest
+from tests.repo_root import find_repo_root
 
 from product_app import config
 from product_app import credentialed_url as credentialed_url_module
+from product_app import feedback_audit as feedback_audit_module
 from product_app import providers as providers_module
 from product_app.credentialed_url import tavily_search_url
 from product_app.providers import provider_execution_service
@@ -336,3 +343,151 @@ def test_both_call_sites_share_the_one_no_redirect_opener() -> None:
     module-level name ``urlopen``, go through the same policy.
     """
     assert providers_module.urlopen == credentialed_url_module.CREDENTIAL_OPENER.open
+
+
+# --------------------------------------------------------------------------
+# #448: the THIRD call that carries the operator's OpenRouter key --
+# ``feedback_audit._call_audit_model`` -- dials through the same opener.
+# ADR-0090 recorded it as the one call left on the bare ``urlopen``.
+# --------------------------------------------------------------------------
+
+
+def _audit_call(monkeypatch: pytest.MonkeyPatch, base: str, key: str) -> str | None:
+    monkeypatch.setenv("OPENROUTER_API_BASE_URL", base)
+    return feedback_audit_module._call_audit_model(
+        openrouter_key=key, model_id=_MODEL_ID, user_prompt="p"
+    )
+
+
+def test_a_redirect_never_delivers_the_key_from_the_audit_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """RED when: ``_call_audit_model`` dials the bare ``urllib.request.urlopen``.
+
+    Asserts on what the SECOND host received, not on the call failing: the
+    leak and the failure are independent, so "it returned None" would pass
+    against a version that still leaked.
+    """
+    with (
+        _recording_server() as (never_reached_base, received),
+        _redirecting_server(f"{never_reached_base}/chat/completions") as redirecting_base,
+    ):
+        result = _audit_call(monkeypatch, redirecting_base, "sk-or-secret-448")
+    assert received == []
+    assert result is None
+
+
+def test_a_direct_audit_dial_with_no_redirect_still_carries_the_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The positive partner: an opener that refused every dial would pass the
+    test above and fail this one.
+    """
+    with _recording_server() as (base, received):
+        _audit_call(monkeypatch, base, "sk-or-secret-direct")
+    assert len(received) == 1
+    assert received[0].get("authorization") == "Bearer sk-or-secret-direct"
+
+
+def _modules_calling_the_bare_urlopen(root: Path) -> set[str]:
+    """Every module under ``root`` that can dial with urllib's default,
+    redirect-following handler.
+
+    Three shapes count, read from the AST so a comment or docstring that names
+    ``urlopen`` never does (rule 8):
+
+    * importing the name: ``from urllib.request import urlopen``;
+    * any attribute called ``urlopen``, whatever it hangs off --
+      ``urllib.request.urlopen``, ``request.urlopen`` after ``from urllib
+      import request``, or ``r.urlopen`` after an alias import;
+    * a ``build_opener(...)`` call that is not handed ``_NoRedirect``, since
+      its ``.open`` follows redirects exactly as ``urlopen`` does.
+    """
+    found: set[str] = set()
+    for path in sorted(root.rglob("*.py")):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            imports_it = (
+                isinstance(node, ast.ImportFrom)
+                and node.module == "urllib.request"
+                and any(alias.name == "urlopen" for alias in node.names)
+            )
+            reaches_it = isinstance(node, ast.Attribute) and node.attr == "urlopen"
+            unguarded_opener = (
+                isinstance(node, ast.Call)
+                and (
+                    (isinstance(node.func, ast.Name) and node.func.id == "build_opener")
+                    or (isinstance(node.func, ast.Attribute) and node.func.attr == "build_opener")
+                )
+                and not any(
+                    isinstance(arg, ast.Name) and arg.id == "_NoRedirect" for arg in node.args
+                )
+            )
+            if imports_it or reaches_it or unguarded_opener:
+                found.add(path.relative_to(root).as_posix())
+    return found
+
+
+def test_the_bare_urlopen_scan_sees_every_shape_it_claims(tmp_path: Path) -> None:
+    """The scan's own positive partner, one probe file per shape.
+
+    RED when: the scan below drops any of the shapes its docstring lists, or
+    starts flagging the guarded forms (the ``clean.py`` control).
+    """
+    probes = {
+        "imported.py": "from urllib.request import urlopen\nurlopen('https://x')\n",
+        "dotted.py": "import urllib.request\nurllib.request.urlopen('https://x')\n",
+        "from_package.py": "from urllib import request\nrequest.urlopen('https://x')\n",
+        "aliased.py": "import urllib.request as r\nr.urlopen('https://x')\n",
+        "opener.py": "from urllib.request import build_opener\nbuild_opener().open('x')\n",
+        "clean.py": (
+            "from urllib.request import build_opener, HTTPRedirectHandler\n"
+            "class _NoRedirect(HTTPRedirectHandler): pass\n"
+            "OPENER = build_opener(_NoRedirect)\n"
+            "urlopen = OPENER.open\n"
+            "# urllib.request.urlopen in a comment does not count\n"
+        ),
+    }
+    for name, text in probes.items():
+        (tmp_path / name).write_text(text, encoding="utf-8")
+    assert _modules_calling_the_bare_urlopen(tmp_path) == set(probes) - {"clean.py"}
+
+
+def test_only_the_credential_free_catalog_fetch_uses_the_bare_urlopen() -> None:
+    """RED when: any module under ``src/product_app`` other than
+    ``catalog_fetcher.py`` reaches the bare ``urlopen`` -- which is what
+    ``feedback_audit.py`` did until #448.
+
+    ``catalog_fetcher`` is allowed because it sends no credential (ADR-0080);
+    the partner test below pins that. The set equality is its own positive
+    partner: a scan that found nothing would give an empty set, not this one.
+
+    What this cannot see: a function reference passed around under another
+    name (``f = getattr(urllib.request, "urlopen")``), an ``OpenerDirector``
+    assembled by hand, other HTTP clients, and anything under ``scripts/``.
+    """
+    root = find_repo_root(Path(__file__)) / "src" / "product_app"
+    assert _modules_calling_the_bare_urlopen(root) == {"catalog_fetcher.py"}
+
+
+def test_the_catalog_fetch_that_may_use_the_bare_urlopen_sends_no_authorization() -> None:
+    """RED when: ``catalog_fetcher.py`` gains an ``Authorization`` header, at
+    which point its allowance above stops being safe.
+
+    Partner: ``feedback_audit.py`` DOES carry the header, so the check below
+    can see the string when it is present.
+    """
+    root = find_repo_root(Path(__file__)) / "src" / "product_app"
+
+    def string_constants(name: str) -> set[str]:
+        tree = ast.parse((root / name).read_text(encoding="utf-8"))
+        return {
+            node.value
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Constant) and isinstance(node.value, str)
+        }
+
+    def names_the_header(name: str) -> bool:
+        return any(value.lower() == "authorization" for value in string_constants(name))
+
+    assert names_the_header("feedback_audit.py")
+    assert not names_the_header("catalog_fetcher.py")

@@ -417,10 +417,9 @@ class _AuditResponse:
 
 @pytest.fixture
 def audit_recorder(monkeypatch: pytest.MonkeyPatch) -> _AuditRecorder:
-    import urllib.request as urllib_request
 
     double = _AuditRecorder()
-    monkeypatch.setattr(urllib_request, "urlopen", double)
+    monkeypatch.setattr(feedback_audit_module, "urlopen", double)
     return double
 
 
@@ -586,9 +585,8 @@ def test_an_unparseable_audit_body_returns_none_rather_than_raising(
     returns the model's text, so this cannot pass over a function that always
     returns ``None``.
     """
-    import urllib.request as urllib_request
 
-    monkeypatch.setattr(urllib_request, "urlopen", _AuditResponder(b"not json at all"))
+    monkeypatch.setattr(feedback_audit_module, "urlopen", _AuditResponder(b"not json at all"))
     assert _audit(monkeypatch, _SAFE_BASE) is None
 
 
@@ -598,8 +596,7 @@ def test_a_well_formed_audit_body_returns_the_models_text(monkeypatch: pytest.Mo
     RED when: the response is not read, or the answer is taken from the wrong
     place in the completion.
     """
-    import urllib.request as urllib_request
 
     body = json.dumps({"choices": [{"message": {"content": "the audit says"}}]}).encode()
-    monkeypatch.setattr(urllib_request, "urlopen", _AuditResponder(body))
+    monkeypatch.setattr(feedback_audit_module, "urlopen", _AuditResponder(body))
     assert _audit(monkeypatch, _SAFE_BASE) == "the audit says"

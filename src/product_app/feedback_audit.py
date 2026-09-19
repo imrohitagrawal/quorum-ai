@@ -47,9 +47,19 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
-from product_app.credentialed_url import base_url_provenance, chat_completions_url
+from product_app.credentialed_url import (
+    CREDENTIAL_OPENER,
+    base_url_provenance,
+    chat_completions_url,
+)
 
 _log = logging.getLogger(__name__)
+
+#: The audit request carries the operator's OpenRouter key, so it dials
+#: through the opener that refuses every redirect, as ``providers.py`` does
+#: (#448, ADR-0090). A redirect then raises ``HTTPError``, which
+#: ``_call_audit_model`` already turns into ``None``.
+urlopen = CREDENTIAL_OPENER.open
 
 
 # ---------------------------------------------------------------------------
@@ -704,7 +714,7 @@ def _call_audit_model(
         method="POST",
     )
     try:
-        with urllib.request.urlopen(request, timeout=60) as response:
+        with urlopen(request, timeout=60) as response:
             raw_body = response.read().decode()
     except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError) as exc:
         _log.warning("feedback_audit: audit model call failed: %s", exc)
