@@ -19,7 +19,7 @@ re-affirmed a window, or flipped a flag.
 ## 1. Merged and running in production
 
 Each row: Deploy JOB read on every run for the merge SHA, and `/status.build_sha`
-matched after it. Details, red output and mutation lists are in the commit bodies.
+read at the time matched it (only the newest can be re-checked now). Details, red output and mutation lists are in the commit bodies.
 
 | issue | PR | merge | issue state |
 |---|---|---|---|
@@ -40,11 +40,16 @@ Advisory leftovers for each are listed in its PR body. Read them there.
    measurement source is `docs/analysis/2026-09-10-telemetry-tokens.jsonl`
    (stages `debate_round_1/2`). Do NOT retry the refuted fold of
    `prior_critique_input_cost` into `debate_prompt_tokens`; its recorded
-   "9 of 495" is itself stale (715 mixes now, ladder moved).
-   Why it matters: the per-call band prices debate at the 4000 cap and is
-   safe; the daily cap and the per-account cumulative rail
-   (`costs.py` `_cumulative_spend_for`) sum the point estimate, so they
-   under-count debate spend.
+   "9 of 495" is stale (the catalog and the cost ladder have both moved
+   since; take the mix count from the sweep script's own output).
+   Why it matters, narrower than it first looks: the per-call band prices
+   debate at the 4000 cap and is safe. The daily cap and the per-account
+   cumulative rail admit a run on its point estimate, and
+   `reconcile_charge_for_run` (`costs.py`, called from
+   `query_run_orchestration.py` when `cost_source == "measured"`) rewrites
+   both to the measured cost at run end. So the under-count applies to runs
+   still in flight when the next is admitted, to runs that end without a
+   measured cost, and to the "typical" figure users are shown.
 2. **#458 flag half: couple the displayed shape to live execution.** The
    landing and `/status` should describe peer critique as effective only when
    `peer_critique_enabled` AND live execution are both on. With live off,
@@ -55,9 +60,11 @@ Advisory leftovers for each are listed in its PR body. Read them there.
    board's stated cause is FALSE: pytest selects an id with a space fine
    (a plain parametrized `[GET /status]` id collects). What fails is selecting
    a `SchemathesisFunction` item by its id (`... ::test_api_conforms_to_openapi_contract[GET /status]`
-   collects nothing; the bare function name collects all 13). Deselecting the
-   module is NOT acceptable: `tests/unit/test_mutation_test_set_integrity.py`
-   forbids exempting tests that can kill a `src/` mutant. Correct the board
+   exits 4 with "ERROR: not found"; the bare function name collects all 13).
+   Deselecting the module is the wrong fix: any exemption must be added to the
+   list pinned in `tests/unit/test_mutation_test_set_integrity.py`, whose
+   comment requires that an exempted test cannot kill a `src/` mutant, and
+   these can. Correct the board
    row's cause in the same PR. Then #464.
 4. **Watchdog auto-off (#459 option 2), before any live window.** Production
    refuses live execution once the declared window lapses, so detection
@@ -80,7 +87,8 @@ Advisory leftovers for each are listed in its PR body. Read them there.
   missed 6 stale sentences; grepping the figures found all of them at once.
 - **The mutation gate can die without measuring** on any diff reaching a
   schemathesis-covered handler (PR #476's run). Read its log before citing it.
-- **`/ui` answers 429 from this machine** (per-IP daily mint cap), so the
+- **`/ui` answers 429 from this machine** (cause not checked; the per-IP daily
+  session cap is the likely one), so the
   served landing page cannot be read from here; `/status` can.
 - The root `CONTINUE-105-BACKLOG-ULTRACODE-PROMPT.md` is stale: its items 1-6
   are done. Use §2 above instead.
