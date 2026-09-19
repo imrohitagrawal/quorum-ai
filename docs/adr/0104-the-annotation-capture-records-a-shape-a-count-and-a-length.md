@@ -99,7 +99,9 @@ The first version's table said `flat` meant *"our reader WORKS; ADR-0084
 refuted"*. Refuted by counterexample: the label tests key presence, while
 `_extract_citations` also runs `_sanitize_source_url` and iterates every
 mapping. **A `flat` label with zero extracted citations is committed as a test** —
-including `{"source": "web", "url_citation": {...}}`, a plausible real shape.
+originally `{"source": "web", "url_citation": {...}}`, a plausible real shape.
+Since #447 piece 1 the reader reads that shape, so the committed arm is now a
+flat url the sanitiser refuses (see the update under Consequences).
 
 `annotation_usable_count` now MEASURES it, by calling the product's own reader
 with `content=""` so the inline-markdown fallback is excluded. That is ADR-0084's
@@ -177,6 +179,26 @@ Its decisions and its own review history are recorded in ADR-0105.
 - If measurement 3 comes back `nested` with `usable_count == 0`, the annotations
   path has never produced a source and `_extract_citations` needs a fix of its
   own — a defect this capture would have found, not caused.
+
+**Update, 2026-09-19 (#447 piece 1).** It came back exactly that way:
+`docs/analysis/2026-09-10-window-measurements.md` records `nested` on 4 of 4
+searching calls, 20 distinct annotations, and usable 0. `_extract_citations`
+now reads `url_citation.url` and `url_citation.title` first and keeps the flat
+keys as the fallback, so an `:online` answer's sources come from the search
+annotations. The inline-markdown fallback then runs only when the block yields
+nothing. Three things it deliberately does not change:
+
+- **Passage `content` is still dropped.** Carrying it to the judge is #447
+  pieces 2-3, which need an input bound first (#268).
+- **Duplicates are still kept.** `test_stream_reassembly_equivalence.py` pins
+  that the reader keeps them, so ordinals match the non-streamed response, while
+  `_annotation_usable_count`'s docstring calls that a product defect. The two
+  disagree. The measured runs had 20 arrivals for 20 distinct annotations, so it
+  did not arise; it is left for its own decision.
+- **The shape label keeps its precedence.** `_annotation_shape` says `flat`
+  when an annotation carries a top-level `url` or `source`, even beside a
+  `url_citation` block the reader now prefers. The label describes where a url
+  sits, and changing it would change what earlier captures mean.
 
 ## What review round 2 found, in the fix itself
 

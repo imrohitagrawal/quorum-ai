@@ -506,6 +506,145 @@ class TestCitationExtractionIsMalformedSafe:
         assert "citation 1" in ref.title
 
 
+def _annotated(*annotations: object) -> dict[str, object]:
+    return {"choices": [{"message": {"annotations": list(annotations)}}]}
+
+
+class TestNestedUrlCitationIsRead:
+    """#447 piece 1. OpenRouter's chat-completions annotations are NESTED:
+    ``{"type": "url_citation", "url_citation": {"url", "title", "content", ...}}``.
+    The reader looked only at a flat ``annotation["url"]``, so on the
+    2026-09-10 paid runs it turned 20 distinct nested annotations into ZERO
+    sources (``docs/analysis/2026-09-10-window-measurements.md``) and every
+    source came from the inline-markdown fallback instead.
+    """
+
+    def test_the_measured_nested_shape_yields_its_url_and_title(self) -> None:
+        """RED WHEN: ``_extract_citations`` reads only the flat keys."""
+        from product_app.providers import ProviderPath, _extract_citations
+
+        refs = _extract_citations(
+            _annotated(
+                {
+                    "type": "url_citation",
+                    "url_citation": {
+                        "url": "https://a.test/page#frag",
+                        "title": "Page A",
+                        "content": "passage text",
+                        "start_index": 0,
+                        "end_index": 10,
+                    },
+                },
+                {"type": "url_citation", "url_citation": {"url": "https://b.test/x"}},
+            ),
+            content="",
+        )
+        assert [(r.url, r.title) for r in refs] == [
+            ("https://a.test/page", "Page A"),
+            ("https://b.test/x", " citation 2"),
+        ]
+        assert all(r.provider is ProviderPath.OPENROUTER_SEARCH for r in refs)
+        assert not any(r.is_fallback for r in refs)
+
+    def test_the_nested_url_wins_over_a_flat_source_label(self) -> None:
+        """RED WHEN: the flat ``source`` key is read before the nested url.
+
+        A ``"source": "web"`` beside the nested block is a label, not a URL;
+        read first, it failed the sanitiser and dropped a real source.
+        """
+        from product_app.providers import _extract_citations
+
+        (ref,) = _extract_citations(
+            _annotated({"source": "web", "url_citation": {"url": "https://a.test/1"}}),
+            content="",
+        )
+        assert ref.url == "https://a.test/1"
+
+    def test_the_nested_url_and_title_win_over_flat_ones_beside_them(self) -> None:
+        """RED WHEN: the flat ``url`` or ``title`` is read before the nested one.
+
+        Review found both orders unpinned: no fixture put a flat url or title
+        beside a nested block. A hostile flat url here would otherwise replace
+        the real source.
+        """
+        from product_app.providers import _extract_citations
+
+        (ref,) = _extract_citations(
+            _annotated(
+                {
+                    "url": "http://169.254.169.254/latest",
+                    "title": "Flat",
+                    "url_citation": {"url": "https://a.test/1", "title": "Nested"},
+                }
+            ),
+            content="",
+        )
+        assert (ref.url, ref.title) == ("https://a.test/1", "Nested")
+
+    def test_the_flat_shape_still_reads(self) -> None:
+        """Positive partner: the flat keys keep working when no nested block is
+        present, including a ``url_citation`` that is not a mapping."""
+        from product_app.providers import _extract_citations
+
+        refs = _extract_citations(
+            _annotated(
+                {"url": "https://a.test/1", "title": "Flat"},
+                {"url": "https://b.test/2", "url_citation": "not a mapping"},
+            ),
+            content="",
+        )
+        assert [r.url for r in refs] == ["https://a.test/1", "https://b.test/2"]
+        assert refs[0].title == "Flat"
+
+    def test_a_nested_url_that_fails_the_sanitiser_is_dropped(self) -> None:
+        """RED WHEN: the nested url bypasses ``_sanitize_source_url``."""
+        from product_app.providers import _extract_citations
+
+        refs = _extract_citations(
+            _annotated(
+                {"url_citation": {"url": "javascript:alert(1)", "title": "Evil"}},
+                {"url_citation": {"url": "https://ok.test/a", "title": {"a": 1}}},
+            ),
+            content="",
+        )
+        assert [r.url for r in refs] == ["https://ok.test/a"]
+        assert refs[0].title == " citation 2"
+
+    def test_a_repeated_nested_url_is_kept_like_a_repeated_flat_one(self) -> None:
+        """RED WHEN: the nested arm de-duplicates while the flat arm does not.
+
+        ``test_stream_reassembly_equivalence.py`` pins that the reader keeps
+        duplicates, so ordinals match the non-streamed response. A nested
+        annotation carries ``start_index``/``end_index``, so one URL cited
+        twice is two annotations. This fix does not change that decision.
+        """
+        from product_app.providers import _extract_citations
+
+        refs = _extract_citations(
+            _annotated(
+                {"url_citation": {"url": "https://a.test/1", "title": "A"}},
+                {"url_citation": {"url": "https://a.test/1", "title": "A"}},
+            ),
+            content="",
+        )
+        assert [r.url for r in refs] == ["https://a.test/1", "https://a.test/1"]
+
+    def test_nested_sources_replace_the_inline_markdown_fallback(self) -> None:
+        """RED WHEN: the fallback also runs, or runs instead, once the nested
+        block yields a source. The partner call proves the same content DOES
+        yield a markdown source when the block is empty.
+        """
+        from product_app.providers import _extract_citations
+
+        content = "See [elsewhere](https://c.test/3)."
+        with_block = _extract_citations(
+            _annotated({"url_citation": {"url": "https://a.test/1"}}), content=content
+        )
+        without = _extract_citations(_annotated(), content=content)
+        assert [r.url for r in with_block] == ["https://a.test/1"]
+        assert [r.url for r in without] == ["https://c.test/3"]
+
+
 class TestSourceUrlRejectsControlCharacters:
     """A URL is a single token. One containing a newline is not a valid URL —
     it is a payload that will forge its own line in any prompt, log line, or

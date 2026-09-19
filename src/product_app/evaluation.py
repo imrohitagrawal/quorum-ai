@@ -1735,8 +1735,14 @@ def build_judge_evidence(
     # Issue #268. Truncate the fields BEFORE formatting, and number AFTER the
     # count cap, so the ordinals the judge reads stay contiguous — a hole in
     # the numbering would point the prose's "[7]" at a line that is not there.
+    #
+    # A title is collapsed to ONE line before the cap. It can be a third-party
+    # page title (a Tavily result, and since #447 piece 1 an OpenRouter
+    # url_citation), and a line break inside it forged a whole
+    # "[N] ... :: url" evidence line the judge would read as a source.
+    # ``str.split()`` breaks on every Unicode line separator, not just "\n".
     source_lines = tuple(
-        f"[{index}] {source.title[:JUDGE_MAX_SOURCE_TITLE_LEN]}"
+        f"[{index}] {' '.join(source.title.split())[:JUDGE_MAX_SOURCE_TITLE_LEN]}"
         f" :: {source.url[:JUDGE_MAX_SOURCE_URL_LEN]}"
         for index, source in enumerate(kept_sources, start=1)
     )
