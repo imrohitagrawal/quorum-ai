@@ -27,8 +27,8 @@ from decimal import Decimal
 import pytest
 
 from product_app import config
-from product_app.costs import CostEstimate, cost_estimation_service
 from product_app.catalog_fetcher import _FALLBACK_CATALOG
+from product_app.costs import CostEstimate, cost_estimation_service
 from product_app.model_slots import (
     DEFAULT_MODEL_IDS,
     ModelSlot,
