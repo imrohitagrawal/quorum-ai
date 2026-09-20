@@ -788,7 +788,8 @@ def test_daily_cap_admits_the_number_of_runs_its_dollar_value_pays_for() -> None
     the price: the unit went to 0.0827, so the envelope was
     floor(0.40 / 0.0827) = 4. THEN #268 / ADR-0115 priced the debate stage from
     measurement and the unit became 0.1052, so the envelope is
-    floor(0.40 / 0.1052) = 3 -- which is what this test asserts today. The default mix stays in ALLOW
+    floor(0.40 / 0.1052) = 3 -- which is what this test asserts today. The
+    default mix stays in ALLOW
     (max_cost_usd 0.1043 under ADR-0028, 0.1313 after ADR-0102 raised the
     debate cap, 0.1593 since the 2026-09-15 activation), so the loop
     below's confirmation round-trip stays a no-op for every admitted run,
