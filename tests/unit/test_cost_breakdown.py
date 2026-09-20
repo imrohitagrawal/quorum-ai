@@ -193,7 +193,8 @@ def test_exact_partition_pins_the_split() -> None:
     ``_DEFAULT_PRICE_PER_1K_OUTPUT=0.005`` — #151: derived from the max real
     price across ``DEFAULT_MODEL_IDS``, was a hand-picked 0.0008/0.002)
     under the issue #16 token model (system 350, web-search 2000,
-    initial-output floor 700 + 0.5/query-token, debate-output 400,
+    initial-output floor 700 + 0.5/query-token, debate-output 2200
+    (#268 / ADR-0115; it was 400 until 2026-09-20),
     synthesis-output 3000; debate priced on haiku-4.5 0.001/0.005). The point
     estimate models ALL ``cost_synthesis_sections``=5 synthesis calls (the
     real live fan-out), each at the per-section floor:
@@ -206,17 +207,17 @@ def test_exact_partition_pins_the_split() -> None:
       initial_total  = 4 * (0.006725 + 0.007 fee) = 0.0549
       ctx4           = 4 * 825 = 3300
       debate_prompt  = 350 + 250 + 3300 = 3900
-      debate_round   = 0.001*3900/1000 + 0.005*400/1000 = 0.0039 + 0.002 = 0.0059
-      synth_prompt   = 350 + 250 + 3300 + 2*400 = 4700
+      debate_round   = 0.001*3900/1000 + 0.005*2200/1000 = 0.0039 + 0.011 = 0.0149
+      synth_prompt   = 350 + 250 + 3300 + 2*2200 = 8300
 
     ADR-0028 moved synthesis pricing from ``openai/gpt-4o-mini`` to
     ``openai/gpt-5-mini`` (0.00015/0.0006 -> 0.00025/0.002 per 1K, added to
     ``_FALLBACK_CATALOG`` by this same change -- see ``catalog_fetcher.py``):
 
-      synth_section  = 0.00025*4700/1000 + 0.002*3000/1000 = 0.001175 + 0.006
-                     = 0.007175
-      synthesis      = 5 * 0.007175 = 0.035875 -> 0.0359 (five section calls)
-      raw_total      = 0.0549 + 2*0.0059 + 0.0359 = 0.1026 -> total 0.1026
+      synth_section  = 0.00025*8300/1000 + 0.002*3000/1000 = 0.002075 + 0.006
+                     = 0.008075
+      synthesis      = 5 * 0.008075 = 0.040375 -> 0.0404 (five section calls)
+      raw_total      = 0.0549 + 2*0.0149 + 0.040375 = 0.125075 -> total 0.1251
 
     Every number in this block is MEASURED by execution (``uv run pytest``),
     not hand-rederived -- see rule 8c on why an upstream's actual behaviour is
@@ -246,18 +247,18 @@ def test_exact_partition_pins_the_split() -> None:
     )
     breakdown = estimate.breakdown
     assert breakdown is not None
-    assert breakdown.total == Decimal("0.1026")
+    assert breakdown.total == Decimal("0.1251")
 
-    # by_stage — initial_answers; two debate rounds at 0.0059 each;
+    # by_stage — initial_answers; two debate rounds at 0.0149 each;
     # synthesis (five sections), now priced from ``openai/gpt-5-mini``'s own
     # ``_FALLBACK_CATALOG`` row (0.00025/0.002 per 1K). MEASURED by execution
     # (``uv run pytest`` — never hand-rederived, per rule 8c): synth_section
-    # is 0.007175, so the five-section total is 0.035875 -> 0.0359.
+    # is 0.008075, so the five-section total is 0.040375 -> 0.0404.
     assert [(line.stage, line.usd) for line in breakdown.by_stage] == [
         ("initial_answers", Decimal("0.0549")),
-        ("debate_round_1", Decimal("0.0059")),
-        ("debate_round_2", Decimal("0.0059")),
-        ("synthesis", Decimal("0.0359")),
+        ("debate_round_1", Decimal("0.0149")),
+        ("debate_round_2", Decimal("0.0149")),
+        ("synthesis", Decimal("0.0404")),
     ]
 
     # by_model — fallback-a gets the extra quantum (largest remainder tie → lowest index).
@@ -266,7 +267,7 @@ def test_exact_partition_pins_the_split() -> None:
         ("test/fallback-b", Decimal("0.0137")),
         ("test/fallback-c", Decimal("0.0137")),
         ("test/fallback-d", Decimal("0.0137")),
-        ("synthesis", Decimal("0.0477")),
+        ("synthesis", Decimal("0.0702")),  # 2*0.0149 debate + 0.0404 synthesis
     ]
 
 

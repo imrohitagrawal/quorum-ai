@@ -597,10 +597,11 @@ class Settings(BaseSettings):
     #: richer questions elicit longer answers). Output tokens for an
     #: initial answer = ``cost_initial_output_tokens + this × query_tokens``.
     cost_output_tokens_per_query_token: float = 0.5
-    #: Output-token floor for one debate round (the typical, for the point
-    #: estimate). The debate model reads the four initial answers (a bounded
-    #: context) and emits a critique.
-    cost_debate_output_tokens: int = 400
+    #: Typical OUTPUT tokens of ONE debate call, for the point estimate. Under
+    #: the peer shape (what production runs) that is one critic's reply, and
+    #: the estimate prices one per slot per round. Measured, with its window
+    #: and command, in ADR-0115 only — do not restate the figure elsewhere.
+    cost_debate_output_tokens: int = 2200
     #: Enforced per-round debate output CAP, used by the fail-safe
     #: ``max_cost_usd`` bound so it is a true ceiling on the debate stage too
     #: (the point estimate keeps the lower typical floor above). MUST stay in

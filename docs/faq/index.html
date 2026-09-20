@@ -1196,14 +1196,14 @@ pre code {
     <div class="qa-block">
       <div class="qa-question" onclick="toggleQA(this)"><span class="q-mark">?</span> Watch cost like a hawk</div>
       <div class="qa-answer">
-        <p>Every LLM call costs money. The cost model in <code>costs.py</code> prices seven billed calls per query run (4 initial answers + 2 debate rounds + 5 synthesis sections). On the default model mix, a typical run costs between $0.01 and $0.03 — but a long query on expensive models can approach the $0.25 hard cap.</p>
+        <p>Every LLM call costs money. The cost model in <code>costs.py</code> prices seven billed calls per query run (4 initial answers + 2 debate rounds + 5 synthesis sections). On the default model mix the estimate shown before a run is about $0.13, measured against production runs that cost about $0.12 (issue #268, ADR-0115, 2026-09-20) — but a long query on expensive models can approach the hard cap. The figure you are shown before your own run is the one that binds; these are the default panel's.</p>
         <p>The guardrail is not optional. It is three-layered:</p>
         <ol style="margin:8px 0 8px 20px;">
           <li><strong>Per-call estimate</strong> — the pre-run estimate prices every call and checks the three-band threshold before any provider is called.</li>
           <li><strong>Cumulative spend</strong> — an in-memory ring buffer tracks accepted spend per account and blocks rapid-fire exhaust-the-budget attacks.</li>
           <li><strong>Daily cap</strong> — the durable SQLite feedback store enforces a $0.20 per-account-per-24h rolling window, catching trickle attacks that the in-memory buffer misses.</li>
         </ol>
-        <p>The cost estimation is deliberately conservative: the point estimate models realistic token counts (grounded against a real live run that observed 2277–2560 prompt tokens and 465–1152 output tokens per model), and the guardrail keys off a fail-safe upper bound that prices initial-answer output at the enforced 2000-token cap. The estimate rarely falls below the measured actual.</p>
+        <p>The cost estimation is deliberately conservative: the guardrail bands key off a fail-safe upper bound that prices every stage at the cap the call site enforces, never at the typical. The estimate shown to you is the typical, and it is re-measured from production telemetry when it drifts — most recently for the debate stage (ADR-0115, 2026-09-20), which had been priced about five times low and now sits a few per cent above measured run cost.</p>
         <div class="mentor-tip">
           <div class="mentor-label">Mentor says</div>
           <p>"Cost is the one metric that compounds silently. A $0.02 leak per run, 100 runs a day, is $730/month. The cost guardrail is not a suggestion — it is a circuit breaker. And the estimate is deliberately conservative: it is better to over-estimate and confirm than to under-estimate and surprise. The guardrail keys off the upper bound for exactly this reason."</p>

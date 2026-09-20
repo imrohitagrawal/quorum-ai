@@ -92,8 +92,10 @@ def test_the_bound_prices_one_call_per_slot_not_one_per_round(
     expected multiplier exactly 4 and independent of what any model costs. The
     first draft of this test asserted ">2x" on the DEFAULT mix instead and went
     red against correct code: measured on the shipped catalog, the default mix
-    moves 0.0052 -> 0.0081, a 1.56x ratio, because the four default slots are
-    collectively cheaper than four Haikus. That number is a fact about the
+    moves 0.0142 -> 0.0242, a 1.70x ratio, because the four default slots are
+    collectively cheaper than four Haikus. (Those two figures were 0.0052 and
+    0.0081 until #268 / ADR-0115 raised ``cost_debate_output_tokens`` to 2200;
+    the RATIO is the part that is a fact about the price list.) That number is a fact about the
     price list, not about this feature -- which is exactly why it does not
     belong in the assertion.
     """
@@ -120,12 +122,14 @@ def test_the_bound_prices_one_call_per_slot_not_one_per_round(
     # sides (rule 7a).
     # RE-MEASURED after ADR-0096 grew both system prompts (0.0213 -> 0.0230),
     # then again after ADR-0107 added PROSE_ATTRIBUTION_INSTRUCTION to both
-    # round prompts (0.0230 -> 0.0235). The bound reads the prompt's real
+    # round prompts (0.0230 -> 0.0235), and again after #268 / ADR-0115 took
+    # ``cost_debate_output_tokens`` 400 -> 2200 (moderator 0.0052 -> 0.0142,
+    # peer 0.0235 -> 0.0595). The bound reads the prompt's real
     # length, so it moved on its own; only this pinned literal had to be
     # re-measured, which is the property this test exists to preserve.
     # The peer figure moves and the moderator one does not, which is itself the
     # point: ADR-0096's convergence contract is asked of PEER critics only.
-    assert (moderator, peer) == (Decimal("0.0052"), Decimal("0.0235"))
+    assert (moderator, peer) == (Decimal("0.0142"), Decimal("0.0595"))
     assert peer > moderator * 4, (
         f"debate_round_1 is {peer} under peer critique against {moderator} under "
         f"the moderator on an identical four-slot panel; four critics are not priced"
@@ -181,8 +185,11 @@ def test_the_shipped_posture_is_byte_identical(monkeypatch: pytest.MonkeyPatch) 
     # LITERALS on both sides (rule 7a). Measured 2026-09-03 at 0.0548 on the
     # shipped catalog with the query at the top of this file; RE-MEASURED at
     # 0.0828 after the 2026-09-15 search-fee activation (CHG-007), which adds
-    # $0.007 to each of the four searching slots.
-    assert estimate.estimated_cost_usd == Decimal("0.0828")
+    # $0.007 to each of the four searching slots; and RE-MEASURED again at
+    # 0.1053 after #268 / ADR-0115 took ``cost_debate_output_tokens``
+    # 400 -> 2200 (the two debate rounds and, through the critique-input term,
+    # the synthesis row).
+    assert estimate.estimated_cost_usd == Decimal("0.1053")
     # Two moves, in order. ADR-0102 (2026-09-06): DEBATE_ROUND_MAX_TOKENS
     # 2000 -> 4000 moved the BOUND 0.1043 -> 0.1313 and left the POINT estimate
     # at 0.0548 — the cap prices the fail-safe ceiling, not the typical run, and
@@ -200,9 +207,9 @@ def test_the_shipped_posture_is_byte_identical(monkeypatch: pytest.MonkeyPatch) 
         # UNCHANGED, which is the point — those stages never append the :online
         # suffix, so they can never carry the fee.
         Decimal("0.0374"),
-        Decimal("0.0052"),
-        Decimal("0.0052"),
-        Decimal("0.0350"),
+        Decimal("0.0142"),
+        Decimal("0.0142"),
+        Decimal("0.0395"),
     ]
     assert breakdown.by_stage[1].usd == breakdown.by_stage[2].usd, (
         "the two debate rounds share one token model and must display equal"

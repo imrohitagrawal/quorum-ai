@@ -43,7 +43,7 @@ QUERY = "Compare transparent model answers"
 #: The four-stage estimate for ``QUERY`` and the slots below, with NO judge.
 #: This is the pre-change figure and it must not move: a run with no judge
 #: configured is not affected by this work at all.
-ESTIMATE_JUDGE_OFF = Decimal("0.1567")
+ESTIMATE_JUDGE_OFF = Decimal("0.1927")
 
 #: The judge's DISPLAYED term, at the pinned judge price. Since ADR-0114 the
 #: point path prices the judge from the TYPICAL settings
@@ -54,13 +54,15 @@ ESTIMATE_JUDGE_OFF = Decimal("0.1567")
 #:     output  150 tok                         @ $0.005/1k = $0.00075
 #:                                                total    = $0.00805825
 #:
-#: Raw judge-off total $0.15673875 + $0.00805825 = $0.164797, displayed $0.1648,
-#: so the headline rises by $0.0081.
+#: Raw judge-off total $0.19273875 + $0.00805825 = $0.200797, displayed
+#: $0.2008, so the headline rises by $0.0081. (The judge-off baseline was
+#: $0.1567 until #268 / ADR-0115 raised ``cost_debate_output_tokens`` to 2200;
+#: the judge term itself is untouched by that change.)
 JUDGE_TERM = Decimal("0.0081")
 
 #: ``ESTIMATE_JUDGE_OFF + JUDGE_TERM``, written out rather than computed so
 #: both sides of the assertion are literals (rule 7a).
-ESTIMATE_JUDGE_ON = Decimal("0.1648")
+ESTIMATE_JUDGE_ON = Decimal("0.2008")
 
 #: The judge reserve the FAIL-SAFE BOUND still carries, from the caps. The same
 #: literal ``test_bound_covers_the_judge.py`` pins:

@@ -680,7 +680,11 @@ def test_estimate_time_block_still_records_blocked_and_pages_sentry() -> None:
 #: `_DEFAULT_PRICE_PER_1K` fallback -- 4x/2.5x too high. With that catalog row
 #: added (see ``catalog_fetcher.py``), this constant is the real, deterministic
 #: price again.
-PINNED_DEFAULT_MIX_UNIT_USD = Decimal("0.0827")
+#: #268 / ADR-0115 (2026-09-20) priced the debate stage from measurement
+#: (``cost_debate_output_tokens`` 400 -> 2200): MEASURED 0.0827 -> 0.1052, and
+#: the admitted run count 4 -> 3. Same shape as the ADR-0028 entry above — the
+#: price of a run changed, not the envelope.
+PINNED_DEFAULT_MIX_UNIT_USD = Decimal("0.1052")
 
 
 @contextmanager
@@ -781,8 +785,10 @@ def test_daily_cap_admits_the_number_of_runs_its_dollar_value_pays_for() -> None
     doubled the cap, so on that 2026-08-09 unit price the SAME unit admitted 7:
     floor(0.40 / 0.0547) = 7, where floor(0.20 / 0.0547) was 3. That ADR moved
     the envelope, not the price. THEN the 2026-09-15 search-fee activation moved
-    the price: the unit is 0.0827, so the envelope is floor(0.40 / 0.0827) = 4 --
-    which is what this test asserts today. The default mix stays in ALLOW
+    the price: the unit went to 0.0827, so the envelope was
+    floor(0.40 / 0.0827) = 4. THEN #268 / ADR-0115 priced the debate stage from
+    measurement and the unit became 0.1052, so the envelope is
+    floor(0.40 / 0.1052) = 3 -- which is what this test asserts today. The default mix stays in ALLOW
     (max_cost_usd 0.1043 under ADR-0028, 0.1313 after ADR-0102 raised the
     debate cap, 0.1593 since the 2026-09-15 activation), so the loop
     below's confirmation round-trip stays a no-op for every admitted run,
@@ -845,13 +851,19 @@ def test_daily_cap_admits_the_number_of_runs_its_dollar_value_pays_for() -> None
         # measured $0.007, so the default-mix unit price rose $0.0547 -> $0.0827
         # and the $0.40 cap pays for four runs instead of seven.
         #
+        # Then 4 -> 3, the same shape again and also a deliberate decision
+        # (#268, CHG-009, ADR-0115, product owner 2026-09-20): the debate stage
+        # was priced at a 400-token typical against a MEASURED mean of 2190
+        # tokens per call, so the estimate the cap keys on was light on every
+        # run with a debate stage. Unit $0.0827 -> $0.1052.
+        #
         # The drop is the ceiling becoming CORRECT, not a regression: before
         # this, the estimate the cap is keyed on was $0.028 light on every
         # searching run, so the cap was admitting a seventh run it could not
         # actually afford. `DAILY_CAP_USD` was deliberately NOT raised to restore
         # the old count — doing so would re-create the under-protection that had
         # been accidental.
-        assert expected_runs == 4, f"default-mix unit price moved: {unit}"
+        assert expected_runs == 3, f"default-mix unit price moved: {unit}"
 
         completed = 0
         rejection = None
