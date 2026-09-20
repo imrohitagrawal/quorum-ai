@@ -37,6 +37,14 @@ from product_app.model_slots import (
 
 _QUERY = "Which database should we choose for a write-heavy workload?"
 
+#: The shipped offline price table, as ``price_index()`` returns it. Pinned by
+#: every estimate in this file so its dollar literals cannot move with
+#: collection order (the catalog is a process global — rule 16a).
+_STATIC_PRICES = {
+    entry.model_id: (entry.input_price_per_1k, entry.output_price_per_1k)
+    for entry in _FALLBACK_CATALOG
+}
+
 
 def _slots() -> list[ModelSlot]:
     return [
@@ -60,11 +68,7 @@ def _bound(monkeypatch: pytest.MonkeyPatch, *, peer: bool) -> CostEstimate:
     uses, scoped to the call so nothing leaks into the rest of the suite.
     """
     monkeypatch.setattr(config.settings, "peer_critique_enabled", peer)
-    static = {
-        entry.model_id: (entry.input_price_per_1k, entry.output_price_per_1k)
-        for entry in _FALLBACK_CATALOG
-    }
-    monkeypatch.setattr(openrouter_model_catalog_service, "price_index", lambda: static)
+    monkeypatch.setattr(openrouter_model_catalog_service, "price_index", lambda: _STATIC_PRICES)
     return cost_estimation_service.estimate(query_text=_QUERY, model_slots=_slots())
 
 
@@ -111,7 +115,8 @@ def test_the_bound_prices_one_call_per_slot_not_one_per_round(
     expected multiplier exactly 4 and independent of what any model costs. The
     first draft of this test asserted ">2x" on the DEFAULT mix instead and went
     red against correct code: measured on the shipped catalog, the default mix
-    moves 0.0142 -> 0.0242, a 1.70x ratio, because the four default slots are
+    moves 0.0142 -> 0.0241 on the shipped static catalog this file pins
+    (0.0242 at live prices), a 1.70x ratio, because the four default slots are
     collectively cheaper than four Haikus. (Those two figures were 0.0052 and
     0.0081 until #268 / ADR-0115 raised ``cost_debate_output_tokens`` to 2200;
     the RATIO is the part that is a fact about the price list.) That number is a fact about the
@@ -126,6 +131,13 @@ def test_the_bound_prices_one_call_per_slot_not_one_per_round(
     def _debate_line(peer: bool) -> Decimal:
         with monkeypatch.context() as mp:
             mp.setattr(config.settings, "peer_critique_enabled", peer)
+            # Same static-catalog pin as ``_bound`` (see its docstring): the
+            # catalog is a process global, and without this the two literals
+            # below move with collection order. Review demonstrated it —
+            # warming the fetcher with a live-shaped haiku price ahead of this
+            # file reddened the assertion while every ``_bound``-pinned test
+            # stayed green.
+            mp.setattr(openrouter_model_catalog_service, "price_index", lambda: _STATIC_PRICES)
             estimate = cost_estimation_service.estimate(query_text=_QUERY, model_slots=same_model)
         return _stages(estimate)["debate_round_1"]
 

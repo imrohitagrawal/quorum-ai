@@ -451,9 +451,12 @@ def test_block_lands_on_the_fourth_quarter_cap_charge_not_the_fifth(
     changed, and the on-the-line and over-the-line cases below still pin it.
 
     The charge sequence alone does NOT pin the comparator: MEASURED, flipping
-    ``>`` to ``>=`` still leaves the BLOCK on the fourth estimate here (the
-    margin over the cap, $0.0057, is not small enough for the comparator
-    choice to matter on this walk). The second half of this test constructs
+    ``>`` to ``>=`` still leaves the BLOCK on the fourth estimate here. The
+    margin over the cap at step four is ``3 * 0.10 + unit - 0.40``, i.e.
+    ``unit - 0.10``: MEASURED in-suite the unit is $0.1054, so the margin is
+    $0.0054 — not small enough for the comparator choice to matter on this
+    walk. (This read "$0.0057" until #268; that was the ADR-0028-era figure
+    and was already stale.) The second half of this test constructs
     the equality case directly — a ledger of exactly ``DAILY_CAP_USD - unit``
     — which is the only input that tells the two comparators apart, and
     asserts the strict one admits it.

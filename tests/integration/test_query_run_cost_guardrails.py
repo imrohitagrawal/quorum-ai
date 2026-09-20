@@ -56,7 +56,8 @@ DEFAULT_MODEL_IDS = [
 #: every band assertion in this file non-deterministic depending on which
 #: other files ran first. With the catalog row in place, pricing is
 #: deterministic and MEASURED (2026-08-09, BEFORE the 2026-09-15 search-fee
-#: activation; at the fee shipping since then the pair is 0.0827 / 0.1593 and
+#: activation; the pair was 0.0827 / 0.1593 after it, and is 0.1052 / 0.1593
+#: since #268 / ADR-0115 priced the debate stage from measurement, and
 #: every band below is unchanged) at:
 #:   DEFAULT_MODEL_IDS: point 0.0547, bound 0.1043 -- ALLOW (unchanged band
 #:     from pre-ADR-0028, just a higher number: point +73%, bound +35%).
@@ -81,7 +82,8 @@ DEFAULT_MODEL_IDS = [
 #: cited, and asserted nowhere. A number no gate compares to the tree goes stale
 #: in silence. Positive control that the grep-for-assertions actually works:
 #: the POINT figure IS asserted -- `PINNED_DEFAULT_MIX_UNIT_USD =
-#: Decimal("0.0827")` below (0.0547 before the 2026-09-15 fee activation);
+#: Decimal("0.1052")` below (0.0827 before #268 / ADR-0115, 0.0547 before the
+#: 2026-09-15 fee activation);
 #: `tests/integration/test_ledger_live_versus_simulated.py` asserts its own
 #: fixture literal independently.
 #:
@@ -194,7 +196,8 @@ def confirmed_request(
     A no-op when the estimate is already ALLOW (the common case for
     DEFAULT_MODEL_IDS under ADR-0028: MEASURED 2026-08-09, pre-activation,
     point 0.0547, bound 0.1043; at the fee shipping since 2026-09-15 the pair
-    is 0.0827 / 0.1593 and the band is unchanged).
+    was 0.0827 / 0.1593 then, and is 0.1052 / 0.1593 since #268 / ADR-0115;
+    the band is unchanged throughout).
     For a mix/query that lands in CONFIRM, this fetches a real preview first
     and attaches its confirmation token -- the same round-trip a real client
     makes for a CONFIRM-band run. Used defensively by tests below that are
@@ -853,7 +856,8 @@ def test_daily_cap_admits_the_number_of_runs_its_dollar_value_pays_for() -> None
         # and the $0.40 cap pays for four runs instead of seven.
         #
         # Then 4 -> 3, the same shape again and also a deliberate decision
-        # (#268, CHG-009, ADR-0115, product owner 2026-09-20): the debate stage
+        # (#268, CHG-009, ADR-0115; the owner chose the value in session on
+        # 2026-09-20 and the merge is a separate sign-off): the debate stage
         # was priced at a 400-token typical against a MEASURED mean of 2190
         # tokens per call, so the estimate the cap keys on was light on every
         # run with a debate stage. Unit $0.0827 -> $0.1052.

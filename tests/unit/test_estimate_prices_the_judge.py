@@ -366,7 +366,9 @@ def test_the_two_debate_rounds_still_display_equal_with_a_judge_row(
     asserted that two already-equal numbers were equal. Adversarial review
     caught it. Measured with the fixup deleted, the rounds come out unequal at
     **237 of the first 1,199 query lengths**, and a 1-character query is one of
-    them (``d1=0.0052`` vs ``d2=0.0051``). That is the fixture used below.
+    them (``d1=0.0142`` vs ``d2=0.0141`` at the debate typical #268 shipped; the
+    pair read 0.0052 / 0.0051 before it, and the 237-of-1,199 count is unchanged
+    by that move). That is the fixture used below.
 
     WHAT TURNS THIS RED: deleting or weakening the equalisation fixup in
     ``_estimate_breakdown`` — proved by deleting all four of its lines and

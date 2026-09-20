@@ -253,8 +253,10 @@ stale, from a twelve-model catalog) proposed `cost_debate_output_tokens`
 400 → 1700, `SYNTHESIS_SECTION_MAX_TOKENS` 3000 → 6000 and a ladder of
 0.18 / 0.27 / 0.28. ADR-0102 then moved the ladder further and by a different
 mechanism (the measured cap), and the two token constants have NOT moved:
-`cost_debate_output_tokens` IS NOW LANDED from measurement — 400 -> 2200,
-#268 / ADR-0115 / CHG-009, product owner 2026-09-20 — against the peer-shaped
+`cost_debate_output_tokens` has a PROPOSED value from measurement — 400 -> 2200,
+#268 / ADR-0115 / CHG-009, AWAITING the product owner's sign-off before merge
+(the owner chose the value in session on 2026-09-20; the merge is a separate
+approval) — measured against the peer-shaped
 telemetry at cap 4000, with the 715-mix sweep re-run (0 band flips, 0 bound
 changes). `synthesis.py` still ships `SYNTHESIS_SECTION_MAX_TOKENS = 3000`,
 which is NOT landed and is deliberately a separate concern: it is a call-site
@@ -428,8 +430,9 @@ genuine code (the constructor assignment and the two SQL binds), not only in a
 comment or docstring — the W7 trap. **When you pin a row, pick a needle the
 fix must DELETE or must ADD, never a line the fix will merely edit around.**
 
-**W13 — #268. The debate half is DONE** (ADR-0115, CHG-009, owner-approved
-2026-09-20): `cost_debate_output_tokens` 400 -> 2200, measured. Two figures
+**W13 — #268. The debate half is BUILT AND PROPOSED, not landed** (ADR-0115,
+CHG-009, awaiting the product owner's sign-off): `cost_debate_output_tokens`
+400 -> 2200, measured. Two figures
 this row used to carry were stale and are not repeated: the cap is 4000, not
 2000, and the "9 of 495 mixes flipping CONFIRM -> BLOCK" came from a
 twelve-model catalog and a different over-charge — the measured sweep for THIS
