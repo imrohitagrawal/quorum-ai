@@ -4,7 +4,7 @@
 proves each row's state.** Issues on GitHub are the mirror; this file is the
 original, because a gate and an offline agent can read it and cannot read `gh`.
 
-Verified at: `33c53793e2af19f0de73510ebe3dc49481219988`
+Verified at: `b1209b5a785e95fb208c55c4303ada85065aeb54`
 
 The board holds **23** rows, **5** of them unpinned.
 
