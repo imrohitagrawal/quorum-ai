@@ -45,9 +45,25 @@ QUERY = "Compare transparent model answers"
 #: configured is not affected by this work at all.
 ESTIMATE_JUDGE_OFF = Decimal("0.1567")
 
-#: The judge reserve, at the pinned fallback price. Deliberately the SAME
-#: literal ``test_bound_covers_the_judge.py`` pins for the bound, because the
-#: point path and the bound path share one formula on purpose (ADR-0064):
+#: The judge's DISPLAYED term, at the pinned judge price. Since ADR-0114 the
+#: point path prices the judge from the TYPICAL settings
+#: ``cost_judge_input_tokens`` / ``cost_judge_output_tokens``, while the bound
+#: keeps the cap-derived reserve (``BOUND_JUDGE_TERM_RAW`` below):
+#:
+#:     input  7300 + 8.25 (the 33-char query) @ $0.001/1k = $0.00730825
+#:     output  150 tok                         @ $0.005/1k = $0.00075
+#:                                                total    = $0.00805825
+#:
+#: Raw judge-off total $0.15673875 + $0.00805825 = $0.164797, displayed $0.1648,
+#: so the headline rises by $0.0081.
+JUDGE_TERM = Decimal("0.0081")
+
+#: ``ESTIMATE_JUDGE_OFF + JUDGE_TERM``, written out rather than computed so
+#: both sides of the assertion are literals (rule 7a).
+ESTIMATE_JUDGE_ON = Decimal("0.1648")
+
+#: The judge reserve the FAIL-SAFE BOUND still carries, from the caps. The same
+#: literal ``test_bound_covers_the_judge.py`` pins:
 #:
 #:     4 answers x 2000 tok        =  8000.00
 #:     5 sections x 3000 tok       = 15000.00
@@ -58,23 +74,15 @@ ESTIMATE_JUDGE_OFF = Decimal("0.1567")
 #:     input                         28232.25  @ $0.001/1k = $0.02823225
 #:     output 1024 (enforced cap)              @ $0.005/1k = $0.00512
 #:                                                total    = $0.03335225
-JUDGE_TERM = Decimal("0.0334")
+#:
+#: Before ADR-0114 the displayed estimate carried this same figure too.
+BOUND_JUDGE_TERM_RAW = Decimal("0.03335225")
 
-#: ``ESTIMATE_JUDGE_OFF + JUDGE_TERM``, written out rather than computed so
-#: both sides of the assertion are literals (rule 7a).
-ESTIMATE_JUDGE_ON = Decimal("0.1901")
-
-#: The judge's DISPLAYED row, which is ONE QUANTUM BELOW ``JUDGE_TERM``, and
-#: that is correct rather than a discrepancy. ``_reconcile_usd_lines`` is
-#: largest-remainder (Hamilton) apportionment: it floors every raw line to a
-#: whole quantum and then hands the residual quanta to the lines with the
-#: biggest fractional remainders. The raw judge term is $0.03335225, which
-#: floors to $0.0333; the leftover quantum goes to ``synthesis`` (whose row
-#: moves 0.0948 -> 0.0949), not back to the judge. The GRAND TOTAL still rises
-#: by the full ``JUDGE_TERM``, and both partitions still re-sum to it exactly —
-#: which is the invariant that matters. Pinned as its own literal so a change
+#: The judge's DISPLAYED row after largest-remainder reconciliation. Measured,
+#: not derived: the raw term is $0.00805 and ``_reconcile_usd_lines`` decides
+#: which line takes the residual quantum. Pinned as its own literal so a change
 #: in the apportionment is caught rather than absorbed.
-JUDGE_ROW_USD = Decimal("0.0333")
+JUDGE_ROW_USD = Decimal("0.0080")
 
 #: Same reasoning as ``test_bound_covers_the_judge.py``: the model catalog is a
 #: PROCESS GLOBAL (rule 16a), so run alone this file sees the fallback prices
@@ -261,8 +269,8 @@ def test_the_judge_is_not_smeared_into_the_writer_row(
     # residual under largest-remainder apportionment, so a slot row can legally
     # shift by a single quantum (measured: slot 4 moves 0.0058 -> 0.0059).
     # That is reapportionment, not smearing, and the tolerance still bites
-    # hard: spreading the $0.0334 judge term across four slots would move each
-    # row by ~$0.0083, which is 83 quanta, not one.
+    # hard: spreading the $0.0081 judge term across four slots would move each
+    # row by ~$0.0020, which is 20 quanta, not one.
     before, after = slot_rows(off), slot_rows(on)
     assert len(before) == len(after) == 4
     # POSITIVE PARTNER: the slot rows are real non-zero figures.
@@ -389,13 +397,14 @@ def test_the_estimate_stays_at_or_below_the_bound_across_query_lengths(
 ) -> None:
     """``estimated_cost_usd <= max_cost_usd`` still holds, judge included.
 
-    The point path and the bound path now BOTH carry a judge term. They are the
-    same formula (ADR-0064), so the gap between the two figures is unchanged by
-    this work — but the invariant the whole guardrail rests on is re-measured
-    across the supported query range rather than argued.
+    The point path and the bound path BOTH carry a judge term. Since ADR-0114
+    they are different formulas: typical settings on the point path, caps on
+    the bound, with the typical figures clamped to the caps. So the invariant
+    the whole guardrail rests on is re-measured across the supported query
+    range rather than argued.
 
     WHAT TURNS THIS RED: pricing the judge larger on the point path than on the
-    bound path (e.g. reading a different max-tokens setting in one of them).
+    bound path (e.g. dropping the clamp while a typical setting exceeds a cap).
     """
     with monkeypatch.context() as mp:
         _pin_catalog(mp)
@@ -482,3 +491,137 @@ def test_the_judge_row_is_a_whole_number_of_display_quanta(
         assert model_line.usd % COST_DISPLAY_QUANTUM == 0, (
             f"model {model_line.model_id} is {model_line.usd}, not a whole {COST_DISPLAY_QUANTUM}"
         )
+
+
+def _judge_term(mp: pytest.MonkeyPatch, *, typical: bool) -> Decimal:
+    """The raw judge term ``_cost_components`` returns, on one path."""
+    _pin_catalog(mp)
+    mp.setattr(settings, "quorum_eval_judge_api_key", "sk-not-a-real-key")
+    mp.setattr(settings, "quorum_eval_judge_model_id", JUDGE_MODEL)
+    _, _, _, _, judge_cost, _ = cost_estimation_service._cost_components(
+        query_text=QUERY,
+        model_slots=_slots(),
+        init_output_tokens=Decimal(settings.initial_answer_max_tokens),
+        price_judge=True,
+        judge_typical=typical,
+    )
+    return judge_cost
+
+
+def test_the_bound_keeps_the_cap_judge_reserve(monkeypatch: pytest.MonkeyPatch) -> None:
+    """ADR-0114 moves only the DISPLAYED judge figure; the bound keeps the caps.
+
+    WHAT TURNS THIS RED: making the bound path read the typical settings too
+    (the bound's judge term falls from $0.03335225 to $0.00805).
+    """
+    with monkeypatch.context() as mp:
+        _pin_catalog(mp)
+        mp.setattr(settings, "quorum_eval_judge_api_key", "sk-not-a-real-key")
+        mp.setattr(settings, "quorum_eval_judge_model_id", JUDGE_MODEL)
+        est = cost_estimation_service.estimate(query_text=QUERY, model_slots=_slots())
+    assert est.max_cost_usd == Decimal("0.3283"), (
+        f"the fail-safe bound moved to {est.max_cost_usd}; the judge reserve in it "
+        "must stay cap-derived (ADR-0114 changes the displayed figure only)"
+    )
+    with monkeypatch.context() as mp:
+        assert _judge_term(mp, typical=False) == BOUND_JUDGE_TERM_RAW
+    with monkeypatch.context() as mp:
+        assert _judge_term(mp, typical=True) == Decimal("0.00805825")
+
+
+def test_a_typical_setting_above_the_cap_is_clamped_to_the_cap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The displayed judge term can never exceed the bound's, whatever an
+    operator sets. Boundary pinned with literals on both sides of each cap.
+
+    For ``QUERY`` (33 chars = 8.25 tokens) the input cap is 28232.25 tokens and
+    the typical input is ``cost_judge_input_tokens + 8.25``, so the clamp bites
+    from a setting of 28224 upward. The output cap is
+    ``quorum_eval_judge_max_tokens`` = 1024.
+
+    WHAT TURNS THIS RED: removing either ``min(...)`` clamp in the judge term of
+    ``_cost_components`` (28225 or 1025 then price above the cap).
+    """
+    cases = [
+        # (input setting, output setting, expected raw judge term)
+        (28223, 1024, Decimal("0.03335125")),  # +8.25 is one token under the cap
+        (28224, 1024, Decimal("0.03335225")),  # +8.25 is exactly the cap
+        (28225, 1024, Decimal("0.03335225")),  # over the cap: clamped
+        (28225, 1023, Decimal("0.03334725")),  # output one token under its cap
+        (28225, 1025, Decimal("0.03335225")),  # output over its cap: clamped
+        (10**9, 10**9, Decimal("0.03335225")),  # both absurd: exactly the bound's term
+    ]
+    for inp, out, expected in cases:
+        with monkeypatch.context() as mp:
+            mp.setattr(settings, "cost_judge_input_tokens", inp)
+            mp.setattr(settings, "cost_judge_output_tokens", out)
+            got = _judge_term(mp, typical=True)
+        assert got == expected, (
+            f"cost_judge_input_tokens={inp}, cost_judge_output_tokens={out}: displayed "
+            f"judge term {got}, expected {expected}"
+        )
+
+
+def test_the_displayed_judge_term_follows_query_length(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A query is in the judge prompt verbatim, so the displayed judge term
+    must grow with it. Found in review: the first version of this change used a
+    flat token figure, and the judge line did not move at all between a
+    33-character query and a 20,000-character one (about $0.002 under-shown at
+    the judge's list price).
+
+    ``query_tokens`` is ``len(query) / 4``, so at 33 / 4000 / 20000 characters
+    the typical input is 7308.25 / 8300 / 12300 tokens.
+
+    WHAT TURNS THIS RED: dropping ``+ query_tokens`` from the typical input in
+    ``_cost_components`` (all three terms collapse to $0.00805).
+    """
+    expected = {
+        33: Decimal("0.00805825"),
+        4000: Decimal("0.00905000"),
+        20000: Decimal("0.01305000"),
+    }
+    seen: dict[int, Decimal] = {}
+    for n in (33, 4000, 20000):
+        with monkeypatch.context() as mp:
+            _pin_catalog(mp)
+            mp.setattr(settings, "quorum_eval_judge_api_key", "sk-not-a-real-key")
+            mp.setattr(settings, "quorum_eval_judge_model_id", JUDGE_MODEL)
+            _, _, _, _, judge_cost, _ = cost_estimation_service._cost_components(
+                query_text="x" * n,
+                model_slots=_slots(),
+                init_output_tokens=Decimal(settings.initial_answer_max_tokens),
+                price_judge=True,
+                judge_typical=True,
+            )
+        seen[n] = judge_cost
+    assert seen == expected, f"displayed judge terms by query length: {seen}, expected {expected}"
+    # POSITIVE PARTNER: the three figures really are different, so "follows the
+    # query" is not three equal numbers agreeing.
+    assert len(set(seen.values())) == 3
+
+
+def test_the_typical_judge_settings_refuse_a_free_judge(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Zero is not a legal typical figure: a judge that runs costs something,
+    and a $0.0000 judge row beside a firing judge is the defect ADR-0064 exists
+    to prevent, one layer down. Found in review.
+
+    WHAT TURNS THIS RED: relaxing either field's ``ge=1`` in ``config.py`` (0
+    and -1 are then accepted).
+    """
+    from pydantic import ValidationError
+
+    from product_app.config import Settings
+
+    for bad in (0, -1):
+        with pytest.raises(ValidationError):
+            Settings(cost_judge_input_tokens=bad)
+        with pytest.raises(ValidationError):
+            Settings(cost_judge_output_tokens=bad)
+    # POSITIVE PARTNER: the smallest legal value IS accepted, so the rule above
+    # is a boundary and not a blanket refusal.
+    assert Settings(cost_judge_input_tokens=1, cost_judge_output_tokens=1)

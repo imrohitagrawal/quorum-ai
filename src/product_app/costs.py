@@ -1488,6 +1488,7 @@ class CostEstimationService:
             synthesis_sections=Decimal(settings.cost_synthesis_sections),
             context_tokens=context_tokens,
             price_judge=price_judge,
+            judge_typical=True,
         )
         total = raw_total.quantize(COST_DISPLAY_QUANTUM, rounding=ROUND_HALF_UP)
 
@@ -1599,6 +1600,7 @@ class CostEstimationService:
         context_tokens: Decimal = Decimal(0),
         price_round_two_prior_critique: bool = False,
         price_judge: bool = False,
+        judge_typical: bool = False,
     ) -> tuple[list[Decimal], Decimal, Decimal, Decimal, Decimal, Decimal]:
         """The shared per-call token model, parameterised by the initial-answer
         output token count and the synthesis section count.
@@ -1608,14 +1610,17 @@ class CostEstimationService:
         SEPARATELY, not merely folded into ``raw_total``, because
         :meth:`_estimate_breakdown` has to place it on its own displayed line
         in both partitions (ADR-0064) — it is zero unless ``price_judge``.
+        ``judge_typical`` (the point path only, ADR-0114) prices that judge
+        from the typical settings, each clamped to its cap, instead of the caps.
         Used with the realistic output floor + all
         ``cost_synthesis_sections`` sections for the displayed estimate
         (:meth:`_estimate_breakdown`) and with the enforced ``max_tokens`` cap +
         the same section count for the fail-safe guardrail bound
         (:meth:`_estimate_bound_usd`) — same arithmetic and section fan-out,
-        differing only in the per-call output assumption (typical floor vs
-        enforced cap), so the point estimate is always <= the bound and the two
-        can never drift.
+        differing in the per-call output assumption (typical floor vs enforced
+        cap) and, when a judge is priced, in the judge's token figures
+        (``judge_typical``, clamped to the caps; ADR-0114). Every typical figure
+        is at or below its cap, so the point estimate is always <= the bound.
 
         ``context_tokens`` is the extra input tokens from a follow-up context
         (prior_question + prior_synthesis). It is priced into debate and synthesis
@@ -1864,11 +1869,12 @@ class CostEstimationService:
         # moment a judge was configured. The judge is intended to be ON in
         # production, so this was not a latent gap for long.
         #
-        # BOUND-ONLY, exactly like ``price_round_two_prior_critique`` above and
-        # for the recorded reason: a term that belongs to no single displayed
-        # stage breaks the ``by_stage``/``by_model`` reconciliation when added
-        # to the point path. ``_estimate_bound_usd`` is the only caller that
-        # sets this, and it returns a scalar with no partition to reconcile.
+        # PRICED ON BOTH PATHS since ADR-0064, which gave the judge its own
+        # reconciled ``"judge"`` row (the judge maps onto one displayed line,
+        # unlike ``price_round_two_prior_critique`` above). The two paths use
+        # DIFFERENT token figures since ADR-0114: the bound prices the caps
+        # described below; the point path (``judge_typical``) prices the
+        # measured typical call, clamped to those caps.
         #
         # WHAT THIS TERM DOES AND DOES NOT BOUND. An earlier draft called it
         # "a TRUE ceiling, not a guess". Adversarial review refuted that with a
@@ -1962,10 +1968,27 @@ class CostEstimationService:
                 + judge_source_tokens
                 + query_tokens
             )
+            judge_output_tokens = Decimal(settings.quorum_eval_judge_max_tokens)
+            if judge_typical:
+                # ADR-0114: the displayed figure uses the measured typical call,
+                # clamped so it can never exceed the reserve computed above.
+                # The query is in the judge prompt verbatim
+                # (``evaluation.build_judge_prompt``) and a query may be 20,000
+                # characters, so the typical figure carries ``query_tokens``
+                # too. Without it the displayed judge line did not move with
+                # query length at all, and under-showed a maximum-length query
+                # by about $0.002 (found in review).
+                judge_input_tokens = min(
+                    Decimal(settings.cost_judge_input_tokens) + query_tokens,
+                    judge_input_tokens,
+                )
+                judge_output_tokens = min(
+                    Decimal(settings.cost_judge_output_tokens), judge_output_tokens
+                )
             judge_cost = _cost(
                 settings.quorum_eval_judge_model_id,
                 judge_input_tokens,
-                Decimal(settings.quorum_eval_judge_max_tokens),
+                judge_output_tokens,
             )
         raw_total = (
             initial_total
@@ -2044,6 +2067,9 @@ class CostEstimationService:
             # paths and reconciled into a ``"judge"`` row by
             # :meth:`_estimate_breakdown`. Both paths call ``judge_configured()``
             # so the two figures cannot disagree about whether a judge will run.
+            # This path leaves ``judge_typical`` False: it keeps the cap-derived
+            # judge reserve while the displayed figure uses the typical call
+            # (ADR-0114).
             price_round_two_prior_critique=True,
             price_judge=judge_configured(),
         )

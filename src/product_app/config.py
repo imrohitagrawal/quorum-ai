@@ -607,6 +607,16 @@ class Settings(BaseSettings):
     #: sync with ``debate.DEBATE_ROUND_MAX_TOKENS`` — the value the live debate
     #: call actually enforces.
     cost_debate_output_tokens_cap: int = 4000
+    #: TYPICAL input and output tokens of one Layer-B judge call, read by the
+    #: DISPLAYED estimate only (ADR-0114). The fail-safe ``max_cost_usd`` bound
+    #: keeps pricing the judge from the caps, and ``costs._cost_components``
+    #: clamps each typical figure to its cap, so the displayed figure can never
+    #: exceed the bound's. The measurement behind both values, with its window
+    #: and command, lives in ADR-0114 only.
+    #: ``ge=1``: a judge call that runs costs something, so a zero would show a
+    #: $0.0000 judge row beside a judge that fires.
+    cost_judge_input_tokens: int = Field(default=7300, ge=1)
+    cost_judge_output_tokens: int = Field(default=150, ge=1)
     #: Output-token floor for one synthesis section call (the reconciled
     #: answer). Synthesis fans out into up to ``cost_synthesis_sections``
     #: independent live calls, each re-sending the full context.

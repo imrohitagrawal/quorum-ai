@@ -117,6 +117,7 @@ ways, so the record shows what was believed on a date and what replaced it.
 | [ADR-0111](adr/0111-a-lapsed-live-window-is-a-one-edit-revert.md) | A lapsed live-execution window is a one-edit revert, not a refusal | Architecture | Accepted — 2026-09-12 |
 | [ADR-0112](adr/0112-a-failed-slot-records-whether-it-could-have-been-billed.md) | A failed slot records whether it could have been billed | Architecture | Accepted — 2026-09-12 |
 | [ADR-0113](adr/0113-the-online-search-fee-is-priced.md) | The `:online` search fee is priced | Architecture | Accepted — 2026-09-15 |
+| [ADR-0114](adr/0114-the-displayed-estimate-prices-a-typical-judge-call.md) | The displayed estimate prices a typical judge call | Architecture | Accepted — 2026-09-20 |
 
 **This index was itself stale** until 2026-07-30: ADR-0002 had existed since
 2026-07-19 and was never listed here. A hand-maintained index is a derived fact
