@@ -28,6 +28,7 @@ import pytest
 
 from product_app import config
 from product_app.costs import CostEstimate, cost_estimation_service
+from product_app.catalog_fetcher import _FALLBACK_CATALOG
 from product_app.model_slots import (
     DEFAULT_MODEL_IDS,
     ModelSlot,
@@ -45,7 +46,25 @@ def _slots() -> list[ModelSlot]:
 
 
 def _bound(monkeypatch: pytest.MonkeyPatch, *, peer: bool) -> CostEstimate:
+    """Price against the SHIPPED STATIC catalog, whatever ran before this.
+
+    The model catalog is a process global (rule 16a). Run alone, this module
+    sees ``_FALLBACK_CATALOG``; run after a module that has warmed the live
+    catalog, it sees live prices, and every dollar literal in this file moves
+    by a quantum — MEASURED while landing #268: the shipped-posture figure
+    reads 0.1053 alone and 0.1054 after the integration modules, so the pin
+    below was green or red depending on collection order alone.
+
+    Pinning the price index here makes those literals deterministic in any
+    order. The same seam as ``tests/integration/test_query_run_cost_guardrails``
+    uses, scoped to the call so nothing leaks into the rest of the suite.
+    """
     monkeypatch.setattr(config.settings, "peer_critique_enabled", peer)
+    static = {
+        entry.model_id: (entry.input_price_per_1k, entry.output_price_per_1k)
+        for entry in _FALLBACK_CATALOG
+    }
+    monkeypatch.setattr(openrouter_model_catalog_service, "price_index", lambda: static)
     return cost_estimation_service.estimate(query_text=_QUERY, model_slots=_slots())
 
 
