@@ -3,7 +3,7 @@
 ## Status
 
 Accepted — 2026-08-22. Decision 4 (the same judge formula on both paths) is
-superseded by ADR-0114 (proposed 2026-09-20): the displayed estimate now prices
+superseded by ADR-0114 (accepted 2026-09-20): the displayed estimate now prices
 a typical judge call, and the bound keeps the caps. The first rejected
 alternative below, "Model a 'typical' judge input instead of reusing the
 reserve", is reversed with it — on 11 measured judge calls, and for the

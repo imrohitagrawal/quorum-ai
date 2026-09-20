@@ -2,11 +2,12 @@
 
 ## Status
 
-Proposed — 2026-09-20. **Awaiting the product owner's sign-off before merge.**
-The product owner chose, in session on 2026-09-20, to correct the judge line
-together with #268's debate value, so that the default panel's daily run
-allowance does not fall while the debate line is corrected. The two values
-below (7300 and 150) are proposed, not yet approved.
+Accepted — 2026-09-20. **Product-owner decision, taken in session on
+2026-09-20** (CHG-008 records it): the judge line is corrected together with
+#268's debate value, so the default panel's daily run allowance does not fall
+while the debate line is corrected, and the two values below (7300 and 150)
+are approved. The owner was shown the measurements table below, the review's
+findings and the mutation proofs before answering.
 
 Supersedes ADR-0064's decision 4 ("the judge term is the SAME formula on both
 paths"). ADR-0064's other decisions stand: the judge keeps its own reconciled
