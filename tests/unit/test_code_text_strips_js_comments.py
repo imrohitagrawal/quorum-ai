@@ -198,9 +198,28 @@ def test_the_stripper_never_corrupts_a_repo_javascript_file() -> None:
         # can. CI never saw it because it runs the e2e lane in a separate job.
         and "playwright-report" not in f.parts
         and "test-results" not in f.parts
+        # uv's package cache, not this repo's source. `Makefile:4` sets
+        # `UV_CACHE_DIR ?= $(CURDIR)/.uv-cache`, so a make target can put the
+        # cache INSIDE the checkout; it is gitignored (.gitignore:7) and holds
+        # other projects' minified bundles (the Playwright driver's, mostly),
+        # which this scanner REFUSES. Measured 2026-09-22 on the main checkout:
+        # 40 swept files, 12 of them minified, all 12 under `.uv-cache`; the
+        # test failed with the "looks minified" ValueError. Same shape as the
+        # two entries above: rglob ignores .gitignore. The cache only fills
+        # when uv installs THROUGH it: a worktree synced with a bare `uv sync`
+        # and then run through `make format-check` held 0 `.js` files, which is
+        # why this is red on a long-lived checkout and green on a fresh one.
+        # Why CI stays green is UNVERIFIED -- no workflow sets UV_CACHE_DIR.
+        and ".uv-cache" not in f.parts
     ]
     # FLOOR (rule 7): a clean sweep over nothing proves nothing.
     assert len(targets) >= 1, "no repo JavaScript found to check — the sweep is vacuous"
+    # POSITIVE PARTNER to the exclusions above: the file the guard tests
+    # actually read must still be swept. RED if an exclusion grows wide enough
+    # to drop `src/` (for example, excluding a part named "static").
+    assert repo / "src" / "product_app" / "static" / "app.js" in targets, (
+        "app.js is no longer swept — an exclusion above is too wide"
+    )
 
     tmp = Path(__import__("tempfile").mkdtemp())
     corrupted: list[str] = []
