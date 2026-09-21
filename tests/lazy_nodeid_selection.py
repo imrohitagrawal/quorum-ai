@@ -52,9 +52,9 @@ mutmut reads as "no tests", a different verdict from a refusal.
 
 ONE NARROWER GUARANTEE THAN IT LOOKS: when the FILE in the id does not exist,
 pytest fails before this plugin's filter runs, and its message names the
-REWRITTEN id with the case stripped (``file or directory not found:
-tests/x.py::test_foo``). The run still fails loudly; the id you typed is just
-not echoed back in full.
+REWRITTEN id with the case stripped — "file or directory not found", then the
+path and function without the ``[case]`` part. The run still fails loudly; the
+id you typed is just not echoed back in full.
 """
 
 from __future__ import annotations
@@ -152,7 +152,7 @@ def keep_requested_cases(config: Config, items: list[Any]) -> None:
         """The requested id this item answers, or ``None``.
 
         An ABSOLUTE id has to match too. Items carry rootdir-relative node ids,
-        so comparing raw strings made ``pytest /abs/path/tests/x.py::test_foo[a]``
+        so comparing raw strings made an absolute bracketed id
         — a selection pytest resolved fine before this plugin existed — fail
         with the UsageError below. Found in review. One matcher, used for BOTH
         "keep this item" and "was this id matched at all": computing those two
