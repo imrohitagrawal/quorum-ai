@@ -1985,6 +1985,38 @@ def test_a_truncated_run_shaped_like_a_real_one_is_inconclusive_not_a_pass(
     assert complete.returncode == 0, complete.stdout
 
 
+def test_reaching_most_of_the_scope_is_still_not_a_pass(scope_script: Path, tmp_path: Path) -> None:
+    """ADR-0118 rejected "pass when the reach is above some percentage".
+
+    Nothing pinned that, so review showed `if 2 * in_scope_reached > in_scope:
+    return` surviving every test. Nine of ten reached, eight killed, one
+    crashed, none survived: the one mutant never reached could be a survivor,
+    and all 35 survivors on PR #463 sat in a single function.
+
+    Turns red if: the INCONCLUSIVE branch is skipped above some share of the
+    scope, above some kill count, or when a reached mutant crashed.
+    """
+    _write_scope(tmp_path, "product_app.costs.x_a")
+    metas: dict[str, int | None] = {f"product_app.costs.x_a__mutmut_{i}": 1 for i in range(1, 9)}
+    metas["product_app.costs.x_a__mutmut_9"] = -11
+    metas["product_app.costs.x_a__mutmut_10"] = None
+    _write_meta(tmp_path, "costs", metas)
+
+    truncated = _run(
+        scope_script, tmp_path, "report", "origin/main", "90", env=_mark_truncated(tmp_path)
+    )
+    output = truncated.stdout + truncated.stderr
+
+    assert "reached 9 of the scope's 10 mutants (90% of the scope)" in output, output
+    assert "INCONCLUSIVE" in output, output
+    assert truncated.returncode != 0, f"90% reached is still not the scope:\n{output}"
+
+    # POSITIVE PARTNER: no marker, same files -> eight of eight, an honest 100%.
+    complete = _run(scope_script, tmp_path, "report", "origin/main", "90")
+    assert "= 100.0%" in complete.stdout, complete.stdout
+    assert complete.returncode == 0, complete.stdout
+
+
 def test_a_truncated_run_says_how_much_of_the_scope_it_reached(
     scope_script: Path, tmp_path: Path
 ) -> None:
