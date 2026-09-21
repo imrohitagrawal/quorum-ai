@@ -1665,9 +1665,22 @@ def test_a_truncated_run_reports_no_percentage_however_good_the_prefix_looks(
     assert "3 of the scope's mutants" in output, (
         f"the truncated verdict must report HOW MANY it managed to score:\n{output}"
     )
-    assert truncated.returncode == 0, (
-        "a truncated run that found NO survivor is a budget event, not a "
-        f"verdict on the diff; it must not fail the gate:\n{output}"
+    # #464 / ADR-0118. Until 2026-09-22 this asserted `returncode == 0`: ADR-0065
+    # called a truncated run with no survivor "a budget event, not a verdict on
+    # the diff". #464 measured what that costs on two heads of one PR: 465 of
+    # 720 mutants reached, 35 survivors, FAILURE; then 249 of 1277 reached, 0
+    # survivors, SUCCESS, with nothing fixed in between. A run that stops
+    # before the survivors cannot find them, so "no survivor yet" passed.
+    #
+    # Turns red if: the truncated branch of `report()` goes back to a bare
+    # `return` when `counts["survived"]` is zero.
+    assert truncated.returncode != 0, (
+        "a truncated run with no survivor PASSED. It reached 3 of 5 mutants; "
+        "the 2 it never reached are unmeasured, and the fewer a run reaches "
+        f"the fewer survivors it can find:\n{output}"
+    )
+    assert "INCONCLUSIVE" in output, (
+        f"a truncated run must name its verdict, not only exit non-zero:\n{output}"
     )
 
     # POSITIVE PARTNER: the same metadata, no marker. Without this, the

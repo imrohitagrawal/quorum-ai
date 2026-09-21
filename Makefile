@@ -951,7 +951,21 @@ def report():
                   "worked example) - do not record an exception for it."
                   % counts["survived"])
             raise SystemExit(1)
-        return
+        # #464 / ADR-0118. This was a bare `return`, so a truncated run with
+        # no survivor exited 0. A run that stops early reaches fewer mutants
+        # and so can find fewer survivors: measured on two heads of one PR,
+        # 465 of 720 reached -> 35 survivors -> FAILURE, then 249 of 1277
+        # reached -> 0 survivors -> SUCCESS, nothing fixed in between. "No
+        # survivor in the part we reached" says nothing about the part we did
+        # not, so it cannot pass. The word INCONCLUSIVE is the verdict; the
+        # exit code is non-zero because make has only pass and fail. This
+        # reverses the alternative ADR-0065 rejected ("a budget event").
+        print("INCONCLUSIVE: no survivor was found in the part of the scope "
+              "this run reached, and the rest was never measured, so this is "
+              "NOT a pass. The gate ran out of budget; that is not a "
+              "statement about the diff. Narrow the scope, or widen "
+              "MUTATION_RUN_DEADLINE_SECONDS, and run it again.")
+        raise SystemExit(1)
     score = 100.0 * counts["killed"] / checked
     print("mutation score (killed / (killed+survived)) = %.1f%% (threshold %.0f%%)" % (score, threshold))
     if score < threshold:
