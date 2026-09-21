@@ -5,6 +5,10 @@
 Accepted — 2026-08-23. Addresses issue #337 (the gate produces no score even at
 minimum scope).
 
+**Amended 2026-09-22 by [ADR-0118](0118-a-truncated-mutation-run-is-inconclusive-and-does-not-pass.md):**
+the rejected alternative "Fail a truncated run" below is reversed. A truncated
+run with no survivor now exits non-zero. Everything else here stands.
+
 Builds on [ADR-0057](0057-the-mutation-gate-is-a-regression-detector-and-must-reach-the-real-tree.md),
 which fixed the abort inside `./mutants/` and named the two things it
 deliberately left open:

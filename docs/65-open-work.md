@@ -6,7 +6,7 @@ original, because a gate and an offline agent can read it and cannot read `gh`.
 
 Verified at: `b1209b5a785e95fb208c55c4303ada85065aeb54`
 
-The board holds **23** rows, **4** of them unpinned.
+The board holds **24** rows, **4** of them unpinned.
 
 `scripts/check_open_work.py --check` reads every row's evidence off disk and
 refuses if a claim is false. It runs inside `make validate`, and
@@ -119,6 +119,7 @@ caught by any automated check and 10 of 16 by adversarial review
 | W22 | The Tavily search call sends its key to a configured base with no scheme guard | DONE | `PRESENT src/product_app/providers.py :: url=f"{settings.tavily_api_base_url.rstrip('/')}/search"` | — | — |
 | W23 | The mutation gate cannot run when a changed function is covered by a schemathesis case | DONE | `ABSENT tests/conftest.py :: from tests.lazy_nodeid_selection import rewrite_lazy_case_args` | — | ADR-0117 |
 |  W24 | The `:online` web-search fee is measured at $0.007 and was priced at `0.0`, so every searching run's receipt and its daily-cap booking were $0.028 light — ACTIVATED 2026-09-15 by product-owner decision (CHG-007, ADR-0113) | DONE | `ABSENT src/product_app/config.py :: Field(default=0.007, ge=0, allow_inf_nan=False)` | #105 | —  |
+| W25 | A truncated mutation run with no survivor passes, so the gate gets greener as it measures less | DONE | `ABSENT Makefile :: print("INCONCLUSIVE: no survivor` | #464 | ADR-0118 |
 
 **STOP** marks a row that cannot be finished without a human decision — a money,
 cost or safety guardrail value that only real measurement could justify. Do not
@@ -400,8 +401,9 @@ real gate, same diff both ways: without it, exit 2 and
 `BadTestExecutionCommandsException` with no score; with it, exit 0 and
 `mutants scored: 1 killed, 0 survived`.
 
-**A gate that can run is not yet a gate that can fail honestly:** #464 records
-that a truncated run still exits 0, and that is the next row, not this one.
+**A gate that can run is not yet a gate that can fail honestly:** #464 recorded
+that a truncated run still exited 0. That is row W25 (ADR-0118). #464's other
+claim, an over-broad scope, did not reproduce; ADR-0118 has the command.
 
 **W10 — #382. DONE** (ADR-0083). `_has_strong_overlap` asked for three answers
 each with two partners — a DEGREE check. Necessary but not sufficient: overlap
