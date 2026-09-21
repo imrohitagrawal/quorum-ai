@@ -134,7 +134,7 @@ def boom(monkeypatch: pytest.MonkeyPatch) -> _Boom:
 
 
 def test_tavily_search_dispatches_nothing_on_a_hostile_base(
-    monkeypatch: pytest.MonkeyPatch, boom: _Boom
+    monkeypatch: pytest.MonkeyPatch, boom: _Boom, caplog: pytest.LogCaptureFixture
 ) -> None:
     """RED when: ``_tavily_search`` builds its URL without the guard.
 
@@ -144,9 +144,24 @@ def test_tavily_search_dispatches_nothing_on_a_hostile_base(
     inside the double would be swallowed by ``_tavily_search``'s catch-all.
     """
     monkeypatch.setattr(config.settings, "tavily_api_base_url", "http://attacker.example.com")
+    caplog.set_level("WARNING", logger="product_app.providers")
     result = provider_execution_service._tavily_search(query_text="quorum voting")
     assert boom.requests == []
     assert result == []
+    # #465. The refusal is the only trace an operator gets, and nothing asserted
+    # it. Exactly ONE record: not billed, and the scheme and host that were
+    # refused (never the whole URL, which can carry userinfo).
+    # RED IF: the event is renamed or not emitted, or any of the three fields
+    # is renamed, dropped or filled from the wrong value.
+    assert [
+        (
+            r.getMessage(),
+            getattr(r, "billing_class", None),
+            getattr(r, "base_url_scheme", None),
+            getattr(r, "base_url_host", None),
+        )
+        for r in caplog.records
+    ] == [("tavily_base_url_refused", "not_billed", "http", "attacker.example.com")]
 
 
 def test_tavily_search_still_dials_a_safe_base(

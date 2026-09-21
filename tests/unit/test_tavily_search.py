@@ -164,12 +164,20 @@ def test_fallback_sources_uses_real_search_when_key_present(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(settings, "tavily_api_key", "tvly-test")
+    # Literals, so the assertions below never compare a setting with itself.
+    monkeypatch.setattr(settings, "tavily_max_results", 3)
+    monkeypatch.setattr(settings, "tavily_timeout_seconds", 3.5)
     captured: dict[str, Any] = {}
 
-    def fake_urlopen(request: Any, timeout: float = 0) -> _FakeResponse:
+    # `timeout` has NO usable default: the old `timeout: float = 0` let a call
+    # that dropped the argument altogether look the same as one that passed it.
+    def fake_urlopen(request: Any, timeout: object = "NOT PASSED") -> _FakeResponse:
         captured["url"] = request.full_url
         captured["auth"] = request.headers.get("Authorization")
         captured["body"] = json.loads(request.data.decode())
+        captured["method"] = request.get_method()
+        captured["content_type"] = request.get_header("Content-type")
+        captured["timeout"] = timeout
         return _FakeResponse(
             _tavily_body([{"title": "Real result", "url": "https://real.example/doc"}])
         )
@@ -183,7 +191,15 @@ def test_fallback_sources_uses_real_search_when_key_present(
 
     assert captured["url"].endswith("/search")
     assert captured["auth"] == "Bearer tvly-test"
-    assert captured["body"]["query"] == "compare vector databases"
+    # #465. The whole body, not one key of it: renaming `max_results` on the
+    # wire silently dropped the result cap and nothing noticed.
+    # RED IF: either key is renamed or dropped, the method is not POST, the
+    # Content-Type is wrong or missing, or the socket timeout is not the
+    # configured one (None or absent hangs the slot on a silent server).
+    assert captured["body"] == {"query": "compare vector databases", "max_results": 3}
+    assert captured["method"] == "POST"
+    assert captured["content_type"] == "application/json"
+    assert captured["timeout"] == 3.5
     assert [s.url for s in sources] == ["https://real.example/doc"]
     # ADR-0098: a real search result is WEB_SEARCH, not the placeholder's path.
     assert sources[0].provider == ProviderPath.WEB_SEARCH
@@ -225,14 +241,26 @@ def test_fallback_sources_degrades_to_stub_when_results_empty(
     assert sources[0].url.startswith("https://example.test/local-demo/fallback/")
 
 
-def test_tavily_search_http_error_returns_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_tavily_search_http_error_returns_empty(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
     monkeypatch.setattr(settings, "tavily_api_key", "tvly-test")
+    caplog.set_level("WARNING", logger="product_app.providers")
 
     def fake_urlopen(request: Any, timeout: float = 0) -> _FakeResponse:
-        raise HTTPError(url=request.full_url, code=401, msg="Unauthorized", hdrs=Message(), fp=None)
+        # 503, not 401: a status no code path would plausibly hard-code, so a
+        # logger that reports a constant instead of `exc.code` goes red.
+        raise HTTPError(url=request.full_url, code=503, msg="Unavailable", hdrs=Message(), fp=None)
 
     monkeypatch.setattr("product_app.providers.urlopen", fake_urlopen)
     assert provider_stub_service._tavily_search(query_text="q") == []
+    # #465. `docs/runbooks/provider-orchestrator.md` names this event as the
+    # operator's signal, and nothing asserted it. Exactly ONE record, with the
+    # status the server sent.
+    # RED IF: the event is renamed, not emitted, or loses its status code.
+    assert [(r.getMessage(), getattr(r, "status_code", None)) for r in caplog.records] == [
+        ("tavily_search_http_error", 503)
+    ]
 
 
 def test_tavily_search_skips_blank_query(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -243,6 +271,10 @@ def test_tavily_search_skips_blank_query(monkeypatch: pytest.MonkeyPatch) -> Non
 
     monkeypatch.setattr("product_app.providers.urlopen", boom)
     assert provider_stub_service._tavily_search(query_text="   ") == []
+    # #465. `"   "` is truthy, so it never reached the `or ""` fallback; the
+    # EMPTY string does. RED IF: that fallback becomes any non-blank text,
+    # which would dial Tavily with a query nobody typed (`boom` then raises).
+    assert provider_stub_service._tavily_search(query_text="") == []
 
 
 # ---------------------------------------------------------------------------

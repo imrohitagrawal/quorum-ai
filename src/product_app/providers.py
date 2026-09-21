@@ -444,6 +444,15 @@ class TokenUsage(BaseModel):
 #: where the closed field type is required — the same shape ``synthesis.py`` uses
 #: for its own string constants, and the reason it uses it.
 BILLING_NOT_BILLED: Final[Literal["not_billed"]] = "not_billed"
+
+#: #465. Header NAMES for the Tavily request, held at module level. `urllib`
+#: capitalises header names itself (`Request.header_items()` gives
+#: `Content-type` for any spelling), so a mutant that only changes a name's case
+#: cannot change what is sent and no test can kill it. mutmut does not mutate
+#: module-level assignments, so naming them here stops those mutants being
+#: generated at all (ADR-0069: eliminate, do not exclude).
+_AUTHORIZATION_HEADER: Final = "Authorization"
+_CONTENT_TYPE_HEADER: Final = "Content-Type"
 BILLING_POSSIBLY_BILLED: Final[Literal["possibly_billed"]] = "possibly_billed"
 
 
@@ -2188,10 +2197,13 @@ class ProviderExecutionService:
             url=url,
             data=payload,
             headers={
-                "Authorization": f"Bearer {settings.tavily_api_key}",
-                "Content-Type": "application/json",
+                _AUTHORIZATION_HEADER: f"Bearer {settings.tavily_api_key}",
+                _CONTENT_TYPE_HEADER: "application/json",
             },
-            method="POST",
+            # No `method=`: a `Request` that carries `data` is a POST already,
+            # so `method=None` and dropping the argument were mutants no test
+            # could kill (#465). The method is still pinned, from outside, by
+            # `test_fallback_sources_uses_real_search_when_key_present`.
         )
         try:
             with urlopen(request, timeout=settings.tavily_timeout_seconds) as response:
