@@ -856,8 +856,8 @@ def test_daily_cap_admits_the_number_of_runs_its_dollar_value_pays_for() -> None
         # and the $0.40 cap pays for four runs instead of seven.
         #
         # Then 4 -> 3, the same shape again and also a deliberate decision
-        # (#268, CHG-009, ADR-0115; the owner chose the value in session on
-        # 2026-09-20 and the merge is a separate sign-off): the debate stage
+        # (#268, CHG-009, ADR-0115, product owner 2026-09-20 for the value and
+        # 2026-09-21 for the merge): the debate stage
         # was priced at a 400-token typical against a MEASURED mean of 2190
         # tokens per call, so the estimate the cap keys on was light on every
         # run with a debate stage. Unit $0.0827 -> $0.1052.

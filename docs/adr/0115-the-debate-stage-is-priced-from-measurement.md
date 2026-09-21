@@ -2,10 +2,12 @@
 
 ## Status
 
-Proposed — 2026-09-20. **Awaiting the product owner's sign-off before merge.**
-The owner chose the value in session on 2026-09-20 ("2200 now, judge together"),
-after being shown the measured distribution and the 715-mix sweep; CHG-009
-records it. The merge itself is a separate approval.
+Accepted — 2026-09-21. **Product-owner decision, taken in session** (CHG-009
+records it): the owner chose the value on 2026-09-20 ("2200 now, judge
+together") after seeing the measured distribution and the 715-mix sweep, and
+approved the merge on 2026-09-21 after seeing the review's findings, the
+long-query counterexample below, the mutation proofs and the local gate
+results.
 
 **Authorises nothing.** It opens no live window, flips no flag, and licenses no
 paid run.
