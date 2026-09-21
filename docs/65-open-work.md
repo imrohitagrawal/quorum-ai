@@ -276,8 +276,14 @@ per-model numbers the design exposes are derivable from that telemetry. W3 has
 not yet re-derived them, and that is W3's work; #290's closure was decided
 2026-09-15.
 
-**W4 — variable panel size.** `Field(ge=1, le=4)` appears at three sites
-(`debate.py` twice, `providers.py` once) and they move together. **No longer
+**W4, W5 and W7: what the owner has already said** is recorded, with sources, in
+`docs/analysis/2026-09-22-decision-register.md` (reconstructed from session
+transcripts, awaiting the owner's confirmation). Read it before calling any of
+the three "undecided".
+
+**W4 — variable panel size.** `Field(ge=1, le=4)` appears at four sites
+(`debate.py` three times, `providers.py` once; `grep -rn "ge=1, le=4" src/`,
+2026-09-22 — this said three until then) and they move together. **No longer
 blocked**: #382 ended *"whoever lifts those caps must fix this primitive
 first,"* and W10 fixed it (ADR-0083). The CSS is cheaper than feared:
 `.model-slot-grid` is `grid-template-columns: 1fr 1fr` with an existing
