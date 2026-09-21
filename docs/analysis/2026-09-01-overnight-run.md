@@ -73,7 +73,10 @@ All three of local `main`, `origin/main` and production `build_sha` agree.
 
 **Review caught two false claims the sub-orchestrator had written itself**, both corrected with the replacement verified by command first (AGENTS.md rule 4): "`/status` carries no OpenAPI schema" was false (it is in `openapi.yaml`, description byte-identical to the docstring at 8317 chars both sides); and "no ADR, requirement or test mentions it" was false — `tests/resilience/test_fault_injection_lane.py` already named and asserted the overlap, but **for a different consequence**, and nobody had carried it across to the verdict question. Five mutants survived the first test drafts and the tests were strengthened until they bit.
 
-**New row W23 (UNPINNED), filed not fixed — and I verified it myself.** The advisory mutation gate aborts before scoring anything when a changed function is covered by a schemathesis case: `mutmut` re-invokes pytest with node ids, schemathesis parametrises by `"{METHOD} {PATH}"`, and pytest cannot select a node id containing a space. My own run on the real tree:
+**New row W23 (UNPINNED), filed not fixed — and I verified it myself.** The advisory mutation gate aborts before scoring anything when a changed function is covered by a schemathesis case: `mutmut` re-invokes pytest with node ids, schemathesis parametrises by `"{METHOD} {PATH}"`, and pytest cannot select one of those ids. My own run on the real tree:
+
+> **Correction, 2026-09-21 (ADR-0117).** The cause named here and below — *"pytest cannot select a node id containing a space"* — is FALSE. Measured: a plain parametrized id carrying the same `GET /status` text selects fine. What fails is a case produced by a lazily expanded collector, because pytest matches a requested name against the module's DIRECT children and schemathesis's 13 items are not among them. The symptom recorded here is real; the explanation was not.
+
 ```
 $ uv run pytest 'tests/contract/test_api_contract_schemathesis.py::test_api_conforms_to_openapi_contract[GET /status]' --no-cov -q --collect-only
 EXIT=4 ... no tests collected in 0.21s
@@ -299,7 +302,7 @@ Production is on `875839602aec3e0adba7aa0358fb679240fd8091`. Board: **22 rows, 5
 
 1. **#418 — the highest-value finding of the night, and it is about the board itself.** A docstring line can satisfy any Python board needle, because `check_open_work.py:180-186` strips `#` comments but never tokenizes. I reproduced it myself: delete W20's guard → gate correctly fails; then, guard still absent, add ONE docstring line → **EXIT=0 and W20 reads DONE**. Affects all 17 Python-pinned needles. *Tonight's five flips are not in doubt* — each was verified against the actual code construct, not via the board.
 2. **W21 / W22** — two further credential exposures found by W18's own review: `urlopen` follows redirects carrying `Authorization` (so an https base that 302s to http still leaks the key), and `_tavily_search` has no scheme guard at all (a reviewer demonstrated dialling `file:///etc/passwd/search` with the key attached). **W22 is the more serious and is fully unblocked.**
-3. **W23** — the advisory mutation gate aborts before scoring when a changed function is covered by a schemathesis case (pytest cannot select a node id containing a space). Confirmed by me.
+3. **W23** — the advisory mutation gate aborts before scoring when a changed function is covered by a schemathesis case (~~pytest cannot select a node id containing a space~~ — that cause is FALSE; see the correction above and ADR-0117: the case is produced by a lazily expanded collector). Confirmed by me; FIXED 2026-09-21.
 4. **A credential was surfaced into a subagent transcript.** A reviewer ran `env | grep ^GIT`, which printed `GITHUB_PERSONAL_ACCESS_TOKEN` into its local transcript. It is **not** in any tracked file (`git grep` clean). Rotation is the owner's call; nothing was rotated.
 5. **One unpushed local commit** carries this log and the #402 design record. Push, or fold into a PR, as preferred.
 

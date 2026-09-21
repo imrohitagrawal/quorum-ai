@@ -6,7 +6,7 @@ original, because a gate and an offline agent can read it and cannot read `gh`.
 
 Verified at: `b1209b5a785e95fb208c55c4303ada85065aeb54`
 
-The board holds **23** rows, **5** of them unpinned.
+The board holds **23** rows, **4** of them unpinned.
 
 `scripts/check_open_work.py --check` reads every row's evidence off disk and
 refuses if a claim is false. It runs inside `make validate`, and
@@ -117,7 +117,7 @@ caught by any automated check and 10 of 16 by adversarial review
 | W20 | `panel_agreement()` reports "agreed" for a genuine N=1 panel | DONE | `ABSENT src/product_app/synthesis_consensus.py :: if len(stance) < 2:` | #394 | — |
 | W21 | A redirect carries the API key off the guarded base | DONE | `ABSENT src/product_app/providers.py :: urlopen = CREDENTIAL_OPENER.open` | — | W18 |
 | W22 | The Tavily search call sends its key to a configured base with no scheme guard | DONE | `PRESENT src/product_app/providers.py :: url=f"{settings.tavily_api_base_url.rstrip('/')}/search"` | — | — |
-| W23 | The mutation gate cannot run when a changed function is covered by a schemathesis case | UNPINNED | `—` | — | — |
+| W23 | The mutation gate cannot run when a changed function is covered by a schemathesis case | DONE | `ABSENT tests/conftest.py :: from tests.lazy_nodeid_selection import rewrite_lazy_case_args` | — | ADR-0117 |
 |  W24 | The `:online` web-search fee is measured at $0.007 and was priced at `0.0`, so every searching run's receipt and its daily-cap booking were $0.028 light — ACTIVATED 2026-09-15 by product-owner decision (CHG-007, ADR-0113) | DONE | `ABSENT src/product_app/config.py :: Field(default=0.007, ge=0, allow_inf_nan=False)` | #105 | —  |
 
 **STOP** marks a row that cannot be finished without a human decision — a money,
@@ -349,19 +349,27 @@ along with excluding the moderator's own slot from the stance it grades —
 which would change every live run's verdict from a 4-slot to a 3-slot reading
 and is a rewrite of the consensus math, not a diagnostic.
 
-**W23 — the mutation gate aborts instead of measuring.** Found by W9, whose
-changed functions are the first to be covered by a schemathesis case.
-`mutmut` picks the tests that cover a changed function and re-invokes pytest
-with their node ids. Schemathesis parametrises by `"{METHOD} {PATH}"`, so one
-of those ids is
-`test_api_conforms_to_openapi_contract[GET /status]` — and **pytest cannot
-select a node id containing a space**, even though `--collect-only` lists it.
-Measured on the real tree, not only inside `./mutants/`:
+**W23 — the mutation gate aborts instead of measuring. DONE** (ADR-0117).
+Found by W9, whose changed functions are the first to be covered by a
+schemathesis case. `mutmut` picks the tests that cover a changed function and
+re-invokes pytest with their node ids, one of which is
+`test_api_conforms_to_openapi_contract[GET /status]`.
+
+**THIS ROW'S STATED CAUSE WAS FALSE and is corrected here.** It said *"pytest
+cannot select a node id containing a space"*. It can: measured under this
+repo's own config, a plain parametrized id carrying the same `GET /status`
+text selects fine (`tests/test_lazy_nodeid_selection.py` selects one, and
+would go red if that stopped being true). What actually fails is selecting a
+case produced by a LAZILY EXPANDED collector. pytest matches a requested name
+against the module's DIRECT children; schemathesis returns one child named
+`test_api_conforms_to_openapi_contract` and produces its 13 per-operation
+items only when that child is expanded, so the bracketed id matches nothing:
 
 ```
 uv run pytest 'tests/contract/test_api_contract_schemathesis.py::\
   test_api_conforms_to_openapi_contract[GET /status]' --no-cov -q --collect-only
-  -> no tests collected in 0.20s
+  -> ERROR: not found: ...[GET /status]
+     (no match in any of [<Module test_api_contract_schemathesis.py>])
 ```
 
 pytest exits 4 (usage error), `mutmut` raises
@@ -371,11 +379,23 @@ rule 2, and the gate's own failure text says so. PR #414 is where it first
 fired; PR #413 the same night scored normally (38 survivors) because its scope
 was `providers.py`, which no schemathesis case covers.
 
-So the gate is blind for **any** future diff touching a function reachable from
-a documented endpoint — the `/status`, `/ready`, `/ui` and `/v1/*` handlers and
-everything under them. Not fixed in #414: it is gate machinery and a separate
-concern from the guard that found it (rule 17), and W9's changed functions were
-mutation-proven by hand instead — 16 mutants, 16 killed, 0 survivors.
+So the gate was blind for **any** diff touching a function reachable from a
+documented endpoint — the `/status`, `/ready`, `/ui` and `/v1/*` handlers and
+everything under them. It fired on #414, on PR #476 and again on PR #483.
+Not fixed in #414: it is gate machinery and a separate concern from the guard
+that found it (rule 17), and W9's changed functions were mutation-proven by
+hand instead — 16 mutants, 16 killed, 0 survivors.
+
+`tests/lazy_nodeid_selection.py` now rewrites such an argument to its parent
+function before collection and keeps exactly the requested items afterwards,
+so one case runs rather than the function's thirteen; an id matching nothing
+is a `UsageError` naming it, never a silent full-function run. MEASURED on the
+real gate, same diff both ways: without it, exit 2 and
+`BadTestExecutionCommandsException` with no score; with it, exit 0 and
+`mutants scored: 1 killed, 0 survived`.
+
+**A gate that can run is not yet a gate that can fail honestly:** #464 records
+that a truncated run still exits 0, and that is the next row, not this one.
 
 **W10 — #382. DONE** (ADR-0083). `_has_strong_overlap` asked for three answers
 each with two partners — a DEGREE check. Necessary but not sufficient: overlap

@@ -26,6 +26,7 @@ import os
 # here WOULD be a real change and is deliberately not done.
 os.environ.setdefault("ENVIRONMENT", "local")
 
+
 # Enable the legacy X-Account-Id header for tests that need to bypass
 # the cookie session dance. The default in production is False; tests
 # that use the cookie path are unaffected.
@@ -316,3 +317,27 @@ def _isolated_feedback_store() -> Iterator[None]:
     """
     with feedback_store.configure_for_tests():
         yield
+
+
+def pytest_collection(session: Any) -> None:
+    """W23: rewrite a lazily-expanded case id so pytest can resolve it.
+
+    ``pytest_collection`` runs before ``perform_collect`` reads
+    ``session.config.args``, and a conftest may implement it. Returning
+    ``None`` lets pytest's own implementation proceed as usual.
+    (``pytest_configure`` would serve too — review measured that. This is not
+    the only workable hook, and an earlier revision wrongly said it was the
+    earliest.)
+
+    See ``tests/lazy_nodeid_selection`` for what is rewritten and why.
+    """
+    from tests.lazy_nodeid_selection import rewrite_lazy_case_args
+
+    rewrite_lazy_case_args(session.config, session.config.args)
+
+
+def pytest_collection_modifyitems(config: Any, items: list[Any]) -> None:
+    """W23: keep exactly the case ids that were asked for."""
+    from tests.lazy_nodeid_selection import keep_requested_cases
+
+    keep_requested_cases(config, items)
