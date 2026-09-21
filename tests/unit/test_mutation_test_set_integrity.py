@@ -93,6 +93,16 @@ DESELECTED_FROM_THE_MUTANT_RUN = (
     # copy, and the module touches no `src/` code, so it can kill no mutant.
     "tests/unit/test_guard_suite_is_not_skipped.py",
     "tests/unit/test_replay_mutation_scope.py",
+    # W23 / ADR-0117. Every test in it spawns pytest as a SUBPROCESS against
+    # the real REPO_ROOT to check how a node id resolves at startup — which is
+    # the only way to test argument resolution at all, and which cannot work
+    # inside mutmut's ``./mutants/`` copy. It imports no ``product_app``
+    # module, so it can kill no ``src/`` mutant; left selected it would spawn
+    # twelve pytest processes per MUTANT against the run deadline. Its marker
+    # is MODULE-level on purpose: a per-function marker is invisible to
+    # ``_marked_modules`` below, which is how the first version of that file
+    # exempted itself without appearing here.
+    "tests/test_lazy_nodeid_selection.py",
     "tests/unit/test_replay_scope_matches_makefile_scope.py",
     # #368. Parses every file under the real `tests/` and shells out to TWO
     # nested `pytest --cov=src` runs over the real `src/`. Inside

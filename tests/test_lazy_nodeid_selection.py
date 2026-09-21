@@ -36,8 +36,20 @@ from pathlib import Path
 import pytest
 
 from tests.repo_root import find_repo_root
+from tests.subprocess_env import env_without_coverage
 
 REPO_ROOT = find_repo_root(Path(__file__))
+
+#: MODULE-LEVEL, deliberately. Every test here spawns pytest against the real
+#: REPO_ROOT, so it cannot run inside mutmut's ``./mutants/`` copy and can kill
+#: no ``src/`` mutant. The first version carried the marker on each function
+#: instead, which is invisible to ``test_the_deselected_set_is_exactly_the_pinned_set``
+#: in ``tests/unit/test_mutation_test_set_integrity.py`` — that guard reads
+#: MODULE-level markers — so this module exempted itself
+#: from the mutation oracle without appearing in the pinned list. Found in
+#: review, together with the commit body's false claim that no test was
+#: exempted. It is pinned there now, with this reason.
+pytestmark = pytest.mark.repo_introspection
 
 #: The real, previously unselectable id. Chosen because ``GET /status`` is the
 #: operation the gate actually tripped over on PR #476 and again on PR #483.
@@ -77,7 +89,6 @@ def _collect(*args: str) -> subprocess.CompletedProcess[str]:
     )
 
 
-@pytest.mark.repo_introspection
 @pytest.mark.parametrize("name", ["GET /status", "plain"])
 def test_a_plain_parametrized_id_with_a_space_is_a_real_case(name: str) -> None:
     """The POSITIVE PARTNER, and the refutation of the board's stated cause.
@@ -89,27 +100,59 @@ def test_a_plain_parametrized_id_with_a_space_is_a_real_case(name: str) -> None:
     assert name
 
 
-@pytest.mark.repo_introspection
-def test_a_space_in_a_node_id_is_not_what_breaks_selection() -> None:
+def test_a_space_in_a_node_id_is_not_what_breaks_selection(tmp_path: Path) -> None:
     """RED IF: the cause recorded in this module and on the board is wrong.
 
-    Selects the plain parametrized case above — whose id contains the same
-    ``GET /status`` text — by its full node id.
+    THE PROBE LIVES OUTSIDE ``tests/`` ON PURPOSE. Inside it, this plugin
+    rewrites the id and filters afterwards, so a pass would prove only that the
+    plugin works — which is not the claim. Review caught exactly that: the
+    first version asserted ``1/2 tests collected``, and that ``N/M`` split IS
+    the plugin's own deselection. Outside the conftest's scope nothing
+    rewrites anything, so ``1 test collected`` with no split is native pytest
+    resolving a node id whose parameter contains a space.
     """
-    result = _collect(
-        "tests/test_lazy_nodeid_selection.py"
-        "::test_a_plain_parametrized_id_with_a_space_is_a_real_case[GET /status]"
+    probe = tmp_path / "test_space_id_probe.py"
+    probe.write_text(
+        "import pytest\n\n"
+        '@pytest.mark.parametrize("name", ["GET /status", "plain"])\n'
+        "def test_space(name):\n    assert name\n",
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            f"{probe}::test_space[GET /status]",
+            "--collect-only",
+            "-q",
+            "--no-cov",
+            "-p",
+            "no:randomly",
+            "-p",
+            "no:cacheprovider",
+        ],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        # This child runs OUTSIDE the repository, so pytest-cov's subprocess
+        # hooks would resolve the relative ``--cov=src`` against tmp_path and
+        # fold a foreign tree into a REQUIRED gate's denominator (#368).
+        env=env_without_coverage(),
     )
     assert result.returncode == 0, (
-        f"a plain parametrized id containing a space failed to select, so the "
-        f"board's original cause may be right after all:\n{result.stdout}\n{result.stderr}"
+        f"NATIVE pytest failed to select a parametrized id containing a space, "
+        f"so the board's original cause may be right after all:\n"
+        f"{result.stdout}\n{result.stderr}"
     )
-    # pytest reports a filtered selection as "kept/total": the plugin keeps the
-    # one case and deselects its sibling.
-    assert "1/2 tests collected" in result.stdout, result.stdout
+    # No "N/M" split: nothing was deselected, because no plugin was involved.
+    assert "1 test collected" in result.stdout, result.stdout
+    assert "1/2" not in result.stdout, (
+        f"something filtered this selection, so it is not a measurement of "
+        f"native pytest:\n{result.stdout}"
+    )
 
 
-@pytest.mark.repo_introspection
 def test_a_schemathesis_case_is_selectable_by_its_node_id() -> None:
     """RED IF: the lazy-node-id plugin stops resolving schemathesis ids.
 
@@ -132,7 +175,6 @@ def test_a_schemathesis_case_is_selectable_by_its_node_id() -> None:
     assert "[GET /status]" in result.stdout, result.stdout
 
 
-@pytest.mark.repo_introspection
 def test_the_parent_function_still_selects_every_case() -> None:
     """POSITIVE PARTNER: the plugin must not narrow an unbracketed selection.
 
@@ -146,7 +188,6 @@ def test_the_parent_function_still_selects_every_case() -> None:
     )
 
 
-@pytest.mark.repo_introspection
 def test_two_schemathesis_cases_select_together() -> None:
     """The gate passes MANY ids at once, so one-at-a-time is not enough.
 
@@ -163,7 +204,6 @@ def test_two_schemathesis_cases_select_together() -> None:
     assert "[GET /status]" in result.stdout and "[GET /ready]" in result.stdout, result.stdout
 
 
-@pytest.mark.repo_introspection
 def test_a_typo_in_a_lazy_id_still_fails_loudly() -> None:
     """THE VACUITY GUARD, and the one that matters most.
 
@@ -178,15 +218,23 @@ def test_a_typo_in_a_lazy_id_still_fails_loudly() -> None:
         "tests/contract/test_api_contract_schemathesis.py"
         "::test_api_conforms_to_openapi_contract[GET /does-not-exist]"
     )
-    assert result.returncode != 0, (
-        f"a node id naming a case that does not exist was accepted:\n{result.stdout}"
+    # EXIT 4, not merely non-zero. Review demonstrated that replacing the
+    # UsageError with ``warnings.warn`` empties the item list instead, pytest
+    # exits 5 ("no tests collected"), and a "!= 0" assertion still passes —
+    # while mutmut reads 5 as "no tests", a different verdict from a refusal.
+    assert result.returncode == 4, (
+        f"expected pytest's usage-error exit 4, got {result.returncode}:\n"
+        f"{result.stdout}\n{result.stderr}"
     )
-    assert "GET /does-not-exist" in (result.stdout + result.stderr), (
-        f"the failure does not name the id that was not found:\n{result.stdout}\n{result.stderr}"
+    output = result.stdout + result.stderr
+    assert "no test matched the requested case id(s)" in output, (
+        f"the refusal is not the plugin's own, so something else failed:\n{output}"
+    )
+    assert "GET /does-not-exist" in output, (
+        f"the failure does not name the id that was not found:\n{output}"
     )
 
 
-@pytest.mark.repo_introspection
 def test_an_ordinary_unbracketed_selection_is_untouched() -> None:
     """The plugin must be invisible to every test that was already selectable.
 
@@ -194,15 +242,44 @@ def test_an_ordinary_unbracketed_selection_is_untouched() -> None:
     """
     result = _collect("tests/test_lazy_nodeid_selection.py")
     assert result.returncode == 0, result.stdout + result.stderr
-    # 10 = the eight tests in this module plus the two-case parametrization of
-    # the probe above. No "N/M" split, because nothing was rewritten.
-    assert "10 tests collected" in result.stdout, (
+    # 12 = the eleven tests in this module plus the second case of the
+    # parametrized probe. No "N/M" split, because nothing was rewritten.
+    assert "12 tests collected" in result.stdout, (
         f"selecting this module by path no longer collects its own tests "
         f"untouched:\n{result.stdout}"
     )
 
 
-@pytest.mark.repo_introspection
+def test_a_sibling_whose_name_extends_a_rewritten_one_is_not_deselected() -> None:
+    """A rewritten ``path::test_alpha`` must not swallow ``path::test_alpha_extra``.
+
+    The filter decides which items "came from" a rewritten argument. Matching
+    that by raw string prefix made ``test_alpha_extra`` look like one of
+    ``test_alpha``'s cases, so a sibling requested by its OWN argument was
+    deselected silently — a test the caller asked for, not run, no error.
+    Review demonstrated it with a failing sibling: the run reported success.
+
+    There is no such pair anywhere else in the suite (censused in review: 0 of
+    4561 node ids), which is why ``tests/test_w23_sibling_probe.py`` exists.
+
+    RED IF: the boundary check goes back to ``node_id.startswith(parents)``.
+    """
+    result = _collect(
+        "tests/test_w23_sibling_probe.py::test_alpha[a]",
+        "tests/test_w23_sibling_probe.py::test_alpha_extra",
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    # The "N/M" split is the proof the plugin was in play at all: one of the
+    # three items (``test_alpha[b]``) is deselected, and the sibling survives.
+    assert "2/3 tests collected" in result.stdout, (
+        f"expected the plugin to filter this selection; without the split it "
+        f"never ran and this test proves nothing:\n{result.stdout}"
+    )
+    assert "test_alpha_extra" in result.stdout, (
+        f"the sibling requested by its own argument was deselected:\n{result.stdout}"
+    )
+
+
 def test_two_runs_in_one_process_do_not_leak_requested_ids() -> None:
     """THE SHAPE ``mutmut`` ACTUALLY USES, and the defect review caught.
 
@@ -244,48 +321,61 @@ def test_two_runs_in_one_process_do_not_leak_requested_ids() -> None:
     assert "1/13 tests collected" in result.stdout, result.stdout
 
 
-@pytest.mark.repo_introspection
-def test_a_sibling_whose_name_extends_a_rewritten_one_is_not_deselected() -> None:
-    """A rewritten ``path::test_foo`` must not swallow ``path::test_foo_bar``.
+def test_only_the_requested_case_actually_RUNS() -> None:
+    """Collection is not execution, and this file was asserting the wrong one.
 
-    The filter decides which items "came from" a rewritten argument. Matching
-    that by raw string prefix made ``test_foo_bar`` look like one of
-    ``test_foo``'s cases, so a sibling requested by its OWN argument was
-    deselected silently — a test the caller asked for, not run, no error.
+    Every other test here reads the ``N/M tests collected`` summary from
+    ``--collect-only``. Review demonstrated that deleting ``items[:] = kept``
+    — so the filter reports a deselection and then runs everything anyway —
+    survives all of them: collection prints ``1/13 tests collected``, while a
+    real run prints ``13 passed, 12 deselected``. That is the substring-vs-
+    structure trap of rule 8 inside the guard meant to prevent it, and it is
+    exactly the 13x-per-mutant outcome ADR-0117 rejected.
 
-    There is no such pair in the suite today (censused in review: 0 of 4561
-    node ids), which is precisely why it needs a test rather than a comment.
-
-    THE PROBE LIVES UNDER ``tests/``, not in ``tmp_path``: the plugin is wired
-    from ``tests/conftest.py``, so a file outside that tree is never rewritten
-    at all and the test would pass against any implementation. The first
-    version of this test made exactly that mistake — it collected "2 tests"
-    with no ``N/M`` split, which is the tell.
-
-    RED IF: the boundary check goes back to ``node_id.startswith(parents)``.
+    RED IF: the filter stops being applied to the items pytest executes.
     """
-    probe = REPO_ROOT / "tests" / "test_zz_w23_sibling_probe.py"
-    probe.write_text(
-        "import pytest\n\n"
-        '@pytest.mark.parametrize("v", ["a", "b"])\n'
-        "def test_foo(v):\n    assert v\n\n\n"
-        "def test_foo_bar():\n    assert True\n",
-        encoding="utf-8",
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            SCHEMATHESIS_CASE_ID,
+            "-q",
+            "--no-cov",
+            "-p",
+            "no:randomly",
+            "-p",
+            "no:cacheprovider",
+        ],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
     )
-    try:
-        result = _collect(
-            "tests/test_zz_w23_sibling_probe.py::test_foo[a]",
-            "tests/test_zz_w23_sibling_probe.py::test_foo_bar",
-        )
-    finally:
-        probe.unlink()
-    assert result.returncode == 0, result.stdout + result.stderr
-    # The "N/M" split is the proof the plugin was in play at all: one of the
-    # three items (``test_foo[b]``) is deselected, and the sibling survives.
-    assert "2/3 tests collected" in result.stdout, (
-        f"expected the plugin to filter this selection; without the split it "
-        f"never ran and this test proves nothing:\n{result.stdout}"
+    assert result.returncode == 0, result.stdout[-3000:] + result.stderr[-2000:]
+    # ONE test ran. The other twelve were deselected, not executed.
+    assert "1 passed" in result.stdout, (
+        f"expected exactly the requested case to run:\n{result.stdout[-3000:]}"
     )
-    assert "test_foo_bar" in result.stdout, (
-        f"the sibling requested by its own argument was deselected:\n{result.stdout}"
+    assert "12 deselected" in result.stdout, result.stdout[-3000:]
+    assert "13 passed" not in result.stdout, (
+        f"the whole function ran — the filter reported a deselection it did not "
+        f"apply:\n{result.stdout[-3000:]}"
     )
+
+
+def test_an_absolute_case_id_still_selects() -> None:
+    """A human or an IDE passes absolute paths; pytest used to accept them.
+
+    Items carry rootdir-relative node ids, so comparing the requested id as a
+    raw string made an absolute id match nothing and raised the plugin's own
+    UsageError — a selection that worked before this plugin existed. Found in
+    review.
+
+    RED IF: the absolute-path normalisation in ``_requested`` is removed.
+    """
+    absolute = str(REPO_ROOT / SCHEMATHESIS_CASE_ID)
+    result = _collect(absolute)
+    assert result.returncode == 0, (
+        f"an absolute node id no longer selects:\n{result.stdout}\n{result.stderr}"
+    )
+    assert "1/13 tests collected" in result.stdout, result.stdout

@@ -322,10 +322,12 @@ def _isolated_feedback_store() -> Iterator[None]:
 def pytest_collection(session: Any) -> None:
     """W23: rewrite a lazily-expanded case id so pytest can resolve it.
 
-    ``pytest_collection`` is the earliest hook a conftest may implement that
-    still runs BEFORE the arguments are resolved — ``perform_collect`` reads
-    ``session.config.args`` after this. Returning ``None`` lets pytest's own
-    implementation proceed as usual.
+    ``pytest_collection`` runs before ``perform_collect`` reads
+    ``session.config.args``, and a conftest may implement it. Returning
+    ``None`` lets pytest's own implementation proceed as usual.
+    (``pytest_configure`` would serve too — review measured that. This is not
+    the only workable hook, and an earlier revision wrongly said it was the
+    earliest.)
 
     See ``tests/lazy_nodeid_selection`` for what is rewritten and why.
     """

@@ -45,12 +45,21 @@ WHY NOT THE OBVIOUS ALTERNATIVES:
 THE FAILURE MODE THIS COULD HAVE INTRODUCED, and how it is closed: a rewrite
 that silently fell back to the parent function would turn a typo'd id into a
 full-function run that reports success while never running what the caller
-named. So a rewritten argument that matches NO item is a usage error, named id
-and all. ``tests/test_lazy_nodeid_selection.py`` pins that case.
+named. So a rewritten argument that matches NO item is a usage error (exit 4),
+named id and all. ``tests/test_lazy_nodeid_selection.py`` pins that case,
+including the exit code — a ``warnings.warn`` in its place exits 5, which
+mutmut reads as "no tests", a different verdict from a refusal.
+
+ONE NARROWER GUARANTEE THAN IT LOOKS: when the FILE in the id does not exist,
+pytest fails before this plugin's filter runs, and its message names the
+REWRITTEN id with the case stripped (``file or directory not found:
+tests/x.py::test_foo``). The run still fails loudly; the id you typed is just
+not echoed back in full.
 """
 
 from __future__ import annotations
 
+import os
 import re
 from typing import TYPE_CHECKING, Any
 
@@ -96,14 +105,19 @@ def _looks_like_a_lazy_case(arg: str) -> re.Match[str] | None:
 def rewrite_lazy_case_args(config: Config, args: list[str]) -> None:
     """Rewrite unresolvable case ids to their parent function, before collection.
 
-    Called from ``tests/conftest.py``'s ``pytest_collection`` hook, which is
-    the earliest point a CONFTEST can reach the argument list:
-    ``pytest_load_initial_conftests`` is documented as never being called for
-    conftest files, and MEASURED here — registering this module through
-    ``pytest_plugins`` left the selection still exiting 4. Loading it with
-    ``-p`` from ``addopts`` fails earlier still, because ``tests`` is not yet
-    importable when plugin arguments are consumed (``ImportError: No module
-    named 'tests'``).
+    Called from ``tests/conftest.py``'s ``pytest_collection`` hook, which runs
+    before pytest reads ``session.config.args`` and which a conftest may
+    implement. Two earlier wirings were tried and measured:
+    ``pytest_load_initial_conftests`` (documented as never called for conftest
+    files — registering this module through ``pytest_plugins`` left the
+    selection still exiting 4), and ``-p tests.lazy_nodeid_selection`` in
+    ``addopts``, which raised ``ImportError: No module named 'tests'`` under
+    ``uv run pytest`` — the console script ``make test`` uses. Review measured
+    that the same ``-p`` DOES import under ``python -m pytest``, where the cwd
+    is on ``sys.path``, so that failure is about ``sys.path`` at plugin-load
+    time rather than about the rootdir being unimportable in general.
+    ``pytest_configure`` would also work; this is not the only possible hook,
+    and an earlier revision called it "the earliest", which nothing measured.
 
     Deliberately cheap and conservative: it touches only arguments that look
     like ``path::func[case]``. Whether the rewrite is NEEDED cannot be known
@@ -134,8 +148,26 @@ def keep_requested_cases(config: Config, items: list[Any]) -> None:
     wanted: set[str] = {node_id for ids in requested.values() for node_id in ids}
     parents = tuple(requested)
 
-    def _requested(node_id: str) -> bool:
-        return node_id in wanted or node_id.replace("\\", "/") in wanted
+    def _satisfied(node_id: str) -> str | None:
+        """The requested id this item answers, or ``None``.
+
+        An ABSOLUTE id has to match too. Items carry rootdir-relative node ids,
+        so comparing raw strings made ``pytest /abs/path/tests/x.py::test_foo[a]``
+        — a selection pytest resolved fine before this plugin existed — fail
+        with the UsageError below. Found in review. One matcher, used for BOTH
+        "keep this item" and "was this id matched at all": computing those two
+        answers separately is what made the first attempt at absolute support
+        keep the item and then refuse the run anyway.
+        """
+        for candidate in (
+            node_id,
+            node_id.replace("\\", "/"),
+            os.path.join(str(config.rootpath), node_id),
+            os.path.join(str(config.rootpath), node_id).replace("\\", "/"),
+        ):
+            if candidate in wanted:
+                return candidate
+        return None
 
     def _from_a_rewritten_arg(node_id: str) -> bool:
         # Items that came from a DIFFERENT argument must pass through
@@ -147,17 +179,24 @@ def keep_requested_cases(config: Config, items: list[Any]) -> None:
         # name merely EXTENDS the rewritten one was deselected with no error.
         # Found in review; there is no such pair in the suite today (censused:
         # 0 of 4561 node ids), which is exactly why it needed a test.
-        return any(
-            node_id == parent or node_id.startswith((f"{parent}[", f"{parent}::"))
-            for parent in parents
-        )
+        spellings = (node_id, os.path.join(str(config.rootpath), node_id))
+        for parent in parents:
+            for spelling in spellings:
+                if spelling == parent or spelling.startswith((f"{parent}[", f"{parent}::")):
+                    return True
+        return False
 
-    kept = [
-        item for item in items if _requested(item.nodeid) or not _from_a_rewritten_arg(item.nodeid)
-    ]
+    kept: list[Any] = []
+    satisfied: set[str] = set()
+    for item in items:
+        answer = _satisfied(item.nodeid)
+        if answer is not None:
+            satisfied.add(answer)
+            kept.append(item)
+        elif not _from_a_rewritten_arg(item.nodeid):
+            kept.append(item)
 
-    matched = {item.nodeid for item in kept}
-    missing = sorted(node_id for node_id in wanted if node_id not in matched)
+    missing = sorted(node_id for node_id in wanted if node_id not in satisfied)
     if missing:
         # Not a warning, and not a silent fallback to the parent function: the
         # caller named a case that does not exist, and a gate that accepted it

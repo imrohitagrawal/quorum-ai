@@ -2,8 +2,17 @@
 
 ## Status
 
-Accepted — 2026-09-21. Test tooling only: no `src/` behaviour changes, no gate
-threshold moves, no test is exempted. **Authorises nothing.**
+Accepted — 2026-09-21. Test tooling only: no `src/` behaviour changes and no
+gate threshold moves. **Authorises nothing.**
+
+One test module IS exempted from the mutation oracle, and this says so because
+an earlier revision claimed the opposite: `tests/test_lazy_nodeid_selection.py`
+carries a module-level `repo_introspection` marker (every test in it spawns
+pytest against the real `REPO_ROOT`, which cannot work inside `./mutants/`), and
+it is pinned with that reason in
+`tests/unit/test_mutation_test_set_integrity.py::DESELECTED_FROM_THE_MUTANT_RUN`.
+The first version used per-function markers, which that guard cannot see — so
+the module exempted itself silently. Found in review.
 
 ## Context
 
@@ -71,17 +80,23 @@ No bracketed name, so nothing matches, and pytest says
    boundary**, not a raw string prefix, so a separately requested
    `path::test_foo_bar` is not swallowed by a rewritten `path::test_foo`.
 
-`pytest_collection` is used because it is the earliest hook a CONFTEST may
-implement that still runs before the arguments are resolved. Two earlier
-attempts are recorded because each looked right and was not:
+`pytest_collection` is used because it runs before pytest reads
+`session.config.args` and a conftest may implement it. It is NOT the only hook
+that would serve — review measured `pytest_configure` doing the same job — and
+an earlier revision of this ADR called it "the earliest", which nothing
+measured. Two earlier attempts are recorded because each looked right and was
+not:
 
 - `pytest_load_initial_conftests` in the plugin, registered via
   `pytest_plugins` in `tests/conftest.py` — measured: selection still exited 4.
   That hook is documented as never being called for conftest files.
 - Loading the plugin with `-p tests.lazy_nodeid_selection` from `addopts` —
-  measured: `ImportError: Error importing plugin "tests.lazy_nodeid_selection":
-  No module named 'tests'`. Plugin arguments are consumed before the rootdir is
-  importable.
+  measured under `uv run pytest`, the console script `make test` uses:
+  `ImportError: Error importing plugin "tests.lazy_nodeid_selection": No module
+  named 'tests'`. Review measured that the same `-p` DOES import under
+  `python -m pytest`, where the cwd is on `sys.path`, so this is about
+  `sys.path` at plugin-load time, not about the rootdir being unimportable in
+  general. An earlier revision stated it unconditionally.
 
 ## Measurements
 
@@ -116,7 +131,7 @@ Selection behaviour, from `tests/test_lazy_nodeid_selection.py`:
 | two schemathesis cases by node id | exit 4 | exit 0, `2/13 tests collected` |
 | the bare function id | 13 collected | 13 collected (unchanged) |
 | a case id that does not exist | exit 4 | exit 4, naming the id |
-| an ordinary module path | 8 collected | 8 collected (unchanged) |
+| an ordinary module path | its own tests, unfiltered | the same, unfiltered (10 today) |
 
 ## Consequences
 
@@ -154,6 +169,8 @@ Selection behaviour, from `tests/test_lazy_nodeid_selection.py`:
 ## Related
 
 - W23 on `docs/65-open-work.md` (whose stated cause this corrects).
+- `docs/analysis/2026-09-01-overnight-run.md`, which states the same refuted
+  cause twice and now carries an in-place correction pointing here.
 - Issue #464 (the gate's verdict inverts under truncation) — next, and separate.
 - Rule 2: a red gate is not evidence it measured; the gate's own failure text
   says so, and it was right.
