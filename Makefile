@@ -955,7 +955,8 @@ def report():
         # no survivor exited 0. A run that stops early reaches fewer mutants
         # and so can find fewer survivors: measured on two heads of one PR,
         # 465 of 720 reached -> 35 survivors -> FAILURE, then 249 of 1277
-        # reached -> 0 survivors -> SUCCESS, nothing fixed in between. "No
+        # reached -> 0 survivors -> SUCCESS. #464 reports nothing was fixed in
+        # between; that part was not re-checked here. "No
         # survivor in the part we reached" says nothing about the part we did
         # not, so it cannot pass. The word INCONCLUSIVE is the verdict; the
         # exit code is non-zero because make has only pass and fail. This

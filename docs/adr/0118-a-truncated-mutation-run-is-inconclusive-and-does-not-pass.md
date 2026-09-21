@@ -45,9 +45,12 @@ inferred that the scope pulled in functions the diff never touched, because
 header names the enclosing class, so a method's name does not appear even when
 its body changed. On the merge commit `a6770b2`, the same diff with `-W` shows
 `def _tavily_search` once, with `"billing_class": "not_billed"` replaced by
-`BILLING_NOT_BILLED` inside it. The scope was right. So the issue's fix 2
-(derive the scope from AST bodies) and fix 3 (order the diff's own functions
-first) have nothing to act on: every function in scope was the diff's own.
+`BILLING_NOT_BILLED` inside it. A reviewer's check found the same for the other
+two functions the issue named (`_post_messages`, `_log_post_dispatch_failure`)
+and reported that all nine functions in scope had changed lines; only the
+`_tavily_search` command above was run by the author. So on that pull request
+the issue's fix 2 (derive the scope from AST bodies) and fix 3 (order the
+diff's own functions first) had nothing to act on, and neither is built.
 
 ## Decision
 
