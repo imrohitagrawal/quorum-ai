@@ -23,6 +23,9 @@ parsed as JSON, rows with `search_enabled` true, field `injected_tokens_est`:
 |---|---|---|---|---|---|
 | 48 | 43 | -63 | 2438 | 2737 | 3160 |
 
+The percentile is `sorted[int(0.9 * (n - 1))]`, the 43rd of 48 sorted values;
+linear interpolation would give 2750.5.
+
 One reading is negative. A `grep` for digits drops it; parse the JSON.
 Four models, 12 readings each. 2900 is exceeded by two readings (2920, 3160).
 
@@ -46,8 +49,8 @@ prices move, so these will not reproduce to the digit on another day:
 At 2000 the bands are 382 `allow`, 329 `require_confirmation`, 4 `block`.
 
 **Which mixes tip.** All five that become `block` by 2900 already sit at a
-bound of 0.4954 to 0.4998 against the 0.50 hard limit, and each combines
-`anthropic/claude-opus-4`, `openai/o3` or `openai/gpt-4.1` with
+bound of 0.4954 to 0.4998 against the 0.50 hard limit, and every one
+contains `openai/gpt-4.1` or `openai/o3`; four of the five also contain
 `google/gemini-2.5-pro`. Two of them tip at 2100. 3160, the largest reading,
 blocks the same five mixes by name as 2900; 3200 also blocks five.
 
@@ -74,8 +77,8 @@ With the judge on and `--fallback-prices` the sweep REFUSES, as designed:
 
 * No value moved. A change to a shipped money value waits for the owner.
 * No sweep of the repository for prose that states 2000. That comes first in
-  whichever change does move it (eleven review rounds were spent on a previous
-  constant because that sweep came last).
+  whichever change does move it: ADR-0115's change to the debate constant
+  found the prose that quoted the old value only late in review.
 * Whether one constant should serve both the point estimate and the bound is
   not examined. The median and the max differ by 722 tokens, which is the
   argument for two.
