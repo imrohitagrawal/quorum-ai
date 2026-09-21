@@ -60,6 +60,16 @@ No bracketed name, so nothing matches, and pytest says
    `1/13 tests collected (12 deselected)`.
 3. **A requested id that matches nothing is a `UsageError` naming it.** Not a
    warning, and not a silent fallback to the parent function.
+4. **The requested ids live on `config.stash`, never in a module global.**
+   Review caught the first version doing the latter, and measured what it
+   cost — see Measurements. `mutmut` calls `pytest.main` IN-PROCESS for its
+   clean run and only then forks one child per mutant, so a global populated
+   by the parent is inherited by every child, which then asks for ids it never
+   requested, gets the `UsageError` above and exits 4. mutmut records those as
+   crashes and DROPS THEM FROM THE DENOMINATOR.
+5. **The "came from a rewritten argument" test matches on the node-id
+   boundary**, not a raw string prefix, so a separately requested
+   `path::test_foo_bar` is not swallowed by a rewritten `path::test_foo`.
 
 `pytest_collection` is used because it is the earliest hook a CONFTEST may
 implement that still runs before the arguments are resolved. Two earlier
@@ -82,6 +92,21 @@ RED then GREEN on the real gate, same diff both times (an edit inside a
 |---|---|
 | without the fix | exit **2**, `BadTestExecutionCommandsException`, **no score produced** |
 | with the fix | exit **0**, `mutants scored: 1 killed, 0 survived`, score 100% |
+
+**And the defect review found in the first version of this fix, which the row
+above is too small to show.** With the requested ids in a module global, a
+diff touching TWO functions produced:
+
+| | result |
+|---|---|
+| module global (first version) | `42 killed, 0 survived`, **100.0%**, exit **0** — with 36 `BadTestExecutionCommandsException` in `run.log` and every crashed mutant dropped from the denominator |
+| control, same diff, `_REQUESTED.clear()` added | `52 killed, 24 survived`, **68.4%**, BELOW THRESHOLD, exit 2 |
+| this version, on `config.stash` | `15 killed, 6 survived`, **71.4%**, BELOW THRESHOLD, exit 2, **0** `BadTestExecutionCommandsException` |
+
+A single-mutant run is the one shape where the parent's clean-run id set equals
+the child's, so the RED/GREEN row above could not see it. That is why the
+regression test drives TWO `pytest.main()` calls in one process — the shape
+`mutmut` actually uses.
 
 Selection behaviour, from `tests/test_lazy_nodeid_selection.py`:
 

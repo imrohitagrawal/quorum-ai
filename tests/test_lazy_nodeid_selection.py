@@ -194,9 +194,98 @@ def test_an_ordinary_unbracketed_selection_is_untouched() -> None:
     """
     result = _collect("tests/test_lazy_nodeid_selection.py")
     assert result.returncode == 0, result.stdout + result.stderr
-    # 8 = the six tests in this module plus the two-case parametrization of
+    # 10 = the eight tests in this module plus the two-case parametrization of
     # the probe above. No "N/M" split, because nothing was rewritten.
-    assert "8 tests collected" in result.stdout, (
+    assert "10 tests collected" in result.stdout, (
         f"selecting this module by path no longer collects its own tests "
         f"untouched:\n{result.stdout}"
+    )
+
+
+@pytest.mark.repo_introspection
+def test_two_runs_in_one_process_do_not_leak_requested_ids() -> None:
+    """THE SHAPE ``mutmut`` ACTUALLY USES, and the defect review caught.
+
+    ``mutmut`` calls ``pytest.main`` IN-PROCESS for its clean run over the
+    union of every mutant's tests, then forks one child per mutant. The first
+    version of this plugin kept the requested ids in a MODULE GLOBAL, so the
+    second run in the same process — and every forked child — asked for ids it
+    had never requested, got a ``UsageError`` and exited 4.
+
+    What that cost, measured on the real gate before the fix: mutmut recorded
+    those mutants as crashes and dropped them from the denominator, so the gate
+    printed ``42 killed, 0 survived``, ``100.0%``, exit 0 on a diff whose
+    honest score was ``52 killed, 24 survived`` = ``68.4%``, BELOW THRESHOLD,
+    exit 2. A false pass on the gate whose whole job is to prove the tests
+    bite.
+
+    RED IF: the requested ids stop being per-run state (a module global, a
+    class attribute, an lru_cache — anything a second ``pytest.main`` in the
+    same process can see). MEASURED with the global restored: RC2 = 4 with
+    "no test matched the requested case id(s)" naming the FIRST run's id.
+    """
+    script = (
+        "import pytest\n"
+        f"rc1 = pytest.main([{SCHEMATHESIS_CASE_ID!r}, '--collect-only', '-q', '--no-cov',\n"
+        "                   '-p', 'no:randomly', '-p', 'no:cacheprovider'])\n"
+        "rc2 = pytest.main(['tests/unit/test_feedback_audit.py', '--collect-only', '-q',\n"
+        "                   '--no-cov', '-p', 'no:randomly', '-p', 'no:cacheprovider'])\n"
+        "print('RC1', rc1, 'RC2', rc2)\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", script], cwd=REPO_ROOT, capture_output=True, text=True
+    )
+    assert "RC1 0 RC2 0" in result.stdout, (
+        "a second pytest run in the same process saw the first run's requested "
+        f"ids — this is how the gate reported a false pass:\n{result.stdout}\n{result.stderr}"
+    )
+    # POSITIVE PARTNER: the first run really did filter, so RC1 == 0 is not
+    # "the plugin did nothing".
+    assert "1/13 tests collected" in result.stdout, result.stdout
+
+
+@pytest.mark.repo_introspection
+def test_a_sibling_whose_name_extends_a_rewritten_one_is_not_deselected() -> None:
+    """A rewritten ``path::test_foo`` must not swallow ``path::test_foo_bar``.
+
+    The filter decides which items "came from" a rewritten argument. Matching
+    that by raw string prefix made ``test_foo_bar`` look like one of
+    ``test_foo``'s cases, so a sibling requested by its OWN argument was
+    deselected silently — a test the caller asked for, not run, no error.
+
+    There is no such pair in the suite today (censused in review: 0 of 4561
+    node ids), which is precisely why it needs a test rather than a comment.
+
+    THE PROBE LIVES UNDER ``tests/``, not in ``tmp_path``: the plugin is wired
+    from ``tests/conftest.py``, so a file outside that tree is never rewritten
+    at all and the test would pass against any implementation. The first
+    version of this test made exactly that mistake — it collected "2 tests"
+    with no ``N/M`` split, which is the tell.
+
+    RED IF: the boundary check goes back to ``node_id.startswith(parents)``.
+    """
+    probe = REPO_ROOT / "tests" / "test_zz_w23_sibling_probe.py"
+    probe.write_text(
+        "import pytest\n\n"
+        '@pytest.mark.parametrize("v", ["a", "b"])\n'
+        "def test_foo(v):\n    assert v\n\n\n"
+        "def test_foo_bar():\n    assert True\n",
+        encoding="utf-8",
+    )
+    try:
+        result = _collect(
+            "tests/test_zz_w23_sibling_probe.py::test_foo[a]",
+            "tests/test_zz_w23_sibling_probe.py::test_foo_bar",
+        )
+    finally:
+        probe.unlink()
+    assert result.returncode == 0, result.stdout + result.stderr
+    # The "N/M" split is the proof the plugin was in play at all: one of the
+    # three items (``test_foo[b]``) is deselected, and the sibling survives.
+    assert "2/3 tests collected" in result.stdout, (
+        f"expected the plugin to filter this selection; without the split it "
+        f"never ran and this test proves nothing:\n{result.stdout}"
+    )
+    assert "test_foo_bar" in result.stdout, (
+        f"the sibling requested by its own argument was deselected:\n{result.stdout}"
     )

@@ -65,10 +65,25 @@ _BRACKETED_NODE_ID = re.compile(
     r"^(?P<path>[^:]+(?::[^:][^:]*)?)::(?P<func>[^:\[]+)\[(?P<case>.+)\]$"
 )
 
-#: Node ids this run asked for that had to be rewritten, and therefore must be
-#: filtered back down after collection. Empty on every ordinary run, which is
-#: what keeps this plugin invisible.
-_REQUESTED: dict[str, list[str]] = {}
+#: Node ids this run asked for that had to be rewritten, keyed off the RUN's
+#: own ``Config`` rather than held in a module global.
+#:
+#: THE MODULE GLOBAL WAS A FALSE-ACCEPTANCE BUG, found in review and measured.
+#: ``mutmut`` calls ``pytest.main`` IN-PROCESS for its clean run over the union
+#: of every mutant's tests, and only then forks one child per mutant
+#: (``mutmut/__main__.py``: ``execute_pytest`` -> ``pytest.main``, then
+#: ``os.fork``). A global populated by the parent is inherited by every child,
+#: which then asks for ids it never requested, gets ``UsageError`` and exits 4.
+#: mutmut records those mutants as crashes and DROPS THEM FROM THE
+#: DENOMINATOR, so the gate printed ``42 killed, 0 survived`` and
+#: ``100.0%``, exit 0, on a diff whose honest score was ``52 killed, 24
+#: survived`` = ``68.4%``, BELOW THRESHOLD, exit 2. A gate reporting a pass for
+#: work it never scored is the one outcome this whole file exists to prevent.
+#:
+#: MEASURED, two ``pytest.main()`` calls in one process: the first selects
+#: ``1/13``, the second exits 4 with "no test matched the requested case
+#: id(s)" naming the FIRST call's id.
+_REQUESTED_KEY: pytest.StashKey[dict[str, list[str]]] = pytest.StashKey()
 
 
 def _looks_like_a_lazy_case(arg: str) -> re.Match[str] | None:
@@ -78,7 +93,7 @@ def _looks_like_a_lazy_case(arg: str) -> re.Match[str] | None:
     return _BRACKETED_NODE_ID.match(arg)
 
 
-def rewrite_lazy_case_args(args: list[str]) -> None:
+def rewrite_lazy_case_args(config: Config, args: list[str]) -> None:
     """Rewrite unresolvable case ids to their parent function, before collection.
 
     Called from ``tests/conftest.py``'s ``pytest_collection`` hook, which is
@@ -95,23 +110,29 @@ def rewrite_lazy_case_args(args: list[str]) -> None:
     without collecting, so it is applied to all of them and the
     post-collection filter restores exact selection either way — which makes
     the behaviour identical for ordinary parametrized ids.
+
+    The requested ids live on ``config.stash``, so they belong to THIS run and
+    cannot leak into the next one in the same process. See ``_REQUESTED_KEY``.
     """
+    requested: dict[str, list[str]] = {}
     for index, arg in enumerate(args):
         match = _looks_like_a_lazy_case(arg)
         if match is None:
             continue
         parent = f"{match.group('path')}::{match.group('func')}"
-        _REQUESTED.setdefault(parent, []).append(arg)
+        requested.setdefault(parent, []).append(arg)
         args[index] = parent
+    config.stash[_REQUESTED_KEY] = requested
 
 
 def keep_requested_cases(config: Config, items: list[Any]) -> None:
     """Keep exactly the requested cases, and refuse an id that matched nothing."""
-    if not _REQUESTED:
+    requested = config.stash.get(_REQUESTED_KEY, {})
+    if not requested:
         return
 
-    wanted: set[str] = {node_id for ids in _REQUESTED.values() for node_id in ids}
-    parents = tuple(_REQUESTED)
+    wanted: set[str] = {node_id for ids in requested.values() for node_id in ids}
+    parents = tuple(requested)
 
     def _requested(node_id: str) -> bool:
         return node_id in wanted or node_id.replace("\\", "/") in wanted
@@ -119,7 +140,17 @@ def keep_requested_cases(config: Config, items: list[Any]) -> None:
     def _from_a_rewritten_arg(node_id: str) -> bool:
         # Items that came from a DIFFERENT argument must pass through
         # untouched: a run may mix a rewritten id with a plain path.
-        return node_id.startswith(parents)
+        #
+        # Matched on the node-id BOUNDARY, not a raw prefix. A raw
+        # ``startswith`` made ``path::test_foo_bar`` look like it came from a
+        # rewritten ``path::test_foo``, so a separately requested sibling whose
+        # name merely EXTENDS the rewritten one was deselected with no error.
+        # Found in review; there is no such pair in the suite today (censused:
+        # 0 of 4561 node ids), which is exactly why it needed a test.
+        return any(
+            node_id == parent or node_id.startswith((f"{parent}[", f"{parent}::"))
+            for parent in parents
+        )
 
     kept = [
         item for item in items if _requested(item.nodeid) or not _from_a_rewritten_arg(item.nodeid)

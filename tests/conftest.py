@@ -331,7 +331,7 @@ def pytest_collection(session: Any) -> None:
     """
     from tests.lazy_nodeid_selection import rewrite_lazy_case_args
 
-    rewrite_lazy_case_args(session.config.args)
+    rewrite_lazy_case_args(session.config, session.config.args)
 
 
 def pytest_collection_modifyitems(config: Any, items: list[Any]) -> None:
