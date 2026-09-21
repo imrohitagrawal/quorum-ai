@@ -85,13 +85,20 @@ ROOT = Path(__file__).resolve().parents[2]
 #: so by making the citation match NOTHING, which turns a loud misnamed failure
 #: into a silent skip -- strictly worse for a gate. It also does not deliver what
 #: it appears to: a `.` satisfies the lookahead, so `docs/notes.jsonl.gz` still
-#: truncates to `docs/notes.jsonl`. The remaining prefix-truncation class (`.tsx`,
-#: `.mdx`, `.pyi`, and any dot-suffixed path) is therefore left LOUD and tracked
-#: in issue #469 rather than silenced here. No `.tsx`, `.mdx` or `.pyi` file is
-#: tracked today (`git ls-files "*.tsx"` -> 0), so nothing is broken by leaving it.
+#: truncates to `docs/notes.jsonl`.
+#:
+#: #469: `mdx`, `pyi` and `tsx` are LISTED, each before the shorter extension it
+#: extends, for the same first-branch-wins reason as `jsonl`. That way such a
+#: citation is CHECKED under its own name rather than reported as `x.md`, `x.py`
+#: or `x.ts`. No `.tsx`, `.mdx` or `.pyi` file is tracked today
+#: (`git ls-files "*.tsx" "*.mdx" "*.pyi"` prints nothing), so this was latent.
+#: STILL LOUD AND MISNAMED, by choice: a dot-suffixed path (`src/x.py.orig`,
+#: `docs/notes.jsonl.gz`) is reported as its listed-extension prefix. No
+#: alternation can list every suffix, and the lookahead that would skip them is
+#: the silent failure described above.
 _CITATION = re.compile(
     r"\b((?:docs|src|tests|scripts|e2e|profiles)/[\w./-]+"
-    r"\.(?:md|py|ts|mjs|yml|yaml|jsonl|json|css|html))"
+    r"\.(?:mdx|md|pyi|py|tsx|ts|mjs|yml|yaml|jsonl|json|css|html))"
 )
 
 #: Only prose-bearing files. A path inside real code is already checked by the
@@ -331,6 +338,22 @@ def test_a_jsonl_citation_is_extracted_whole_and_still_checked() -> None:
     dotted = "e2e/tests/invariants/readiness-no-flash.spec.ts"
     assert (ROOT / dotted).exists(), "precondition: this fixture path is a real file"
     assert _CITATION.findall(f"see {dotted} here") == [dotted]
+
+
+def test_a_longer_extension_is_not_truncated_to_a_listed_shorter_one() -> None:
+    """#469. `.tsx`, `.mdx` and `.pyi` each extend a listed extension by one
+    character, and Python's `|` takes the first branch that matches, so each was
+    reported under a path nobody wrote (`x.tsx` -> `x.ts`).
+
+    RED IF: `tsx`, `mdx` or `pyi` is dropped from the alternation, or moved
+    after the shorter extension it extends.
+    """
+    for cited in ("e2e/tests/x.tsx", "docs/x.mdx", "src/x.pyi"):
+        assert _CITATION.findall(f"see {cited} here") == [cited]
+
+    # POSITIVE PARTNER: the shorter extensions still extract, whole and alone.
+    for cited in ("e2e/tests/x.ts", "docs/x.md", "src/x.py"):
+        assert _CITATION.findall(f"see {cited} here") == [cited]
 
 
 def test_a_path_relative_to_a_known_working_directory_resolves() -> None:
