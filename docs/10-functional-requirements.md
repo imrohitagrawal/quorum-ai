@@ -116,6 +116,14 @@ These requirements cover Release 1 MVP for the public AI cross-validation workfl
   critique of the others in both rounds, billed to its own model, with a
   `kind="critique"` receipt row per critic.
 
+  ENABLED IS NOT THE SAME AS IN EFFECT (#458, ADR-0116). A slot is eligible to
+  critique only if it was really invoked, and only a live provider call
+  produces that — so with live execution off, every run takes the moderator
+  shape however this flag is set. Production has run exactly that posture
+  (flag true, live off) since 2026-09-03. The copy surfaces and `/status`
+  report both facts: `peer_critique_enabled` is the flag,
+  `peer_critique_in_effect` is the flag AND live execution AND a key.
+
   The CODE default is still `false` (`config.py`, `.env.example`), so a local
   run and the whole test suite take the moderator shape unless the flag is set.
   PRODUCTION sets it true, and has since 2026-09-03. Enabling it was a money

@@ -186,7 +186,16 @@ def test_api_description_matches_the_shape_this_process_will_run() -> None:
     from product_app.config import Settings
     from product_app.main import _app_description
 
-    peer_on = _app_description(Settings(peer_critique_enabled=True)).lower()
+    # ADR-0116: the copy follows whether peer critique is IN EFFECT — the
+    # flag AND live execution AND a key — because a critic call is dispatched
+    # only when all three hold. The flag alone was the falsehood production
+    # served: flag on, live off, every run on the moderator path.
+    in_effect = Settings(
+        peer_critique_enabled=True,
+        openrouter_live_execution_enabled=True,
+        openrouter_api_key="sk-not-a-real-key",
+    )
+    peer_on = _app_description(in_effect).lower()
     peer_off = _app_description(Settings(peer_critique_enabled=False)).lower()
 
     # POSITIVE PARTNER FIRST (rule 7). Without these, every negative below is
@@ -217,6 +226,28 @@ def test_api_description_matches_the_shape_this_process_will_run() -> None:
     served = app.openapi()["info"]["description"].lower()
     assert served in (peer_on, peer_off)
 
+    # THE #458 CASE, and the reason this test exists in this shape: the flag
+    # ON while live execution is OFF is PRODUCTION's posture, and no critic
+    # call can be dispatched there, so the moderator wording is the true one.
+    # RED IF the builder reads the flag alone again.
+    flag_on_live_off = _app_description(
+        Settings(peer_critique_enabled=True, openrouter_live_execution_enabled=False)
+    ).lower()
+    assert flag_on_live_off == peer_off, (
+        "flag on with live execution off still promises mutual critique; no "
+        "critic is dispatched in that posture (debate._eligible_critics is empty)"
+    )
+    # And live on with NO key is the same: query_run_orchestration fails the
+    # whole run there, so promising peer critique is worse, not better.
+    live_on_no_key = _app_description(
+        Settings(
+            peer_critique_enabled=True,
+            openrouter_live_execution_enabled=True,
+            openrouter_api_key="",
+        )
+    ).lower()
+    assert live_on_no_key == peer_off
+
 
 def _landing_subhead(html: str) -> str:
     match = re.search(r'<p class="landing-subhead">(.*?)</p>', html, re.DOTALL)
@@ -237,10 +268,14 @@ def test_landing_subhead_matches_the_shape_this_process_will_run(
     from product_app import config
     from product_app.main import _render_workspace_html
 
-    monkeypatch.setattr(config.settings, "peer_critique_enabled", True)
-    peer_on_exact = _landing_subhead(_render_workspace_html())
-    monkeypatch.setattr(config.settings, "peer_critique_enabled", False)
-    peer_off_exact = _landing_subhead(_render_workspace_html())
+    def _render(*, flag: bool, live: bool, key: str) -> str:
+        monkeypatch.setattr(config.settings, "peer_critique_enabled", flag)
+        monkeypatch.setattr(config.settings, "openrouter_live_execution_enabled", live)
+        monkeypatch.setattr(config.settings, "openrouter_api_key", key)
+        return _landing_subhead(_render_workspace_html())
+
+    peer_on_exact = _render(flag=True, live=True, key="sk-not-a-real-key")
+    peer_off_exact = _render(flag=False, live=True, key="sk-not-a-real-key")
     peer_on, peer_off = peer_on_exact.lower(), peer_off_exact.lower()
 
     # POSITIVE PARTNER FIRST (rule 7): both rendered a real sentence.
@@ -269,6 +304,13 @@ def test_landing_subhead_matches_the_shape_this_process_will_run(
         "Four frontier AI models answer. A separate moderator model critiques their answers." + tail
     )
 
+    # THE #458 CASE. Production runs the flag ON with live execution OFF, and
+    # every run there takes the moderator path, so this is the sentence it
+    # must serve. RED IF the subhead reads the flag alone again.
+    assert _render(flag=True, live=False, key="sk-not-a-real-key") == peer_off_exact
+    # Live on, no key: the run fails outright, so peer copy is worse still.
+    assert _render(flag=True, live=True, key="") == peer_off_exact
+
 
 def test_the_served_landing_subhead_is_the_one_for_the_served_config() -> None:
     """RED IF: ``/ui`` serves a subhead other than the render for its settings.
@@ -282,7 +324,12 @@ def test_the_served_landing_subhead_is_the_one_for_the_served_config() -> None:
     served = _landing_subhead(TestClient(app).get("/ui").text).lower()
     assert served.startswith("four frontier ai models answer.")
     assert served == _landing_subhead(_render_workspace_html()).lower()
-    expected = "critique each other's" if settings.peer_critique_enabled else "moderator model"
+    in_effect = (
+        settings.peer_critique_enabled
+        and settings.openrouter_live_execution_enabled
+        and bool(settings.openrouter_api_key)
+    )
+    expected = "critique each other's" if in_effect else "moderator model"
     assert expected in served
 
 

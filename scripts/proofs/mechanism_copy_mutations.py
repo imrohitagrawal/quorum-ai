@@ -121,9 +121,9 @@ MUTATIONS: list[tuple[str, str, str, str]] = [
         '      if (isConsensus) chipText = "Consensus reached";',
     ),
     (
-        "10 API description stops branching on the flag",
+        "10 API description stops branching on the in-effect predicate",
         "main",
-        "    if active_settings.peer_critique_enabled:\n"
+        "    if _peer_critique_in_effect(active_settings):\n"
         "        mechanism = (\n"
         "            \"has them critique each other's answers and sources "
         'so each can revise its own, and "\n'

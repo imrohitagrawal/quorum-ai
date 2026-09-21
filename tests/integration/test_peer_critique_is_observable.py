@@ -159,3 +159,80 @@ def test_the_reported_state_matches_the_real_dispatch_gate(
         f"{reported!r} but _build_peer_round "
         f"{'did' if gate_ran else 'did NOT'} get past its flag check"
     )
+
+
+# --- ADR-0116 / #458: the flag, and whether it is IN EFFECT -----------------
+#
+# Production ran ``peer_critique_enabled: true`` with live execution OFF for
+# weeks. In that posture no slot is ever invoked, so ``_eligible_critics`` is
+# empty and every run takes the moderator path — while the landing page said
+# the models critique each other. The flag was true and the mechanism was not
+# running, and ``/status`` could not tell an operator those apart.
+#
+# Both are reported now. The flag field keeps its meaning because it is the
+# only labelled signal that re-opening a live window will also switch critics
+# back on (``fly.toml`` records that standing risk); the new field says
+# whether a critic call can actually be dispatched.
+
+
+@pytest.mark.parametrize(
+    ("flag", "live", "key", "expected"),
+    [
+        (True, True, "sk-not-a-real-key", True),
+        # PRODUCTION's posture until this change: configured, not in effect.
+        (True, False, "sk-not-a-real-key", False),
+        # Live on with no key: the run fails outright, so nothing is critiqued.
+        (True, True, "", False),
+        (False, True, "sk-not-a-real-key", False),
+        (False, False, "", False),
+    ],
+)
+def test_status_reports_whether_peer_critique_is_in_effect(
+    monkeypatch: pytest.MonkeyPatch, flag: bool, live: bool, key: str, expected: bool
+) -> None:
+    """RED IF: ``peer_critique_in_effect`` stops reading all three terms.
+
+    Dropping the live term makes row 2 report True; dropping the key term
+    makes row 3 report True; reading the flag alone makes both wrong.
+    """
+    monkeypatch.setattr(settings, "peer_critique_enabled", flag)
+    monkeypatch.setattr(settings, "openrouter_live_execution_enabled", live)
+    monkeypatch.setattr(settings, "openrouter_api_key", key)
+    payload = _status(TestClient(app))
+
+    assert "peer_critique_in_effect" in payload, (
+        "/status no longer reports peer_critique_in_effect, so an operator "
+        "cannot tell a configured-but-dormant deployment from a running one"
+    )
+    assert payload["peer_critique_in_effect"] is expected
+    assert isinstance(payload["peer_critique_in_effect"], bool)
+
+    # THE POINT OF TWO FIELDS: the flag keeps reporting the flag, whatever the
+    # live posture. RED IF the new field replaces the old one's meaning.
+    assert payload["peer_critique_enabled"] is flag
+
+
+def test_the_two_peer_fields_disagree_in_productions_posture(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The pair must be able to DIFFER, or one of them is decoration.
+
+    Partner to the parametrized test above: that one would still pass if both
+    fields were the same expression in the posture CI happens to serve. This
+    pins the exact shape production ran — flag true, live off — where the two
+    must read differently.
+
+    RED IF: ``peer_critique_in_effect`` is aliased to
+    ``peer_critique_enabled``, or either is hardcoded.
+    """
+    monkeypatch.setattr(settings, "peer_critique_enabled", True)
+    monkeypatch.setattr(settings, "openrouter_live_execution_enabled", False)
+    monkeypatch.setattr(settings, "openrouter_api_key", "sk-not-a-real-key")
+    payload = _status(TestClient(app))
+
+    assert payload["peer_critique_enabled"] is True, (
+        "the flag field must still report the flag; an operator reads it to "
+        "know that re-opening a live window turns critics back on"
+    )
+    assert payload["peer_critique_in_effect"] is False
+    assert payload["peer_critique_enabled"] != payload["peer_critique_in_effect"]
