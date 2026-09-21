@@ -6,7 +6,7 @@ original, because a gate and an offline agent can read it and cannot read `gh`.
 
 Verified at: `b1209b5a785e95fb208c55c4303ada85065aeb54`
 
-The board holds **24** rows, **4** of them unpinned.
+The board holds **25** rows, **4** of them unpinned.
 
 `scripts/check_open_work.py --check` reads every row's evidence off disk and
 refuses if a claim is false. It runs inside `make validate`, and
@@ -120,6 +120,7 @@ caught by any automated check and 10 of 16 by adversarial review
 | W23 | The mutation gate cannot run when a changed function is covered by a schemathesis case | DONE | `ABSENT tests/conftest.py :: from tests.lazy_nodeid_selection import rewrite_lazy_case_args` | — | ADR-0117 |
 |  W24 | The `:online` web-search fee is measured at $0.007 and was priced at `0.0`, so every searching run's receipt and its daily-cap booking were $0.028 light — ACTIVATED 2026-09-15 by product-owner decision (CHG-007, ADR-0113) | DONE | `ABSENT src/product_app/config.py :: Field(default=0.007, ge=0, allow_inf_nan=False)` | #105 | —  |
 | W25 | A truncated mutation run with no survivor passes, so the gate gets greener as it measures less | DONE | `ABSENT Makefile :: print("INCONCLUSIVE: no survivor` | #464 | ADR-0118 |
+| W26 | The citation gate reports `.tsx`, `.mdx` and `.pyi` citations under a truncated path nobody wrote | DONE | `ABSENT tests/unit/test_cited_paths_resolve.py :: def test_a_longer_extension_is_not_truncated_to_a_listed_shorter_one` | #469 | — |
 
 **STOP** marks a row that cannot be finished without a human decision — a money,
 cost or safety guardrail value that only real measurement could justify. Do not
