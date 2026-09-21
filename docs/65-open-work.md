@@ -467,7 +467,9 @@ twelve-model catalog and a different over-charge — the measured sweep for THIS
 change is 715 mixes, **0** band flips and **0** bound changes, because the
 bands key off the fail-safe bound, which this constant does not feed.
 **#268 stays open**: its other named half, `cost_web_search_context_tokens`,
-is untouched.
+is untouched in value. It is MEASURED and PROPOSED, awaiting the owner: ADR-0119 has
+the 48 readings (43 above the shipped 2000) and the sweep showing that every
+raise tried moves at least two mixes into `block`.
 
 **W14 — #105.** No code. It closes on production evidence, not a diff.
 
