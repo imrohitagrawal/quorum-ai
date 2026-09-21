@@ -229,13 +229,22 @@ async function servedShape(page: import("@playwright/test").Page): Promise<"peer
   // ADR-0116 / #458: the copy follows whether peer critique is IN EFFECT, not
   // whether the flag is set. Production ran the flag TRUE with live execution
   // OFF, where no critic call is dispatched and every run takes the moderator
-  // path. Reading `peer_critique_enabled` here would make this spec derive the
-  // wrong expected sentence from the same field the page was built from — it
-  // would agree with the falsehood instead of catching it.
+  // path, so reading `peer_critique_enabled` here would make this spec expect
+  // the peer sentence in exactly that posture.
   //
-  // CI serves flag-off/live-off, where both fields are false, so this line is
-  // never exercised by the difference in CI. That is precisely why it is
-  // pinned here rather than left to the gate.
+  // WHAT THIS SPEC CAN AND CANNOT CATCH. Both sides read ONE server-side
+  // predicate — `/status.peer_critique_in_effect` and the subhead are both
+  // `main._peer_critique_in_effect(settings)` — so a WRONG PREDICATE cannot
+  // redden this spec: it would move both sides together. Review demonstrated
+  // that by stubbing the predicate to `return True` and watching this spec
+  // still pass. What this pins is the SENTENCES (byte-exact, either shape),
+  // that `/status` carries BOTH fields as booleans, and that the page agrees
+  // with what the server says about itself. The predicate itself is pinned by
+  // tests/unit/test_ui_honesty.py and
+  // tests/integration/test_peer_critique_is_observable.py, which drive the
+  // three terms directly.
+  //
+  // CI serves flag-off/live-off, where both fields are false.
   const inEffect = status.peer_critique_in_effect;
   // RED IF: /status stops reporting either field. Defaulting a missing field
   // to either shape would let this spec assert the wrong sentence silently.

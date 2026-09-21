@@ -169,7 +169,7 @@ def test_cancel_button_hidden_when_no_run_in_progress() -> None:
 
 
 def test_api_description_matches_the_shape_this_process_will_run() -> None:
-    """RED IF: the description stops branching on ``peer_critique_enabled``.
+    """RED IF: the description stops branching on ``_peer_critique_in_effect``.
 
     BOTH branches are asserted, and that is the point. A flat string is wrong
     in one configuration or the other, and review demonstrated which: peer
@@ -179,9 +179,10 @@ def test_api_description_matches_the_shape_this_process_will_run() -> None:
     wording is therefore read only by the deployments where it is FALSE.
 
     Mutation that reddens this: delete the ``if
-    active_settings.peer_critique_enabled`` branch in ``_app_description`` and
-    return either wording unconditionally. One of the two halves below then
-    fails.
+    _peer_critique_in_effect(active_settings)`` branch in ``_app_description``
+    and return either wording unconditionally — the same anchor
+    ``scripts/proofs/mechanism_copy_mutations.py`` mutation 10 uses. One of the
+    two halves below then fails.
     """
     from product_app.config import Settings
     from product_app.main import _app_description
@@ -258,7 +259,11 @@ def _landing_subhead(html: str) -> str:
 def test_landing_subhead_matches_the_shape_this_process_will_run(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """RED IF: the landing subhead stops following ``peer_critique_enabled``.
+    """RED IF: the subhead stops following ``_peer_critique_in_effect``.
+
+    That includes a regression to the flag alone, which is what #458's second
+    half fixed: MEASURED, changing the branch back to
+    ``active_settings.peer_critique_enabled`` reddens this test.
 
     #458. The subhead was static peer copy, so a deployment running the
     moderator shape (the code default, and what CI serves) promised a

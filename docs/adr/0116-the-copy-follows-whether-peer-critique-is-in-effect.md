@@ -3,8 +3,11 @@
 ## Status
 
 Accepted — 2026-09-21. Code only. **Authorises nothing**: it flips no flag,
-opens no live window, and licenses no paid run. The product owner approved this
-approach in session (#458's flag half, "code only, no flag flipped").
+opens no live window, and licenses no paid run. Scope and approach come from
+the product owner's own work order for this session, item 2: *"#458 flag half:
+the landing and `/status` say peer critique is in effect only when the flag AND
+live execution are both on. Code only, no flag flipped. I have approved this
+approach."* Nothing here records an approval beyond that sentence.
 
 Completes ADR-0099's premise — "the UI describes peer critique because peer
 critique is what runs" — which was false in production. Amends ADR-0097's
@@ -12,9 +15,12 @@ critique is what runs" — which was false in production. Amends ADR-0097's
 
 ## Context
 
-`PEER_CRITIQUE_ENABLED` has been `"true"` in production since 2026-09-03 while
-live execution is off. In that posture, **no run takes the peer path**, and the
-landing page said the models critique each other.
+`PEER_CRITIQUE_ENABLED` has been `"true"` in production since 2026-09-03, and
+live execution has been off since **2026-09-12** — the flag was set by the same
+commit that OPENED a live window (`6d13643`), which `522f8c9` closed nine days
+later. So the flag-true/live-off posture dates from 2026-09-12, not from the
+flag being set. In that posture **no run takes the peer path**, and the landing
+page said the models critique each other.
 
 The chain, read from the code rather than assumed:
 
@@ -23,9 +29,13 @@ The chain, read from the code rather than assumed:
 - `_eligible_critics` keeps a slot only if it is `COMPLETED` **and**
   `providers.model_was_invoked(answer)` — that is, its `provider_path` is
   `OPENROUTER_SEARCH`.
-- The only site producing `OPENROUTER_SEARCH` is gated on
-  `providers.ProviderExecutionService._live_execution_enabled`, whose terms are
-  `settings.openrouter_live_execution_enabled and openrouter_key`.
+- The only site producing a **COMPLETED** answer on the `OPENROUTER_SEARCH`
+  path is gated on `providers.ProviderExecutionService._live_execution_enabled`,
+  whose terms are `settings.openrouter_live_execution_enabled and
+  openrouter_key`. (The cancel, failure and deadline constructors stamp the same
+  path on FAILED slots; `_eligible_critics` drops those on its COMPLETED
+  conjunct. An earlier revision of this bullet said "the only site producing
+  `OPENROUTER_SEARCH`", which is literally false.)
 
 So the live dependency is real but **indirect**: the live flag is not a term in
 the peer/moderator decision at all — it acts through `provider_path`. Measured
@@ -47,13 +57,22 @@ given. `_landing_subhead` and `_app_description` both use it.
 Those are the same three terms the dispatch gate reads — not a re-derivation.
 
 **2. NOT `/status.live_execution`.** That field is
-`readiness.report.state == "live"`, which additionally requires a **cached**
-key-auth probe verdict that the spending path does not have. Under a refused
-key the probe says "not live" while `_live_execution_enabled` still returns
-True and up to eight critic calls are dispatched and billed.
-`scripts/live_posture_check.py` already documents that drift and refuses to
-read that field; reproducing it in the landing copy would be a second instance
-of a defect this repo has already named.
+`readiness.report.state == "live"`, which additionally requires a key-auth
+probe verdict the spending path does not have. That verdict is **cached**
+(`readiness._key_auth_state`) and neither `providers` nor `debate` reads it, so
+the two can disagree in either direction; in the direction that matters, a
+rejection recorded earlier keeps `/status.live_execution` false while
+`_live_execution_enabled` still returns True and critic calls dispatch and
+bill. `scripts/live_posture_check.py` already documents that drift and refuses
+to read that field; reproducing it in the landing copy would be a second
+instance of a defect this repo has already named.
+
+**A correction this ADR owes its reviewers:** an earlier revision justified
+this decision with "under a refused key … up to eight critic calls are
+dispatched and billed". That is FALSE, and review demonstrated it: a key that
+is refused right now fails every slot, so `_eligible_critics` is empty and
+**zero** critic calls are reached. The stale-verdict case above is the real
+one.
 
 **3. The key term is not optional.** With the live flag on and no key,
 `query_run_orchestration` fails the whole run ("Live execution is enabled but
@@ -65,10 +84,23 @@ field is added beside it.** `peer_critique_in_effect` is computed in the same
 dict build from the same settings. Both are reported.
 
 **5. The prospective claim is stated as such.** The predicate says a critic
-CAN be dispatched, not that one was. Two reachable states still over-promise
-and cannot be known when `/ui` is served: every slot failing, and the run's key
-being forced empty by the spend ceiling. `app.js` tells the per-run truth from
-`critique_shape`; the landing makes the prospective claim.
+CAN be dispatched, not that one was. Three reachable states still over-promise:
+
+- **Every slot failing**, which includes a key that is refused right now. Not
+  knowable before the run. The page's readiness island reports
+  `offline_by_bad_key` beside the copy.
+- **The global spend ceiling** forcing the run's key empty. This one IS
+  knowable at serve time — `_render_workspace_html` computes
+  `global_spend_ceiling_reached` in the same function that renders the subhead
+  — and is deliberately NOT used: the ceiling is transient, the same page
+  already reports it, and the sentence describes the configured shape rather
+  than this second's capacity. An earlier revision of this ADR claimed the
+  ceiling state "cannot be known when the page is served", which review
+  refuted by pointing at the line above the call.
+- **A caller-supplied panel** whose slots differ from the default.
+
+`app.js` tells the per-run truth from `critique_shape`; the landing makes the
+prospective claim.
 
 ## Measurements
 
@@ -105,11 +137,15 @@ anchor: **10 killed / 10**.
   is a separate change, and `scripts/close_live_window.py` still does not touch
   `PEER_CRITIQUE_ENABLED` (grep: no hits).
 - `e2e/tests/invariants/landing-cta-reachable.spec.ts` derives its expected
-  sentence from `peer_critique_in_effect`. It previously read the flag — the
-  same field the page was built from — so it would have agreed with the
-  falsehood rather than catching it. **CI serves flag-off and live-off, where
-  both fields are false**, so this difference is never exercised in CI; it is
-  pinned in `tests/unit/test_ui_honesty.py` instead.
+  sentence from `peer_critique_in_effect` rather than the flag, so it no longer
+  demands the peer sentence in production's posture. **It cannot catch a wrong
+  predicate**, and its comment now says so: both sides read one server-side
+  function, so stubbing that function moves both together — review
+  demonstrated exactly that. The spec pins the sentences byte-exact and the
+  two-field contract; the predicate is pinned by
+  `tests/unit/test_ui_honesty.py` and
+  `tests/integration/test_peer_critique_is_observable.py`. **CI serves
+  flag-off and live-off, where both fields are false.**
 - `/status`'s response schema is `additionalProperties: true` with no required
   keys, so adding a field does not move `make openapi-check`.
 

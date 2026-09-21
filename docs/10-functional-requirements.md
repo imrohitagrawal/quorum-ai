@@ -120,7 +120,8 @@ These requirements cover Release 1 MVP for the public AI cross-validation workfl
   critique only if it was really invoked, and only a live provider call
   produces that — so with live execution off, every run takes the moderator
   shape however this flag is set. Production has run exactly that posture
-  (flag true, live off) since 2026-09-03. The copy surfaces and `/status`
+  (flag true, live off) since 2026-09-12, when the live window opened on
+  2026-09-03 by the same commit that set this flag was closed. The copy surfaces and `/status`
   report both facts: `peer_critique_enabled` is the flag,
   `peer_critique_in_effect` is the flag AND live execution AND a key.
 

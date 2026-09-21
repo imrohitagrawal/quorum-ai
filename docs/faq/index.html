@@ -495,7 +495,7 @@ pre code {
     <div class="qa-block">
       <div class="qa-question" onclick="toggleQA(this)"><span class="q-mark">?</span> What is Quorum AI?</div>
       <div class="qa-answer">
-        <p>Quorum AI is a research-synthesis tool. You type one question, it runs that question against four large language models (LLMs) in parallel, has the four models critique each other's answers and sources across two debate rounds, each free to revise its own answer, and produces a single answer split into five sections: <strong>consensus</strong> (what all models agree on), <strong>disagreement</strong> (where they diverge), <strong>source support</strong> (what backs each claim), <strong>uncertainty</strong> (what is not settled), and <strong>recommendation</strong> (a practical takeaway).</p>
+        <p>Quorum AI is a research-synthesis tool. You type one question, it runs that question against four large language models (LLMs) in parallel, runs two critique rounds over those answers — the four models critiquing each other when peer critique is in effect, a separate moderator model otherwise (ADR-0116) — and produces a single answer split into five sections: <strong>consensus</strong> (what all models agree on), <strong>disagreement</strong> (where they diverge), <strong>source support</strong> (what backs each claim), <strong>uncertainty</strong> (what is not settled), and <strong>recommendation</strong> (a practical takeaway).</p>
         <p>A <strong>repo</strong> (short for <em>repository</em>) is a project's complete file history stored on GitHub — think of it as a version-controlled folder that every collaborator can read and contribute to. The Quorum AI repo is at <code>github.com/imrohitagrawal/quorum-ai</code>.</p>
         <p>The product is designed for decision support, not for automated decisions. The output is meant to help you think more clearly, not to replace your judgment on high-stakes matters like medical, legal, or financial questions.</p>
         <span class="honesty built">● Built</span>
@@ -803,7 +803,7 @@ pre code {
           <li><strong>ADR-0029</strong> — The grounding score counts the citations the reader can see.</li>
           <li><strong>ADR-0030</strong> — A citation marker is compared in the shape the source store keeps — a terminal run is evaluated once.</li>
           <li><strong>ADR-0032</strong> — The copy describes the moderator; the requirement keeps peer critique — corrected UI copy that overstated the debate design while peer critique was unbuilt. <em>Decisions 1, 3 and 4 superseded by ADR-0099</em>, which retired that copy once peer critique shipped and was enabled.</li>
-          <li><strong>ADR-0099</strong> — The UI describes peer critique, because peer critique is what runs — retires the moderator copy across the landing page, the run views and the export. Since #458 the landing subhead names the moderator again when peer critique is switched off.</li>
+          <li><strong>ADR-0099</strong> — The UI describes peer critique, because peer critique is what runs — retires the moderator copy across the landing page, the run views and the export. Since #458 the landing subhead names the moderator whenever peer critique is not IN EFFECT — the flag alone is not enough, because no slot is eligible to critique while live execution is off (ADR-0116).</li>
         </ul>
         <p style="margin:12px 0 4px;"><strong>Correctness and safety of scoring</strong></p>
         <ul style="margin:4px 0 8px 20px;">

@@ -241,18 +241,37 @@ def _peer_critique_in_effect(active_settings: Settings) -> bool:
 
     THE SAME THREE TERMS the dispatch gate uses, not a re-derivation, and
     deliberately NOT ``/status.live_execution``: that is
-    ``readiness.report.state == "live"``, which adds a CACHED key-auth probe
-    term the spending path has not got. Under a refused key the probe says
-    "not live" while ``_live_execution_enabled`` still returns True and up to
-    eight critic calls are dispatched and billed.
+    ``readiness.report.state == "live"``, which adds a key-auth probe term the
+    spending path has not got. That term is a CACHED verdict
+    (``readiness._key_auth_state``), and neither ``providers`` nor ``debate``
+    ever reads it (grep: no hits), so the two can disagree in either
+    direction. In the direction that matters, a rejection recorded earlier
+    keeps ``/status.live_execution`` false while ``_live_execution_enabled``
+    still returns True and calls dispatch and bill.
     ``scripts/live_posture_check.py`` documents that drift and refuses to read
     that field for the same reason.
 
+    (A key that is refused RIGHT NOW is a different case and does no harm
+    here: every slot then FAILS, so ``_eligible_critics`` is empty and no
+    critic call is reached at all. Review demonstrated that, after an earlier
+    revision of this comment claimed eight calls were billed in that posture.)
+
     PROSPECTIVE, and necessarily so: it says a critic CAN be dispatched, not
-    that one was. Two states still over-promise and cannot be known when the
-    page is served — every slot failing, and the run's key being forced empty
-    by the spend ceiling (``query_run_orchestration``). ``app.js`` tells the
-    per-run truth from ``critique_shape``; this is the prospective claim.
+    that one was. Three states still over-promise, and ADR-0116 records each
+    rather than hiding it:
+
+    * every slot failing (including a key that is refused right now) — not
+      knowable before the run;
+    * the global spend ceiling forcing the run's key empty — this one IS
+      knowable at serve time (``_render_workspace_html`` computes
+      ``global_spend_ceiling_reached`` in the same function), and is
+      deliberately not used here: the ceiling is transient, the same page
+      already reports it in its readiness island, and this sentence describes
+      the configured shape rather than this second's capacity;
+    * a caller-supplied panel whose slots differ from the default.
+
+    ``app.js`` tells the per-run truth from ``critique_shape``; this is the
+    prospective claim.
     """
     return (
         active_settings.peer_critique_enabled
