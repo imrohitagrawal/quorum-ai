@@ -93,17 +93,21 @@ kill_timeout = "5s"
   # DELIBERATELY LEFT "true" while live execution is off, which is safe but is
   # NOT the end state. It costs nothing today -- peer critique multiplies debate
   # calls only INSIDE a live posture, and with the flag above false no provider
-  # call is made at all. Since #458 the landing subhead follows this flag
-  # (`main.py` `_landing_subhead`), and
-  # `e2e/tests/invariants/landing-cta-reachable.spec.ts` picks the sentence it
-  # expects from `/status`. It follows the FLAG, not what runs: with live
-  # execution off, no slot is eligible to critique, so every run takes the
-  # moderator path while the landing shows the peer sentence. Flipping this is
-  # a human decision, not made here.
+  # call is made at all. Since #458 (ADR-0116) the landing subhead and the API
+  # description follow whether peer critique is IN EFFECT -- this flag AND live
+  # execution AND a key, the same three terms the dispatch gate reads -- so
+  # with live execution off they correctly say the moderator shape, which is
+  # what every run takes. `/status` reports BOTH: `peer_critique_enabled` (this
+  # flag) and `peer_critique_in_effect`. Flipping this is a human decision, not
+  # made here.
   #
-  # The residual risk this leaves: re-enabling live execution turns peer
-  # critique back on with it, at up to eight critic calls instead of two. No
-  # gate couples the flags. Read this comment before re-opening a window.
+  # The residual risk this leaves is UNCHANGED by ADR-0116: re-enabling live
+  # execution turns peer critique back on with it, at up to eight critic calls
+  # instead of two. No gate couples the flags -- the copy now tells the truth
+  # about it, which is not the same as coupling it. `peer_critique_enabled` on
+  # `/status` stays the labelled signal that this flag is set, precisely so
+  # that risk is visible while live is off. Read this comment before
+  # re-opening a window.
   PEER_CRITIQUE_ENABLED = "true"
   # issue #27: keep the feedback-event SQLite trail on the persistent volume
   # (mounted at /data below), NOT the ephemeral rootfs default (.data/…) which

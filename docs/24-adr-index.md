@@ -119,6 +119,7 @@ ways, so the record shows what was believed on a date and what replaced it.
 | [ADR-0113](adr/0113-the-online-search-fee-is-priced.md) | The `:online` search fee is priced | Architecture | Accepted — 2026-09-15 |
 | [ADR-0114](adr/0114-the-displayed-estimate-prices-a-typical-judge-call.md) | The displayed estimate prices a typical judge call | Architecture | Accepted — 2026-09-20 |
 | [ADR-0115](adr/0115-the-debate-stage-is-priced-from-measurement.md) | The debate stage is priced from measurement | Architecture | Accepted — 2026-09-21 |
+| [ADR-0116](adr/0116-the-copy-follows-whether-peer-critique-is-in-effect.md) | The copy follows whether peer critique is in effect, not whether the flag is set | Architecture | Accepted — 2026-09-21 |
 
 **This index was itself stale** until 2026-07-30: ADR-0002 had existed since
 2026-07-19 and was never listed here. A hand-maintained index is a derived fact

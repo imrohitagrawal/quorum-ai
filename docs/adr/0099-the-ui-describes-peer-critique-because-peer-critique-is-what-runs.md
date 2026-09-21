@@ -4,6 +4,11 @@
 
 Accepted - 2026-09-04.
 
+**Amended by ADR-0116 (2026-09-21):** the subhead and the API description
+follow whether peer critique is IN EFFECT — the flag AND live execution AND a
+key — not the flag alone. The sentences below that say the copy follows the
+flag describe #458's first half and are superseded by its second.
+
 Supersedes **ADR-0032 decisions 3 and 4** (the landing subhead naming a
 moderator model, and the chip calling peer critique "planned, not yet built").
 ADR-0032 decision 5 - the eyebrow and the h1 - is a product-owner decision and

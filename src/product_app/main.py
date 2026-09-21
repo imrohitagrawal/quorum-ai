@@ -226,6 +226,60 @@ if SENTRY_DSN:
 _VENDOR_PREFIX = "/static/vendor"
 
 
+def _peer_critique_in_effect(active_settings: Settings) -> bool:
+    """Whether a peer critic call can actually be dispatched, for COPY.
+
+    ADR-0116, the other half of #458. The flag alone is not the shape a run
+    takes. A critic is eligible only if its slot was really invoked
+    (``debate._eligible_critics`` -> ``providers.model_was_invoked``), and the
+    only path that produces an invoked slot is gated by
+    ``providers.ProviderExecutionService._live_execution_enabled``, whose two
+    terms are the live flag and a key. So with the flag on and live execution
+    off — PRODUCTION's posture — ``_build_peer_round`` returns ``None`` and
+    every run takes the moderator path while the landing promised mutual
+    critique.
+
+    THE SAME THREE TERMS the dispatch gate uses, not a re-derivation, and
+    deliberately NOT ``/status.live_execution``: that is
+    ``readiness.report.state == "live"``, which adds a key-auth probe term the
+    spending path has not got. That term is a CACHED verdict
+    (``readiness._key_auth_state``), and neither ``providers`` nor ``debate``
+    ever reads it (grep: no hits), so the two can disagree in either
+    direction. In the direction that matters, a rejection recorded earlier
+    keeps ``/status.live_execution`` false while ``_live_execution_enabled``
+    still returns True and calls dispatch and bill.
+    ``scripts/live_posture_check.py`` documents that drift and refuses to read
+    that field for the same reason.
+
+    (A key that is refused RIGHT NOW is a different case and does no harm
+    here: every slot then FAILS, so ``_eligible_critics`` is empty and no
+    critic call is reached at all. Review demonstrated that, after an earlier
+    revision of this comment claimed eight calls were billed in that posture.)
+
+    PROSPECTIVE, and necessarily so: it says a critic CAN be dispatched, not
+    that one was. Three states still over-promise, and ADR-0116 records each
+    rather than hiding it:
+
+    * every slot failing (including a key that is refused right now) — not
+      knowable before the run;
+    * the global spend ceiling forcing the run's key empty — this one IS
+      knowable at serve time (``_render_workspace_html`` computes
+      ``global_spend_ceiling_reached`` in the same function), and is
+      deliberately not used here: the ceiling is transient, the same page
+      already reports it in its readiness island, and this sentence describes
+      the configured shape rather than this second's capacity;
+    * a caller-supplied panel whose slots differ from the default.
+
+    ``app.js`` tells the per-run truth from ``critique_shape``; this is the
+    prospective claim.
+    """
+    return (
+        active_settings.peer_critique_enabled
+        and active_settings.openrouter_live_execution_enabled
+        and bool(active_settings.openrouter_api_key)
+    )
+
+
 def _app_description(active_settings: Settings) -> str:
     """The API's own front page, describing the shape THIS process will run.
 
@@ -242,7 +296,7 @@ def _app_description(active_settings: Settings) -> str:
     either" — applied to the API's description. The setting is the closest
     thing this builder has to a run.
     """
-    if active_settings.peer_critique_enabled:
+    if _peer_critique_in_effect(active_settings):
         mechanism = (
             "has them critique each other's answers and sources so each can revise its own, and "
         )
@@ -268,14 +322,14 @@ def _landing_subhead(active_settings: Settings) -> str:
     default, and what CI serves) promised a mechanism that does not run there.
     Same rule, and the same mechanism sentences, as :func:`_app_description`.
 
-    It follows the FLAG, not what a given run does. With the flag on, a run
-    with no eligible critic still takes the moderator path
-    (``debate.py::_build_peer_round``). That includes every run while live
-    execution is off, because simulated slots are never eligible. Tying the
-    flag to the live window is #458's other half, left to the product owner.
+    It follows whether peer critique is IN EFFECT — the flag AND live
+    execution AND a key — because a run with no eligible critic takes the
+    moderator path (``debate.py::_build_peer_round``), and no slot is eligible
+    while live execution is off. See :func:`_peer_critique_in_effect`. It is
+    still prospective: it says what a run WOULD do, not what one did.
     Returned as HTML: the dash is an entity.
     """
-    if active_settings.peer_critique_enabled:
+    if _peer_critique_in_effect(active_settings):
         mechanism = "They critique each other's answers and sources, and each can revise its own."
     else:
         mechanism = "A separate moderator model critiques their answers."
@@ -1234,6 +1288,25 @@ def status_snapshot() -> dict[str, object]:
         # and the ceiling DO bind it; ADR-0097 records why that difference
         # means peer critique needs no per-window declaration of its own.
         "peer_critique_enabled": settings.peer_critique_enabled,
+        # ADR-0116, #458. The FLAG above says what is configured; this says
+        # whether a critic call can actually be dispatched. They differ in
+        # production today — flag true, live execution off — and that gap is
+        # why the landing page promised a mechanism no run took.
+        #
+        # BOTH are reported, deliberately. Redefining the flag field to mean
+        # this would delete the operator's only labelled signal that the flag
+        # is set, which is exactly the standing risk fly.toml records:
+        # re-opening a live window turns peer critique back on with it, at up
+        # to eight critic calls per run instead of two. A field that reads
+        # false while live is off would hide that.
+        #
+        # Computed HERE, in this dict, from the same three settings
+        # `_peer_critique_in_effect` reads for the copy — one predicate, two
+        # readers, judge_enabled's rule. It is NOT derived from
+        # `live_execution` above: that field is the readiness probe's verdict
+        # (`report.state`), which carries a cached key-auth term the dispatch
+        # gate has not got.
+        "peer_critique_in_effect": _peer_critique_in_effect(settings),
         "model_catalog_loaded": report.catalog_loaded,
         # W9. The default panel slot numbers whose model IS the configured
         # debate moderator, so a moderator grading its own answer is visible

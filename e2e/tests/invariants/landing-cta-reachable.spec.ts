@@ -199,13 +199,16 @@ test.describe("landing CTA is reachable on a phone (#222)", () => {
  * That is the point — this is a claim about the system, not decoration.
  */
 /*
- * #458: the subhead now follows the served `peer_critique_enabled`, so this
- * pins one of two approved sentences, chosen by the flag `/status` reports.
- * CI serves the flag OFF, so in CI only the moderator branch runs here; the
- * peer sentence is pinned byte-exact by `tests/unit/test_ui_honesty.py`. Before,
- * it pinned the peer sentence alone while CI serves the code default
- * (`peer_critique_enabled=False`), so it asserted peer copy under a moderator
- * config: green on the falsehood, and red on the correction.
+ * #458: the subhead follows whether peer critique is IN EFFECT — the flag AND
+ * live execution AND a key (ADR-0116) — so this pins one of two approved
+ * sentences, chosen by `peer_critique_in_effect` from `/status`. CI serves
+ * flag-off and live-off, so in CI only the moderator branch runs here; the
+ * peer sentence is pinned byte-exact by `tests/unit/test_ui_honesty.py`.
+ * Before #458's first half, it pinned the peer sentence alone while CI serves
+ * the code default, so it asserted peer copy under a moderator config: green
+ * on the falsehood, and red on the correction. Its second half moved the
+ * predicate off the bare flag, which production had TRUE while live execution
+ * was off — every run on the moderator path under peer copy.
  */
 const TAIL =
   " A synthesis model writes the one answer — where they agree, where they " +
@@ -222,11 +225,32 @@ const EXPECTED_SUBHEAD = {
 async function servedShape(page: import("@playwright/test").Page): Promise<"peer" | "moderator"> {
   const response = await page.request.get("/status");
   expect(response.ok()).toBe(true);
-  const flag = (await response.json()).peer_critique_enabled;
-  // RED IF: /status stops reporting the flag. Defaulting a missing field to
-  // either shape would let this spec assert the wrong sentence silently.
-  expect(typeof flag).toBe("boolean");
-  return flag ? "peer" : "moderator";
+  const status = await response.json();
+  // ADR-0116 / #458: the copy follows whether peer critique is IN EFFECT, not
+  // whether the flag is set. Production ran the flag TRUE with live execution
+  // OFF, where no critic call is dispatched and every run takes the moderator
+  // path, so reading `peer_critique_enabled` here would make this spec expect
+  // the peer sentence in exactly that posture.
+  //
+  // WHAT THIS SPEC CAN AND CANNOT CATCH. Both sides read ONE server-side
+  // predicate — `/status.peer_critique_in_effect` and the subhead are both
+  // `main._peer_critique_in_effect(settings)` — so a WRONG PREDICATE cannot
+  // redden this spec: it would move both sides together. Review demonstrated
+  // that by stubbing the predicate to `return True` and watching this spec
+  // still pass. What this pins is the SENTENCES (byte-exact, either shape),
+  // that `/status` carries BOTH fields as booleans, and that the page agrees
+  // with what the server says about itself. The predicate itself is pinned by
+  // tests/unit/test_ui_honesty.py and
+  // tests/integration/test_peer_critique_is_observable.py, which drive the
+  // three terms directly.
+  //
+  // CI serves flag-off/live-off, where both fields are false.
+  const inEffect = status.peer_critique_in_effect;
+  // RED IF: /status stops reporting either field. Defaulting a missing field
+  // to either shape would let this spec assert the wrong sentence silently.
+  expect(typeof inEffect).toBe("boolean");
+  expect(typeof status.peer_critique_enabled).toBe("boolean");
+  return inEffect ? "peer" : "moderator";
 }
 
 test.describe("landing copy describes the real pipeline (ADR-0032)", () => {
