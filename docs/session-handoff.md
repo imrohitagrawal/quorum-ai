@@ -1,7 +1,7 @@
 # Session Handoff
 
 ## Date/time
-2026-09-19T23:44:33+05:30
+2026-09-21T20:29:43+05:30
 
 ## Open work
 `docs/65-open-work.md` — the source of truth for what is open, what blocks what,
@@ -11,24 +11,24 @@ line further down this file is the factory router's view of the lifecycle, not a
 work status.
 
 ## Latest narrative handoff
-`docs/analysis/2026-09-19-session-handoff.md` — read this for full context before editing. (today)
+`docs/analysis/2026-09-21-session-handoff.md` — read this for full context before editing. (today)
 
 This file is a mechanical snapshot (branch/git-status/skill-route/live state) —
 regenerated fresh every `make handoff`. The narrative above (what happened,
 what's next, the traps) lives in the dated doc it points to, not here.
 
 ## Current branch/worktree
-docs/handoff-2026-09-19
+docs/2026-09-21-handoff
 
 ## Live state (measured fresh by this run, not hand-carried)
 Run `make handoff` again for current numbers instead of trusting this file
 once it ages -- every value below is read from git/gh/`/status` at
 generation time, per #134.
 
-- **`origin/main` tip:** `cfe26d4f5528`
-- **Last commit touching `src/`:** `cfe26d4f5528`
-- **Production vs. last `src/` commit:** production build_sha cfe26d4 is in sync with last src/ commit
-- **pytest collected (no execution):** 4543
+- **`origin/main` tip:** `597e02bc4d82`
+- **Last commit touching `src/`:** `aa072b913b0f`
+- **Production vs. last `src/` commit:** production build_sha 597e02b does NOT match last src/ commit aa072b9 -- a deploy may be in flight or overdue
+- **pytest collected (no execution):** 4575
 - **e2e lane spec counts:** invariants: 20, ops: 2, degraded: 1
 - **Open issues:** 8
 - **Changed-lines coverage:** not computed here -- `make diff-cover` shares
@@ -93,7 +93,8 @@ Operate, learn, and improve
 
 ## Git status
 ```text
-clean
+?? CONTINUE-105-BACKLOG-ULTRACODE-PROMPT.md
+?? CONTINUE-268-BACKLOG-ULTRACODE-PROMPT.md
 ```
 
 ## Diff stat
