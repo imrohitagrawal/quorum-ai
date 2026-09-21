@@ -22,9 +22,12 @@ or made a paid call. The only network use was `gh`, `git`, `/status`,
 ## 1. Merged and running in production
 
 Every row: all six required contexts green on the PR head, every Deploy
-**run** for the merge SHA enumerated (3 per merge; the extras cancelled by
-concurrency) and its Deploy **job** read, `/status.build_sha` equal to the
-merge SHA at the time.
+**run** for the merge SHA enumerated and its Deploy **job** read, and
+`/status.build_sha` equal to the merge SHA at the time. Exactly one run per
+SHA has a Deploy job of `success`. The count of runs per merge is **3 to 6
+and grows for a while after the merge**: measured on `6653bb9`, 3 runs when
+the watcher stopped and 6 twenty minutes later (1 `success`, 2 `cancelled`,
+3 `skipped`, all `workflow_run`-triggered). Never key on the count.
 
 | item | PR | merge | issue |
 |---|---|---|---|
@@ -45,7 +48,8 @@ branch `proposal/268-web-search-context-tokens`, worktree
 `../quorum-ai-wt-268` left in place. ADR-0119 is `PROPOSED — AWAITING
 OWNER`; the constant is still 2000. Measured: 43 of 48 readings above 2000;
 every raise tried (2100 upward) moves at least two mixes into `block`, so the
-decision-brief rule ("no mix moves into block") fails for every candidate.
+rule the owner's prompt proposed for autonomous merging ("no mix moves into
+block") fails for every candidate.
 The two questions the owner owes are in ADR-0119 §"The decision owed".
 
 ## 3. Owner decisions still open (asked in the session's first message)

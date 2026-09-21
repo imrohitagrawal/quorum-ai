@@ -1,7 +1,7 @@
 # Session Handoff
 
 ## Date/time
-2026-09-22T04:58:07+05:30
+2026-09-22T05:09:55+05:30
 
 ## Open work
 `docs/65-open-work.md` — the source of truth for what is open, what blocks what,
@@ -93,15 +93,13 @@ Operate, learn, and improve
 
 ## Git status
 ```text
-R  docs/analysis/2026-09-21-session-handoff.md -> docs/archive/2026-09/2026-09-21-session-handoff.md
- M docs/session-handoff.md
-?? docs/analysis/2026-09-22-session-handoff.md
+M docs/analysis/2026-09-22-session-handoff.md
 ```
 
 ## Diff stat
 ```text
-docs/session-handoff.md | 19 +++++++++----------
- 1 file changed, 9 insertions(+), 10 deletions(-)
+docs/analysis/2026-09-22-session-handoff.md | 12 ++++++++----
+ 1 file changed, 8 insertions(+), 4 deletions(-)
 ```
 
 ## Completed in this session
