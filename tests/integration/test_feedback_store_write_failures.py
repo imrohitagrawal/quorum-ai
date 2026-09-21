@@ -418,7 +418,7 @@ def _drive(
 # ---------------------------------------------------------------------------
 
 
-def test_block_lands_on_the_fifth_quarter_cap_charge_not_the_fourth(
+def test_block_lands_on_the_fourth_quarter_cap_charge_not_the_fifth(
     tmp_path: Path, restore_store: None
 ) -> None:
     """Pins the boundary the corrected docstring states, from both sides.
@@ -437,16 +437,26 @@ def test_block_lands_on_the_fifth_quarter_cap_charge_not_the_fourth(
     the FOURTH.
 
     ADR-0102 doubled the ladder, taking DAILY_CAP_USD 0.20 -> 0.40 and so
-    _QUARTER_CAP 0.05 -> 0.10. MEASURED, the real estimate is $0.0568, which
-    is UNDER the new quarter — so the walk returns to its ORIGINAL shape: four
-    quarter-cap charges land the ledger exactly on $0.40 and the FIFTH
-    estimate is the first to exceed it. The assertion below is flipped
-    accordingly, exactly as the previous version's own message instructed.
+    _QUARTER_CAP 0.05 -> 0.10, and the estimate of $0.0568 was UNDER the new
+    quarter, so the walk returned to its original five-step shape.
+
+    #268 / ADR-0115 raised ``cost_debate_output_tokens`` 400 -> 2200 from
+    measurement, and MEASURED here the estimate for this mix is now $0.1054 —
+    back OVER a quarter of the cap. So the walk blocks one step earlier, on the
+    FOURTH, exactly as the previous version's own failure message instructed
+    ("if a future price change pushes unit back over _QUARTER_CAP, this test's
+    expected action sequence must move back to four"). This is the behavioural
+    consequence of pricing the debate stage honestly: a user whose runs really
+    cost more reaches the daily cap sooner. Nothing about the comparator
+    changed, and the on-the-line and over-the-line cases below still pin it.
 
     The charge sequence alone does NOT pin the comparator: MEASURED, flipping
-    ``>`` to ``>=`` still leaves the BLOCK on the fourth estimate here (the
-    margin over the cap, $0.0057, is not small enough for the comparator
-    choice to matter on this walk). The second half of this test constructs
+    ``>`` to ``>=`` still leaves the BLOCK on the fourth estimate here. The
+    margin over the cap at step four is ``3 * 0.10 + unit - 0.40``, i.e.
+    ``unit - 0.10``: MEASURED in-suite the unit is $0.1054, so the margin is
+    $0.0054 — not small enough for the comparator choice to matter on this
+    walk. (This read "$0.0057" until #268; that was the ADR-0028-era figure
+    and was already stale.) The second half of this test constructs
     the equality case directly — a ledger of exactly ``DAILY_CAP_USD - unit``
     — which is the only input that tells the two comparators apart, and
     asserts the strict one admits it.
@@ -467,11 +477,11 @@ def test_block_lands_on_the_fifth_quarter_cap_charge_not_the_fourth(
             query_text=_QUERY, model_slots=_SLOTS, account_id=None
         ).estimated_cost_usd
         assert Decimal("0") < unit < DAILY_CAP_USD, unit
-        assert unit < _QUARTER_CAP, (
-            "this test pins the case where the real estimate is UNDER a "
-            "quarter of the cap, so BLOCK lands on the fifth step; if a "
-            "future price change pushes unit back over _QUARTER_CAP, this "
-            "test's expected action sequence must move back to four"
+        assert unit > _QUARTER_CAP, (
+            "this test pins the case where the real estimate is OVER a "
+            "quarter of the cap, so BLOCK lands on the fourth step; if a "
+            "future price change pushes unit back under _QUARTER_CAP, this "
+            "test's expected action sequence must move back to five"
         )
 
         actions = _drive(store, service, account_id, 8)
@@ -480,11 +490,10 @@ def test_block_lands_on_the_fifth_quarter_cap_charge_not_the_fourth(
             CostThresholdAction.ALLOW,
             CostThresholdAction.ALLOW,
             CostThresholdAction.ALLOW,
-            CostThresholdAction.ALLOW,
             CostThresholdAction.BLOCK,
         ], actions
-        assert store.daily_spend_for(account_id) == _QUARTER_CAP * 4
-        assert _rows(db) == 4
+        assert store.daily_spend_for(account_id) == _QUARTER_CAP * 3
+        assert _rows(db) == 3
 
         # Exactly ON the cap once this estimate is added: strict ``>`` admits it.
         on_the_line = uuid4()

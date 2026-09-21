@@ -56,7 +56,8 @@ DEFAULT_MODEL_IDS = [
 #: every band assertion in this file non-deterministic depending on which
 #: other files ran first. With the catalog row in place, pricing is
 #: deterministic and MEASURED (2026-08-09, BEFORE the 2026-09-15 search-fee
-#: activation; at the fee shipping since then the pair is 0.0827 / 0.1593 and
+#: activation; the pair was 0.0827 / 0.1593 after it, and is 0.1052 / 0.1593
+#: since #268 / ADR-0115 priced the debate stage from measurement, and
 #: every band below is unchanged) at:
 #:   DEFAULT_MODEL_IDS: point 0.0547, bound 0.1043 -- ALLOW (unchanged band
 #:     from pre-ADR-0028, just a higher number: point +73%, bound +35%).
@@ -81,7 +82,8 @@ DEFAULT_MODEL_IDS = [
 #: cited, and asserted nowhere. A number no gate compares to the tree goes stale
 #: in silence. Positive control that the grep-for-assertions actually works:
 #: the POINT figure IS asserted -- `PINNED_DEFAULT_MIX_UNIT_USD =
-#: Decimal("0.0827")` below (0.0547 before the 2026-09-15 fee activation);
+#: Decimal("0.1052")` below (0.0827 before #268 / ADR-0115, 0.0547 before the
+#: 2026-09-15 fee activation);
 #: `tests/integration/test_ledger_live_versus_simulated.py` asserts its own
 #: fixture literal independently.
 #:
@@ -194,7 +196,8 @@ def confirmed_request(
     A no-op when the estimate is already ALLOW (the common case for
     DEFAULT_MODEL_IDS under ADR-0028: MEASURED 2026-08-09, pre-activation,
     point 0.0547, bound 0.1043; at the fee shipping since 2026-09-15 the pair
-    is 0.0827 / 0.1593 and the band is unchanged).
+    was 0.0827 / 0.1593 then, and is 0.1052 / 0.1593 since #268 / ADR-0115;
+    the band is unchanged throughout).
     For a mix/query that lands in CONFIRM, this fetches a real preview first
     and attaches its confirmation token -- the same round-trip a real client
     makes for a CONFIRM-band run. Used defensively by tests below that are
@@ -680,7 +683,11 @@ def test_estimate_time_block_still_records_blocked_and_pages_sentry() -> None:
 #: `_DEFAULT_PRICE_PER_1K` fallback -- 4x/2.5x too high. With that catalog row
 #: added (see ``catalog_fetcher.py``), this constant is the real, deterministic
 #: price again.
-PINNED_DEFAULT_MIX_UNIT_USD = Decimal("0.0827")
+#: #268 / ADR-0115 (2026-09-20) priced the debate stage from measurement
+#: (``cost_debate_output_tokens`` 400 -> 2200): MEASURED 0.0827 -> 0.1052, and
+#: the admitted run count 4 -> 3. Same shape as the ADR-0028 entry above — the
+#: price of a run changed, not the envelope.
+PINNED_DEFAULT_MIX_UNIT_USD = Decimal("0.1052")
 
 
 @contextmanager
@@ -781,8 +788,11 @@ def test_daily_cap_admits_the_number_of_runs_its_dollar_value_pays_for() -> None
     doubled the cap, so on that 2026-08-09 unit price the SAME unit admitted 7:
     floor(0.40 / 0.0547) = 7, where floor(0.20 / 0.0547) was 3. That ADR moved
     the envelope, not the price. THEN the 2026-09-15 search-fee activation moved
-    the price: the unit is 0.0827, so the envelope is floor(0.40 / 0.0827) = 4 --
-    which is what this test asserts today. The default mix stays in ALLOW
+    the price: the unit went to 0.0827, so the envelope was
+    floor(0.40 / 0.0827) = 4. THEN #268 / ADR-0115 priced the debate stage from
+    measurement and the unit became 0.1052, so the envelope is
+    floor(0.40 / 0.1052) = 3 -- which is what this test asserts today. The
+    default mix stays in ALLOW
     (max_cost_usd 0.1043 under ADR-0028, 0.1313 after ADR-0102 raised the
     debate cap, 0.1593 since the 2026-09-15 activation), so the loop
     below's confirmation round-trip stays a no-op for every admitted run,
@@ -845,13 +855,20 @@ def test_daily_cap_admits_the_number_of_runs_its_dollar_value_pays_for() -> None
         # measured $0.007, so the default-mix unit price rose $0.0547 -> $0.0827
         # and the $0.40 cap pays for four runs instead of seven.
         #
+        # Then 4 -> 3, the same shape again and also a deliberate decision
+        # (#268, CHG-009, ADR-0115, product owner 2026-09-20 for the value and
+        # 2026-09-21 for the merge): the debate stage
+        # was priced at a 400-token typical against a MEASURED mean of 2190
+        # tokens per call, so the estimate the cap keys on was light on every
+        # run with a debate stage. Unit $0.0827 -> $0.1052.
+        #
         # The drop is the ceiling becoming CORRECT, not a regression: before
         # this, the estimate the cap is keyed on was $0.028 light on every
         # searching run, so the cap was admitting a seventh run it could not
         # actually afford. `DAILY_CAP_USD` was deliberately NOT raised to restore
         # the old count — doing so would re-create the under-protection that had
         # been accidental.
-        assert expected_runs == 4, f"default-mix unit price moved: {unit}"
+        assert expected_runs == 3, f"default-mix unit price moved: {unit}"
 
         completed = 0
         rejection = None

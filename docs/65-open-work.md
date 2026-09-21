@@ -4,7 +4,7 @@
 proves each row's state.** Issues on GitHub are the mirror; this file is the
 original, because a gate and an offline agent can read it and cannot read `gh`.
 
-Verified at: `33c53793e2af19f0de73510ebe3dc49481219988`
+Verified at: `b1209b5a785e95fb208c55c4303ada85065aeb54`
 
 The board holds **23** rows, **5** of them unpinned.
 
@@ -253,13 +253,16 @@ stale, from a twelve-model catalog) proposed `cost_debate_output_tokens`
 400 → 1700, `SYNTHESIS_SECTION_MAX_TOKENS` 3000 → 6000 and a ladder of
 0.18 / 0.27 / 0.28. ADR-0102 then moved the ladder further and by a different
 mechanism (the measured cap), and the two token constants have NOT moved:
-`config.py` still ships `cost_debate_output_tokens: int = 400` and
-`synthesis.py` still `SYNTHESIS_SECTION_MAX_TOKENS = 3000`. That is the open
-remainder of W3, and it is the same concern as W13 (#268): the debate output
-is priced at 400 tokens against an enforced 4000 cap. Re-measure with
-`finish_reason` in place against the peer-shaped telemetry, re-run the sweep
-at cap 4000, and land both token constants with their measurement in ONE pull
-request. Nothing in this paragraph authorises a live window or a paid run.
+`cost_debate_output_tokens` IS LANDED from measurement — 400 -> 2200,
+#268 / ADR-0115 / CHG-009, product owner 2026-09-20 (value) and 2026-09-21
+(merge) — measured against the peer-shaped
+telemetry at cap 4000, with the 715-mix sweep re-run (0 band flips, 0 bound
+changes). `synthesis.py` still ships `SYNTHESIS_SECTION_MAX_TOKENS = 3000`,
+which is NOT landed and is deliberately a separate concern: it is a call-site
+cap, not a pricing typical, and no measurement here bears on it. So this
+paragraph's "land both token constants in ONE pull request" was followed only
+for the one the telemetry measures; say so rather than silently ignore it.
+Nothing in this paragraph authorises a live window or a paid run.
 
 `finish_reason` is now IN PLACE (ADR-0093 decision 5, shipped with W2): the
 durable token stream carries `query_run_id`, `stage` and a bounded
@@ -426,12 +429,15 @@ genuine code (the constructor assignment and the two SQL binds), not only in a
 comment or docstring — the W7 trap. **When you pin a row, pick a needle the
 fix must DELETE or must ADD, never a line the fix will merely edit around.**
 
-**W13 — #268. STOP.** Unpinned: the fix's shape is not yet chosen. Marked STOP
-because the issue's own subject is a cost guardrail — it identifies
-`cost_debate_output_tokens = 400` as a point estimate five times below the
-enforced 2000-token cap, and measures **9 of the 495** shipped-catalog four-slot
-mixes flipping `CONFIRM` → `BLOCK` on the over-charge alone. `BLOCK` is a hard
-refusal, so this is a guardrail move, not a bug fix.
+**W13 — #268. The debate half is DONE** (ADR-0115, CHG-009, owner-approved
+2026-09-21): `cost_debate_output_tokens` 400 -> 2200, measured. Two figures
+this row used to carry were stale and are not repeated: the cap is 4000, not
+2000, and the "9 of 495 mixes flipping CONFIRM -> BLOCK" came from a
+twelve-model catalog and a different over-charge — the measured sweep for THIS
+change is 715 mixes, **0** band flips and **0** bound changes, because the
+bands key off the fail-safe bound, which this constant does not feed.
+**#268 stays open**: its other named half, `cost_web_search_context_tokens`,
+is untouched.
 
 **W14 — #105.** No code. It closes on production evidence, not a diff.
 
