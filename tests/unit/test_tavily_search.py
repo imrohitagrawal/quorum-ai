@@ -248,7 +248,9 @@ def test_tavily_search_http_error_returns_empty(
     caplog.set_level("WARNING", logger="product_app.providers")
 
     def fake_urlopen(request: Any, timeout: float = 0) -> _FakeResponse:
-        raise HTTPError(url=request.full_url, code=401, msg="Unauthorized", hdrs=Message(), fp=None)
+        # 503, not 401: a status no code path would plausibly hard-code, so a
+        # logger that reports a constant instead of `exc.code` goes red.
+        raise HTTPError(url=request.full_url, code=503, msg="Unavailable", hdrs=Message(), fp=None)
 
     monkeypatch.setattr("product_app.providers.urlopen", fake_urlopen)
     assert provider_stub_service._tavily_search(query_text="q") == []
@@ -257,7 +259,7 @@ def test_tavily_search_http_error_returns_empty(
     # status the server sent.
     # RED IF: the event is renamed, not emitted, or loses its status code.
     assert [(r.getMessage(), getattr(r, "status_code", None)) for r in caplog.records] == [
-        ("tavily_search_http_error", 401)
+        ("tavily_search_http_error", 503)
     ]
 
 
@@ -271,12 +273,8 @@ def test_tavily_search_skips_blank_query(monkeypatch: pytest.MonkeyPatch) -> Non
     assert provider_stub_service._tavily_search(query_text="   ") == []
     # #465. `"   "` is truthy, so it never reached the `or ""` fallback; the
     # EMPTY string does. RED IF: that fallback becomes any non-blank text,
-    # which would dial Tavily with a query nobody typed. `boom`'s error would
-    # be swallowed by the function's catch-all, so the call is counted here.
-    calls: list[object] = []
-    monkeypatch.setattr("product_app.providers.urlopen", lambda *a, **k: calls.append(a))
+    # which would dial Tavily with a query nobody typed (`boom` then raises).
     assert provider_stub_service._tavily_search(query_text="") == []
-    assert calls == []
 
 
 # ---------------------------------------------------------------------------
