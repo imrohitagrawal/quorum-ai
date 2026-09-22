@@ -99,7 +99,7 @@ caught by any automated check and 10 of 16 by adversarial review
 | W1 | Stream the provider call (was "B2") | DONE | `ABSENT src/product_app/providers.py :: "stream": True` | — | — |
 | W2 | Peer critique: the answer models critique each other, two rounds (built; ships default-off) | DONE | `ABSENT src/product_app/debate.py :: def _build_peer_round(` | #290 | W1 |
 | W3 | Re-set the money constants against a measured bound — ladder moved 2026-09-07 (ADR-0102); token constants remain (W13/#268) | DONE | `PRESENT src/product_app/costs.py :: DAILY_CAP_USD = Decimal("0.20")` | — | W2 |
-| W4 | Variable panel size N ∈ {2,3,4} | PENDING | `PRESENT src/product_app/model_slots.py :: if len(model_ids) != EXPECTED_SLOT_COUNT:` | — | — (W10 done) |
+| W4 | Variable panel size N ∈ {2,3,4} — backend half shipped (ADR-0120, CHG-010); the workspace control and the validator widening follow | PENDING | `ABSENT src/product_app/model_slots.py :: Between 2 and 4 model slots are required.` | — | — (W10 done) |
 | W5 | Quick-answer N=1 mode | UNPINNED | `—` | — | W4 |
 | W6 | A panel of one reports strong consensus | DONE | `ABSENT src/product_app/synthesis_consensus.py :: if len(stance) == 1:` | #383 | — |
 | W7 | Google sign-in and logout | UNPINNED | `—` | — | — |
@@ -284,9 +284,13 @@ not yet re-derived them, and that is W3's work; #290's closure was decided
 transcripts, awaiting the owner's confirmation). Read it before calling any of
 the three "undecided".
 
-**W4 — variable panel size.** `Field(ge=1, le=4)` appears at four sites
-(`debate.py` three times, `providers.py` once; `grep -rn "ge=1, le=4" src/`,
-2026-09-22 — this said three until then) and they move together. **No longer
+**W4 — variable panel size.** Decided by the owner on 2026-09-22 (CHG-010,
+ADR-0120): a visible remove/add control, range 2..4, and at N=2 a green
+"Both models agree (2 of 2)" band with trust capped at moderate. The backend
+half is in: `MIN_SLOT_COUNT`/`MAX_SLOT_COUNT`, the four `Field(ge=1, le=4)`
+sites now read `le=MAX_SLOT_COUNT`, the estimate prices N upstream answers,
+and the trust cap exists. The validator still accepts only four until the
+workspace control ships with it. **No longer
 blocked**: #382 ended *"whoever lifts those caps must fix this primitive
 first,"* and W10 fixed it (ADR-0083). The CSS is cheaper than feared:
 `.model-slot-grid` is `grid-template-columns: 1fr 1fr` with an existing

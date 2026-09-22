@@ -46,12 +46,12 @@ These requirements cover Release 1 MVP for the public AI cross-validation workfl
 - Tests: TEST-FR-003.
 - Jira: Not created.
 
-## FR-004 Four configurable model slots
+## FR-004 Configurable model slots (a panel of two to four, four by default)
 
 - Actor: Authenticated user.
 - Trigger: The user opens or configures the query workflow.
-- Behavior: The system provides four model slots defaulting to `openai/gpt-4o-mini`, `anthropic/claude-haiku-4.5`, `google/gemini-2.5-flash`, and `nvidia/nemotron-3-nano-30b-a3b`, and allows the user to replace each slot with an OpenRouter-supported model identifier from the live catalog when available.
-- Outcome: The user can compare four selected models while starting from known defaults.
+- Behavior: The system provides a panel of two to four model slots — four by default, defaulting to `openai/gpt-4o-mini`, `anthropic/claude-haiku-4.5`, `google/gemini-2.5-flash`, and `nvidia/nemotron-3-nano-30b-a3b`, and allows the user to replace each slot with an OpenRouter-supported model identifier from the live catalog when available.
+- Outcome: The user can compare two, three or four selected models while starting from known defaults. Amended 2026-09-22 (CHG-010): the range was decided by the product owner; the user chooses the size with a visible remove/add control (AC-050).
 - Source: `docs/01-product-brief.md`, `docs/115-release-scope.md`, `docs/13-open-questions.md`.
 - Owner: Product owner.
 - Priority: Must.
