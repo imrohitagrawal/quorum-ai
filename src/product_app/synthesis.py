@@ -402,13 +402,6 @@ class SynthesisResult:
     live_call_usages: list[TokenUsage | None] = field(default_factory=list)
 
 
-def _panel_count_word(count: int) -> str:
-    """``"Two"``, ``"Three"``, ``"Four"`` for the panel sizes W4 allows, else the
-    digits. Served prose used to hard-code ``"Four"``; at the default panel the
-    output is byte-identical, which is what keeps the eval corpus green."""
-    return {2: "Two", 3: "Three", 4: "Four"}.get(count, str(count))
-
-
 def _with_retrieved_note(user_prompt: str, initial_answers: list[InitialModelAnswer]) -> str:
     """Append the retrieved-sources note for the Source-support section ONLY.
 
@@ -873,7 +866,7 @@ class SynthesisOrchestrationService:
             lines.append(prior_synthesis)
             lines.append("")
         lines.append(
-            f"{_panel_count_word(len(initial_answers))} model answers (model name, status, first "
+            "Four model answers (model name, status, first "
             f"{SYNTHESIS_ANSWER_EXCERPT_MAX_CHARS} chars):"
         )
         for answer in initial_answers:
@@ -1019,16 +1012,14 @@ class SynthesisOrchestrationService:
             )
         elif consensus_strength == "strong":
             base = (
-                f"{_panel_count_word(len(initial_answers))} models were asked the same "
-                f"question; {len(successful)} returned "
+                f"Four models were asked the same question; {len(successful)} returned "
                 f"a usable response and broadly agree. Roughly {sourced_pct}% of those "
                 "answers carried at least one visible source reference. "
                 "Treat the consensus as a working hypothesis, not a verdict."
             )
         elif consensus_strength == "divided":
             base = (
-                f"{_panel_count_word(len(initial_answers))} models were asked the same "
-                f"question; {len(successful)} returned "
+                f"Four models were asked the same question; {len(successful)} returned "
                 f"a usable response but did not agree. Roughly {sourced_pct}% of those "
                 "answers carried at least one visible source reference. "
                 "Disagreement is preserved as the dominant signal — do not treat the "
@@ -1036,8 +1027,7 @@ class SynthesisOrchestrationService:
             )
         else:
             base = (
-                f"{_panel_count_word(len(initial_answers))} models were asked the same "
-                f"question; {len(successful)} returned "
+                f"Four models were asked the same question; {len(successful)} returned "
                 f"a usable response. Roughly {sourced_pct}% of those answers carried at "
                 "least one visible source reference. Some models disagreed "
                 "on points; treat the consensus as a working hypothesis, not a verdict."
@@ -1291,8 +1281,7 @@ class SynthesisOrchestrationService:
             # empty list).
             debate_marker = " (debate was skipped)" if not debate_outputs else ""
             base = (
-                f"All {_panel_count_word(len(initial_answers)).lower()} models returned a "
-                "usable response, but no model is independently "
+                "All four models returned a usable response, but no model is independently "
                 f"authoritative{debate_marker}. Treat the synthesis as a working hypothesis "
                 "pending human review."
             )

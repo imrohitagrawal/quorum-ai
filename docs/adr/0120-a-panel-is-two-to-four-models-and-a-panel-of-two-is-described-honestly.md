@@ -8,7 +8,8 @@ changes no user-visible behaviour: the validator still accepts only four
 until the workspace control exists. Refs board row W4.
 
 ADR-0119 is reserved by draft PR #491 (#268); this record takes 0120 so the
-two branches cannot collide on a number.
+two branches cannot collide on a number (ADR-0119 exists on branch
+`proposal/268-web-search-context-tokens`).
 
 ## Context
 
@@ -22,8 +23,8 @@ two-model panel may claim. Every previous session re-asked them
 Two facts about the existing code shaped the design:
 
 - **The green band already requires evidence, at any N.** `app.js` shows the
-  green band only when `aligned === total`, `panel_agreement === "agreed"`
-  and no false consensus was preserved. `panel_agreement` is `"agreed"` at
+  green band only when `aligned === total`, `panel_agreement === "agreed"`,
+  no false consensus was preserved, no step failed and the run completed. `panel_agreement` is `"agreed"` at
   N=2 exactly when a moderator stance exists and both labels match, and
   `"undetermined"` when there is no stance — the same rule as at N=4. So at
   N=2 the band is green under the same evidence, and only its wording
@@ -50,12 +51,14 @@ Two facts about the existing code shaped the design:
    `costs.py` priced the debate and synthesis prompts as if the moderator
    read four answers whatever the panel; it now uses `len(model_slots)`, and
    the fail-safe bound shares the arithmetic.
-5. **Served prose counts the panel it had.** "Four models were asked…" and
-   the "Four model answers" headers are written from the panel size with a
-   word map (Two / Three / Four), byte-identical at four, which is what keeps
-   the eval corpus green. The module-level prompt constants that still say
-   "four" (`synthesis.py` section prompts, `debate.py` round-one system
-   prompt) are left for the second pull request, when N can actually vary.
+5. **Served prose is NOT changed in this pull request.** A first version
+   wrote "Four models were asked…" from `len(initial_answers)`; review showed
+   that on a run where one slot never records (a worker timeout with budget
+   left, `query_run_orchestration.py`), that reads "Three models were asked"
+   when four were. The count the prose needs is the REQUESTED panel size,
+   which `synthesis.py` and `debate.py` do not receive today. The second
+   pull request threads it through and rewrites the prose, the section
+   prompts and the round-one system prompt together.
 6. **The API edge is not bounded to the range.** A `min_length=max_length=4`
    bound on `model_slots` was tried and turned the typed
    `INVALID_MODEL_SLOT` envelope into Pydantic's generic `VALIDATION_ERROR`
@@ -64,8 +67,10 @@ Two facts about the existing code shaped the design:
 
 ## Measured
 
-Through the shipped estimator, no live call, catalog prices of 2026-09-22
-(`scripts` one-off, kept in the pull request):
+Through the shipped estimator, no live call, live catalog prices read on
+2026-09-22 (a reviewer re-ran it the same day and every figure reproduced
+within 0.0001): `cost_estimation_service.estimate` on the default panel and
+on every 2- and 3-model subset of it, under the two postures below.
 
 | posture | N=4 default | N=3 (cheapest .. dearest trio) | N=2 (cheapest .. dearest pair) |
 |---|---|---|---|
@@ -74,7 +79,9 @@ Through the shipped estimator, no live call, catalog prices of 2026-09-22
 
 So N=2 is one fifth to one third cheaper, never half: the judge is fixed,
 synthesis shrinks little, and the saving depends on which two models remain.
-Price copy must not sell N=2 on cost.
+That price copy must not sell N=2 on cost is the session's recommendation,
+not an owner instruction; the owner's decision covers the band and the trust
+cap.
 
 Trust cap, unit-measured: composite 90 → `high` at N=3, 4 and unknown;
 `moderate` at N=2 with `panel_size_cap` true; `unverified` at any N without
@@ -104,8 +111,9 @@ reading there is no evidence of agreement.
 
 - After this record's pull request: nothing user-visible changes; the
   estimate for four is unchanged to the cent (the `Decimal(4)` term equals
-  `len(model_slots)` at four); `openapi.yaml` gains `panel_size_cap`
-  (optional, additive).
+  `len(model_slots)` at four; a reviewer diffed both postures, main against
+  branch, and only the confirmation token differed); served prose is
+  untouched; `openapi.yaml` gains `panel_size_cap` (optional, additive).
 - After the second: a two- or three-model run is reachable, priced for its
   size, and described with its size.
 - Board row W4 stays `PENDING` until the second pull request: its needle is

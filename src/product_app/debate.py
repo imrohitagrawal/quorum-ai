@@ -567,14 +567,6 @@ class DebateOutput(BaseModel):
     #: decision 5 listed as a recorded-not-decided candidate.
     eligible_critic_count: int = Field(default=0, ge=0, le=EXPECTED_SLOT_COUNT)
 
-
-def _panel_count_word(count: int) -> str:
-    """``"Two"``, ``"Three"``, ``"Four"`` for the panel sizes W4 allows, else the
-    digits. Byte-identical to the old hard-coded ``"Four"`` at the default
-    panel (the same helper lives in ``synthesis.py``)."""
-    return {2: "Two", 3: "Three", 4: "Four"}.get(count, str(count))
-
-
 def debate_system_prompt_max_chars(*, peer: bool) -> int:
     """The LONGEST system prompt a single debate call can carry, in characters.
 
@@ -1848,8 +1840,7 @@ class DebateOrchestrationService:
         # instructions ("do NOT repeat the query") inside a block whose system
         # rule tells the model to ignore instructions — self-defeating.
         directives: list[str] = [
-            f"The user's question and the {_panel_count_word(len(initial_answers)).lower()} "
-            "model answers are in the evidence "
+            "The user's question and the four model answers are in the evidence "
             "block below. Do NOT repeat the question verbatim in your response.",
         ]
         if prior_round is not None:
@@ -1863,7 +1854,7 @@ class DebateOrchestrationService:
         lines.append(_one_line(query_text))
         lines.append("")
         lines.append(
-            f"{_panel_count_word(len(initial_answers))} model answers (model name, status, first "
+            "Four model answers (model name, status, first "
             f"{DEBATE_ANSWER_EXCERPT_MAX_CHARS} chars):"
         )
         for answer in initial_answers:
@@ -1939,8 +1930,8 @@ class DebateOrchestrationService:
                 "as unsupported."
             )
         return (
-            f"All {_panel_count_word(len(initial_answers)).lower()} models returned at least "
-            "one source reference; the relative strength of those references still varies."
+            "All four models returned at least one source reference; the relative strength of "
+            "those references still varies."
         )
 
     def _extract_missing_reasoning(self, *, initial_answers: list[InitialModelAnswer]) -> str:
