@@ -57,7 +57,7 @@ from product_app.credentialed_url import (
     tavily_search_url,
 )
 from product_app.feedback_store import record_event as _record_feedback_event
-from product_app.model_slots import ModelSlot, openrouter_model_catalog_service
+from product_app.model_slots import MAX_SLOT_COUNT, ModelSlot, openrouter_model_catalog_service
 from product_app.provider_keys import ProviderCredentialSource
 from product_app.telemetry_sink import (
     TELEMETRY_STAGE_INITIAL_ANSWERS,
@@ -457,7 +457,7 @@ BILLING_POSSIBLY_BILLED: Final[Literal["possibly_billed"]] = "possibly_billed"
 
 
 class InitialModelAnswer(BaseModel):
-    slot_number: int = Field(ge=1, le=4)
+    slot_number: int = Field(ge=1, le=MAX_SLOT_COUNT)
     model_id: str
     display_name: str = ""
     answer_text: str

@@ -34,6 +34,8 @@ from product_app.feedback_store import record_event as _record_feedback_event
 
 __all__ = [
     "EXPECTED_SLOT_COUNT",
+    "MAX_SLOT_COUNT",
+    "MIN_SLOT_COUNT",
     "default_model_slots",
     "default_moderator_overlap_slots",
     "moderator_overlap_slots",
@@ -42,6 +44,14 @@ __all__ = [
     "ModelDefaultsResponse",
 ]
 
+#: W4. A panel is 2 to 4 models; four is the DEFAULT, not the only size. The
+#: product owner decided the range on 2026-09-22 (CHG-010). ``EXPECTED_SLOT_COUNT``
+#: keeps its name because 20+ readers use it as "the default panel"; the two
+#: bounds below are what validation and the estimator check against. N=1 is
+#: refused: a lone answer has nothing to agree with (ADR-0087; W5 is the
+#: separate quick-answer mode).
+MIN_SLOT_COUNT = 2
+MAX_SLOT_COUNT = 4
 EXPECTED_SLOT_COUNT = 4
 
 #: Authoritative default model ids, in slot order (1, 2, 3, 4).
@@ -102,7 +112,7 @@ class ModelSlotError:
 
 
 class ModelSlot(BaseModel):
-    slot_number: int = Field(ge=1, le=EXPECTED_SLOT_COUNT)
+    slot_number: int = Field(ge=1, le=MAX_SLOT_COUNT)
     model_id: str
     # L2: per-slot web-search opt-in. Defaults to True so the existing
     # four-slot "all on" behavior is preserved when callers don't pass

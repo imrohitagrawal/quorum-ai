@@ -413,3 +413,12 @@ Given `QUORUM_EVAL_JUDGE_API_KEY` and `QUORUM_EVAL_JUDGE_MODEL_ID` are both conf
 
 - Requirement: FR-015, NFR-011, NFR-012
 - Test: TEST-FR-015 (`tests/integration/test_judge_request_path_wiring.py` unlock, memoisation, half-configured/OFF byte-identity, stub-suppression regression; `tests/contract/test_golden_fixture_matches_served_schema.py` engine-recomputed verified fixture; `e2e/tests/invariants/trust-score-invariants.spec.ts` verified render + tamper fail-closed)
+
+## AC-050 The panel can be shrunk to two or grown to four, and a panel of two is described honestly
+
+Given the query workflow shows its four default slots, when the user removes a slot, then the panel has three slots and the run request carries three model slots; when the user removes another, the panel has two and the remove control is disabled; when the user adds a slot, the panel grows by one up to four. A run with two models that both agree shows a green band reading "Both models agree (2 of 2)" — never "The panel's verdict" — and its served trust band is never `high` (capped at `moderate`, `TrustDiagnostics.panel_size_cap` true). A request with one slot or five is refused with the typed `INVALID_MODEL_SLOT` envelope.
+
+- Requirement: FR-004
+- Test: TEST-FR-004 (`tests/unit/test_panel_of_n_is_priced_and_bounded.py` for the range, the N-relative estimate and the trust cap; the remove/add control and the N=2 band copy are TEST-FR-004's e2e half, delivered with the workspace change that follows CHG-010)
+- Decided by the product owner on 2026-09-22 (CHG-010).
+

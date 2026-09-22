@@ -122,6 +122,7 @@ ways, so the record shows what was believed on a date and what replaced it.
 | [ADR-0116](adr/0116-the-copy-follows-whether-peer-critique-is-in-effect.md) | The copy follows whether peer critique is in effect, not whether the flag is set | Architecture | Accepted — 2026-09-21 |
 | [ADR-0117](adr/0117-a-lazily-expanded-case-is-selectable-by-its-node-id.md) | A lazily expanded test case is selectable by its node id | Architecture | Accepted — 2026-09-21 |
 | [ADR-0118](adr/0118-a-truncated-mutation-run-is-inconclusive-and-does-not-pass.md) | A truncated mutation run is inconclusive, and does not pass | Architecture | Accepted — 2026-09-22 |
+| [ADR-0120](adr/0120-a-panel-is-two-to-four-models-and-a-panel-of-two-is-described-honestly.md) | A panel is two to four models, and a panel of two is described honestly | Architecture | Accepted — 2026-09-22 |
 
 **This index was itself stale** until 2026-07-30: ADR-0002 had existed since
 2026-07-19 and was never listed here. A hand-maintained index is a derived fact

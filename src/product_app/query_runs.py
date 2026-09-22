@@ -280,6 +280,12 @@ class _QueryRunRequestBase(BaseModel):
     """
 
     query_text: str = Field(min_length=1, max_length=_QUERY_TEXT_MAX_LENGTH)
+    # W4. Deliberately NOT bounded to the panel range here: the count is
+    # checked by ``_validate_model_id_list`` so a wrong count gets the typed
+    # ``INVALID_MODEL_SLOT`` envelope (pinned by
+    # ``test_create_query_run_with_wrong_slot_count_preserves_typed_envelope``),
+    # not Pydantic's generic ``VALIDATION_ERROR``. Measured 2026-09-22: a
+    # ``min_length=max_length=4`` bound here turned that envelope generic.
     model_slots: list[str] = Field(min_length=1)
     # L2: optional per-slot web-search opt-in. Same length as
     # ``model_slots`` when provided. ``None`` (the default) means

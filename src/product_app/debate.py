@@ -35,7 +35,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from product_app.config import RuntimeEnvironment, settings
 from product_app.costs import CHARS_PER_TOKEN
 from product_app.feedback_store import record_event as _record_feedback_event
-from product_app.model_slots import EXPECTED_SLOT_COUNT, ModelSlot
+from product_app.model_slots import EXPECTED_SLOT_COUNT, MAX_SLOT_COUNT, ModelSlot
 from product_app.providers import (
     _MAX_SOURCE_TITLE_LEN,
     CallTelemetryLabels,
@@ -349,7 +349,7 @@ class SlotPosition(BaseModel):
     Bounded in length because it arrives from a model and is persisted.
     """
 
-    slot: int = Field(ge=1, le=4)
+    slot: int = Field(ge=1, le=MAX_SLOT_COUNT)
     #: ``strip_whitespace`` runs BEFORE ``min_length``, so a label that is
     #: nothing but spaces is rejected rather than becoming a group of its own.
     #: Without it ``"  "`` has length 2, passes, and two blank labels would
@@ -453,7 +453,7 @@ _MAX_CRITIC_SOURCES = 6
 class SlotCritique(BaseModel):
     """One answer model's critique of the other slots, inside one round."""
 
-    critic_slot_number: int = Field(ge=1, le=4)
+    critic_slot_number: int = Field(ge=1, le=MAX_SLOT_COUNT)
     critic_model_id: str = Field(min_length=1, max_length=256)
     critique_text: str
     focus_areas: list[str] = Field(default_factory=list)
@@ -2177,7 +2177,7 @@ class PositionMovement(BaseModel):
     records restoring the observed movement as its own package.
     """
 
-    slot_number: int = Field(ge=1, le=4)
+    slot_number: int = Field(ge=1, le=MAX_SLOT_COUNT)
     model_id: str
     display_name: str
     opening: str

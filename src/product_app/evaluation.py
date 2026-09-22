@@ -2046,6 +2046,10 @@ class TrustDiagnostics(BaseModel):
 
     layer_a_composite_unverified: float = Field(ge=0.0, le=100.0)
     contributions: list[TrustContribution]
+    #: W4. True when the served band was lowered from ``high`` to ``moderate``
+    #: because the run asked for fewer than :data:`TRUST_CAP_BELOW_PANEL_SIZE`
+    #: models. The score is served as computed; only the band is capped.
+    panel_size_cap: bool = False
 
 
 class TrustScore(BaseModel):
@@ -2119,27 +2123,40 @@ def compute_composite(signals: LayerASignals) -> tuple[float, list[TrustContribu
     return min(max(composite, 0.0), 100.0), contributions
 
 
+#: W4. A panel smaller than this cannot serve a ``high`` band. Decided by the
+#: product owner on 2026-09-22 (CHG-010): at N=2 the only corroboration an
+#: answer has is one other model, so the band stops at ``moderate`` however
+#: good the citations are. ``agreement_ratio`` is deliberately absent from the
+#: composite weights (see ``LAYER_A_WEIGHTS``), so this cap is the ONLY place
+#: panel size touches the served trust, and it never moves the score.
+TRUST_CAP_BELOW_PANEL_SIZE = 3
+
+
 def build_trust_score(
     evaluation: RunEvaluation,
     *,
     support_verified: bool = False,
+    requested_slot_count: int | None = None,
 ) -> TrustScore:
-    """Build the served trust object, applying the OC-2 suppression rule.
+    """Build the served trust object, applying the OC-2 suppression rule and
+    the W4 panel-size cap.
 
     ``support_verified`` may only be True when a REAL judge returned a
     verdict; ``evaluate_run`` is the only caller that decides that.
+    ``requested_slot_count`` is the panel the run asked for; ``None`` (a caller
+    with only a bag of answers) is treated as a full panel and is never
+    capped.
     """
     composite, contributions = compute_composite(evaluation.signals)
-    diagnostics = TrustDiagnostics(
-        layer_a_composite_unverified=composite,
-        contributions=contributions,
-    )
     if not support_verified:
         return TrustScore(
             support_verified=False,
             band="unverified",
             score=None,
-            diagnostics=diagnostics,
+            diagnostics=TrustDiagnostics(
+                layer_a_composite_unverified=composite,
+                contributions=contributions,
+            ),
         )
     score = int(round(composite))
     if score < BAND_LOW_CEILING:
@@ -2148,11 +2165,22 @@ def build_trust_score(
         band = "moderate"
     else:
         band = "high"
+    capped = (
+        band == "high"
+        and requested_slot_count is not None
+        and requested_slot_count < TRUST_CAP_BELOW_PANEL_SIZE
+    )
+    if capped:
+        band = "moderate"
     return TrustScore(
         support_verified=True,
         band=band,
         score=score,
-        diagnostics=diagnostics,
+        diagnostics=TrustDiagnostics(
+            layer_a_composite_unverified=composite,
+            contributions=contributions,
+            panel_size_cap=capped,
+        ),
     )
 
 
@@ -2267,12 +2295,17 @@ def evaluate_run(
     )
     return RunEvaluationResult(
         evaluation=evaluation,
-        trust=build_trust_score(evaluation, support_verified=support_verified),
+        trust=build_trust_score(
+            evaluation,
+            support_verified=support_verified,
+            requested_slot_count=requested_slot_count,
+        ),
     )
 
 
 __all__ = [
     "BAND_LOW_CEILING",
+    "TRUST_CAP_BELOW_PANEL_SIZE",
     "BAND_MODERATE_CEILING",
     "EVAL_SCHEMA_VERSION",
     "GROUNDING_FABRICATION_THRESHOLD",

@@ -51,10 +51,14 @@ Owner's own message, transcript `5512d375`, `2026-09-21T16:41:52Z`:
 Repository-side scope:
 `docs/archive/2026-08/CONTINUE-DEMO-READINESS-ULTRACODE-PROMPT.md`, package D.
 
-**Still owed by the owner:** how a user chooses N (a visible control, a URL
-parameter, or not exposed), and the range to pin (`2..4` or `3..4`). FR-004 and
-AC-007 still say four model slots. Asked at 2026-09-21T20:16Z; unanswered when this
-file was written.
+**Decided by the owner in chat, later on 2026-09-22 (after this file was
+first written), recorded in CHG-010 and ADR-0120:** (1) a visible remove/add
+control per slot; (2) range `2..4`, four by default; (3) at N=2 with both
+agreeing, a green "Both models agree (2 of 2)" band — the owner overruled the
+session's "never a green band at N=2" — with the served trust capped at
+`moderate`. Source: owner's own message, transcript `b56df1d3`,
+`2026-09-22T15:02:03Z`; the owner's own words on the band were: *"a green unanimous band because the USER selected only 2 models ...
+trust stays at the 'moderate' level"*.
 
 ## W5 — quick-answer mode, N = 1
 

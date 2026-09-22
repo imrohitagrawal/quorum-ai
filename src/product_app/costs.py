@@ -61,7 +61,13 @@ from product_app.feedback_store import (
     charge_event_type,
 )
 from product_app.feedback_store import record_event as _record_feedback_event
-from product_app.model_slots import DEFAULT_MODEL_IDS, ModelSlot, openrouter_model_catalog_service
+from product_app.model_slots import (
+    DEFAULT_MODEL_IDS,
+    MAX_SLOT_COUNT,
+    MIN_SLOT_COUNT,
+    ModelSlot,
+    openrouter_model_catalog_service,
+)
 
 #: The opening-charge event types the IN-MEMORY ring's per-account rail counts
 #: (issue #376). It must match ``feedback_store._ACCOUNT_CHARGE_EVENTS``: the
@@ -1629,8 +1635,10 @@ class CostEstimationService:
         """
         if not model_slots:
             raise ValueError("model_slots must not be empty")
-        if len(model_slots) != 4:
-            raise ValueError("model_slots must contain exactly four slots")
+        if not MIN_SLOT_COUNT <= len(model_slots) <= MAX_SLOT_COUNT:
+            raise ValueError(
+                f"model_slots must contain between {MIN_SLOT_COUNT} and {MAX_SLOT_COUNT} slots"
+            )
         # PERF-P1: use the cached price index instead of rebuilding the dict
         # on every estimate call — O(1) lookup per model id.
         prices = openrouter_model_catalog_service.price_index()
@@ -1693,7 +1701,11 @@ class CostEstimationService:
         # input tokens.
         # Same prefix for debate (system) and synthesis (user).
         context_input_tokens = context_tokens
-        upstream_answers_tokens = Decimal(4) * init_output_tokens
+        # W4. One upstream answer per SLOT, not a hard four: with ``Decimal(4)``
+        # a panel of two was priced as if the moderator read four answers, so
+        # the estimate and the fail-safe bound (which shares this arithmetic)
+        # both over-charged the smaller panel.
+        upstream_answers_tokens = Decimal(len(model_slots)) * init_output_tokens
         # #290 / ADR-0095. The debate call's SYSTEM prompt, priced from its real
         # length rather than the flat ``cost_system_prompt_tokens = 350`` the
         # other stages use.

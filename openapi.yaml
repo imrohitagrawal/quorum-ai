@@ -1732,6 +1732,10 @@ components:
             $ref: '#/components/schemas/TrustContribution'
           type: array
           title: Contributions
+        panel_size_cap:
+          type: boolean
+          title: Panel Size Cap
+          default: false
       type: object
       required:
       - layer_a_composite_unverified
