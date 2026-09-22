@@ -567,6 +567,7 @@ class DebateOutput(BaseModel):
     #: decision 5 listed as a recorded-not-decided candidate.
     eligible_critic_count: int = Field(default=0, ge=0, le=EXPECTED_SLOT_COUNT)
 
+
 def debate_system_prompt_max_chars(*, peer: bool) -> int:
     """The LONGEST system prompt a single debate call can carry, in characters.
 

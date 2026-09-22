@@ -56,8 +56,8 @@ first written), recorded in CHG-010 and ADR-0120:** (1) a visible remove/add
 control per slot; (2) range `2..4`, four by default; (3) at N=2 with both
 agreeing, a green "Both models agree (2 of 2)" band — the owner overruled the
 session's "never a green band at N=2" — with the served trust capped at
-`moderate`. The chat transcript is the source; the owner's own words on the
-band were: *"a green unanimous band because the USER selected only 2 models ...
+`moderate`. Source: owner's own message, transcript `b56df1d3`,
+`2026-09-22T15:02:03Z`; the owner's own words on the band were: *"a green unanimous band because the USER selected only 2 models ...
 trust stays at the 'moderate' level"*.
 
 ## W5 — quick-answer mode, N = 1
