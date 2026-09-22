@@ -55,7 +55,10 @@ NEW_SIGNALS = {"unverifiable_marker_count", "unverifiable_marker_ratio"}
 TRUST_SCORE_REQUIRED = {"band", "diagnostics", "support_verified"}
 TRUST_SCORE_PROPERTIES = TRUST_SCORE_REQUIRED | {"score"}
 TRUST_DIAGNOSTICS_REQUIRED = {"contributions", "layer_a_composite_unverified"}
-TRUST_DIAGNOSTICS_PROPERTIES = TRUST_DIAGNOSTICS_REQUIRED
+#: W4 (2026-09-22) adds ``panel_size_cap`` with a default of ``False``: present
+#: in ``properties``, ABSENT from ``required`` — additive, same rule as the two
+#: S3 signals. RED IF it becomes required, or the required set grows otherwise.
+TRUST_DIAGNOSTICS_PROPERTIES = TRUST_DIAGNOSTICS_REQUIRED | {"panel_size_cap"}
 
 #: PRE-S3 `required` set of `QueryRunEvaluationProjection`, 5 fields. S3 adds
 #: exactly one new REQUIRED field: `label_confidence`.

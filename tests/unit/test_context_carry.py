@@ -505,10 +505,18 @@ def test_unknown_context_key_is_rejected_on_both_bodies(path: str) -> None:
 # --------------------------------------------------------------------------
 
 
-def _synthesis_user_prompt(context: dict[str, str] | None) -> str:
-    """Drive the real ``_user_prompt`` builder through the public method."""
+def _synthesis_user_prompt(
+    context: dict[str, str] | None, *, answers: list[InitialModelAnswer] | None = None
+) -> str:
+    """Drive the real ``_user_prompt`` builder through the public method.
+
+    Four answers by default, not an empty list: since W4 the "Four model
+    answers" header is written from the panel the prompt was built for, so an
+    empty list would make the assertions below look for a header the prompt
+    never emits.
+    """
     return synthesis_stub_service._user_prompt(
-        initial_answers=[],
+        initial_answers=_sourced_answers() if answers is None else answers,
         debate_outputs=[],
         failed_count=0,
         coverage_ratio=Decimal("0.5"),
@@ -599,7 +607,9 @@ def test_prior_synthesis_is_capped_even_if_the_request_bound_is_loosened() -> No
     """
     oversized = "X" * 200_000  # far above FINAL_SYNTHESIS_MAX_CHARS (60_117 today)
 
-    prompt = _synthesis_user_prompt({"prior_synthesis": oversized})
+    # An empty panel: this test measures the prior-synthesis cap against a
+    # fixed overhead, and four answers' worth of evidence is not that overhead.
+    prompt = _synthesis_user_prompt({"prior_synthesis": oversized}, answers=[])
 
     assert len(prompt) <= 61_000, (
         f"the synthesis prompt was {len(prompt)} chars — the consumer-side "

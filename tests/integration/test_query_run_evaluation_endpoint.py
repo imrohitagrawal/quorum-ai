@@ -197,7 +197,13 @@ def test_result_endpoint_serves_unverified_evaluation_for_a_terminal_run() -> No
         # could read as a confidence figure may appear while support is
         # unverified — that suppression is the entire point of the slice.
         assert set(trust) == {"support_verified", "band", "score", "diagnostics"}
-        assert set(trust["diagnostics"]) == {"layer_a_composite_unverified", "contributions"}
+        assert set(trust["diagnostics"]) == {
+            "layer_a_composite_unverified",
+            "contributions",
+            "panel_size_cap",
+        }
+        # W4: an unverified band is never capped, whatever the panel size.
+        assert trust["diagnostics"]["panel_size_cap"] is False
         for name, _value in _walk_numbers(served):
             assert name not in {
                 "score",

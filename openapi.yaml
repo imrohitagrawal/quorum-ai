@@ -1056,8 +1056,7 @@ components:
           items:
             type: string
           type: array
-          maxItems: 4
-          minItems: 4
+          minItems: 1
           title: Model Slots
         slot_search:
           anyOf:
@@ -1135,8 +1134,7 @@ components:
           items:
             type: string
           type: array
-          maxItems: 4
-          minItems: 4
+          minItems: 1
           title: Model Slots
         slot_search:
           anyOf:

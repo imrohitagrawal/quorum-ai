@@ -193,6 +193,12 @@ BUCKET_A_LITERAL_PIN = (
     "auth.CSRF_HEADER_NAME",
     "main._HSTS_HEADER",
     "model_slots.EXPECTED_SLOT_COUNT",
+    # W4. The panel range. A wrong MIN silently lets a lone answer be a "panel"
+    # (ADR-0087: nothing to agree with); a wrong MAX outruns every
+    # ``Field(le=MAX_SLOT_COUNT)`` bound, the UI's slot markup and the price
+    # sweeps. Pinned as literals so neither moves as a side effect.
+    "model_slots.MIN_SLOT_COUNT",
+    "model_slots.MAX_SLOT_COUNT",
     # The four cost event-type strings (#255, #376). A LITERAL pin, not a
     # behaviour one, because these values are written into a DURABLE table that
     # outlives every deploy: change one and the meter stops counting every row
@@ -1180,6 +1186,9 @@ def test_the_slot_count_is_pinned() -> None:
     many models actually answered.
     """
     assert model_slots.EXPECTED_SLOT_COUNT == 4
+    # W4: the range the product owner decided on 2026-09-22 (CHG-010).
+    assert model_slots.MIN_SLOT_COUNT == 2
+    assert model_slots.MAX_SLOT_COUNT == 4
 
 
 def test_every_default_slot_vendor_is_listed_in_default_vendors() -> None:
