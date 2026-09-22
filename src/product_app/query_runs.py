@@ -30,7 +30,7 @@ from product_app.costs import (
     cost_estimation_service,
 )
 from product_app.feedback_store import ChargeOutcome
-from product_app.model_slots import ModelSlot, model_slot_event_recorder
+from product_app.model_slots import EXPECTED_SLOT_COUNT, ModelSlot, model_slot_event_recorder
 from product_app.providers import InitialModelAnswer
 from product_app.query_run_orchestration import _EVALUATION_MEMO_MAX as _EVALUATION_MEMO_MAX
 from product_app.query_run_orchestration import (
@@ -280,7 +280,11 @@ class _QueryRunRequestBase(BaseModel):
     """
 
     query_text: str = Field(min_length=1, max_length=_QUERY_TEXT_MAX_LENGTH)
-    model_slots: list[str] = Field(min_length=1)
+    # W4, PR 1 of 3. The edge says what the product does TODAY: exactly four.
+    # It had no upper bound and a lower bound of 1, so the published contract
+    # promised a panel the validator refused. PR 2 widens this to
+    # ``MIN_SLOT_COUNT..MAX_SLOT_COUNT`` together with the UI that can send it.
+    model_slots: list[str] = Field(min_length=EXPECTED_SLOT_COUNT, max_length=EXPECTED_SLOT_COUNT)
     # L2: optional per-slot web-search opt-in. Same length as
     # ``model_slots`` when provided. ``None`` (the default) means
     # "use the per-slot default" — which is search-enabled for the

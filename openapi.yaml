@@ -1056,7 +1056,8 @@ components:
           items:
             type: string
           type: array
-          minItems: 1
+          maxItems: 4
+          minItems: 4
           title: Model Slots
         slot_search:
           anyOf:
@@ -1134,7 +1135,8 @@ components:
           items:
             type: string
           type: array
-          minItems: 1
+          maxItems: 4
+          minItems: 4
           title: Model Slots
         slot_search:
           anyOf:
@@ -1732,6 +1734,10 @@ components:
             $ref: '#/components/schemas/TrustContribution'
           type: array
           title: Contributions
+        panel_size_cap:
+          type: boolean
+          title: Panel Size Cap
+          default: false
       type: object
       required:
       - layer_a_composite_unverified

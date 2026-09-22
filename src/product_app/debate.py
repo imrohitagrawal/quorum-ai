@@ -35,7 +35,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from product_app.config import RuntimeEnvironment, settings
 from product_app.costs import CHARS_PER_TOKEN
 from product_app.feedback_store import record_event as _record_feedback_event
-from product_app.model_slots import EXPECTED_SLOT_COUNT, ModelSlot
+from product_app.model_slots import EXPECTED_SLOT_COUNT, MAX_SLOT_COUNT, ModelSlot
 from product_app.providers import (
     _MAX_SOURCE_TITLE_LEN,
     CallTelemetryLabels,
@@ -349,7 +349,7 @@ class SlotPosition(BaseModel):
     Bounded in length because it arrives from a model and is persisted.
     """
 
-    slot: int = Field(ge=1, le=4)
+    slot: int = Field(ge=1, le=MAX_SLOT_COUNT)
     #: ``strip_whitespace`` runs BEFORE ``min_length``, so a label that is
     #: nothing but spaces is rejected rather than becoming a group of its own.
     #: Without it ``"  "`` has length 2, passes, and two blank labels would
@@ -453,7 +453,7 @@ _MAX_CRITIC_SOURCES = 6
 class SlotCritique(BaseModel):
     """One answer model's critique of the other slots, inside one round."""
 
-    critic_slot_number: int = Field(ge=1, le=4)
+    critic_slot_number: int = Field(ge=1, le=MAX_SLOT_COUNT)
     critic_model_id: str = Field(min_length=1, max_length=256)
     critique_text: str
     focus_areas: list[str] = Field(default_factory=list)
@@ -566,6 +566,13 @@ class DebateOutput(BaseModel):
     #: It also answers "3 critiques, not 4" after the fact, which ADR-0093
     #: decision 5 listed as a recorded-not-decided candidate.
     eligible_critic_count: int = Field(default=0, ge=0, le=EXPECTED_SLOT_COUNT)
+
+
+def _panel_count_word(count: int) -> str:
+    """``"Two"``, ``"Three"``, ``"Four"`` for the panel sizes W4 allows, else the
+    digits. Byte-identical to the old hard-coded ``"Four"`` at the default
+    panel (the same helper lives in ``synthesis.py``)."""
+    return {2: "Two", 3: "Three", 4: "Four"}.get(count, str(count))
 
 
 def debate_system_prompt_max_chars(*, peer: bool) -> int:
@@ -1841,7 +1848,8 @@ class DebateOrchestrationService:
         # instructions ("do NOT repeat the query") inside a block whose system
         # rule tells the model to ignore instructions — self-defeating.
         directives: list[str] = [
-            "The user's question and the four model answers are in the evidence "
+            f"The user's question and the {_panel_count_word(len(initial_answers)).lower()} "
+            "model answers are in the evidence "
             "block below. Do NOT repeat the question verbatim in your response.",
         ]
         if prior_round is not None:
@@ -1855,7 +1863,7 @@ class DebateOrchestrationService:
         lines.append(_one_line(query_text))
         lines.append("")
         lines.append(
-            "Four model answers (model name, status, first "
+            f"{_panel_count_word(len(initial_answers))} model answers (model name, status, first "
             f"{DEBATE_ANSWER_EXCERPT_MAX_CHARS} chars):"
         )
         for answer in initial_answers:
@@ -1931,8 +1939,8 @@ class DebateOrchestrationService:
                 "as unsupported."
             )
         return (
-            "All four models returned at least one source reference; the relative strength of "
-            "those references still varies."
+            f"All {_panel_count_word(len(initial_answers)).lower()} models returned at least "
+            "one source reference; the relative strength of those references still varies."
         )
 
     def _extract_missing_reasoning(self, *, initial_answers: list[InitialModelAnswer]) -> str:
@@ -2177,7 +2185,7 @@ class PositionMovement(BaseModel):
     records restoring the observed movement as its own package.
     """
 
-    slot_number: int = Field(ge=1, le=4)
+    slot_number: int = Field(ge=1, le=MAX_SLOT_COUNT)
     model_id: str
     display_name: str
     opening: str
