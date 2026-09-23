@@ -123,6 +123,7 @@ ways, so the record shows what was believed on a date and what replaced it.
 | [ADR-0117](adr/0117-a-lazily-expanded-case-is-selectable-by-its-node-id.md) | A lazily expanded test case is selectable by its node id | Architecture | Accepted — 2026-09-21 |
 | [ADR-0118](adr/0118-a-truncated-mutation-run-is-inconclusive-and-does-not-pass.md) | A truncated mutation run is inconclusive, and does not pass | Architecture | Accepted — 2026-09-22 |
 | [ADR-0120](adr/0120-a-panel-is-two-to-four-models-and-a-panel-of-two-is-described-honestly.md) | A panel is two to four models, and a panel of two is described honestly | Architecture | Accepted — 2026-09-22 |
+| [ADR-0121](adr/0121-a-user-key-changes-who-chooses-the-flags-and-who-sets-the-rails.md) | A user key changes who chooses the flags and who sets the rails | Architecture | PROPOSED — AWAITING OWNER |
 
 **This index was itself stale** until 2026-07-30: ADR-0002 had existed since
 2026-07-19 and was never listed here. A hand-maintained index is a derived fact
