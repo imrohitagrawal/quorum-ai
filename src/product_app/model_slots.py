@@ -342,9 +342,11 @@ def _validate_model_id_list(model_ids: list[str]) -> None:
     """Validate the model id strings; raise ``InvalidModelSlotError`` on any problem.
 
     W4: the list may hold ``MIN_SLOT_COUNT`` to ``MAX_SLOT_COUNT`` ids (two to
-    four). This is the one count check in the product; the API edge stays
-    ``min_length=1`` so the typed ``INVALID_MODEL_SLOT`` envelope, not
-    Pydantic's generic one, is what a wrong count returns (ADR-0120 decision 6).
+    four). This is the count check on the run's request path (the estimator
+    repeats the same range in ``costs.py``); the API edge stays ``min_length=1``
+    so the typed ``INVALID_MODEL_SLOT`` envelope, not Pydantic's generic one,
+    is what a wrong count of one or more returns (ADR-0120 decision 6; an
+    EMPTY list is the one count Pydantic answers first, with its own envelope).
 
     Extracted so that ``validate_model_slots`` and
     ``validate_model_slots_with_search`` can both use the same

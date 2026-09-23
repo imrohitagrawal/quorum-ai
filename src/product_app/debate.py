@@ -215,10 +215,11 @@ def round_one_system_prompt(panel_size: int) -> str:
     """The round-one system prompt for a panel of ``panel_size`` (W4).
 
     Only the opening word moves: "Two", "Three" or "Four". ``ROUND_ONE_SYSTEM_PROMPT``
-    below is the four-form, kept as a constant because three test modules compare
-    a call's ``system_prompt`` against it by value and the cost layer reads its
-    length; ``round_one_system_prompt(4) == ROUND_ONE_SYSTEM_PROMPT`` is pinned
-    byte-for-byte.
+    below is the four-form, kept as a constant because four pre-existing test
+    modules import it (one compares a call's ``system_prompt`` against it by
+    value, one reads its length) and the cost layer reads its length;
+    ``round_one_system_prompt(4) == ROUND_ONE_SYSTEM_PROMPT`` is pinned
+    byte-for-byte in ``tests/unit/test_panel_size_prose.py``.
     """
     return (
         f"{panel_size_word(panel_size)} models were asked the same question "

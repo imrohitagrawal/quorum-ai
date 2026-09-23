@@ -223,7 +223,10 @@ test.describe("panel size: remove / add a slot, N-relative copy (W4)", () => {
         const overflow = document.documentElement.scrollWidth > document.documentElement.clientWidth;
         return { raw, walked, overflow };
       });
-      expect(scan.walked, `N=${n}: the walker must have visited text`).toBeGreaterThan(20);
+      // Positive partner in the shape check-negative-assertions.mjs recognises
+      // (`toBeGreaterThanOrEqual(<positive literal>)`): "no raw Markdown" is
+      // trivially true of a page that rendered nothing.
+      expect(scan.walked, `N=${n}: the walker must have visited text`).toBeGreaterThanOrEqual(20);
       expect(scan.raw, `N=${n}: raw Markdown survived`).toEqual([]);
       expect(scan.overflow, `N=${n}: horizontal overflow`).toBe(false);
     }

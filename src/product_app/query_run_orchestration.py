@@ -92,6 +92,7 @@ from product_app.model_slots import (
     InvalidModelSlotError,
     ModelSlot,
     openrouter_model_catalog_service,
+    panel_size_word,
     validate_model_slots_with_search,
 )
 from product_app.provider_keys import ProviderCredentialSource
@@ -1200,7 +1201,9 @@ def _execute_query_run(query_run_id: UUID, account_id: UUID) -> None:
         status_value=QueryRunStatus.INITIAL_ANSWERS_RUNNING,
         stage_name="initial_answers",
         stage_state=StageState.RUNNING,
-        detail="Running four initial model calls.",
+        # W4: the live stage strip shows this beside "N/M answers"; it names the
+        # REQUESTED panel size (review found it still said "four" at N=2).
+        detail=f"Running {panel_size_word(len(query_run.model_slots)).lower()} initial model calls.",
         mark_started=True,
     )
 

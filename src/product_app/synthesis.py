@@ -246,9 +246,11 @@ _flatten_for_prompt = flatten_for_prompt
 
 # W4 (ADR-0120 decision 5): the four section prompts that name the panel size
 # are built from the REQUESTED size. The module constants below are the
-# four-form, kept because three test modules compare a call's ``system_prompt``
-# against them by value; ``_consensus_prompt(4) == _CONSENSUS_PROMPT`` is pinned
-# byte-for-byte in ``tests/unit/test_panel_size_prose.py``.
+# four-form, kept because ``tests/unit/test_untrusted_text_fencing.py`` sweeps
+# them by value and ``test_usage_threading.py`` compares a call's
+# ``system_prompt`` against ``_RECOMMENDATION_PROMPT``;
+# ``_consensus_prompt(4) == _CONSENSUS_PROMPT`` is pinned byte-for-byte in
+# ``tests/unit/test_panel_size_prose.py``.
 def _consensus_prompt(panel_size: int) -> str:
     n = panel_size_word(panel_size).lower()
     return _section_prompt(

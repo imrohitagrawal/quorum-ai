@@ -25,6 +25,7 @@ from product_app import config
 from product_app.debate import debate_stub_service
 from product_app.main import app
 from product_app.model_slots import default_model_slots
+from product_app.query_run_orchestration import query_run_repository
 from product_app.safety import WARNING_VERSION, WarningType
 from product_app.synthesis import synthesis_stub_service
 
@@ -129,6 +130,19 @@ def test_a_two_slot_run_is_created_and_the_requested_size_reaches_debate_and_syn
 
     monkeypatch.setattr(debate_stub_service, "run_debate_rounds", spy_debate)
     monkeypatch.setattr(synthesis_stub_service, "produce_final_synthesis", spy_synthesis)
+    # The live stage strip renders every ``detail`` the orchestrator writes
+    # beside "N/M answers"; the running detail is overwritten on completion, so
+    # it is captured at the repository write rather than read back later.
+    # Review round 1 found it still said "Running four initial model calls."
+    details: list[str] = []
+    real_update_status = query_run_repository.update_status
+
+    def spy_update_status(*args: Any, **kwargs: Any) -> Any:
+        if kwargs.get("detail"):
+            details.append(str(kwargs["detail"]))
+        return real_update_status(*args, **kwargs)
+
+    monkeypatch.setattr(query_run_repository, "update_status", spy_update_status)
 
     with isolated_run_semaphore(1) as semaphore:
         client = TestClient(app)
@@ -168,6 +182,9 @@ def test_a_two_slot_run_is_created_and_the_requested_size_reaches_debate_and_syn
     assert captured == {"debate": 2, "synthesis": 2}
     assert [slot["slot_number"] for slot in payload["model_slots"]] == [1, 2]
     assert len(payload["result"]["model_answers"]) == 2
+    # RED if the stage detail hard-codes "four" (it did until review round 1).
+    assert "Running two initial model calls." in details
+    assert not any("four" in detail for detail in details), details
 
 
 def test_workspace_serves_four_slots_the_hidden_add_control_and_the_range_copy() -> None:
