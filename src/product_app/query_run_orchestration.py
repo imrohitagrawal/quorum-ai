@@ -1203,7 +1203,9 @@ def _execute_query_run(query_run_id: UUID, account_id: UUID) -> None:
         stage_state=StageState.RUNNING,
         # W4: the live stage strip shows this beside "N/M answers"; it names the
         # REQUESTED panel size (review found it still said "four" at N=2).
-        detail=f"Running {panel_size_word(len(query_run.model_slots)).lower()} initial model calls.",
+        detail=(
+            f"Running {panel_size_word(len(query_run.model_slots)).lower()} initial model calls."
+        ),
         mark_started=True,
     )
 

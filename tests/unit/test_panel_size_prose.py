@@ -270,8 +270,9 @@ def test_synthesis_user_prompt_labels_the_evidence_block_by_panel_size() -> None
 
 
 def test_round_one_system_prompt_at_four_is_the_shipped_constant() -> None:
-    """``ROUND_ONE_SYSTEM_PROMPT`` is compared by identity of text in three
-    test modules and priced by the cost layer. RED if the generated four-form
+    """``ROUND_ONE_SYSTEM_PROMPT`` is imported by four pre-existing test modules
+    (one compares a call's system_prompt against it by value, one reads its
+    length) and priced by the cost layer. RED if the generated four-form
     differs from it by a byte, or the constant no longer opens with "Four"."""
     assert round_one_system_prompt(4) == ROUND_ONE_SYSTEM_PROMPT
     assert ROUND_ONE_SYSTEM_PROMPT.startswith(
