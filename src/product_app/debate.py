@@ -35,7 +35,14 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from product_app.config import RuntimeEnvironment, settings
 from product_app.costs import CHARS_PER_TOKEN
 from product_app.feedback_store import record_event as _record_feedback_event
-from product_app.model_slots import EXPECTED_SLOT_COUNT, MAX_SLOT_COUNT, ModelSlot
+from product_app.model_slots import (
+    EXPECTED_SLOT_COUNT,
+    MAX_SLOT_COUNT,
+    MIN_SLOT_COUNT,
+    ModelSlot,
+    all_models_phrase,
+    panel_size_word,
+)
 from product_app.providers import (
     _MAX_SOURCE_TITLE_LEN,
     CallTelemetryLabels,
@@ -193,6 +200,7 @@ MODERATOR_STANCE_INSTRUCTION = (
     "DIFFERENT labels. Include every slot exactly once."
 )
 
+
 #: ADR-0096 reframed both rounds. The old wording asked a "debate moderator" to
 #: "identify specific points of disagreement" — which catalogues CONCORD and
 #: never asks what is CORRECT. A model could satisfy it perfectly without once
@@ -203,31 +211,45 @@ MODERATOR_STANCE_INSTRUCTION = (
 #: on nothing is called out as readily as disagreement, because four models
 #: sharing an unsourced assumption is the failure a multi-vendor panel exists to
 #: catch — and it is the failure that reads as "strong consensus" today.
-ROUND_ONE_SYSTEM_PROMPT = (
-    "Four models were asked the same question independently. Their answers and "
-    "the sources each cited are below. Your job is not to win a debate; it is "
-    "to help establish what is actually TRUE for the person who asked.\n"
-    "Work through, concretely:\n"
-    "  1. Where do the answers agree — and is that agreement supported by a "
-    "cited source, or is it a shared assumption none of them evidenced? Say "
-    "which. Unevidenced agreement is a risk, not a result.\n"
-    "  2. Where do they genuinely differ on FACT (not on wording or emphasis)? "
-    "Quote the specific passages that conflict.\n"
-    "  3. What did another answer get RIGHT that yours missed or understated?\n"
-    "  4. What is factually WRONG or unsupported in any answer, including your "
-    "own — and what is your evidence? Name the source you are relying on. If "
-    "you have none, say 'no source' rather than asserting it anyway.\n"
-    "Judge the sources shown, not just the prose: a claim whose source does not "
-    "cover it is unsupported even when it sounds right. You cannot open the "
-    "links, so reason only from the titles, URLs and text you were given, and "
-    "say when that is not enough to decide.\n"
-    "The output is for a human reviewer, not the user.\n\n"
-    + PROSE_ATTRIBUTION_INSTRUCTION
-    + "\n\n"
-    + MODERATOR_STANCE_INSTRUCTION
-    + "\n\n"
-    + UNTRUSTED_DATA_SYSTEM_RULE
-)
+def round_one_system_prompt(panel_size: int) -> str:
+    """The round-one system prompt for a panel of ``panel_size`` (W4).
+
+    Only the opening word moves: "Two", "Three" or "Four". ``ROUND_ONE_SYSTEM_PROMPT``
+    below is the four-form, kept as a constant because four pre-existing test
+    modules import it (one compares a call's ``system_prompt`` against it by
+    value, one reads its length) and the cost layer reads its length;
+    ``round_one_system_prompt(4) == ROUND_ONE_SYSTEM_PROMPT`` is pinned
+    byte-for-byte in ``tests/unit/test_panel_size_prose.py``.
+    """
+    return (
+        f"{panel_size_word(panel_size)} models were asked the same question "
+        "independently. Their answers and "
+        "the sources each cited are below. Your job is not to win a debate; it is "
+        "to help establish what is actually TRUE for the person who asked.\n"
+        "Work through, concretely:\n"
+        "  1. Where do the answers agree — and is that agreement supported by a "
+        "cited source, or is it a shared assumption none of them evidenced? Say "
+        "which. Unevidenced agreement is a risk, not a result.\n"
+        "  2. Where do they genuinely differ on FACT (not on wording or emphasis)? "
+        "Quote the specific passages that conflict.\n"
+        "  3. What did another answer get RIGHT that yours missed or understated?\n"
+        "  4. What is factually WRONG or unsupported in any answer, including your "
+        "own — and what is your evidence? Name the source you are relying on. If "
+        "you have none, say 'no source' rather than asserting it anyway.\n"
+        "Judge the sources shown, not just the prose: a claim whose source does not "
+        "cover it is unsupported even when it sounds right. You cannot open the "
+        "links, so reason only from the titles, URLs and text you were given, and "
+        "say when that is not enough to decide.\n"
+        "The output is for a human reviewer, not the user.\n\n"
+        + PROSE_ATTRIBUTION_INSTRUCTION
+        + "\n\n"
+        + MODERATOR_STANCE_INSTRUCTION
+        + "\n\n"
+        + UNTRUSTED_DATA_SYSTEM_RULE
+    )
+
+
+ROUND_ONE_SYSTEM_PROMPT = round_one_system_prompt(EXPECTED_SLOT_COUNT)
 
 #: Round 2 is the CONVERGENCE step (ADR-0096). Round 1 opened the disagreements;
 #: this one settles them and asks each model to state where it now stands.
@@ -590,7 +612,12 @@ def debate_system_prompt_max_chars(*, peer: bool) -> int:
     number is one that drifts the next time a prompt is edited — and these
     prompts have been edited repeatedly (#354 added the stance instruction).
     """
-    longest = max(len(ROUND_ONE_SYSTEM_PROMPT), len(ROUND_TWO_SYSTEM_PROMPT))
+    # W4: round one names the panel size and "Three" is a character longer than
+    # "Four", so the ceiling is the max over every size the validator admits.
+    longest = max(
+        max(len(round_one_system_prompt(n)) for n in range(MIN_SLOT_COUNT, MAX_SLOT_COUNT + 1)),
+        len(ROUND_TWO_SYSTEM_PROMPT),
+    )
     if not peer:
         return longest
     # ``slot_number`` changes the directive's length by one digit at most, and
@@ -989,7 +1016,11 @@ class DebateOrchestrationService:
         context: dict[str, Any] | None = None,
         should_stop: Callable[[], bool] | None = None,
         on_round_two_start: Callable[[], None] | None = None,
+        panel_size: int = EXPECTED_SLOT_COUNT,
     ) -> DebateResult:
+        # ``panel_size`` is the REQUESTED panel size (W4, ADR-0120 decision 5),
+        # read by every prompt and served line that names it. It is not
+        # ``len(initial_answers)``: a slot that never recorded would shrink it.
         if model_slots is None:
             model_slots = []
         if safety_acknowledgements is None:
@@ -1010,7 +1041,7 @@ class DebateOrchestrationService:
         round_one_eligible = 0
         peer_one = self._build_peer_round(
             round_number=1,
-            system_prompt=ROUND_ONE_SYSTEM_PROMPT,
+            system_prompt=round_one_system_prompt(panel_size),
             initial_answers=initial_answers,
             query_text=query_text,
             prior_round=None,
@@ -1018,6 +1049,7 @@ class DebateOrchestrationService:
             query_run_id=query_run_id,
             context=context,
             should_stop=should_stop,
+            panel_size=panel_size,
         )
         if peer_one is not None:
             round_one_critiques, peer_one_live, round_one_eligible = peer_one
@@ -1057,6 +1089,7 @@ class DebateOrchestrationService:
                 openrouter_key=openrouter_key,
                 context=context,
                 should_stop=should_stop,
+                panel_size=panel_size,
             )
             round_one_mode = (
                 DEBATE_MODE_FALLBACK if round_one_fallback is not None else DEBATE_MODE_LIVE
@@ -1157,6 +1190,7 @@ class DebateOrchestrationService:
             query_run_id=query_run_id,
             context=context,
             should_stop=should_stop,
+            panel_size=panel_size,
         )
         if peer_two is not None:
             round_two_critiques, peer_two_live, round_two_eligible = peer_two
@@ -1197,6 +1231,7 @@ class DebateOrchestrationService:
                 openrouter_key=openrouter_key,
                 context=context,
                 should_stop=should_stop,
+                panel_size=panel_size,
             )
             round_two_mode = (
                 DEBATE_MODE_FALLBACK if round_two_fallback is not None else DEBATE_MODE_LIVE
@@ -1259,9 +1294,12 @@ class DebateOrchestrationService:
         openrouter_key: str,
         context: dict[str, Any] | None = None,
         should_stop: Callable[[], bool] | None = None,
+        panel_size: int = EXPECTED_SLOT_COUNT,
     ) -> tuple[str, str | None, LiveProviderResult | None, PanelStance | None]:
         disagreement = self._extract_disagreement(initial_answers=initial_answers)
-        weak_support = self._extract_weak_support(initial_answers=initial_answers)
+        weak_support = self._extract_weak_support(
+            initial_answers=initial_answers, panel_size=panel_size
+        )
         missing = self._extract_missing_reasoning(initial_answers=initial_answers)
         templated = (
             "Round 1 critique.\n"
@@ -1285,11 +1323,12 @@ class DebateOrchestrationService:
                 query_run_id=str(query_run_id),
                 stage=debate_round_stage(1),
             ),
-            system_prompt=ROUND_ONE_SYSTEM_PROMPT,
+            system_prompt=round_one_system_prompt(panel_size),
             user_prompt=self._debate_user_prompt(
                 query_text=query_text,
                 initial_answers=initial_answers,
                 prior_round=None,
+                panel_size=panel_size,
             ),
             context=context,
             should_stop=should_stop,
@@ -1342,9 +1381,12 @@ class DebateOrchestrationService:
         openrouter_key: str,
         context: dict[str, Any] | None = None,
         should_stop: Callable[[], bool] | None = None,
+        panel_size: int = EXPECTED_SLOT_COUNT,
     ) -> tuple[str, str | None, LiveProviderResult | None, PanelStance | None]:
         disagreement = self._extract_disagreement(initial_answers=initial_answers)
-        weak_support = self._extract_weak_support(initial_answers=initial_answers)
+        weak_support = self._extract_weak_support(
+            initial_answers=initial_answers, panel_size=panel_size
+        )
         missing = self._extract_missing_reasoning(initial_answers=initial_answers)
         templated = (
             "Round 2 critique, refining round 1.\n"
@@ -1368,6 +1410,7 @@ class DebateOrchestrationService:
                 query_text=query_text,
                 initial_answers=initial_answers,
                 prior_round=round_one_text,
+                panel_size=panel_size,
             ),
             context=context,
             should_stop=should_stop,
@@ -1473,6 +1516,7 @@ class DebateOrchestrationService:
         query_run_id: UUID,
         context: dict[str, Any] | None,
         should_stop: Callable[[], bool] | None,
+        panel_size: int = EXPECTED_SLOT_COUNT,
     ) -> tuple[tuple[SlotCritique, ...], list[LiveProviderResult], int] | None:
         """Dispatch one round of peer critique, or ``None`` for "not applicable".
 
@@ -1520,6 +1564,7 @@ class DebateOrchestrationService:
                     query_text=query_text,
                     initial_answers=initial_answers,
                     prior_round=prior_round,
+                    panel_size=panel_size,
                 ),
                 context=context,
                 # BOTH checks, deliberately. The loop-head check above is what
@@ -1827,6 +1872,7 @@ class DebateOrchestrationService:
         query_text: str,
         initial_answers: list[InitialModelAnswer],
         prior_round: str | None,
+        panel_size: int = EXPECTED_SLOT_COUNT,
     ) -> str:
         # WP-D (F-08): the moderator now sees each answer in full rather than
         # its first 200 chars. The old comment here ("we summarise each model
@@ -1841,7 +1887,8 @@ class DebateOrchestrationService:
         # instructions ("do NOT repeat the query") inside a block whose system
         # rule tells the model to ignore instructions — self-defeating.
         directives: list[str] = [
-            "The user's question and the four model answers are in the evidence "
+            f"The user's question and the {panel_size_word(panel_size).lower()} model "
+            "answers are in the evidence "
             "block below. Do NOT repeat the question verbatim in your response.",
         ]
         if prior_round is not None:
@@ -1855,7 +1902,7 @@ class DebateOrchestrationService:
         lines.append(_one_line(query_text))
         lines.append("")
         lines.append(
-            "Four model answers (model name, status, first "
+            f"{panel_size_word(panel_size)} model answers (model name, status, first "
             f"{DEBATE_ANSWER_EXCERPT_MAX_CHARS} chars):"
         )
         for answer in initial_answers:
@@ -1923,7 +1970,12 @@ class DebateOrchestrationService:
             "evidence; surface the difference so the user can audit it."
         )
 
-    def _extract_weak_support(self, *, initial_answers: list[InitialModelAnswer]) -> str:
+    def _extract_weak_support(
+        self,
+        *,
+        initial_answers: list[InitialModelAnswer],
+        panel_size: int = EXPECTED_SLOT_COUNT,
+    ) -> str:
         weak = [answer for answer in initial_answers if not answer.sources]
         if weak:
             return (
@@ -1931,8 +1983,8 @@ class DebateOrchestrationService:
                 "as unsupported."
             )
         return (
-            "All four models returned at least one source reference; the relative strength of "
-            "those references still varies."
+            f"{all_models_phrase(panel_size)} returned at least one source reference; the "
+            "relative strength of those references still varies."
         )
 
     def _extract_missing_reasoning(self, *, initial_answers: list[InitialModelAnswer]) -> str:

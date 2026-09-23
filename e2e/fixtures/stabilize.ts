@@ -77,7 +77,12 @@ export async function stabilize(page: Page): Promise<void> {
  * the 60s whole-test timeout — which is why it always reported as a generic
  * test timeout rather than as this wait failing.)
  */
-export async function waitForComposerReady(page: Page): Promise<void> {
+/**
+ * W4 (ADR-0120): the panel is 2 to 4 slots, FOUR by default. Every existing
+ * caller waits for the default composer, so `slots` defaults to 4; a spec that
+ * has removed or added a slot passes the count it expects.
+ */
+export async function waitForComposerReady(page: Page, slots = 4): Promise<void> {
   const state = await page
     .waitForFunction(
       () => document.documentElement.dataset.appState ?? null,
@@ -89,12 +94,12 @@ export async function waitForComposerReady(page: Page): Promise<void> {
     state,
     "app bootstrap did not succeed — the model slots will never populate",
   ).toBe("ready");
-  const slots = page.locator("[data-model-slot]");
-  await expect(slots).toHaveCount(4);
+  const slotInputs = page.locator("[data-model-slot]");
+  await expect(slotInputs).toHaveCount(slots);
   await expect
     .poll(
       () =>
-        slots.evaluateAll((els) =>
+        slotInputs.evaluateAll((els) =>
           els.every(
             (s) => ((s as HTMLInputElement).value ?? "").trim().length > 0,
           ),

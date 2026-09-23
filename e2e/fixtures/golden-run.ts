@@ -670,6 +670,67 @@ export const goldenRespWithPeerCritiques = (live = 3, eligible = 4) => {
 };
 
 /**
+ * W4 (ADR-0120): the golden run on a panel of TWO or THREE.
+ *
+ * A dedicated builder (AGENTS.md rule 13d): `goldenCompletedResp()` feeds the
+ * visual lane and must not grow. This slices the four-slot golden run down to
+ * `n` slots coherently -- `model_slots`, `model_answers`, `position_movements`,
+ * each round's `contributing_models`, `agreement.total`, `live_count` and the
+ * run-level citation coverage all describe the same `n` -- so every denominator
+ * the result view prints reads "of n".
+ *
+ * `consensus` carries the #354 verdict (`panel_agreement: "agreed"`, aligned
+ * n of n) so the green band is reachable at n=2 and n=3; without it the band is
+ * neutral at `n - 1` of `n`. `failedSlots` drops that many answers from the end
+ * and lowers `live_count` by the same count without touching `local_count`, the
+ * shape a slot that never recorded has (counted in neither), so the degraded
+ * banner reads "(n - failed) of n".
+ *
+ * Slots 1 and 2 are the sourced ones in `goldenAnswer`; slot 3 is the zero-source
+ * slot. So n=2 is fully sourced (target met) and n=3 is 2 of 3 (below the 0.75
+ * target, amber caution line) -- both real shapes a server emits.
+ */
+export const goldenRespWithPanelSize = (
+  n: 2 | 3,
+  opts: { consensus?: boolean; failedSlots?: number } = {},
+) => {
+  const resp = goldenCompletedResp() as Record<string, any>;
+  const failed = opts.failedSlots ?? 0;
+  const slots = SLOTS.slice(0, n);
+  resp.model_slots = slots;
+  resp.result.model_answers = resp.result.model_answers.slice(0, n - failed);
+  resp.result.position_movements = resp.result.position_movements.slice(0, n);
+  for (const round of resp.result.debate_outputs) {
+    round.contributing_models = slots.map((s) => s.model_id);
+  }
+  resp.result.agreement = opts.consensus
+    ? { aligned: n, total: n, panel_agreement: "agreed" }
+    : { aligned: n - 1, total: n };
+  resp.live_count = n - failed;
+  resp.local_count = 0;
+  if (failed > 0) resp.demo_mode = true;
+  const answered = resp.result.model_answers.length;
+  const sourced = resp.result.model_answers.filter((a: any) => a.sources.length > 0).length;
+  const ratio = answered > 0 ? sourced / answered : 0;
+  const targetMet = ratio >= 0.75;
+  resp.result.final_synthesis = {
+    ...resp.result.final_synthesis,
+    citation_coverage: {
+      answer_count: answered,
+      sourced_answer_count: sourced,
+      sourced_answer_ratio: ratio.toFixed(2),
+      target_ratio: "0.75",
+      target_met: targetMet,
+    },
+    quality_checks: {
+      ...resp.result.final_synthesis.quality_checks,
+      citation_coverage_target_met: targetMet,
+    },
+  };
+  return resp;
+};
+
+/**
  * A peer run whose per-critic text carries REAL MARKDOWN (ADR-0107).
  *
  * A third dedicated builder (AGENTS.md rule 13d). `goldenRespWithPeerCritiques`

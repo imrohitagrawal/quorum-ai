@@ -844,7 +844,7 @@ def _render_workspace_html() -> str:
         .replace("{{ cost_model_json }}", cost_model_json)
         .replace("{{ landing_subhead }}", _landing_subhead(settings))
     )
-    for slot_index in range(4):
+    for slot_index in range(len(default_ids)):
         default_id = escape(default_ids[slot_index])
         # ``model_slot_N_value`` sets the value attribute on the first
         # option; ``model_slot_N_selected`` toggles the ``selected``

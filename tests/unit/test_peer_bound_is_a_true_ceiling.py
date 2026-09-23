@@ -444,16 +444,20 @@ def test_the_peer_branch_prices_the_system_prompt_it_actually_sends(
     # The gap this branch closes therefore nearly QUADRUPLED with the design
     # change — and closed automatically, because the bound reads the prompt's
     # real length instead of a number somebody has to remember to update.
-    assert peer_tokens == Decimal("1034.25")
+    # W4 (ADR-0120 decision 5) then made round one name the panel size; the
+    # three-model form is one character longer than the four-model one, and
+    # the ceiling is a max over every admitted size, so 1034.25 -> 1034.5.
+    # Re-measured: `debate_system_prompt_max_chars(peer=True)` / CHARS_PER_TOKEN.
+    assert peer_tokens == Decimal("1034.5")
     assert flat == Decimal(350)
-    assert peer_tokens - flat == Decimal("684.25"), (
+    assert peer_tokens - flat == Decimal("684.5"), (
         "the per-call shortfall the peer branch exists to stop pricing away"
     )
     # The MODERATOR shape is deliberately NOT corrected — see the comment in
     # `_cost_components`. Its own prompt is still longer than the flat price,
     # and that pre-existing gap is filed, not fixed here.
     moderator_tokens = Decimal(debate_system_prompt_max_chars(peer=False)) / CHARS_PER_TOKEN
-    assert moderator_tokens == Decimal("757.75")
+    assert moderator_tokens == Decimal("758")  # 757.75 before W4, same +0.25
     assert moderator_tokens > flat, (
         "the pre-existing moderator shortfall this change deliberately leaves alone"
     )

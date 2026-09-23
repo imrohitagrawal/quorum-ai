@@ -5186,6 +5186,54 @@ main:focus { outline: none; }
   font-size: 0.7rem;
   color: var(--muted);
 }
+/* W4 (ADR-0120): per-slot remove control and the add-a-model control.
+   Same 44x44 interactive convention as the swap control. The remove button
+   is DISABLED at the two-model floor rather than hidden, so the layout does
+   not shift and the floor is visible. */
+.model-slot-remove {
+  flex-shrink: 0;
+  min-width: 44px;
+  min-height: 44px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-xs);
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 1.1rem;
+  line-height: 1;
+  cursor: pointer;
+}
+.model-slot-remove:hover:not([disabled]) {
+  color: var(--ink);
+  border-color: var(--ink);
+}
+.model-slot-remove:focus-visible {
+  outline: 3px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+.model-slot-remove[disabled] {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.model-slot-add {
+  margin-top: var(--space-3);
+  min-height: 44px;
+  padding: 0 var(--space-4);
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  cursor: pointer;
+}
+.model-slot-add:hover {
+  border-style: solid;
+}
+.model-slot-add:focus-visible {
+  outline: 3px solid var(--focus-ring);
+  outline-offset: 2px;
+}
 /* Compact ▾ swap control: a real <select> overlaid transparently so the
    caret box opens the vendor-scoped model list while the accessible name
    (aria-label="Model for slot N") and keyboard affordance survive. */

@@ -99,7 +99,7 @@ caught by any automated check and 10 of 16 by adversarial review
 | W1 | Stream the provider call (was "B2") | DONE | `ABSENT src/product_app/providers.py :: "stream": True` | — | — |
 | W2 | Peer critique: the answer models critique each other, two rounds (built; ships default-off) | DONE | `ABSENT src/product_app/debate.py :: def _build_peer_round(` | #290 | W1 |
 | W3 | Re-set the money constants against a measured bound — ladder moved 2026-09-07 (ADR-0102); token constants remain (W13/#268) | DONE | `PRESENT src/product_app/costs.py :: DAILY_CAP_USD = Decimal("0.20")` | — | W2 |
-| W4 | Variable panel size N ∈ {2,3,4} — backend half shipped (ADR-0120, CHG-010); the workspace control and the validator widening follow | PENDING | `ABSENT src/product_app/model_slots.py :: Between 2 and 4 model slots are required.` | — | — (W10 done) |
+| W4 | Variable panel size N ∈ {2,3,4} — backend (PR #493) and the workspace control with the validator widening (second PR) shipped; the remaining "four" copy outside the run path is the third PR (ADR-0120, CHG-010) | DONE | `ABSENT src/product_app/model_slots.py :: Between 2 and 4 model slots are required.` | — | — (W10 done) |
 | W5 | Quick-answer N=1 mode | UNPINNED | `—` | — | W4 |
 | W6 | A panel of one reports strong consensus | DONE | `ABSENT src/product_app/synthesis_consensus.py :: if len(stance) == 1:` | #383 | — |
 | W7 | Google sign-in and logout | UNPINNED | `—` | — | — |

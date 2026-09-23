@@ -61,7 +61,7 @@ The Release 1 UX is a work-focused query workflow, not a marketing landing page.
 ## Form Validation
 
 - Query text is required.
-- Exactly four model slots are required.
+- Between two and four model slots are required; four by default (W4, ADR-0120).
 - Duplicate model IDs may be allowed unless later product policy forbids them; if allowed, the UI should make duplicates obvious.
 - Safety/privacy warnings must be shown before execution.
 - Cost confirmation must be explicit when required; passive visibility is not enough.

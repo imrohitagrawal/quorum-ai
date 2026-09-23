@@ -7,6 +7,19 @@ Delivered in three pull requests; this record ships with the first, which
 changes no user-visible behaviour: the validator still accepts only four
 until the workspace control exists. Refs board row W4.
 
+Second pull request (the workspace): the validator now accepts two to four
+(`_validate_model_id_list`, "Between 2 and 4 model slots are required."), the
+composer has a remove control per slot and an add control, the served prose
+and the debate and synthesis prompts read the REQUESTED panel size through a
+`panel_size` argument the orchestrator passes (`len(query_run.model_slots)`),
+and the verdict band's eyebrow reads "Both models agree" at two. Measured
+before merging: `cost_estimation_service.estimate` on the default panel and
+its 2- and 3-slot prefixes is identical to the cent between `origin/main` and
+the branch under both postures (the one cost-side effect is the debate
+prompt ceiling, which now covers the "Three" form: 1034.25 → 1034.5 tokens
+with peer critique, 757.75 → 758 without, and neither reaches a served
+4-decimal figure).
+
 ADR-0119 is reserved by draft PR #491 (#268); this record takes 0120 so the
 two branches cannot collide on a number (ADR-0119 exists on branch
 `proposal/268-web-search-context-tokens`).

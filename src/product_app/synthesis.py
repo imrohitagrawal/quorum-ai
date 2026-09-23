@@ -46,6 +46,7 @@ from product_app.debate import (
     summarize_agreement,
 )
 from product_app.feedback_store import record_event as _record_feedback_event
+from product_app.model_slots import EXPECTED_SLOT_COUNT, all_models_phrase, panel_size_word
 from product_app.providers import (
     _MAX_SOURCE_TITLE_LEN,
     CallTelemetryLabels,
@@ -243,29 +244,56 @@ _LINE_BREAKING_CHARS = LINE_BREAKING_CHARS
 _flatten_for_prompt = flatten_for_prompt
 
 
-_CONSENSUS_PROMPT = _section_prompt(
-    "Given the four model answers below, list the 2-4 points where "
-    "they agree. Use bullet points. Quote specific phrases from the "
-    "answers. Do not invent consensus that is not in the answers. "
-    "Output is shown to the user as 'Consensus'."
-)
-_DISAGREEMENT_PROMPT = _section_prompt(
-    "Given the four model answers below, list the 2-4 points where "
-    "they disagree. Name the specific models and quote the specific "
-    "passages that disagree. Do not invent disagreement that is not "
-    "in the answers. Output is shown to the user as 'Disagreement'."
-)
-_SOURCE_SUPPORT_PROMPT = _section_prompt(
-    "For each of the four model answers, list the sources it cited "
-    "(title and URL if available). Note which sources appear in two "
-    "or more answers. Be concrete. Output is shown to the user as "
-    "'Source support'."
-)
-_UNCERTAINTY_PROMPT = _section_prompt(
-    "Given the four model answers and the debate rounds above, list "
-    "1-3 things you cannot determine from the available evidence. Be "
-    "honest. Do not pad. Output is shown to the user as 'Uncertainty'."
-)
+# W4 (ADR-0120 decision 5): the four section prompts that name the panel size
+# are built from the REQUESTED size. The module constants below are the
+# four-form, kept because ``tests/unit/test_untrusted_text_fencing.py`` sweeps
+# them by value and ``test_usage_threading.py`` compares a call's
+# ``system_prompt`` against ``_RECOMMENDATION_PROMPT``;
+# ``_consensus_prompt(4) == _CONSENSUS_PROMPT`` is pinned byte-for-byte in
+# ``tests/unit/test_panel_size_prose.py``.
+def _consensus_prompt(panel_size: int) -> str:
+    n = panel_size_word(panel_size).lower()
+    return _section_prompt(
+        f"Given the {n} model answers below, list the 2-4 points where "
+        "they agree. Use bullet points. Quote specific phrases from the "
+        "answers. Do not invent consensus that is not in the answers. "
+        "Output is shown to the user as 'Consensus'."
+    )
+
+
+def _disagreement_prompt(panel_size: int) -> str:
+    n = panel_size_word(panel_size).lower()
+    return _section_prompt(
+        f"Given the {n} model answers below, list the 2-4 points where "
+        "they disagree. Name the specific models and quote the specific "
+        "passages that disagree. Do not invent disagreement that is not "
+        "in the answers. Output is shown to the user as 'Disagreement'."
+    )
+
+
+def _source_support_prompt(panel_size: int) -> str:
+    n = panel_size_word(panel_size).lower()
+    return _section_prompt(
+        f"For each of the {n} model answers, list the sources it cited "
+        "(title and URL if available). Note which sources appear in two "
+        "or more answers. Be concrete. Output is shown to the user as "
+        "'Source support'."
+    )
+
+
+def _uncertainty_prompt(panel_size: int) -> str:
+    n = panel_size_word(panel_size).lower()
+    return _section_prompt(
+        f"Given the {n} model answers and the debate rounds above, list "
+        "1-3 things you cannot determine from the available evidence. Be "
+        "honest. Do not pad. Output is shown to the user as 'Uncertainty'."
+    )
+
+
+_CONSENSUS_PROMPT = _consensus_prompt(EXPECTED_SLOT_COUNT)
+_DISAGREEMENT_PROMPT = _disagreement_prompt(EXPECTED_SLOT_COUNT)
+_SOURCE_SUPPORT_PROMPT = _source_support_prompt(EXPECTED_SLOT_COUNT)
+_UNCERTAINTY_PROMPT = _uncertainty_prompt(EXPECTED_SLOT_COUNT)
 _RECOMMENDATION_PROMPT = _section_prompt(
     "Write a one-paragraph recommendation using the consensus, "
     "disagreement, sources, and uncertainty above. Hard rules:\n"
@@ -490,7 +518,18 @@ class SynthesisOrchestrationService:
         openrouter_key: str = "",
         context: dict[str, Any] | None = None,
         should_stop: Callable[[], bool] | None = None,
+        panel_size: int = EXPECTED_SLOT_COUNT,
     ) -> SynthesisResult:
+        """Produce the five synthesis sections.
+
+        ``panel_size`` is the REQUESTED panel size (W4, ADR-0120 decision 5):
+        the orchestrator passes ``len(query_run.model_slots)``. Every served
+        sentence that names the size reads it, never ``len(initial_answers)``,
+        because a slot that never recorded (a worker timeout with run budget
+        left) would otherwise turn "Four models were asked" into "Three".
+        The default is the four-slot panel so every pre-existing caller and
+        fixture is byte-identical.
+        """
         started_at = perf_counter()
         if safety_acknowledgements is None:
             safety_acknowledgements = []
@@ -543,6 +582,7 @@ class SynthesisOrchestrationService:
             coverage_ratio=coverage.sourced_answer_ratio,
             coverage_target_met=coverage.target_met,
             context=context,
+            panel_size=panel_size,
         )
 
         # PERF-P0: parallelize the 5 synthesis section calls. The
@@ -578,6 +618,7 @@ class SynthesisOrchestrationService:
             user_prompt=user_prompt,
             context=context,
             should_stop=should_stop,
+            panel_size=panel_size,
             telemetry_labels=telemetry_labels,
         )
         disagreement_future = _submit_section(
@@ -589,6 +630,7 @@ class SynthesisOrchestrationService:
             user_prompt=user_prompt,
             context=context,
             should_stop=should_stop,
+            panel_size=panel_size,
             telemetry_labels=telemetry_labels,
         )
         source_future = _submit_section(
@@ -599,6 +641,7 @@ class SynthesisOrchestrationService:
             user_prompt=user_prompt,
             context=context,
             should_stop=should_stop,
+            panel_size=panel_size,
             telemetry_labels=telemetry_labels,
         )
         uncertainty_future = _submit_section(
@@ -610,6 +653,7 @@ class SynthesisOrchestrationService:
             user_prompt=user_prompt,
             context=context,
             should_stop=should_stop,
+            panel_size=panel_size,
             telemetry_labels=telemetry_labels,
         )
         recommendation_future = _submit_section(
@@ -782,6 +826,7 @@ class SynthesisOrchestrationService:
         coverage_ratio: Decimal,
         coverage_target_met: bool,
         context: dict[str, Any] | None = None,
+        panel_size: int = EXPECTED_SLOT_COUNT,
     ) -> str:
         """Build a compact, deterministic prompt that fits within the
         per-section token budget. We summarise each model answer and
@@ -866,7 +911,7 @@ class SynthesisOrchestrationService:
             lines.append(prior_synthesis)
             lines.append("")
         lines.append(
-            "Four model answers (model name, status, first "
+            f"{panel_size_word(panel_size)} model answers (model name, status, first "
             f"{SYNTHESIS_ANSWER_EXCERPT_MAX_CHARS} chars):"
         )
         for answer in initial_answers:
@@ -950,7 +995,9 @@ class SynthesisOrchestrationService:
         context: dict[str, Any] | None = None,
         should_stop: Callable[[], bool] | None = None,
         telemetry_labels: CallTelemetryLabels | None = None,
+        panel_size: int = EXPECTED_SLOT_COUNT,
     ) -> tuple[str, str | None, LiveProviderResult | None]:
+        asked = panel_size_word(panel_size)
         successful = [
             answer for answer in initial_answers if answer.status is InitialAnswerStatus.COMPLETED
         ]
@@ -1012,14 +1059,14 @@ class SynthesisOrchestrationService:
             )
         elif consensus_strength == "strong":
             base = (
-                f"Four models were asked the same question; {len(successful)} returned "
+                f"{asked} models were asked the same question; {len(successful)} returned "
                 f"a usable response and broadly agree. Roughly {sourced_pct}% of those "
                 "answers carried at least one visible source reference. "
                 "Treat the consensus as a working hypothesis, not a verdict."
             )
         elif consensus_strength == "divided":
             base = (
-                f"Four models were asked the same question; {len(successful)} returned "
+                f"{asked} models were asked the same question; {len(successful)} returned "
                 f"a usable response but did not agree. Roughly {sourced_pct}% of those "
                 "answers carried at least one visible source reference. "
                 "Disagreement is preserved as the dominant signal — do not treat the "
@@ -1027,7 +1074,7 @@ class SynthesisOrchestrationService:
             )
         else:
             base = (
-                f"Four models were asked the same question; {len(successful)} returned "
+                f"{asked} models were asked the same question; {len(successful)} returned "
                 f"a usable response. Roughly {sourced_pct}% of those answers carried at "
                 "least one visible source reference. Some models disagreed "
                 "on points; treat the consensus as a working hypothesis, not a verdict."
@@ -1035,7 +1082,7 @@ class SynthesisOrchestrationService:
         templated = TEMPLATED_FALLBACK_PREFIX + base
         live = self._call_synthesis_model(
             openrouter_key=openrouter_key,
-            system_prompt=_CONSENSUS_PROMPT,
+            system_prompt=_consensus_prompt(panel_size),
             user_prompt=user_prompt,
             context=context,
             should_stop=should_stop,
@@ -1066,6 +1113,7 @@ class SynthesisOrchestrationService:
         context: dict[str, Any] | None = None,
         should_stop: Callable[[], bool] | None = None,
         telemetry_labels: CallTelemetryLabels | None = None,
+        panel_size: int = EXPECTED_SLOT_COUNT,
     ) -> tuple[str, str | None, LiveProviderResult | None]:
         fallback_paths = {answer.provider_path for answer in initial_answers}
         # #247: no model was asked, so there is nothing to disagree. Tested
@@ -1111,7 +1159,8 @@ class SynthesisOrchestrationService:
         elif consensus_strength == "divided":
             base = (
                 "Models do not agree. The disagreement is preserved as the dominant signal — "
-                "do not collapse the four answers into a single consensus claim."
+                f"do not collapse the {panel_size_word(panel_size).lower()} answers into a "
+                "single consensus claim."
             )
         else:
             base = (
@@ -1121,7 +1170,7 @@ class SynthesisOrchestrationService:
         templated = TEMPLATED_FALLBACK_PREFIX + base
         live = self._call_synthesis_model(
             openrouter_key=openrouter_key,
-            system_prompt=_DISAGREEMENT_PROMPT,
+            system_prompt=_disagreement_prompt(panel_size),
             user_prompt=user_prompt,
             context=context,
             should_stop=should_stop,
@@ -1151,6 +1200,7 @@ class SynthesisOrchestrationService:
         context: dict[str, Any] | None = None,
         should_stop: Callable[[], bool] | None = None,
         telemetry_labels: CallTelemetryLabels | None = None,
+        panel_size: int = EXPECTED_SLOT_COUNT,
     ) -> tuple[str, str | None, LiveProviderResult | None]:
         # WP-C review A1/A4: this prose sits directly under the "Source support"
         # tile that renders ``sourced_answer_ratio``. It MUST use the same
@@ -1222,7 +1272,7 @@ class SynthesisOrchestrationService:
         templated = TEMPLATED_FALLBACK_PREFIX + base
         live = self._call_synthesis_model(
             openrouter_key=openrouter_key,
-            system_prompt=_SOURCE_SUPPORT_PROMPT,
+            system_prompt=_source_support_prompt(panel_size),
             # ADR-0098. Scoped to THIS section, not appended to the shared
             # ``directives`` block. The shared user prompt reaches all five
             # sections, and this sentence ends "do not report the run as having
@@ -1264,6 +1314,7 @@ class SynthesisOrchestrationService:
         context: dict[str, Any] | None = None,
         should_stop: Callable[[], bool] | None = None,
         telemetry_labels: CallTelemetryLabels | None = None,
+        panel_size: int = EXPECTED_SLOT_COUNT,
     ) -> tuple[str, str | None, LiveProviderResult | None]:
         failed = sum(1 for answer in initial_answers if answer.status is InitialAnswerStatus.FAILED)
         if failed:
@@ -1281,14 +1332,15 @@ class SynthesisOrchestrationService:
             # empty list).
             debate_marker = " (debate was skipped)" if not debate_outputs else ""
             base = (
-                "All four models returned a usable response, but no model is independently "
-                f"authoritative{debate_marker}. Treat the synthesis as a working hypothesis "
+                f"{all_models_phrase(panel_size)} returned a usable response, but no model is "
+                f"independently authoritative{debate_marker}. Treat the synthesis as a working "
+                "hypothesis "
                 "pending human review."
             )
         templated = TEMPLATED_FALLBACK_PREFIX + base
         live = self._call_synthesis_model(
             openrouter_key=openrouter_key,
-            system_prompt=_UNCERTAINTY_PROMPT,
+            system_prompt=_uncertainty_prompt(panel_size),
             user_prompt=user_prompt,
             context=context,
             should_stop=should_stop,
