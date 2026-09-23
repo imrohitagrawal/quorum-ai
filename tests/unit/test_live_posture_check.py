@@ -3036,13 +3036,15 @@ def test_an_innocent_word_containing_a_revoked_marker_still_authorises(
     ), status
 
 
-def test_only_the_three_genuinely_revoked_adrs_in_this_tree_are_refused(
+def test_only_the_genuinely_revoked_or_proposed_adrs_in_this_tree_are_refused(
     posture: ModuleType,
 ) -> None:
     """The false-positive floor, measured against the REAL corpus.
 
-    Every ADR here is Accepted except three, and a status check that refuses
-    more than those three is refusing legitimate records.
+    Every ADR here is Accepted except the ones listed below, and a status
+    check that refuses more than those is refusing legitimate records. (Named
+    "the_three_genuinely_revoked" until 2026-09-24, when ADR-0121 joined the
+    list as PROPOSED.)
 
     RED IF: a revoked marker starts matching an ordinary Accepted status — or a
     genuinely revoked one stops being caught.
@@ -3057,9 +3059,11 @@ def test_only_the_three_genuinely_revoked_adrs_in_this_tree_are_refused(
         status = _re.search(r"^## Status\s*\n+([^\n]+)", path.read_text(encoding="utf-8"), _re.M)
         if status and not posture._adr_status_is_live(status.group(1)):
             refused.append(path.name.split("-")[0])
-    assert sorted(refused) == ["0001", "0014", "0060"], (
-        f"expected exactly ADR-0001 (Superseded), ADR-0014 (Proposed) and "
-        f"ADR-0060 (Reverted) to be refused — ADR-0113 was PROPOSED until the "
+    assert sorted(refused) == ["0001", "0014", "0060", "0121"], (
+        f"expected exactly ADR-0001 (Superseded), ADR-0014 (Proposed), "
+        f"ADR-0060 (Reverted) and ADR-0121 (PROPOSED — AWAITING OWNER: the BYOK "
+        f"plan, whose shape the owner gave on 2026-09-23 and whose delivery the "
+        f"owner has not decided) to be refused — ADR-0113 was PROPOSED until the "
         f"product owner accepted it on 2026-09-15 and is live again; got {sorted(refused)}"
     )
 

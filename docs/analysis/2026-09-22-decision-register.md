@@ -154,13 +154,18 @@ per-run peer/moderator choice allowed. Rails under a user key: DROP the
 global daily ceiling, the per-account envelope and the live window; ADD a
 user budget window, $5 default, the existing cost gate asking before a run
 crosses it; KEEP the per-run hard cap and one run at a time per session.
-Abuse limits under a user key, owner's numbers: about 100 to 200 sessions
-per IP per day (not 2: office networks share an IP); about 10 requests per
-1 to 2 minutes. The owner's sentence (`16:21:02Z`): "I would not keep 2 new
+Abuse limits under a user key, the session's reading of the owner's
+numbers: about 100 to 200 sessions per IP per day (not 2: office networks
+share an IP); about 10 requests per 1 to 2 minutes. The owner's sentence (`16:21:02Z`): "I would not keep 2 new
 sessions per IP because that is too low. … We should look at 100 or 200
 requests, that is something, but yes, within 1 or 2 minutes, we can have a
 limit of, say, 10 requests." "Sessions per IP per day" for the first number
-is the session's reading, not the owner's noun. Sequencing: own board item; failure-mode page first; then
+is the session's reading, not the owner's noun. Likewise the keep/drop rails
+list and the three-pull-request sequencing above were the session's
+suggestions in that chat, accepted by the owner with "For the rest, I agree
+with all your suggestions" (`16:21:02Z`); the owner's own typed points are
+the $5 window, live execution and the judge on by default, "everything should
+be a user-defined flag", and the limits quoted above. Sequencing: own board item; failure-mode page first; then
 three PRs (key intake and scoping; rails by credential source plus the
 budget window; user toggles and per-run shape). Nothing of this is built now.
 
