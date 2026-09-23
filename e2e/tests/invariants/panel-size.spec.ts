@@ -25,6 +25,16 @@
  *   - the transcript renders one card per REQUESTED slot, two at N=2
  *     (red if the cards are keyed off the default panel).
  *
+ * Third pull request (CHG-011, decided 2026-09-23):
+ *   - the composer's shape line (D5) reads the served shape off /status and the
+ *     rendered count: four, three, two, three again (red if the line stops
+ *     following remove/add, names the other shape, or is reworded);
+ *   - the transcript's model-card tooltip (D6) reads the run's size and its
+ *     rounds' critique_shape (red if "all four" comes back at two, or the
+ *     moderator wording is served on a peer run);
+ *   - the landing-to-composer message (D6) names the composer's current panel
+ *     (red if "your four models" is served after a removal).
+ *
  * The trust cap (ADR-0120 decision 3) is NOT observable here: `support_verified`
  * is always false in CI, so it is unit-tested in tests/unit only.
  *
@@ -38,6 +48,7 @@ import {
   driveToTranscript,
   goldenCreateResp,
   goldenRespWithPanelSize,
+  goldenRespWithPeerDebate,
 } from "../../fixtures/golden-run";
 import { waitForComposerReady } from "../../fixtures/stabilize";
 
@@ -244,6 +255,149 @@ test.describe("panel size: remove / add a slot, N-relative copy (W4)", () => {
     const meta = page.locator("#cost-gate-question-meta");
     await expect(meta).toContainText(/^2 models/);
     await expect(meta).not.toContainText("4 models");
+  });
+
+  // CHG-011 D5. Both shapes' sentences are pinned WHOLE so a reworded line is
+  // red, and the served shape is read off /status (`peer_critique_in_effect`,
+  // the same server-side predicate that fills the readiness island) rather
+  // than assumed: CI serves the moderator shape, production does today too.
+  const SHAPE_LINE = {
+    moderator: {
+      4:
+        "This run: a moderator model critiques all four answers, in two rounds, then one sourced synthesis. " +
+        "Peer critique, where each model critiques the others, is available and off on this deployment.",
+      3:
+        "This run: a moderator model critiques all three answers, in two rounds, then one sourced synthesis. " +
+        "Peer critique, where each model critiques the others, is available and off on this deployment.",
+      2:
+        "This run: a moderator model critiques both answers, in two rounds, then one sourced synthesis. " +
+        "Peer critique, where each model critiques the others, is available and off on this deployment.",
+    },
+    peer: {
+      4: "This run: each of the four models critiques the others, in two rounds, then one sourced synthesis.",
+      3: "This run: each of the three models critiques the others, in two rounds, then one sourced synthesis.",
+      2: "This run: both models critique each other, in two rounds, then one sourced synthesis.",
+    },
+  } as const;
+
+  test("the composer's shape line reads the served shape and the count: four, three, two, three", async ({
+    page,
+  }) => {
+    const status = await (await page.request.get("/status")).json();
+    // RED IF: /status stops reporting the predicate; defaulting would let the
+    // spec assert the wrong shape silently.
+    expect(typeof status.peer_critique_in_effect).toBe("boolean");
+    const shape: "peer" | "moderator" = status.peer_critique_in_effect ? "peer" : "moderator";
+
+    await boot(page);
+    const line = page.locator("#panel-shape-line");
+    await expect(line).toBeVisible();
+    await expect(line).toHaveAttribute("data-shape", shape);
+    await expect(line).toHaveAttribute("data-panel-size", "4");
+    await expect(line).toHaveText(SHAPE_LINE[shape][4]);
+
+    await removeButtons(page).nth(3).click();
+    await expect(slotInputs(page)).toHaveCount(3);
+    await expect(line).toHaveAttribute("data-panel-size", "3");
+    await expect(line).toHaveText(SHAPE_LINE[shape][3]);
+
+    await removeButtons(page).nth(2).click();
+    await expect(slotInputs(page)).toHaveCount(2);
+    await expect(line).toHaveAttribute("data-panel-size", "2");
+    await expect(line).toHaveText(SHAPE_LINE[shape][2]);
+
+    await addButton(page).click();
+    await expect(slotInputs(page)).toHaveCount(3);
+    await expect(line).toHaveText(SHAPE_LINE[shape][3]);
+
+    // The static honesty rule: under the moderator shape the first sentence
+    // never claims the models critique each other; the availability sentence
+    // is the only place that mechanism is named, and it says "off".
+    const text = (await line.textContent()) ?? "";
+    expect(text.length).toBeGreaterThan(80);
+    if (shape === "moderator") {
+      expect(text.split(". ")[0]).not.toContain("critique each other");
+      expect(text).toContain("off on this deployment");
+    } else {
+      expect(text).not.toContain("moderator");
+    }
+  });
+
+  test("the transcript's model-card tooltip reads the run's size and its shape", async ({ page }) => {
+    // A moderator run of two: "both", never "all four".
+    await driveToResult(page, goldenRespWithPanelSize(2, { consensus: true }));
+    await driveToTranscript(page);
+    const info = page.locator("article.model-card [data-info-icon]");
+    await expect(info).toHaveCount(2);
+    for (let i = 0; i < 2; i++) {
+      await expect(info.nth(i)).toHaveAttribute(
+        "data-info-text",
+        "This shows one model's answer. It is the model's only answer — it is not revised. " +
+          "Once both respond, a separate moderator model reads both and writes the debate critique.",
+      );
+    }
+    // A peer run of four: each model reads the others; no moderator is named.
+    await page.goto("/ui", { waitUntil: "domcontentloaded" });
+    await driveToResult(page, goldenRespWithPeerDebate());
+    await driveToTranscript(page);
+    const peerInfo = page.locator("article.model-card [data-info-icon]");
+    await expect(peerInfo).toHaveCount(4);
+    await expect(peerInfo.first()).toHaveAttribute(
+      "data-info-text",
+      "This shows one model's answer. It is the model's only answer — it is not revised. " +
+        "Once all four respond, each model reads the others and writes its own critique.",
+    );
+    const peerText = (await peerInfo.first().getAttribute("data-info-text")) ?? "";
+    expect(peerText.length).toBeGreaterThan(80);
+    expect(peerText).not.toContain("moderator");
+  });
+
+  test("the landing-to-composer message names the composer's current panel", async ({ page }) => {
+    await boot(page);
+    await removeButtons(page).nth(3).click();
+    await expect(slotInputs(page)).toHaveCount(3);
+    // Back to the landing (the "How it works" link) with three slots held.
+    await page.locator("#show-landing").click();
+    await expect(page.locator('[data-view="landing"]')).toBeVisible();
+    await page.locator("#landing-query").fill("Which three models agree on retention metrics?");
+    await page.locator("#landing-estimate").click();
+    const note = page.locator("#landing-handoff-note-text");
+    // The note dwells 2.8 s on the landing before the view changes.
+    await expect(note).toHaveText(
+      "Got your question. Taking you to review your three models and see the itemized cost before anything runs…",
+    );
+    await expect(note).not.toContainText("four models");
+  });
+
+  test("the landing CTA still hands off when clicked before the slot grid has rendered", async ({
+    page,
+  }) => {
+    // Review of the third pull request found this: the hand-off message read
+    // the composer's count through getModelIds(), which throws on the
+    // template's placeholder labels until /v1/models/defaults has answered.
+    // The throw left the hand-off latch set, so the landing CTA was dead until
+    // reload. Hold the defaults until after the click and prove the hand-off
+    // still happens, with the default count.
+    let releaseDefaults: () => void = () => {};
+    const held = new Promise<void>((resolve) => {
+      releaseDefaults = resolve;
+    });
+    await page.route("**/v1/models/defaults", async (route) => {
+      await held;
+      await route.continue();
+    });
+    await page.goto("/ui", { waitUntil: "domcontentloaded" });
+    await expect(page.locator('[data-view="landing"]')).toBeVisible();
+    await expect(page.locator("#landing-query")).toBeVisible();
+    // Positive partner: the grid really is un-rendered at this point.
+    expect(await page.locator("select[data-model-slot]").count()).toBe(0);
+    await page.locator("#landing-query").fill("Should we adopt passkeys?");
+    await page.locator("#landing-estimate").click();
+    await expect(page.locator("#landing-handoff-note-text")).toHaveText(
+      "Got your question. Taking you to review your four models and see the itemized cost before anything runs…",
+    );
+    releaseDefaults();
+    await expect(page.locator('[data-view="composer"]')).toBeVisible({ timeout: 15000 });
   });
 
   test("the transcript renders one card per requested slot: two at N=2, four by default", async ({
