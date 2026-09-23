@@ -244,8 +244,8 @@
             </div>
 
             <fieldset class="field-group">
-              <legend>Four model slots</legend>
-              <div class="muted">Choose four different models. Swap any slot from the live catalog; duplicates are allowed but flagged.</div>
+              <legend>Model slots</legend>
+              <div class="muted">Choose two to four different models. Swap any slot from the live catalog; duplicates are allowed but flagged.</div>
               <div id="model-inputs" class="model-slot-grid">
                 <label class="inline" data-model-slot="1">
                   <span>Slot 1</span>
@@ -272,6 +272,10 @@
                   </select>
                 </label>
               </div>
+              <!-- W4 (ADR-0120): the panel is 2 to 4 models. Four render by
+                   default (AC-007); the add control is hidden at four and
+                   shown by renderModelInputs once a slot is removed. -->
+              <button type="button" id="model-slot-add" class="model-slot-add" hidden>Add a model</button>
             </fieldset>
             <div id="cost-confirmation" class="callout callout-cost" hidden>
               <div class="callout-icon" aria-hidden="true">$</div>
@@ -372,7 +376,7 @@
             <div class="cost-gate-question">
               <span class="cost-gate-question-label">Your question</span>
               <div id="cost-gate-question" class="cost-gate-question-text"></div>
-              <span class="cost-gate-question-meta">4 models · 2 debate rounds · synthesis · sourced answers where search succeeds</span>
+              <span id="cost-gate-question-meta" class="cost-gate-question-meta">4 models · 2 debate rounds · synthesis · sourced answers where search succeeds</span>
             </div>
 
             <div id="cost-review-card" class="cost-review-card" data-band="require_confirmation">

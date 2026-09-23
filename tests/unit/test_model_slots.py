@@ -57,7 +57,8 @@ def test_model_slot_validator_rejects_wrong_slot_count() -> None:
     with pytest.raises(InvalidModelSlotError) as exc_info:
         validate_model_slots(["openai/gpt-4o-mini"])
 
-    assert exc_info.value.errors[0].message == "Exactly four model slots are required."
+    # W4 (ADR-0120): the count is a 2..4 range; one slot is still refused.
+    assert exc_info.value.errors[0].message == "Between 2 and 4 model slots are required."
 
 
 def test_model_slot_validator_rejects_malformed_model_id() -> None:
@@ -87,7 +88,7 @@ def test_model_slot_validator_rejects_duplicate_model_ids() -> None:
         )
 
     assert exc_info.value.errors[0].slot_number == 3
-    assert exc_info.value.errors[0].message == "Model IDs must be unique across all four slots."
+    assert exc_info.value.errors[0].message == "Model IDs must be unique across all slots."
 
 
 # ---------------------------------------------------------------------------

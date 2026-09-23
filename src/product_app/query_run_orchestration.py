@@ -1381,6 +1381,8 @@ def _execute_query_run(query_run_id: UUID, account_id: UUID) -> None:
         context=query_run.context,
         should_stop=lambda: _should_stop(query_run_id),
         on_round_two_start=_announce_round_two,
+        # W4: the REQUESTED panel size, not the recorded answer count.
+        panel_size=len(query_run.model_slots),
     )
     # F-05 Layer 2 (#106): a cancel that landed while the debate stage was
     # already entered stopped every round from BILLING (the should_stop
@@ -1498,6 +1500,8 @@ def _execute_query_run(query_run_id: UUID, account_id: UUID) -> None:
         # of the five synthesis calls and sent to none of them.
         context=query_run.context,
         should_stop=lambda: _should_stop(query_run_id),
+        # W4: the REQUESTED panel size, not the recorded answer count.
+        panel_size=len(query_run.model_slots),
     )
     # F-05 Layer 2 (#106): see the matching comment at the debate call site —
     # if the cancel stopped every section from billing, recording the

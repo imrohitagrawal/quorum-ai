@@ -202,6 +202,7 @@ jobs:
           tests/invariants/result-debate.spec.ts
           tests/invariants/critique-cost-rows.spec.ts
           tests/invariants/peer-critique-copy.spec.ts
+          tests/invariants/panel-size.spec.ts
           --project=chromium
           --retries=0
 
@@ -329,7 +330,17 @@ jobs:
         # reported "263 passed (6.1m)" on 2026-09-03 — on a CLEANED `.data`,
         # because the durable per-IP mint cap accumulates across local runs and
         # a poisoned database presents as ~30 unrelated timeouts.
-        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 284 --lane "invariants lane"
+        # 284 -> 293 (W4, ADR-0120): panel-size.spec.ts adds nine tests — the
+        # default composer, the three-id POST body, the two-slot floor and the
+        # add control, the N=2 and N=3 bands, the "1 of 2" degraded banner, the
+        # rendering invariants on both fixtures, the cost-gate meta line and
+        # the transcript card count. Raised in the same PR that adds them, for
+        # the reason every raise above gives. MEASURED locally on 2026-09-23
+        # with the CI invocation plus the two local overrides: the 18-spec
+        # lane reported "293 passed (6.8m)". Not computed as 284 + 9; the
+        # local/CI one-test gap noted on 2026-09-09 was not re-measured here,
+        # and a floor at the local count is the conservative choice.
+        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 293 --lane "invariants lane"
 
       - name: Clear the previous lane's JUnit report
         run: rm -f e2e/results.xml

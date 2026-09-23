@@ -37,6 +37,8 @@ __all__ = [
     "MAX_SLOT_COUNT",
     "MIN_SLOT_COUNT",
     "default_model_slots",
+    "all_models_phrase",
+    "panel_size_word",
     "default_moderator_overlap_slots",
     "moderator_overlap_slots",
     "openrouter_catalog_fetcher",
@@ -53,6 +55,32 @@ __all__ = [
 MIN_SLOT_COUNT = 2
 MAX_SLOT_COUNT = 4
 EXPECTED_SLOT_COUNT = 4
+
+#: The word served prose and prompts use for the REQUESTED panel size (W4,
+#: ADR-0120 decision 5). A literal table, not ``str(n)``: at four every string
+#: that reads it must stay byte-identical to what shipped before the panel was
+#: variable, and a size the validator never admits must not quietly become
+#: "5 models were asked". ``tests/unit/test_panel_size_prose.py`` pins both.
+_PANEL_SIZE_WORDS: dict[int, str] = {2: "Two", 3: "Three", 4: "Four"}
+
+
+def panel_size_word(panel_size: int) -> str:
+    """Return "Two", "Three" or "Four" for a requested panel size in range."""
+    try:
+        return _PANEL_SIZE_WORDS[panel_size]
+    except KeyError:
+        raise ValueError(
+            f"panel size {panel_size!r} is outside {MIN_SLOT_COUNT}..{MAX_SLOT_COUNT}"
+        ) from None
+
+
+def all_models_phrase(panel_size: int) -> str:
+    """ "All four models" / "All three models" / "Both models" — the subject of
+    a sentence about every model on the panel. "All two models" is not English."""
+    if panel_size == 2:
+        return "Both models"
+    return f"All {panel_size_word(panel_size).lower()} models"
+
 
 #: Authoritative default model ids, in slot order (1, 2, 3, 4).
 #:
@@ -311,7 +339,12 @@ def default_moderator_overlap_slots() -> tuple[int, ...]:
 
 
 def _validate_model_id_list(model_ids: list[str]) -> None:
-    """Validate the four model id strings; raise ``InvalidModelSlotError`` on any problem.
+    """Validate the model id strings; raise ``InvalidModelSlotError`` on any problem.
+
+    W4: the list may hold ``MIN_SLOT_COUNT`` to ``MAX_SLOT_COUNT`` ids (two to
+    four). This is the one count check in the product; the API edge stays
+    ``min_length=1`` so the typed ``INVALID_MODEL_SLOT`` envelope, not
+    Pydantic's generic one, is what a wrong count returns (ADR-0120 decision 6).
 
     Extracted so that ``validate_model_slots`` and
     ``validate_model_slots_with_search`` can both use the same
@@ -321,12 +354,13 @@ def _validate_model_id_list(model_ids: list[str]) -> None:
     "is the model id list well-formed?" check.
     """
     errors: list[ModelSlotError] = []
-    if len(model_ids) != EXPECTED_SLOT_COUNT:
+    if not MIN_SLOT_COUNT <= len(model_ids) <= MAX_SLOT_COUNT:
         errors.append(
             ModelSlotError(
                 slot_number=0,
                 model_id=None,
-                message="Exactly four model slots are required.",
+                # Board row W4 pins this literal; keep it a literal.
+                message="Between 2 and 4 model slots are required.",
             ),
         )
         raise InvalidModelSlotError(errors)
@@ -390,7 +424,7 @@ def _validate_model_id_list(model_ids: list[str]) -> None:
                 ModelSlotError(
                     slot_number=index,
                     model_id=model_id,
-                    message="Model IDs must be unique across all four slots.",
+                    message="Model IDs must be unique across all slots.",
                 ),
             )
             continue

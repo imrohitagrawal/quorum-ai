@@ -35,6 +35,21 @@
     document.getElementById("model-catalog-data").textContent || "[]",
   );
   const defaultModelIds = window.DEFAULT_MODEL_IDS;
+  // W4 (ADR-0120): a panel is 2 to 4 models, four by default. These mirror
+  // MIN_SLOT_COUNT / MAX_SLOT_COUNT in model_slots.py; the server validates.
+  const PANEL_MIN_SLOTS = 2;
+  const PANEL_MAX_SLOTS = 4;
+  // The word served copy uses for a panel size. A literal table so that at
+  // four every string that reads it is byte-identical to what shipped when
+  // the panel could only be four; anything else falls back to the digit.
+  const PANEL_SIZE_WORDS = { 2: "two", 3: "three", 4: "four" };
+  const panelSizeWord = (n) => PANEL_SIZE_WORDS[n] || String(n);
+  // The panel size of a run: the REQUESTED slots the server echoes back, or
+  // the default panel while no run exists yet.
+  const panelSlotCount = (result) => {
+    const slots = result && Array.isArray(result.model_slots) ? result.model_slots.length : 0;
+    return slots > 0 ? slots : defaultModelIds.length;
+  };
 
   // Per-model price index for the honest per-slot pre-run estimate (design-comp
   // parity, item 3). Built from the catalog island's ``input_price_per_1k`` /
@@ -1493,10 +1508,54 @@
       }
       swap.append(caret, select);
 
-      card.append(avatar, info, estimate, swap);
+      // W4: per-slot remove control. Disabled (and said so to assistive tech)
+      // at the two-model floor rather than hidden, so the control's position
+      // is stable and the floor is discoverable. Not a ``data-model-slot``
+      // element: ``getModelIds`` and the composer-ready wait count those.
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "model-slot-remove";
+      remove.dataset.slotRemove = String(index);
+      remove.setAttribute(
+        "aria-label",
+        `Remove slot ${index + 1} (${displayNameForModel(modelId)})`,
+      );
+      remove.textContent = "×";
+      const atFloor = modelIds.length <= PANEL_MIN_SLOTS;
+      remove.disabled = atFloor;
+      remove.setAttribute("aria-disabled", atFloor ? "true" : "false");
+
+      card.append(avatar, info, estimate, swap, remove);
       return card;
     });
     modelInputs.replaceChildren(...cards);
+    // W4: the add control lives after the grid and is hidden at the ceiling.
+    const addButton = el("model-slot-add");
+    if (addButton) addButton.hidden = modelIds.length >= PANEL_MAX_SLOTS;
+  }
+
+  // W4: the next model to add is the first default not already on the panel,
+  // then the first catalog model not on it; a duplicate is the last resort
+  // (permitted, and flagged by renderModelInputs).
+  function nextModelIdToAdd(currentIds) {
+    const taken = new Set(currentIds);
+    const fromDefaults = (defaultModelIds || []).find((id) => !taken.has(id));
+    if (fromDefaults) return fromDefaults;
+    const catalogIds = Array.isArray(modelCatalog)
+      ? modelCatalog.map((m) => m && m.model_id).filter(Boolean)
+      : [];
+    const fromCatalog = catalogIds.find((id) => !taken.has(id));
+    if (fromCatalog) return fromCatalog;
+    return (defaultModelIds && defaultModelIds[0]) || currentIds[0];
+  }
+
+  // Shared tail of every composer panel change (swap, remove, add): rebuild
+  // the cards, refresh the per-slot pre-run estimate and re-evaluate the drift
+  // banner against the new selection.
+  function applyPanelSelection(modelIds) {
+    renderModelInputs(modelIds);
+    updatePerSlotEstimates();
+    renderDriftBanner();
   }
 
   // ---------------------------------------------------------------------------
@@ -1613,7 +1672,8 @@
       // and naming the moderator is a claim it is not in a position to make.
       // Under #290's peer shape no moderator call happens at all. The wording
       // below is true under both shapes.
-      "The panel is critiquing the four answers for this round. The round-level critique appears here once it completes.",
+      // W4: "the four answers" became N-relative; see liveRoundPlaceholderBody.
+      "The panel is critiquing the answers for this round. The round-level critique appears here once it completes.",
     pending: "This round has not started yet.",
     failed: "This round did not complete.",
     skipped: "This round was skipped.",
@@ -1725,11 +1785,11 @@
   // Honest per-stage meta: initial answers shows the REAL "N/4 answers"
   // (answers received vs 4) while running/complete; every other stage shows
   // its state label + the server ``detail`` if any. NO fabricated time/cost.
-  function liveStageMeta(def, stage, stageState, answersReceived) {
+  function liveStageMeta(def, stage, stageState, answersReceived, slotCount) {
     const detail = stage && stage.detail ? String(stage.detail) : "";
     if (def.key === "initial_answers") {
       if (stageState === "running" || stageState === "completed") {
-        const base = `${Math.min(answersReceived, 4)}/4 answers`;
+        const base = `${Math.min(answersReceived, slotCount)}/${slotCount} answers`;
         return detail ? `${base} · ${detail}` : base;
       }
       return detail ? `${stageState} · ${detail}` : stageState;
@@ -1742,9 +1802,11 @@
     if (!strip) return;
     const stages = (result.progress && result.progress.stages) || [];
     const byKey = new Map(stages.map((s) => [s.stage, s]));
+    const slotCount = panelSlotCount(result);
     // Fix 3: skip the rebuild when nothing this strip renders has changed.
     const sig = JSON.stringify({
       answersReceived,
+      slotCount,
       stages: LIVE_PIPELINE_STAGES.map((def) => {
         const s = byKey.get(def.key);
         return s ? [s.state, s.detail || ""] : null;
@@ -1776,8 +1838,8 @@
       const fill = document.createElement("span");
       fill.className = "live-stage-bar-fill";
       if (def.key === "initial_answers" && stageState === "running") {
-        // REAL fraction: answers landed out of 4.
-        fill.style.width = `${(Math.min(answersReceived, 4) / 4) * 100}%`;
+        // REAL fraction: answers landed out of the requested panel.
+        fill.style.width = `${(Math.min(answersReceived, slotCount) / slotCount) * 100}%`;
       } else if (stageState === "running") {
         // No honest fraction exists for debate/synthesis — show an
         // indeterminate blue bar (static under reduced-motion).
@@ -1787,7 +1849,7 @@
 
       const meta = document.createElement("div");
       meta.className = "live-stage-meta mono";
-      meta.textContent = liveStageMeta(def, stage, stageState, answersReceived);
+      meta.textContent = liveStageMeta(def, stage, stageState, answersReceived, slotCount);
 
       item.append(head, bar, meta);
       return item;
@@ -1847,7 +1909,16 @@
     return card;
   }
 
-  function renderLiveDebatePlaceholder(roundNo, stageState) {
+  // W4: the running placeholder names the panel size; every other state's
+  // copy is size-free and comes from the table above unchanged.
+  function liveRoundPlaceholderBody(stageState, slotCount) {
+    if (stageState === "running") {
+      return `The panel is critiquing the ${panelSizeWord(slotCount)} answers for this round. The round-level critique appears here once it completes.`;
+    }
+    return LIVE_ROUND_PLACEHOLDER_BODY[stageState] || "This round has not started yet.";
+  }
+
+  function renderLiveDebatePlaceholder(roundNo, stageState, slotCount) {
     const card = document.createElement("article");
     card.className = "live-round-card live-round-placeholder";
     card.dataset.state = stageState;
@@ -1862,8 +1933,7 @@
     header.append(pill, stateEl);
     const body = document.createElement("p");
     body.className = "live-round-body muted";
-    body.textContent =
-      LIVE_ROUND_PLACEHOLDER_BODY[stageState] || "This round has not started yet.";
+    body.textContent = liveRoundPlaceholderBody(stageState, slotCount);
     card.append(header, body);
     return card;
   }
@@ -1898,7 +1968,11 @@
       const round = byRound.get(roundNo);
       if (round) return renderLiveDebateCard(round);
       const stage = stageByKey.get(`debate_round_${roundNo}`);
-      return renderLiveDebatePlaceholder(roundNo, stage ? stage.state : "pending");
+      return renderLiveDebatePlaceholder(
+        roundNo,
+        stage ? stage.state : "pending",
+        panelSlotCount(result),
+      );
     });
     host.replaceChildren(...cards);
   }
@@ -2581,14 +2655,16 @@
       // code today, not a live defect (measured:
       // ``ProviderExecutionService.produce_initial_answers`` with a refused
       // key returns 4 of 4 slots FAILED, zero LOCAL_SIMULATION).
-      let causeClause =
-        "Live execution is turned off, so all four model answers and the synthesis below come from Quorum's local simulation helpers.";
+      // W4: "all four model answers" names the requested panel size. The word
+      // map is INLINE here, not ``panelSizeWord``: tests/unit/test_demo_mode_banner_copy.py
+      // extracts this one function by brace count and runs it under node alone.
+      const totalWord = { 2: "two", 3: "three", 4: "four" }[total] || String(total);
+      const allAnswers = `all ${totalWord} model answers`;
+      let causeClause = `Live execution is turned off, so ${allAnswers} and the synthesis below come from Quorum's local simulation helpers.`;
       if (readinessState === "offline_by_bad_key") {
-        causeClause =
-          "The model provider refused this deployment's key, so all four model answers and the synthesis below come from Quorum's local simulation helpers.";
+        causeClause = `The model provider refused this deployment's key, so ${allAnswers} and the synthesis below come from Quorum's local simulation helpers.`;
       } else if (readinessState === "offline_by_no_key") {
-        causeClause =
-          "No model provider key is configured, so all four model answers and the synthesis below come from Quorum's local simulation helpers.";
+        causeClause = `No model provider key is configured, so ${allAnswers} and the synthesis below come from Quorum's local simulation helpers.`;
       }
       const message =
         causeClause +
@@ -3446,7 +3522,9 @@
     }
     const total = answers.length;
     const n = refined.size;
-    const count = (k) => (k === 4 ? "four" : String(k));
+    // Inline word map (not ``panelSizeWord``): tests/unit/test_peer_caption_counts.py
+    // extracts this function alone and runs it under node.
+    const count = (k) => ({ 2: "two", 3: "three", 4: "four" })[k] || String(k);
     const plural = (k) => (k === 1 ? "answer" : "answers");
     if (total === 0) return "from the model answers";
     if (n === 0) return `from the ${count(total)} opening ${plural(total)}`;
@@ -3909,7 +3987,13 @@
       mkEl(
         "span",
         "result-verdict-eyebrow",
-        isConsensus ? "The panel's verdict" : "The panel's leaning",
+        // W4 / CHG-010: a two-model panel that agreed is "Both models agree",
+        // never "The panel's verdict". Three and four keep the panel wording.
+        isConsensus
+          ? total === 2
+            ? "Both models agree"
+            : "The panel's verdict"
+          : "The panel's leaning",
       ),
     );
 
@@ -5002,13 +5086,20 @@
       "The card shows the round's combined critique; the per-model detail is " +
         "recorded and itemised on the receipt.",
     );
+    // W4: "all four answers" names the REQUESTED panel. ``agreement.total`` is
+    // the requested slot count the server echoes (the ring's denominator);
+    // ``model_answers.length`` would under-count a slot that never recorded.
+    const requested = Number(res && res.agreement && res.agreement.total);
+    const panelSize = Number.isInteger(requested) && requested > 0 ? requested : defaultModelIds.length;
+    const allAnswers = panelSize === 2 ? "both answers" : `all ${panelSizeWord(panelSize)} answers`;
     head.appendChild(
       mkEl(
         "span",
         "result-debate-caption",
         peerSentence ||
-          "One critique per round, covering all four answers together — " +
-            "Quorum does not record a per-model, line-by-line exchange.",
+          "One critique per round, covering " +
+            allAnswers +
+            " together — Quorum does not record a per-model, line-by-line exchange.",
       ),
     );
     container.appendChild(head);
@@ -5950,7 +6041,13 @@
         }
       }
     }
-    const cards = defaultModelIds.map((fallbackModelId, index) => {
+    // W4: one card per REQUESTED slot. The run echoes its ``model_slots``; a
+    // result-less call (the composer reset) falls back to the default panel.
+    const panelModelIds =
+      result && Array.isArray(result.model_slots) && result.model_slots.length > 0
+        ? result.model_slots.map((slot) => slot.model_id)
+        : defaultModelIds;
+    const cards = panelModelIds.map((fallbackModelId, index) => {
       const slot = modelAnswers.find((answer) => answer.slot_number === index + 1);
       const modelId = slot?.model_id || getModelIds()[index] || fallbackModelId;
       // Run-level status, scoped to the whole card so both the empty-slot
@@ -7338,6 +7435,11 @@
 
     // Question echo (from the composer).
     if (gateQuestion) gateQuestion.textContent = queryTextarea.value.trim();
+    // W4: the meta line names the requested panel size, not "4 models".
+    const gateMeta = el("cost-gate-question-meta");
+    if (gateMeta) {
+      gateMeta.textContent = `${getModelIds().length} models · 2 debate rounds · synthesis · sourced answers where search succeeds`;
+    }
 
     // Big mono total. The estimated range is band-specific and is set only
     // in the confirm branch below (it is hidden in the block band, where a
@@ -9071,6 +9173,35 @@
     }
   }
 
+  // W4: the remove / add controls. Its own init, separate from
+  // ``initModelSlotSelection``: tests/integration/test_app_js_fixes.py runs that
+  // function under a DOM shim that has no ``el``.
+  function initPanelSizeControls() {
+    // Remove a slot. The request body is the ordered list of model ids
+    // (``getModelIds``) and the server assigns ``slot_number`` by position, so
+    // removing is a splice and a re-render; nothing renumbers client-side.
+    modelInputs.addEventListener("click", (event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLElement)) return;
+      const button = target.closest("[data-slot-remove]");
+      if (!button || button.disabled) return;
+      const index = Number(button.dataset.slotRemove);
+      const current = getModelIds();
+      if (!Number.isInteger(index) || current.length <= PANEL_MIN_SLOTS) return;
+      current.splice(index, 1);
+      applyPanelSelection(current);
+    });
+    const addButton = el("model-slot-add");
+    if (addButton) {
+      addButton.addEventListener("click", () => {
+        const current = getModelIds();
+        if (current.length >= PANEL_MAX_SLOTS) return;
+        current.push(nextModelIdToAdd(current));
+        applyPanelSelection(current);
+      });
+    }
+  }
+
   function initModelSlotSelection() {
     modelInputs.addEventListener("change", (event) => {
       const target = event.target;
@@ -9248,6 +9379,7 @@
     initThemeToggle();
     initLanding();
     initModelSlotSelection();
+    initPanelSizeControls();
     initQueryValidation();
     initHighStakesGate();
     initKeyboardShortcuts();

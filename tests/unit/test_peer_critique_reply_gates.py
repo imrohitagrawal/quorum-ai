@@ -45,6 +45,7 @@ from product_app.debate import (
     debate_stub_service,
     debate_system_prompt_max_chars,
     parse_peer_convergence,
+    round_one_system_prompt,
 )
 from product_app.model_slots import EXPECTED_SLOT_COUNT
 from product_app.providers import (
@@ -249,7 +250,12 @@ def test_the_peer_ceiling_prices_the_worst_directive() -> None:
     assert EXPECTED_SLOT_COUNT < 10
 
     # And the ceiling itself covers prompt + worst directive, not prompt alone.
-    longest_prompt = max(len(ROUND_ONE_SYSTEM_PROMPT), len(ROUND_TWO_SYSTEM_PROMPT))
+    # W4: round one names the panel size, and the "Three" form is one character
+    # longer than the shipped four-form, so the longest reachable round-one
+    # prompt is the three-model one. Measured: 3032 chars against 3031.
+    longest_round_one = max(len(round_one_system_prompt(n)) for n in (2, 3, 4))
+    assert longest_round_one == len(ROUND_ONE_SYSTEM_PROMPT) + 1
+    longest_prompt = max(longest_round_one, len(ROUND_TWO_SYSTEM_PROMPT))
     peer = debate_system_prompt_max_chars(peer=True)
     assert peer == longest_prompt + len(d(slot_number=1, round_number=2))
     assert peer > debate_system_prompt_max_chars(peer=False) == longest_prompt

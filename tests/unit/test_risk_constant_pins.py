@@ -199,6 +199,10 @@ BUCKET_A_LITERAL_PIN = (
     # sweeps. Pinned as literals so neither moves as a side effect.
     "model_slots.MIN_SLOT_COUNT",
     "model_slots.MAX_SLOT_COUNT",
+    # W4, second PR. The word served prose uses for the requested panel size.
+    # A wrong entry is silently harmful in the user-facing direction: "Three
+    # models were asked" over a four-model run. Pinned as literals below.
+    "model_slots._PANEL_SIZE_WORDS",
     # The four cost event-type strings (#255, #376). A LITERAL pin, not a
     # behaviour one, because these values are written into a DURABLE table that
     # outlives every deploy: change one and the meter stops counting every row
@@ -1189,6 +1193,9 @@ def test_the_slot_count_is_pinned() -> None:
     # W4: the range the product owner decided on 2026-09-22 (CHG-010).
     assert model_slots.MIN_SLOT_COUNT == 2
     assert model_slots.MAX_SLOT_COUNT == 4
+    # W4, second PR: the served word for each admitted size, byte-identical to
+    # the "Four" that shipped before the panel was variable.
+    assert model_slots._PANEL_SIZE_WORDS == {2: "Two", 3: "Three", 4: "Four"}
 
 
 def test_every_default_slot_vendor_is_listed_in_default_vendors() -> None:
