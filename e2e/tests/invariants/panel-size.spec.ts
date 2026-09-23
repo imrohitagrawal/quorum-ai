@@ -369,6 +369,37 @@ test.describe("panel size: remove / add a slot, N-relative copy (W4)", () => {
     await expect(note).not.toContainText("four models");
   });
 
+  test("the landing CTA still hands off when clicked before the slot grid has rendered", async ({
+    page,
+  }) => {
+    // Review of the third pull request found this: the hand-off message read
+    // the composer's count through getModelIds(), which throws on the
+    // template's placeholder labels until /v1/models/defaults has answered.
+    // The throw left the hand-off latch set, so the landing CTA was dead until
+    // reload. Hold the defaults until after the click and prove the hand-off
+    // still happens, with the default count.
+    let releaseDefaults: () => void = () => {};
+    const held = new Promise<void>((resolve) => {
+      releaseDefaults = resolve;
+    });
+    await page.route("**/v1/models/defaults", async (route) => {
+      await held;
+      await route.continue();
+    });
+    await page.goto("/ui", { waitUntil: "domcontentloaded" });
+    await expect(page.locator('[data-view="landing"]')).toBeVisible();
+    await expect(page.locator("#landing-query")).toBeVisible();
+    // Positive partner: the grid really is un-rendered at this point.
+    expect(await page.locator("select[data-model-slot]").count()).toBe(0);
+    await page.locator("#landing-query").fill("Should we adopt passkeys?");
+    await page.locator("#landing-estimate").click();
+    await expect(page.locator("#landing-handoff-note-text")).toHaveText(
+      "Got your question. Taking you to review your four models and see the itemized cost before anything runs…",
+    );
+    releaseDefaults();
+    await expect(page.locator('[data-view="composer"]')).toBeVisible({ timeout: 15000 });
+  });
+
   test("the transcript renders one card per requested slot: two at N=2, four by default", async ({
     page,
   }) => {

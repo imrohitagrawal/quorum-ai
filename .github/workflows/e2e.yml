@@ -340,7 +340,14 @@ jobs:
         # lane reported "293 passed (6.8m)". Not computed as 284 + 9; the
         # local/CI one-test gap noted on 2026-09-09 was not re-measured here,
         # and a floor at the local count is the conservative choice.
-        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 293 --lane "invariants lane"
+        # 293 -> 298 (W4 third pull request, CHG-011): panel-size.spec.ts adds
+        # four tests (the composer shape line, the model-card tooltip, the
+        # hand-off message, the hand-off before the grid renders) and
+        # landing-cta-reachable.spec.ts adds one (the decided literals). The
+        # lane reported "297 passed (5.9m)" locally before the fifth was
+        # written and 298 is that count plus one; CI's own number is read on
+        # the pull request, and the floor is the local count, not a guess.
+        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 298 --lane "invariants lane"
 
       - name: Clear the previous lane's JUnit report
         run: rm -f e2e/results.xml

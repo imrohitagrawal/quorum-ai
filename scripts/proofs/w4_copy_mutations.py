@@ -189,8 +189,14 @@ E2E_MUTATIONS: list[tuple[str, str, str, str]] = [
     (
         "E4 the handoff message reads the default panel, not the composer",
         "js",
-        "      const message = landingHandoffCopy(kind, getModelIds().length);",
+        "      const message = landingHandoffCopy(kind, landingHandoffSlotCount());",
         "      const message = landingHandoffCopy(kind, 4);",
+    ),
+    (
+        "E6 the hand-off reads getModelIds() again and throws before the grid renders",
+        "js",
+        "      const message = landingHandoffCopy(kind, landingHandoffSlotCount());",
+        "      const message = landingHandoffCopy(kind, getModelIds().length);",
     ),
     (
         "E5 the model-card tooltip ignores the rounds' shape",

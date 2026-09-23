@@ -152,6 +152,12 @@ test.describe("landing CTA is reachable on a phone (#222)", () => {
     // not a safe assertion (4px of slack at this viewport).
     console.log(`landing @390x664: ${JSON.stringify(m)}`);
 
+    // CHG-011 at phone width: the panel line (D2) is shown and the capability
+    // line (D4) is not (the eyebrow states the two rounds here). RED IF either
+    // flips: both shown breaks the bound below; both hidden loses D2.
+    await expect(page.locator(".landing-hero .landing-note-panel")).toBeVisible();
+    await expect(page.locator(".landing-hero .landing-note").first()).toBeHidden();
+
     // RED IF: the density block in app.css is removed. MEASURED with the
     // readiness banner present, before the fix, the page was 1848px against a
     // 664px fold (2.78x); after, 1422px (2.14x). The bound below is set at 2.4x
@@ -336,12 +342,17 @@ test.describe("landing copy describes the real pipeline (ADR-0032)", () => {
       "Four AI models · two debate rounds · one sourced answer",
     );
     await expect(page.locator("#landing-heading")).toHaveText("Ask once. Let four minds argue it out.");
-    await expect(page.locator(".landing-note")).toHaveCount(2);
-    await expect(page.locator(".landing-note").first()).toHaveText(
+    // Both lines live IN THE HERO (D2: "under the headline") and are VISIBLE
+    // at this viewport: review showed every text pin passes on a
+    // display:none element, so visibility is asserted on its own.
+    await expect(page.locator(".landing-hero .landing-note")).toHaveCount(2);
+    await expect(page.locator(".landing-hero .landing-note").first()).toBeVisible();
+    await expect(page.locator(".landing-hero .landing-note").first()).toHaveText(
       "Two rounds of debate, by the panel itself or by a moderator model, then one sourced synthesis.",
     );
-    await expect(page.locator(".landing-note-panel")).toHaveCount(1);
-    await expect(page.locator(".landing-note-panel")).toHaveText(
+    await expect(page.locator(".landing-hero .landing-note-panel")).toHaveCount(1);
+    await expect(page.locator(".landing-hero .landing-note-panel")).toBeVisible();
+    await expect(page.locator(".landing-hero .landing-note-panel")).toHaveText(
       "Your panel, your size: four models by default, three or two when that is all you need.",
     );
 

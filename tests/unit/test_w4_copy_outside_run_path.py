@@ -91,8 +91,13 @@ def test_the_landing_never_sells_a_range_or_a_saving() -> None:
     Positive partner first: the landing view is rendered and carries the
     decided lines, so the absences below are asserted over real text.
     """
-    landing = _visible_text(_landing_view(TestClient(app).get("/ui").text))
+    html = TestClient(app).get("/ui").text
+    landing = _visible_text(_landing_view(html))
     assert PANEL_SUBLINE in landing and DEBATE_LINE in landing and LANDING_H1 in landing
+    # D2 says "under the headline": both lines sit inside the hero block.
+    hero_start = html.index('<div class="landing-hero">')
+    hero = html[hero_start : html.index("</div>", html.index(PANEL_SUBLINE, hero_start))]
+    assert LANDING_H1 in hero and DEBATE_LINE in hero and PANEL_SUBLINE in hero
     lowered = landing.lower()
     for banned in ("2 to 4", "2-4", "two to four ai models", "1 sourced answer"):
         assert banned not in lowered, f"the landing reads a range: {banned!r}"

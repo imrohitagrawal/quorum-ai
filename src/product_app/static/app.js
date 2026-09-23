@@ -8984,7 +8984,13 @@
       clearLandingError();
       if (!landingHandoffNote || !landingHandoffNoteText) return;
       // CHG-011 D6: the count is the composer's current panel, not the default.
-      const message = landingHandoffCopy(kind, getModelIds().length);
+      // Read the RENDERED slot selects, not getModelIds(): until
+      // refreshDefaults() has answered, #model-inputs still holds the
+      // template's placeholder labels and getModelIds() throws on them —
+      // which, from here, left the hand-off latch set and the CTA dead
+      // (review of the third pull request reproduced it). No selects yet
+      // means the default panel is what the visitor is about to review.
+      const message = landingHandoffCopy(kind, landingHandoffSlotCount());
       // Reveal the container FIRST, then write the text: a ``role="status"``
       // aria-live=polite region announces a text mutation that happens while it
       // is in the accessibility tree. Writing the text while still ``hidden`` and
@@ -8992,6 +8998,14 @@
       // reason-for-navigation could go unspoken. Order matters here.
       landingHandoffNote.hidden = false;
       landingHandoffNoteText.textContent = message;
+    }
+
+    // The panel the visitor is about to review: the rendered slot selects, or
+    // the default panel while the grid has not rendered yet. Never throws.
+    function landingHandoffSlotCount() {
+      const rendered = document.querySelectorAll("select[data-model-slot]").length;
+      if (rendered > 0) return rendered;
+      return Array.isArray(defaultModelIds) && defaultModelIds.length > 0 ? defaultModelIds.length : 4;
     }
 
     // Disable/enable the two landing CTAs while the transition message dwells, so

@@ -2,8 +2,8 @@
 
 **RECONSTRUCTED FROM SESSION TRANSCRIPTS — AWAITING OWNER CONFIRMATION**, for
 the sections dated up to 2026-09-22. The section dated 2026-09-23 at the end
-is different in kind: the owner wrote those decisions down, and CHG-011
-records them.
+is different in kind: the owner gave those decisions in chat, in their own
+messages, and CHG-011 records them; see that section for how each was checked.
 
 This file records what the product owner said, or sent, about three board rows,
 with where each sentence came from. The two 2026-08-31 lines were drafted by an
@@ -11,9 +11,11 @@ assistant and then sent by the owner; see below. It exists because none
 of it was in the repository, so every new session labelled these rows
 "undecided" and asked again.
 
-It is **not** a decision record. No CHG row and no ADR has been filed for any
-row below, and none should be until the owner confirms this text. Nothing here
-is "Accepted".
+The sections up to 2026-09-22 are **not** a decision record: no CHG row and
+no ADR was filed from them, and none should be until the owner confirms that
+text. (W4's own decisions of 2026-09-22 were then taken in chat and recorded
+in CHG-010 and ADR-0120, as its section notes.) The 2026-09-23 section is
+recorded in CHG-011.
 
 ## How each quote was checked
 
@@ -90,11 +92,15 @@ lands. Asked at 2026-09-21T20:16Z; unanswered when this file was written.
 ## 2026-09-23 — W4's third pull request (the copy), and BYOK as a plan
 
 **DECIDED (D1 to D7) and PLANNED (D8, D9) by the product owner, 2026-09-23.**
-Source: the owner's chat with the session that shipped PR #494, written by
-the owner into the root prompt `CONTINUE-W4-PR3-AND-BYOK-ULTRACODE-PROMPT.md`
-§4 (untracked; transcript `23fee4a3`, the file written at
-`2026-09-23T16:25:17Z`) and quoted here verbatim. Recorded the same day in
-CHG-011; ADR-0120 carries the amendment. Nothing below is reconstructed.
+Source and how it was checked: the owner's own messages (`type: user`) in
+transcript `23fee4a3`, between `2026-09-23T15:15:46Z` ("We cannot change the
+main heading …") and `16:21:02Z` (the abuse-limit numbers); at `16:23:25Z`
+the owner asked the session for a self-running prompt, and the SESSION wrote
+those decisions into the root prompt `CONTINUE-W4-PR3-AND-BYOK-ULTRACODE-PROMPT.md`
+§4 at `16:25:17Z` (an `assistant` record; the file is untracked). The D1 to
+D9 text below is that file's wording, which the owner has not separately
+confirmed; the two direct quotations in D1 and D5 are the owner's own words.
+Recorded the same day in CHG-011; ADR-0120 carries the amendment.
 
 **D1. Headline.** The landing headline stays exactly
 `Four AI models, one sourced answer.` Owner: "We cannot change the main
@@ -145,7 +151,11 @@ user budget window, $5 default, the existing cost gate asking before a run
 crosses it; KEEP the per-run hard cap and one run at a time per session.
 Abuse limits under a user key, owner's numbers: about 100 to 200 sessions
 per IP per day (not 2: office networks share an IP); about 10 requests per
-1 to 2 minutes. Sequencing: own board item; failure-mode page first; then
+1 to 2 minutes. The owner's sentence (`16:21:02Z`): "I would not keep 2 new
+sessions per IP because that is too low. … We should look at 100 or 200
+requests, that is something, but yes, within 1 or 2 minutes, we can have a
+limit of, say, 10 requests." "Sessions per IP per day" for the first number
+is the session's reading, not the owner's noun. Sequencing: own board item; failure-mode page first; then
 three PRs (key intake and scoping; rails by credential source plus the
 budget window; user toggles and per-run shape). Nothing of this is built now.
 
@@ -158,5 +168,5 @@ budget window; user toggles and per-run shape). Nothing of this is built now.
 **W5, restated on 2026-09-23:** the owner's queue says build it "only if its
 decision register entry is complete enough to build; otherwise write the
 scoping and stop". The entry above names the mode's SHAPE (what it keeps and
-drops) and nothing else; see the W5 scoping note of 2026-09-23 for what is
-still owed.
+drops) and nothing else; a W5 scoping note naming what is still owed follows
+in its own docs-only pull request.
