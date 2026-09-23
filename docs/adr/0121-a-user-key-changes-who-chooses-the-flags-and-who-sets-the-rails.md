@@ -2,10 +2,17 @@
 
 ## Status
 
-PROPOSED — AWAITING OWNER. The product owner decided the SHAPE of this on
-2026-09-23 (CHG-011 D8, "planned, not next": the principle, the toggles, the
-rails and the sequencing below are the owner's words). The owner has NOT
-decided its delivery: no pull request is authorised, nothing is scheduled,
+PROPOSED — AWAITING OWNER. On 2026-09-23 the product owner set the shape of
+this in chat (CHG-011 D8, "planned, not next"). What the owner typed, in
+their own words: a "$5 window or a limit", live execution and the judge
+"turned on by default", "everything should be a user-defined flag", the
+rejection of 2 sessions per IP, and "100 or 200 requests" with "10 requests"
+"within 1 or 2 minutes" (transcript `23fee4a3`, `type: user`, 16:11:37Z,
+16:17:23Z, 16:21:02Z). The principle sentence, the keep/drop rails table and
+the three-pull-request sequencing below were the SESSION's suggestions in
+that chat, which the owner accepted with "For the rest, I agree with all your
+suggestions" (16:21:02Z); they are recorded here as agreed proposals, not as
+the owner's wording. The owner has NOT decided delivery: no pull request is authorised, nothing is scheduled,
 and no code in this repository implements any of it. This record exists so
 that the first BYOK pull request builds to the recorded shape instead of
 re-asking it, and so that the one prerequisite it has (the token binding in
@@ -29,9 +36,9 @@ openrouter_key = settings.openrouter_api_key or ""
 assigned nowhere (`grep -rn BYO_OPENROUTER src/` hits the enum only). FR-012
 is titled "Required bring-your-own OpenRouter key" while its Behavior line
 says the first cut uses server keys only, and the traceability matrix cites
-two BYO test files that do not exist (`tests/unit/test_provider_keys.py`,
-`tests/integration/test_provider_key_endpoints.py`; `ls` on each: no such
-file). So the repository already half-promises BYOK and delivers none of it.
+two BYO test files that do not exist (`test_provider_keys` under the unit
+tests and `test_provider_key_endpoints` under the integration tests; `ls` on
+each path named in `docs/18`: no such file). So the repository already half-promises BYOK and delivers none of it.
 
 Because the app pays, the app also decides: the money flags (live execution,
 the judge, peer critique) are environment settings governed by the
@@ -40,7 +47,7 @@ committed, watchdog-enforced window (`configs/live-execution-windows.json`,
 admin toggle surface and no per-run choice (CHG-011 D7). That is the right
 posture for the app's money and the wrong one for a user's.
 
-## Decision (the owner's shape, D8)
+## Decision (the shape agreed on 2026-09-23, D8)
 
 **Principle: the party paying chooses the flags; the party at risk sets the
 rails.** Two postures, keyed on the credential source of the run:
@@ -57,11 +64,14 @@ rails.** Two postures, keyed on the credential source of the run:
 | Per-run hard cap (`HARD_LIMIT_USD`) | keeps | KEEPS: a runaway single run is the same risk on any key |
 | One run at a time per session | keeps | KEEPS |
 
-Abuse limits under a user key, the owner's numbers: about 100 to 200 session
-mints per IP per day (today's `SESSION_MINT_CAP_PER_IP = 2` exists because the
-app pays; office networks share an IP), and about 10 requests per 1 to 2
-minutes. The exact constants are for the rails pull request to measure and
-propose.
+Abuse limits under a user key, in the owner's words: "I would not keep 2 new
+sessions per IP because that is too low … We should look at 100 or 200
+requests … within 1 or 2 minutes, we can have a limit of, say, 10 requests"
+(16:21:02Z). Reading "100 or 200" as session mints per IP per day is the
+session's interpretation (today's `SESSION_MINT_CAP_PER_IP = 2` exists
+because the app pays; office networks share an IP); the owner said
+"requests" and named no period. The exact constants and their units are for
+the rails pull request to measure and propose.
 
 "Live execution" generalises from "the app's flag is on" to "this run holds
 a key that may be spent" (D9). `_live_execution_enabled` gains a term for the
@@ -69,7 +79,7 @@ credential source; `_peer_critique_in_effect` gains one term for the same
 reason, and stays the single predicate every piece of shape copy reads.
 Nothing new reads `openrouter_live_execution_enabled` directly.
 
-## Sequencing (the owner's, D8)
+## Sequencing (proposed by the session, agreed by the owner, D8)
 
 1. A board row (W28) and the failure-mode page
    (`docs/analysis/2026-09-23-byok-failure-modes.md`) — this pull request.

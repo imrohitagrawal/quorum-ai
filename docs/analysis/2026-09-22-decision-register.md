@@ -160,7 +160,12 @@ per IP per day (not 2: office networks share an IP); about 10 requests per
 sessions per IP because that is too low. … We should look at 100 or 200
 requests, that is something, but yes, within 1 or 2 minutes, we can have a
 limit of, say, 10 requests." "Sessions per IP per day" for the first number
-is the session's reading, not the owner's noun. Sequencing: own board item; failure-mode page first; then
+is the session's reading, not the owner's noun. Likewise the keep/drop rails
+list and the three-pull-request sequencing above were the session's
+suggestions in that chat, accepted by the owner with "For the rest, I agree
+with all your suggestions" (`16:21:02Z`); the owner's own typed points are
+the $5 window, live execution and the judge on by default, "everything should
+be a user-defined flag", and the limits quoted above. Sequencing: own board item; failure-mode page first; then
 three PRs (key intake and scoping; rails by credential source plus the
 budget window; user toggles and per-run shape). Nothing of this is built now.
 
