@@ -24,6 +24,29 @@ ADR-0119 is reserved by draft PR #491 (#268); this record takes 0120 so the
 two branches cannot collide on a number (ADR-0119 exists on branch
 `proposal/268-web-search-context-tokens`).
 
+**Amendment, 2026-09-23 (CHG-011) — the third pull request, the copy outside
+the run path.** The product owner decided the wording in session, and the
+words are in CHG-011 and the decision register's 2026-09-23 section. In
+short: the headline stays `Four AI models, one sourced answer.` and never
+becomes a range (D1); one muted panel-size line under it, once, with no
+price claim (D2); product copy describes the default of four, copy about
+this composer state or this run reads the actual count and shape (D3); the
+landing's debate line names both shapes as a capability (D4); the composer
+carries a shape line chosen by `_peer_critique_in_effect` and the rendered
+slot count, whose moderator form states that peer critique is available and
+off on this deployment (D5); the transcript's model-card tooltip reads the
+run's `agreement.total` and its rounds' `critique_shape`, and the
+landing-to-composer message reads the composer's count (D6). The landing
+eyebrow, the h1 and the landing subhead in `main.py` stay at four (D3). Two
+things the build found, recorded rather than hidden: the debate placeholder
+and the synthesis tooltips D6 names sit inside `.panel.panel-section`, which
+`app.css` hides on every view, so they were given neutral literals and no
+renderer; and at 390x664 the two hero lines do not fit the #222 density
+bound (1515px without them, 1629px with both, bound 1593.6px; no type size
+keeps both under it), so below 600px the capability line is not rendered
+and the panel line is set at 14px (1567px). Decisions 1 to 6 below are
+unchanged; decision 5's "second pull request" is #494.
+
 ## Context
 
 `EXPECTED_SLOT_COUNT = 4` was the only panel size the product accepted. The

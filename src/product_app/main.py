@@ -822,6 +822,11 @@ def _render_workspace_html() -> str:
         "reasons": list(report.reasons),
         "catalog_drift_ids": list(report.catalog_drift_ids),
         "global_spend_ceiling_reached": global_spend_ceiling_reached,
+        # W4 PR 3 (CHG-011 D5). The composer's shape line reads this key to
+        # say which critique shape THIS deployment runs. One predicate, one
+        # more reader (ADR-0116): the same ``_peer_critique_in_effect`` that
+        # ``/status`` and the landing subhead read, never the flag alone.
+        "peer_critique_in_effect": _peer_critique_in_effect(settings),
     }
     live_readiness_json = json.dumps(readiness_payload).replace("<", "\\u003c")
     # PR-0 / Bug 7: inject the actual default model ids into the

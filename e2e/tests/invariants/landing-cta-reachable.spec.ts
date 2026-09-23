@@ -308,13 +308,55 @@ test.describe("landing copy describes the real pipeline (ADR-0032)", () => {
     // subhead test above is what pins the wording. The h1 "Let four minds
     // argue it out" is deliberately retained (ADR-0032 §5), so "argue" is not
     // among these.
+    // CHG-011 D4: the landing carries ONE capability line that names both
+    // shapes ("by the panel itself or by a moderator model"), so the peer-shape
+    // ban is the subhead's moderator CLAIM ("moderator model critiques"), not
+    // the word alone.
     const otherShape =
       shape === "peer"
-        ? ["moderator", "audits them", "a separate model reads"]
+        ? ["moderator model critiques", "audits them", "a separate model reads"]
         : ["critique each other", "revise its own"];
     for (const banned of [...otherShape, "planned, not yet built", "not yet built"]) {
       expect(text).not.toContain(banned);
     }
+  });
+
+  // CHG-011 (decided 2026-09-23). D1: the headline stays "Four AI models, one
+  // sourced answer." and never becomes a range. D2: one muted panel-size line,
+  // once, with no price claim. D4: one capability line naming both shapes.
+  // D6: the eyebrow and the h1 stay at four (D3: product copy describes the
+  // default). Every literal is pinned WHOLE.
+  test("the headline, eyebrow, h1 and the two decided lines are the approved literals (CHG-011)", async ({
+    page,
+  }) => {
+    await stubReadinessLive(page);
+    await page.goto("/ui");
+    await expect(page.locator(".landing-hero")).toBeAttached();
+    await expect(page.locator(".landing-eyebrow")).toHaveText(
+      "Four AI models · two debate rounds · one sourced answer",
+    );
+    await expect(page.locator("#landing-heading")).toHaveText("Ask once. Let four minds argue it out.");
+    await expect(page.locator(".landing-note")).toHaveCount(2);
+    await expect(page.locator(".landing-note").first()).toHaveText(
+      "Two rounds of debate, by the panel itself or by a moderator model, then one sourced synthesis.",
+    );
+    await expect(page.locator(".landing-note-panel")).toHaveCount(1);
+    await expect(page.locator(".landing-note-panel")).toHaveText(
+      "Your panel, your size: four models by default, three or two when that is all you need.",
+    );
+
+    const landing = ((await page.locator("[data-view='landing']").textContent()) ?? "").toLowerCase();
+    // Positive partner: the view rendered (a 429 shell would be empty here).
+    expect(landing.length).toBeGreaterThan(400);
+    // RED IF: a range or a saving reaches the landing — both rejected decisions.
+    for (const banned of ["2 to 4", "two to four ai models", "1 sourced answer", " half "]) {
+      expect(landing).not.toContain(banned);
+    }
+
+    // D1: the brand line on the workspace the landing hands off to.
+    await page.locator("#landing-open-workspace").click();
+    await expect(page.locator('[data-view="composer"]')).toBeVisible();
+    await expect(page.locator(".brand-lede")).toHaveText("Four AI models, one sourced answer.");
   });
 
   test("the disclaimer row names a REAL current limit, not a stale roadmap", async ({

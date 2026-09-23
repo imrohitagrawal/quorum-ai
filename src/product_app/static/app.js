@@ -44,6 +44,55 @@
   // the panel could only be four; anything else falls back to the digit.
   const PANEL_SIZE_WORDS = { 2: "two", 3: "three", 4: "four" };
   const panelSizeWord = (n) => PANEL_SIZE_WORDS[n] || String(n);
+
+  // CHG-011 D5 (2026-09-23). The composer's shape line: which critique shape
+  // THIS run takes, at THIS panel size. `peerInEffect` is the readiness
+  // island's `peer_critique_in_effect` — the server-side predicate
+  // `_peer_critique_in_effect` (ADR-0116), never the flag alone. The second
+  // moderator sentence is stated as a fact about this deployment. Inline word
+  // map, not `panelSizeWord`: the unit harness runs this function alone.
+  function composerShapeCopy(slotCount, peerInEffect) {
+    const words = { 2: "two", 3: "three", 4: "four" };
+    const n = Number(slotCount);
+    const word = words[n] || String(n);
+    if (peerInEffect) {
+      if (n === 2) {
+        return "This run: both models critique each other, in two rounds, then one sourced synthesis.";
+      }
+      return `This run: each of the ${word} models critiques the others, in two rounds, then one sourced synthesis.`;
+    }
+    const answers = n === 2 ? "both answers" : `all ${word} answers`;
+    return (
+      `This run: a moderator model critiques ${answers}, in two rounds, then one sourced synthesis. ` +
+      "Peer critique, where each model critiques the others, is available and off on this deployment."
+    );
+  }
+
+  // CHG-011 D6. The transcript's model-card tooltip reads the run's panel size
+  // and its shape. At four under the moderator shape this is the pre-change
+  // literal, so the default panel's transcript stays byte-identical.
+  function modelCardInfoText(panelSize, peerShape) {
+    const words = { 2: "two", 3: "three", 4: "four" };
+    const n = Number(panelSize);
+    const all = n === 2 ? "both" : `all ${words[n] || String(n)}`;
+    const head = "This shows one model's answer. It is the model's only answer — it is not revised. ";
+    if (peerShape) {
+      const others = n === 2 ? "the other" : "the others";
+      return `${head}Once ${all} respond, each model reads ${others} and writes its own critique.`;
+    }
+    return `${head}Once ${all} respond, a separate moderator model reads ${all} and writes the debate critique.`;
+  }
+
+  // CHG-011 D6. The landing-to-composer message names the panel the visitor
+  // is about to review: the slots the composer holds right now.
+  function landingHandoffCopy(kind, slotCount) {
+    const words = { 2: "two", 3: "three", 4: "four" };
+    const n = Number(slotCount);
+    const word = words[n] || String(n);
+    return kind === "estimate"
+      ? `Got your question. Taking you to review your ${word} models and see the itemized cost before anything runs…`
+      : `Got your question. Taking you to review your ${word} models, then we'll price it and run once you approve…`;
+  }
   // The panel size of a run: the REQUESTED slots the server echoes back, or
   // the default panel while no run exists yet.
   const panelSlotCount = (result) => {
@@ -1532,6 +1581,24 @@
     // W4: the add control lives after the grid and is hidden at the ceiling.
     const addButton = el("model-slot-add");
     if (addButton) addButton.hidden = modelIds.length >= PANEL_MAX_SLOTS;
+    // CHG-011 D5: the shape line follows the rendered count.
+    renderPanelShapeLine(modelIds.length);
+  }
+
+  // CHG-011 D5. Writes the composer's shape line for the rendered slot count.
+  // The shape comes from the page-load readiness island, which the server
+  // fills from `_peer_critique_in_effect` — a process setting, so the seed is
+  // the right source and no poll can drift it. A missing island (the /ui 429
+  // page, an old cached shell) reads as the moderator shape, which is the
+  // shape every run takes when no critic can be dispatched.
+  function renderPanelShapeLine(slotCount) {
+    const line = el("panel-shape-line");
+    if (!line) return;
+    const seed = window.LIVE_READINESS;
+    const peer = Boolean(seed && typeof seed === "object" && seed.peer_critique_in_effect === true);
+    line.textContent = composerShapeCopy(slotCount, peer);
+    line.dataset.shape = peer ? "peer" : "moderator";
+    line.dataset.panelSize = String(slotCount);
   }
 
   // W4: the next model to add is the first default not already on the panel,
@@ -6047,6 +6114,16 @@
       result && Array.isArray(result.model_slots) && result.model_slots.length > 0
         ? result.model_slots.map((slot) => slot.model_id)
         : defaultModelIds;
+    // CHG-011 D6: the card tooltip reads THIS run's panel size — the requested
+    // count the server echoes as `agreement.total`, else the cards rendered —
+    // and its shape off the rounds' `critique_shape`; never the default panel.
+    const requestedTotal = Number(result && result.result && result.result.agreement && result.result.agreement.total);
+    const cardPanelSize = Number.isInteger(requestedTotal) && requestedTotal > 0 ? requestedTotal : panelModelIds.length;
+    const cardRounds = result && result.result && Array.isArray(result.result.debate_outputs) ? result.result.debate_outputs : [];
+    // Through the one helper that reads `critique_shape` (ADR-0099): it returns
+    // null unless a peer round exists, so null means the moderator shape.
+    const cardPeerShape = describePeerCritique(cardRounds) !== null;
+    const cardInfoText = modelCardInfoText(cardPanelSize, cardPeerShape);
     const cards = panelModelIds.map((fallbackModelId, index) => {
       const slot = modelAnswers.find((answer) => answer.slot_number === index + 1);
       const modelId = slot?.model_id || getModelIds()[index] || fallbackModelId;
@@ -6079,7 +6156,7 @@
       modelCardInfo.type = "button";
       modelCardInfo.className = "info-icon";
       modelCardInfo.setAttribute("data-info-icon", "");
-      modelCardInfo.setAttribute("data-info-text", "This shows one model's answer. It is the model's only answer — it is not revised. Once all four respond, a separate moderator model reads all four and writes the debate critique.");
+      modelCardInfo.setAttribute("data-info-text", cardInfoText);
       modelCardInfo.setAttribute("aria-label", "What is this card?");
       modelCardInfo.innerHTML = "&#9432;";
       heading.append(modelCardInfo);
@@ -6181,11 +6258,11 @@
   // they are never generated by a model, even with a live API key.
   const SYNTHESIS_TOOLTIPS = {
     "Consensus":
-      "A templated summary of how many of the four models returned a usable answer, and what share of THOSE answers carried a visible source. Templated by Quorum; no model generates this.",
+      "A templated summary of how many of the panel's models returned a usable answer, and what share of THOSE answers carried a visible source. Templated by Quorum; no model generates this.",
     "Disagreement":
-      "A templated note about preserved disagreement — typically whether the four answers diverged on which provider path was used. Templated by Quorum; no model generates this.",
+      "A templated note about preserved disagreement — typically whether the answers diverged on which provider path was used. Templated by Quorum; no model generates this.",
     "Source support":
-      "The share of the answers that CAME BACK carrying at least one primary source reference, as a percentage. A slot that failed or was cancelled produced no text to source, so it is out of this figure entirely — on a run with a failed slot the denominator is smaller than four, and the completeness signal is what reports the missing slot. It counts whether a source is PRESENT on each answer — it does not check that the source supports what the answer says. Templated by Quorum; no model generates this.",
+      "The share of the answers that CAME BACK carrying at least one primary source reference, as a percentage. A slot that failed or was cancelled produced no text to source, so it is out of this figure entirely — on a run with a failed slot the denominator is smaller than the panel, and the completeness signal is what reports the missing slot. It counts whether a source is PRESENT on each answer — it does not check that the source supports what the answer says. Templated by Quorum; no model generates this.",
     "Uncertainty":
       "A templated statement about how much of the run's evidence is uncertain, based on failed answers and low coverage. Templated by Quorum; no model generates this.",
     "Recommendation":
@@ -8906,10 +8983,8 @@
     function showLandingHandoffNote(kind) {
       clearLandingError();
       if (!landingHandoffNote || !landingHandoffNoteText) return;
-      const message =
-        kind === "estimate"
-          ? "Got your question. Taking you to review your four models and see the itemized cost before anything runs…"
-          : "Got your question. Taking you to review your four models, then we'll price it and run once you approve…";
+      // CHG-011 D6: the count is the composer's current panel, not the default.
+      const message = landingHandoffCopy(kind, getModelIds().length);
       // Reveal the container FIRST, then write the text: a ``role="status"``
       // aria-live=polite region announces a text mutation that happens while it
       // is in the accessibility tree. Writing the text while still ``hidden`` and

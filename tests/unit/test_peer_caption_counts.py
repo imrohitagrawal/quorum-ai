@@ -353,8 +353,10 @@ def test_both_debate_captions_are_rendered_from_the_helper(app_js_code: str) -> 
     ``rounds.some((r) => r && r.critique_shape === "peer")`` and a fixed string.
     """
     calls = app_js_code.count("describePeerCritique(")
-    # 1 definition + 2 call sites (result view, transcript view).
-    assert calls == 3, f"expected 1 definition and 2 call sites, found {calls} occurrences"
+    # 1 definition + 3 call sites: the result view, the transcript view, and
+    # (CHG-011 D6) the transcript model-card tooltip, which reads the run's
+    # shape through the helper rather than with its own inline predicate.
+    assert calls == 4, f"expected 1 definition and 3 call sites, found {calls} occurrences"
 
     # POSITIVE PARTNER: the old inline predicate is GONE from the render path.
     # Without this the count above passes over code that calls the helper and

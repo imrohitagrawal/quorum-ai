@@ -276,6 +276,11 @@
                    default (AC-007); the add control is hidden at four and
                    shown by renderModelInputs once a slot is removed. -->
               <button type="button" id="model-slot-add" class="model-slot-add" hidden>Add a model</button>
+              <!-- CHG-011 D5: which critique shape THIS run takes, at THIS
+                   panel size. Text is written by renderPanelShapeLine (app.js)
+                   from the readiness island's peer_critique_in_effect and the
+                   rendered slot count; re-written on every remove/add. -->
+              <p id="panel-shape-line" class="muted panel-shape-line" data-shape="" data-panel-size=""></p>
             </fieldset>
             <div id="cost-confirmation" class="callout callout-cost" hidden>
               <div class="callout-icon" aria-hidden="true">$</div>
@@ -768,6 +773,12 @@
               <p class="landing-eyebrow">Four AI models · two debate rounds · one sourced answer</p>
               <h1 id="landing-heading" class="landing-h1" tabindex="-1">Ask once. Let four minds argue it out.</h1>
               <p class="landing-subhead">{{ landing_subhead }}</p>
+              <!-- CHG-011 (2026-09-23), D4 then D2. D4 is a CAPABILITY line and
+                   names both critique shapes; the subhead above is the one that
+                   follows the served shape (ADR-0116). D2 is the one muted line
+                   about panel size; it carries no price claim, ever. -->
+              <p class="landing-note">Two rounds of debate, by the panel itself or by a moderator model, then one sourced synthesis.</p>
+              <p class="landing-note landing-note-panel">Your panel, your size: four models by default, three or two when that is all you need.</p>
             </div>
 
             <div class="landing-runbar">
@@ -938,7 +949,7 @@
                 type="button"
                 class="info-icon"
                 data-info-icon
-                data-info-text="The synthesis is written by a single configured model (currently openai/gpt-5-mini) after it reads the four opening answers and the round-level debate critiques. It is not a vote or a quote — it is one model's interpretation of the four."
+                data-info-text="The synthesis is written by a single configured model (currently openai/gpt-5-mini) after it reads the panel's opening answers and the round-level debate critiques. It is not a vote or a quote — it is one model's interpretation of the panel."
                 aria-label="What is the synthesis?"
               >&#9432;</button>
             </h3>
@@ -946,7 +957,7 @@
           </div>
           <div class="result-block" aria-live="polite" aria-atomic="true">
             <h3>Debate rounds</h3>
-            <div id="debate-output" class="muted" aria-live="polite" aria-atomic="true">No debate rounds yet — run a query to see the moderator's critique of all four answers.</div>
+            <div id="debate-output" class="muted" aria-live="polite" aria-atomic="true">No debate rounds yet — run a query to see the round-level critique of the panel's answers.</div>
           </div>
         </div>
       </section>
