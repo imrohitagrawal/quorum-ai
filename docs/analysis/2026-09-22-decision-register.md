@@ -26,7 +26,9 @@ hard line breaks in the transcript, so a one-line `grep -F` finds only
 fragments of them; they are shown here with the breaks joined. Timestamps are
 the transcript's own, in UTC. The transcripts
 are outside this repository, so a reader without that machine cannot re-run
-the check; that is the reason for the AWAITING CONFIRMATION label.
+the check; that is the reason for the AWAITING CONFIRMATION label. The
+2026-09-23 section marks, quote by quote, which words are the owner's and
+which are the session's.
 
 The two 2026-08-31 lines come from one long prompt. **An assistant drafted
 it**: transcript `d1d57431`, a record of type `assistant` at
@@ -98,8 +100,11 @@ main heading …") and `16:21:02Z` (the abuse-limit numbers); at `16:23:25Z`
 the owner asked the session for a self-running prompt, and the SESSION wrote
 those decisions into the root prompt `CONTINUE-W4-PR3-AND-BYOK-ULTRACODE-PROMPT.md`
 §4 at `16:25:17Z` (an `assistant` record; the file is untracked). The D1 to
-D9 text below is that file's wording, which the owner has not separately
-confirmed; the two direct quotations in D1 and D5 are the owner's own words.
+D9 text below follows that file's wording (D6 abridged, D8 annotated); the
+owner has not separately confirmed that wording, and the "party paying"
+principle sentence in D8 is the session's phrasing. The three direct
+quotations, in D1, D5 and D8, are the owner's own `type: user` words, each
+checked in that transcript.
 Recorded the same day in CHG-011; ADR-0120 carries the amendment.
 
 **D1. Headline.** The landing headline stays exactly
@@ -165,8 +170,8 @@ budget window; user toggles and per-run shape). Nothing of this is built now.
 - Every optional stage stays a priced `by_stage` row.
 - The confirmation token must bind the slot list and the shape BEFORE any per-run toggle exists; W5 must not add a per-run choice first.
 
-**W5, restated on 2026-09-23:** the owner's queue says build it "only if its
-decision register entry is complete enough to build; otherwise write the
-scoping and stop". The entry above names the mode's SHAPE (what it keeps and
+**W5, restated on 2026-09-23:** the session-written prompt (at the owner's
+request, above) queues it "only if its decision register entry is complete
+enough to build; otherwise write the scoping and stop". The entry above names the mode's SHAPE (what it keeps and
 drops) and nothing else; a W5 scoping note naming what is still owed follows
 in its own docs-only pull request.

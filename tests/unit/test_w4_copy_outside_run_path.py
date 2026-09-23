@@ -94,9 +94,13 @@ def test_the_landing_never_sells_a_range_or_a_saving() -> None:
     html = TestClient(app).get("/ui").text
     landing = _visible_text(_landing_view(html))
     assert PANEL_SUBLINE in landing and DEBATE_LINE in landing and LANDING_H1 in landing
-    # D2 says "under the headline": both lines sit inside the hero block.
+    # D2 says "under the headline": both lines sit inside the hero block. The
+    # hero holds only <p> and <h1> children, so its FIRST closing div is its
+    # own; review showed an end bound taken after the subline contained the
+    # subline by construction. RED IF either line moves out of the hero.
     hero_start = html.index('<div class="landing-hero">')
-    hero = html[hero_start : html.index("</div>", html.index(PANEL_SUBLINE, hero_start))]
+    hero = html[hero_start : html.index("</div>", hero_start)]
+    assert "<div" not in hero[len('<div class="landing-hero">') :], "the hero grew a nested div"
     assert LANDING_H1 in hero and DEBATE_LINE in hero and PANEL_SUBLINE in hero
     lowered = landing.lower()
     for banned in ("2 to 4", "2-4", "two to four ai models", "1 sourced answer"):
