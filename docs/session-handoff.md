@@ -1,7 +1,7 @@
 # Session Handoff
 
 ## Date/time
-2026-09-23T14:28:17+05:30
+2026-09-24T02:18:18+05:30
 
 ## Open work
 `docs/65-open-work.md` — the source of truth for what is open, what blocks what,
@@ -11,24 +11,24 @@ line further down this file is the factory router's view of the lifecycle, not a
 work status.
 
 ## Latest narrative handoff
-`docs/analysis/2026-09-23-session-handoff.md` — read this for full context before editing. (today)
+`docs/analysis/2026-09-24-session-handoff.md` — read this for full context before editing. (today)
 
 This file is a mechanical snapshot (branch/git-status/skill-route/live state) —
 regenerated fresh every `make handoff`. The narrative above (what happened,
 what's next, the traps) lives in the dated doc it points to, not here.
 
 ## Current branch/worktree
-docs/handoff-2026-09-23
+docs/handoff-2026-09-24
 
 ## Live state (measured fresh by this run, not hand-carried)
 Run `make handoff` again for current numbers instead of trusting this file
 once it ages -- every value below is read from git/gh/`/status` at
 generation time, per #134.
 
-- **`origin/main` tip:** `783fabff696c`
-- **Last commit touching `src/`:** `783fabff696c`
-- **Production vs. last `src/` commit:** production build_sha 12b1e51 does NOT match last src/ commit 783fabf -- a deploy may be in flight or overdue
-- **pytest collected (no execution):** 4611
+- **`origin/main` tip:** `2cbb9c1307b3`
+- **Last commit touching `src/`:** `53d0a117df3b`
+- **Production vs. last `src/` commit:** production build_sha 2cbb9c1 does NOT match last src/ commit 53d0a11 -- a deploy may be in flight or overdue
+- **pytest collected (no execution):** 4620
 - **e2e lane spec counts:** invariants: 21, ops: 2, degraded: 1
 - **Open issues:** 8
 - **Changed-lines coverage:** not computed here -- `make diff-cover` shares
@@ -93,7 +93,8 @@ Operate, learn, and improve
 
 ## Git status
 ```text
-?? docs/analysis/2026-09-23-session-handoff.md
+?? docs/analysis/2026-09-24-session-handoff.md
+?? docs/analysis/2026-09-24-w5-scoping.md
 ```
 
 ## Diff stat
