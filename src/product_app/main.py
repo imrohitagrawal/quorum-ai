@@ -1294,6 +1294,10 @@ def status_snapshot() -> dict[str, object]:
         # and the ceiling DO bind it; ADR-0097 records why that difference
         # means peer critique needs no per-window declaration of its own.
         "peer_critique_enabled": settings.peer_critique_enabled,
+        # #447 / ADR-0124: the source fetcher is an egress-capable subsystem
+        # (it reads arbitrary cited hosts), so its flag is reported like the
+        # others (ADR-0013). State only. Shipped off.
+        "source_fetch_enabled": settings.quorum_source_fetch_enabled,
         # ADR-0116, #458. The FLAG above says what is configured; this says
         # whether a critic call can actually be dispatched. They differed in
         # production from 2026-09-12 to 2026-09-24 — flag true, live execution

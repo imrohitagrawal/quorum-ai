@@ -6,7 +6,7 @@ original, because a gate and an offline agent can read it and cannot read `gh`.
 
 Verified at: `b1209b5a785e95fb208c55c4303ada85065aeb54`
 
-The board holds **27** rows, **4** of them unpinned.
+The board holds **28** rows, **4** of them unpinned.
 
 `scripts/check_open_work.py --check` reads every row's evidence off disk and
 refuses if a claim is false. It runs inside `make validate`, and
@@ -123,6 +123,7 @@ caught by any automated check and 10 of 16 by adversarial review
 | W26 | The citation gate reports `.tsx`, `.mdx` and `.pyi` citations under a truncated path nobody wrote | DONE | `ABSENT tests/unit/test_cited_paths_resolve.py :: def test_a_longer_extension_is_not_truncated_to_a_listed_shorter_one` | #469 | — |
 | W27 | 35 mutants of `_tavily_search` survive: the request's shape, its socket timeout and both of its log events are unasserted | DONE | `ABSENT src/product_app/providers.py :: _CONTENT_TYPE_HEADER: Final = "Content-Type"` | #465 | W25 |
 | W28 | BYOK: two postures, the party paying chooses — PLANNED by the owner 2026-09-23 (CHG-011 D8), delivery not decided (ADR-0121 PROPOSED; failure modes in `docs/analysis/2026-09-23-byok-failure-modes.md`) | PENDING | `PRESENT src/product_app/query_run_orchestration.py :: credential_source = ProviderCredentialSource.APP_OWNED` | — | owner decision; the token binding (CHG-011 D9) landed 2026-09-24 (ADR-0123) |
+| W29 | The judge reads the cited pages (#447, Route B): the fetcher is built behind a default-off setting (ADR-0124); the judge wiring — page text in the judge's evidence, the input reserve, the receipt row, the posture-keyed copy — is the next pull request | PENDING | `ABSENT src/product_app/evaluation.py :: source_pages` | #447 | the wiring pull request |
 
 **STOP** marks a row that cannot be finished without a human decision — a money,
 cost or safety guardrail value that only real measurement could justify. Do not

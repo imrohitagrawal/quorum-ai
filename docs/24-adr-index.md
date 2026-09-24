@@ -126,6 +126,7 @@ ways, so the record shows what was believed on a date and what replaced it.
 | [ADR-0121](adr/0121-a-user-key-changes-who-chooses-the-flags-and-who-sets-the-rails.md) | A user key changes who chooses the flags and who sets the rails | Architecture | PROPOSED — AWAITING OWNER |
 | [ADR-0122](adr/0122-peer-critique-cannot-outlive-a-live-window.md) | Peer critique cannot outlive a live window | Architecture | Accepted — 2026-09-24 |
 | [ADR-0123](adr/0123-the-confirmation-token-binds-the-panel-and-the-critique-shape.md) | The confirmation token binds the panel and the critique shape | Architecture | Accepted — 2026-09-24 |
+| [ADR-0124](adr/0124-the-judge-reads-the-cited-page-the-fetcher-ships-off.md) | The judge reads the cited page, not the model's memory of it — the fetcher, behind a default-off setting | Architecture | Accepted — 2026-09-24 |
 
 **This index was itself stale** until 2026-07-30: ADR-0002 had existed since
 2026-07-19 and was never listed here. A hand-maintained index is a derived fact
