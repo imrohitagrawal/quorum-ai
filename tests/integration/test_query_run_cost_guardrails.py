@@ -351,6 +351,74 @@ def test_high_cost_query_requires_confirmation_before_creation() -> None:
     assert _events_for(account_id)[0].event_type == "cost_confirmation_required"
 
 
+def test_a_reordered_panel_cannot_reuse_the_estimate_token() -> None:
+    """ADR-0123: the token binds the ORDERED panel. The same four models in
+    reverse order price identically, so before the binding the estimate's
+    token confirmed the reordered create (measured on ``main`` at b6213c4:
+    202). RED IF: the create route does not hand the panel to the verifier.
+
+    Cardinality (rule 6b) on the process-global service, as deltas: the
+    estimate mints +1; the refused create re-estimates (+1) and consumes the
+    refused token (-1); the accepted create re-estimates (+1) and consumes
+    its own token (-1). The 402's fresh token is bound to the panel THAT
+    request carried (the reordered one), so the accepted create sends the
+    reordered panel with it — the honest flow: what you sent is what the
+    fresh token confirms.
+    """
+    client = TestClient(app)
+    account_id = uuid4()
+    headers = {"X-Account-Id": str(account_id)}
+    tokens = cost_estimation_service._tokens  # noqa: SLF001
+    before = len(tokens)
+    estimate = client.post(
+        "/v1/query-runs/estimate",
+        json={"query_text": CONFIRM_QUERY, "model_slots": CONFIRM_MODEL_IDS},
+        headers=headers,
+    )
+    assert estimate.status_code == 200
+    cost_estimate = estimate.json()["cost_estimate"]
+    assert cost_estimate["threshold_action"] == "require_confirmation"
+    assert len(tokens) == before + 1
+    confirmation = {
+        "estimated_cost_usd": cost_estimate["estimated_cost_usd"],
+        "confirmation_token": cost_estimate["confirmation_token"],
+    }
+
+    reordered = client.post(
+        "/v1/query-runs",
+        json={
+            **acknowledged_request(CONFIRM_QUERY, list(reversed(CONFIRM_MODEL_IDS))),
+            "cost_confirmation": confirmation,
+        },
+        headers=headers,
+    )
+    assert reordered.status_code == 402
+    assert reordered.json()["detail"]["code"] == "COST_CONFIRMATION_REQUIRED"
+    # The reordered panel prices the same to the cent, so only the binding
+    # refused it (positive partner for the equal-cost premise).
+    assert (
+        reordered.json()["detail"]["cost_estimate"]["estimated_cost_usd"]
+        == (cost_estimate["estimated_cost_usd"])
+    )
+    assert len(tokens) == before + 1  # +1 minted by the 402, -1 consumed
+
+    accepted = client.post(
+        "/v1/query-runs",
+        json={
+            **acknowledged_request(CONFIRM_QUERY, list(reversed(CONFIRM_MODEL_IDS))),
+            "cost_confirmation": {
+                "estimated_cost_usd": cost_estimate["estimated_cost_usd"],
+                "confirmation_token": reordered.json()["detail"]["cost_estimate"][
+                    "confirmation_token"
+                ],
+            },
+        },
+        headers=headers,
+    )
+    assert accepted.status_code == 202
+    assert len(tokens) == before + 1  # +1 minted by the create, -1 consumed
+
+
 def test_high_cost_query_accepts_matching_confirmation_token() -> None:
     client = TestClient(app)
     account_id = uuid4()

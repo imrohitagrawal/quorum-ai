@@ -147,6 +147,7 @@ def test_high_cost_query_requires_matching_confirmation() -> None:
     missing_decision = cost_estimation_service.evaluate_confirmation(
         estimate=estimate,
         confirmation=None,
+        model_slots=model_slots,
     )
     matching_decision = cost_estimation_service.evaluate_confirmation(
         estimate=estimate,
@@ -154,6 +155,7 @@ def test_high_cost_query_requires_matching_confirmation() -> None:
             estimated_cost_usd=estimate.estimated_cost_usd,
             confirmation_token=estimate.confirmation_token or "",
         ),
+        model_slots=model_slots,
     )
 
     assert not missing_decision.confirmed

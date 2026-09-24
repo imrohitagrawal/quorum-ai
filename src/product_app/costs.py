@@ -41,7 +41,7 @@ import os
 import secrets
 import time
 import warnings
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass
 from dataclasses import replace as dataclass_replace
 from datetime import UTC, datetime, timedelta
@@ -68,6 +68,36 @@ from product_app.model_slots import (
     ModelSlot,
     openrouter_model_catalog_service,
 )
+
+#: The two critique shapes a run can take (``debate`` imports these, so the
+#: run's recorded ``critique_shape`` and the confirmation token's bound shape
+#: are the same vocabulary by construction). ADR-0123.
+CRITIQUE_SHAPE_MODERATOR = "moderator"
+CRITIQUE_SHAPE_PEER = "peer"
+
+
+def priced_critique_shape() -> str:
+    """The shape the ESTIMATE prices with, read from the same process-global
+    flag the three pricing reads in ``_cost_components`` use (ADR-0123).
+
+    Deliberately NOT ``main._peer_critique_in_effect`` (flag AND live AND key,
+    the copy predicate): the estimator prices from the flag alone, and a token
+    must bind what its estimate priced, or a live window opening inside the
+    token's TTL would refuse a correctly priced token.
+    """
+    return CRITIQUE_SHAPE_PEER if settings.peer_critique_enabled else CRITIQUE_SHAPE_MODERATOR
+
+
+#: A panel as the token binds it: the ORDERED ``(model_id, search)`` pairs.
+#: Order is part of the panel (a reorder prices identically and is the free
+#: equal-cost collision); ``search`` moves the price on paid models and is
+#: derived from the same ``slot_search`` list by both routes.
+PanelKey = tuple[tuple[str, bool], ...]
+
+
+def panel_key(model_slots: Sequence[ModelSlot]) -> PanelKey:
+    return tuple((slot.model_id, bool(slot.search)) for slot in model_slots)
+
 
 #: The opening-charge event types the IN-MEMORY ring's per-account rail counts
 #: (issue #376). It must match ``feedback_store._ACCOUNT_CHARGE_EVENTS``: the
@@ -589,16 +619,24 @@ class _BoundToken:
     estimated_cost_usd: Decimal
     expires_at: datetime
     token: str
+    # ADR-0123: the ordered panel and the priced shape. The HMAC digest on the
+    # wire is a lookup key; THIS record and its comparison in
+    # ``_verify_confirmation_token`` are the binding.
+    panel: PanelKey
+    critique_shape: str
 
 
 class CostEstimationService:
     """Pure cost estimation + token binding.
 
     Token generation mixes a 32-byte random secret with the bound
-    ``account_id``, ``query_run_id``, ``estimated_cost_usd``, and expiry
-    timestamp. The token is verifiable without database access, but it is
-    also stored in an in-memory table so we can reject replay across
-    accounts. The bound secret is held in process memory and never logged.
+    ``account_id``, ``query_run_id``, ``estimated_cost_usd``, expiry
+    timestamp, the ordered panel and the priced critique shape (ADR-0123).
+    The digest on the wire is a LOOKUP KEY: verification finds the token in
+    the in-memory table and compares the stored record (account, cost,
+    panel, shape, expiry); it never recomputes the digest, so a token is not
+    verifiable without that table. The bound secret is held in process
+    memory and never logged.
     """
 
     def __init__(
@@ -952,7 +990,8 @@ class CostEstimationService:
         confirmation_token: str | None = None
         if threshold_action is not CostThresholdAction.BLOCK:
             # Mint a token whenever the estimate is at all confirmable. The
-            # token is bound to the (account, query_run, cost) triple. The
+            # token is bound to the account, the cost, the ordered panel and
+            # the priced shape (ADR-0123; the run id is stored, not compared). The
             # account_id is optional: when it is ``None`` we still mint a
             # token using a placeholder UUID so unit tests and the
             # ``evaluate_confirmation`` round-trip work without one. The
@@ -961,6 +1000,10 @@ class CostEstimationService:
                 account_id=account_id or uuid4(),
                 query_run_id=query_run_id,
                 estimated_cost_usd=estimated,
+                # ADR-0123: bound to the panel and the shape THIS estimate
+                # priced, read inside the same call as the price.
+                panel=panel_key(model_slots),
+                critique_shape=priced_critique_shape(),
             )
         return CostEstimate(
             estimated_cost_usd=estimated,
@@ -1053,8 +1096,14 @@ class CostEstimationService:
         *,
         estimate: CostEstimate,
         confirmation: CostConfirmation | None,
+        model_slots: Sequence[ModelSlot],
         account_id: UUID | None = None,
     ) -> CostGuardrailDecision:
+        """``model_slots`` is the panel of THIS request (the create body's
+        validated slots) and the shape is the one the fresh ``estimate`` was
+        just priced with; both must equal what the token was minted for
+        (ADR-0123). Required, not optional: a caller that could omit the panel
+        would re-open the binding it exists to close."""
         reasons: list[str] = []
         if estimate.threshold_action is not CostThresholdAction.REQUIRE_CONFIRMATION:
             reasons.append("Confirmation is only required for estimates in the upper-cost band.")
@@ -1071,9 +1120,12 @@ class CostEstimationService:
             token=confirmation.confirmation_token,
             account_id=account_id,
             estimated_cost_usd=estimate.estimated_cost_usd,
+            panel=panel_key(model_slots),
+            critique_shape=priced_critique_shape(),
         ):
             reasons.append(
-                "Confirmation token is invalid, expired, or was issued to a different account."
+                "Confirmation token is invalid, expired, was issued to a different "
+                "account, or was issued for a different panel or critique shape."
             )
             return CostGuardrailDecision(confirmed=False, reasons=reasons)
         return CostGuardrailDecision(
@@ -2200,6 +2252,8 @@ class CostEstimationService:
         account_id: UUID,
         query_run_id: UUID | None,
         estimated_cost_usd: Decimal,
+        panel: PanelKey,
+        critique_shape: str,
     ) -> str:
         expires_at = self._now() + CONFIRMATION_TOKEN_TTL
         nonce = secrets.token_hex(16)
@@ -2209,6 +2263,8 @@ class CostEstimationService:
             estimated_cost_usd=estimated_cost_usd,
             expires_at=expires_at,
             nonce=nonce,
+            panel=panel,
+            critique_shape=critique_shape,
         )
         with self._lock:
             self._tokens[token] = _BoundToken(
@@ -2217,6 +2273,8 @@ class CostEstimationService:
                 estimated_cost_usd=estimated_cost_usd,
                 expires_at=expires_at,
                 token=token,
+                panel=panel,
+                critique_shape=critique_shape,
             )
             self._purge_expired_tokens_locked()
         return token
@@ -2227,6 +2285,8 @@ class CostEstimationService:
         token: str,
         account_id: UUID | None,
         estimated_cost_usd: Decimal,
+        panel: PanelKey,
+        critique_shape: str,
     ) -> bool:
         with self._lock:
             record = self._tokens.get(token)
@@ -2239,6 +2299,16 @@ class CostEstimationService:
             if account_id is not None and record.account_id != account_id:
                 return False
             if record.estimated_cost_usd != estimated_cost_usd:
+                return False
+            # ADR-0123: the ORDERED panel and the priced shape, compared as
+            # tuples (a set or a sorted list would re-admit a reorder). A
+            # token that fails its binding is CONSUMED: it must not be probed
+            # again with another panel inside its TTL, and the 402 the route
+            # answers with carries a fresh token, so a legitimate retry loses
+            # nothing. Its place before the expiry check is a reading aid:
+            # both branches pop and return False, so the order is unobservable.
+            if record.panel != panel or record.critique_shape != critique_shape:
+                self._tokens.pop(token, None)
                 return False
             if record.expires_at < self._now():
                 # Drop the expired token so a follow-up attempt with the
@@ -2269,10 +2339,16 @@ class CostEstimationService:
         estimated_cost_usd: Decimal,
         expires_at: datetime,
         nonce: str,
+        panel: PanelKey,
+        critique_shape: str,
     ) -> str:
+        # The panel is serialised with separators that cannot occur in a
+        # model id (ids carry '/' and ':'): unit separator between fields,
+        # record separator between slots.
+        panel_text = "\x1e".join(f"{model_id}\x1f{int(search)}" for model_id, search in panel)
         message = (
             f"{account_id}|{query_run_id or ''}|{estimated_cost_usd}|"
-            f"{expires_at.isoformat()}|{nonce}"
+            f"{expires_at.isoformat()}|{nonce}|{panel_text}|{critique_shape}"
         ).encode()
         digest = hmac.new(self._binding_secret, message, hashlib.sha256).hexdigest()
         # The token embeds the expiry timestamp, the nonce, and a 64-hex-char

@@ -41,7 +41,8 @@ final report has the Deploy job ids: #496 run 35913928780, #497 run 35917924555,
 - **BYOK: PLANNED, NOT NEXT.** ADR-0121 is `PROPOSED — AWAITING OWNER`; the
   owner has set the shape (CHG-011 D8) and not the delivery. Prerequisite
   before any per-run toggle: the confirmation token binds the slot list and
-  the shape (CHG-011 D9; `costs.py::_format_token` binds neither today).
+  the shape (CHG-011 D9; it bound neither when this was written; landed
+  later the same day, ADR-0123).
 - **#268** stays parked on `../quorum-ai-wt-268` (draft PR #491, ADR-0119).
   **#458, #459, #447** stay gated on owner decisions not taken.
 
