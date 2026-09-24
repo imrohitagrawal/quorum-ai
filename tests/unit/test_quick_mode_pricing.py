@@ -64,12 +64,14 @@ def test_with_the_judge_on_a_quick_estimate_has_the_answer_and_judge_rows_only()
     from a quick estimate, a debate/synthesis/writer row appears, a partition
     stops summing to the total, or the point passes the bound."""
     estimate = _service().estimate(query_text=QUERY, model_slots=ONE, mode=MODE_QUICK)
-    by_stage = estimate.breakdown.by_stage
-    by_model = estimate.breakdown.by_model
+    breakdown = estimate.breakdown
+    assert breakdown is not None
+    by_stage = breakdown.by_stage
+    by_model = breakdown.by_model
     assert [line.stage for line in by_stage] == ["initial_answers", "judge"]
     assert [line.kind for line in by_model] == ["model", "judge"]
     assert all(line.usd > 0 for line in by_stage)
-    total = estimate.breakdown.total
+    total = breakdown.total
     assert sum((line.usd for line in by_stage), Decimal(0)) == total
     assert sum((line.usd for line in by_model), Decimal(0)) == total
     assert estimate.max_cost_usd is not None
@@ -170,13 +172,18 @@ def test_debate_spend_on_a_quick_receipt_is_refused_not_hidden() -> None:
     """RED IF debate or synthesis money on a quick run is silently dropped
     from the receipt; raising makes ``_actual_cost`` fall back to the
     estimate, so the money is never shown as lower than it was."""
-    for extra in (
-        {"debate_by_round": {1: Decimal("0.001")}, "synthesis_cost": Decimal(0)},
-        {"debate_by_round": {}, "synthesis_cost": Decimal("0.001")},
+    debate_spend: dict[int, Decimal] = {1: Decimal("0.001")}
+    no_debate: dict[int, Decimal] = {}
+    for debate_by_round, synthesis_cost in (
+        (debate_spend, Decimal(0)),
+        (no_debate, Decimal("0.001")),
     ):
         with pytest.raises(ValueError, match="no debate or synthesis"):
             build_measured_breakdown(
-                per_model_initial=[("m/x", "X", Decimal("0.001"))], quick=True, **extra
+                per_model_initial=[("m/x", "X", Decimal("0.001"))],
+                debate_by_round=debate_by_round,
+                synthesis_cost=synthesis_cost,
+                quick=True,
             )
 
 

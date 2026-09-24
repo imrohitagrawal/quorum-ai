@@ -502,7 +502,7 @@ def _measured_run(account_id: Any, *, mode: str = "panel") -> Any:
     run = query_run_repository.create(
         account_id=account_id,
         query_text=QUERY_TEXT,
-        model_slots=validate_model_slots_with_search(model_ids, mode=mode),  # type: ignore[arg-type]
+        model_slots=validate_model_slots_with_search(model_ids, mode=mode),
         cost_estimate=CostEstimate(
             estimated_cost_usd=Decimal("0.0200"),
             threshold_action=CostThresholdAction.ALLOW,
