@@ -710,6 +710,56 @@ class Settings(BaseSettings):
     #: real cost has been measured, and W3 is the pass that measures it.
     peer_critique_enabled: bool = False
 
+    # --- Source fetch (#447, ADR-0124) ------------------------------------
+    #: The judge reads the cited pages, not only their titles. SHIPPED OFF:
+    #: nothing in the run path calls the fetcher until the wiring pull
+    #: request, and even then only when the judge is configured. Egress to
+    #: arbitrary cited hosts is a new surface (T-014), so it is reported on
+    #: /status like the other subsystems (ADR-0013) and never enabled
+    #: invisibly. ``source_fetcher.py`` holds the egress policy.
+    quorum_source_fetch_enabled: bool = False
+    #: Per-read socket timeout for one page (a socket timeout bounds each
+    #: recv, not the page; the total budget below bounds the call).
+    quorum_source_fetch_timeout_seconds: float = 3.0
+    #: TOTAL wall-clock budget for all of one run's pages. Must exceed the
+    #: per-read timeout, or the first slow read consumes all of it.
+    quorum_source_fetch_budget_seconds: float = 8.0
+    #: Bytes read per page before it is cut and marked truncated.
+    quorum_source_fetch_max_bytes: int = 262_144
+    #: Pages fetched per run; the rest are reported as skipped.
+    quorum_source_fetch_max_pages: int = 8
+    #: Characters of extracted text kept per page.
+    quorum_source_fetch_max_text_chars: int = 4_000
+
+    @field_validator(
+        "quorum_source_fetch_timeout_seconds",
+        "quorum_source_fetch_budget_seconds",
+        "quorum_source_fetch_max_bytes",
+        "quorum_source_fetch_max_pages",
+        "quorum_source_fetch_max_text_chars",
+        mode="after",
+    )
+    @classmethod
+    def _source_fetch_bounds_are_real(cls, value: float, info: Any) -> float:
+        # ONE validator for the five source-fetch bounds: each decorated
+        # function is a unit mutmut skips, and
+        # tests/unit/test_mutation_test_set_integrity.py caps their number. ``isfinite`` first: NaN
+        # compares False to every bound, so a pure range check accepts it.
+        if not math.isfinite(value) or value <= 0:
+            raise ValueError(
+                f"{info.field_name.upper()} must be finite and > 0; 0 or negative "
+                "never means 'unlimited' here"
+            )
+        if info.field_name == "quorum_source_fetch_budget_seconds":
+            per_read = (info.data or {}).get("quorum_source_fetch_timeout_seconds")
+            if per_read is not None and value <= per_read:
+                raise ValueError(
+                    "QUORUM_SOURCE_FETCH_BUDGET_SECONDS must be strictly greater than "
+                    f"QUORUM_SOURCE_FETCH_TIMEOUT_SECONDS ({per_read:g}); the first slow "
+                    "read would otherwise consume the whole budget"
+                )
+        return value
+
     # --- Catalog fetcher -------------------------------------------------
     # The  model catalog is fetched from a public, unauthenticated
     # endpoint and cached in process memory. Six hours is the
