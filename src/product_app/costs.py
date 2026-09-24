@@ -355,6 +355,16 @@ _JUDGE_SOURCE_LINE_OVERHEAD_CHARS = Decimal(10)
 #: ``settings.synthesis_model_id`` — the models those calls actually use —
 #: not a proxy rate borrowed from the four slot models.
 
+#: The web-search context tokens the fail-safe BOUND prices per searching
+#: slot (#268, product-owner decision "pick b", 2026-09-24, CHG-012 D5;
+#: ADR-0125). It equals the shipped ``cost_web_search_context_tokens`` (2000),
+#: so every bound and band is unchanged today; it does NOT follow that setting,
+#: so a later, truer point value moves the displayed estimate and never the
+#: per-call band (the per-account spend rails add the typical estimate and do
+#: see it). The bound was never a ceiling on this term: nothing bounds the context
+#: OpenRouter's ``:online`` suffix injects (48 readings: median 2438,
+#: max 3160 — ADR-0119, on the unmerged branch of draft PR #491).
+BOUND_WEB_SEARCH_CONTEXT_TOKENS = 2000
 CONFIRMATION_TOKEN_TTL = timedelta(minutes=5)
 
 
@@ -436,10 +446,11 @@ class CostEstimate(BaseModel):
     #: call is represented. It bounds the OUTPUT side of every call from an
     #: enforced cap. It does NOT bound the input side: the per-call system
     #: prompt and web-search context are priced from
-    #: ``cost_system_prompt_tokens`` / ``cost_web_search_context_tokens``, which
-    #: are ASSUMPTIONS no code enforces (the search context is injected upstream
-    #: by the provider). So "real cost never exceeds it" is not a guarantee this
-    #: figure can make, and the shipped UI copy deliberately says "the worst
+    #: ``cost_system_prompt_tokens`` / ``BOUND_WEB_SEARCH_CONTEXT_TOKENS`` (the
+    #: bound's own figure since ADR-0125), which are ASSUMPTIONS no code
+    #: enforces (the search context is injected upstream by the provider). So
+    #: "real cost never exceeds it" is not a guarantee this figure can make,
+    #: and the shipped UI copy deliberately says "the worst
     #: case this run is priced at" instead. The per-call BAND (BLOCK /
     #: REQUIRE_CONFIRMATION) is evaluated against THIS value, not the point
     #: estimate, so that rail fails safe (issue #16 rec #2/#3). The two
@@ -451,8 +462,10 @@ class CostEstimate(BaseModel):
     #: before the run does. This comment listed "daily cap" among the things
     #: evaluated against the bound until 2026-08-22; that was wrong. Optional
     #: with a ``None`` default so pre-existing ``CostEstimate(...)``
-    #: constructions keep working; always >= ``estimated_cost_usd`` when
-    #: ``estimate()`` sets it.
+    #: constructions keep working; >= ``estimated_cost_usd`` when ``estimate()``
+    #: sets it at the shipped settings (a raised ``cost_web_search_context_tokens``
+    #: can put the point above it on long queries: only on already-BLOCK
+    #: mixes up to 3300, on runnable ones too from 3400; ADR-0125).
     max_cost_usd: Decimal | None = Field(default=None, ge=Decimal("0"))
     #: Itemized cost partition (by model AND by stage). Optional with a
     #: ``None`` default so pre-existing ``CostEstimate(...)`` constructions
@@ -763,8 +776,9 @@ class CostEstimationService:
         # not the realistic point estimate, so it can only over-protect: real
         # cost is capped at the initial-answer ``max_tokens`` this bound
         # prices, and debate/synthesis are already capped. ``max_cost_usd``
-        # is >= ``estimated`` and is surfaced to the UI as the "up to $Y"
-        # figure. The cumulative / daily-cap accounting below stays on the
+        # is >= ``estimated`` at the shipped settings (ADR-0125 names the one
+        # exception) and is surfaced to the UI as the "up to $Y" figure. The
+        # cumulative / daily-cap accounting below stays on the
         # realistic ``estimated`` — those track accumulated REAL spend, which
         # tracks the point estimate, not the worst case.
         bound = self._estimate_bound_usd(
@@ -1501,7 +1515,8 @@ class CostEstimationService:
         # fixed-cap bound — printing a "typical ≈ $X" ABOVE the "up to $Y"
         # ceiling and breaking ``estimated_cost_usd <= max_cost_usd`` (issue #24;
         # the bound path :meth:`_estimate_bound_usd` uses exactly this cap, so
-        # the clamp makes the point <= bound invariant hold on every term).
+        # the clamp makes the point <= bound invariant hold on this term; the
+        # web-search context term is the exception, ADR-0125).
         query_tokens = Decimal(len(query_text)) / CHARS_PER_TOKEN
         init_output_tokens = min(
             Decimal(settings.cost_initial_output_tokens)
@@ -1723,6 +1738,7 @@ class CostEstimationService:
         init_output_tokens: Decimal,
         synthesis_sections: Decimal = Decimal(1),
         debate_output_override: Decimal | None = None,
+        search_context_override: Decimal | None = None,
         context_tokens: Decimal = Decimal(0),
         price_round_two_prior_critique: bool = False,
         price_judge: bool = False,
@@ -1747,7 +1763,10 @@ class CostEstimationService:
         differing in the per-call output assumption (typical floor vs enforced
         cap) and, when a judge is priced, in the judge's token figures
         (``judge_typical``, clamped to the caps; ADR-0114). Every typical figure
-        is at or below its cap, so the point estimate is always <= the bound.
+        is at or below its cap, so the point estimate is <= the bound, with one
+        exception: the bound prices web-search context from
+        ``BOUND_WEB_SEARCH_CONTEXT_TOKENS``, not the setting (ADR-0125), so a
+        setting raised above that figure can put the point above the bound.
 
         ``context_tokens`` is the extra input tokens from a follow-up context
         (prior_question + prior_synthesis). It is priced into debate and synthesis
@@ -1781,7 +1800,15 @@ class CostEstimationService:
 
         query_tokens = Decimal(len(query_text)) / CHARS_PER_TOKEN
         system_tokens = Decimal(settings.cost_system_prompt_tokens)
-        search_tokens = Decimal(settings.cost_web_search_context_tokens)
+        # The point estimate prices the web-search context from the setting;
+        # the fail-safe bound passes its own figure (#268 option b, ADR-0125)
+        # so a truer setting moves the displayed estimate without moving any
+        # mix's band.
+        search_tokens = (
+            search_context_override
+            if search_context_override is not None
+            else Decimal(settings.cost_web_search_context_tokens)
+        )
         # Flat per-request web-search plugin fee (issue #18) — charged once per
         # SEARCHING slot regardless of the model's token price, so a :free model
         # still incurs it. String() so a float default becomes an exact Decimal.
@@ -2167,7 +2194,10 @@ class CostEstimationService:
         debate output at the enforced per-round
         ``settings.cost_debate_output_tokens_cap`` (instead of the floor), and
         synthesis as all ``settings.cost_synthesis_sections`` section calls
-        (instead of one). Because the live calls are capped at exactly these
+        (instead of one). The web-search context is the exception: it is
+        priced from the bound's own figure, ``BOUND_WEB_SEARCH_CONTEXT_TOKENS``,
+        not from the setting the point estimate reads (ADR-0125). Because the
+        live calls are capped at exactly these
         values — initial (see ``providers._call_openrouter_with_optional_search``),
         debate (``debate.DEBATE_ROUND_MAX_TOKENS``), synthesis
         (``synthesis.SYNTHESIS_SECTION_MAX_TOKENS`` × section count) — this
@@ -2198,6 +2228,10 @@ class CostEstimationService:
             init_output_tokens=init_output_tokens,
             synthesis_sections=Decimal(settings.cost_synthesis_sections),
             debate_output_override=Decimal(settings.cost_debate_output_tokens_cap),
+            # #268 option (b), ADR-0125: the bound prices the web-search context
+            # from its OWN figure, not the setting, so a truer setting cannot
+            # move an affordable mix into BLOCK.
+            search_context_override=Decimal(BOUND_WEB_SEARCH_CONTEXT_TOKENS),
             context_tokens=context_tokens,
             # The bound is the only caller that must be a true CEILING, and the
             # only one with no breakdown to reconcile — which is why
