@@ -313,6 +313,14 @@ components:
             $ref: '#/components/schemas/InitialModelAnswer'
           type: array
           title: Initial Answers
+        mode:
+          anyOf:
+          - type: string
+            enum:
+            - panel
+            - quick
+          - type: 'null'
+          title: Mode
       type: object
       required:
       - query_run_id

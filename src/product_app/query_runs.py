@@ -313,6 +313,16 @@ class _QueryRunRequestBase(BaseModel):
     @model_validator(mode="after")
     def _validate_context(self) -> Self:
         _check_context(self.context)
+        # W5 (ADR-0126): a quick answer is one model call, and the follow-up
+        # context is priced into and sent to debate and synthesis only, which
+        # a quick answer does not run. Accepting it would take the user's
+        # context and silently use none of it, so it is refused.
+        if (
+            self.mode == "quick"
+            and self.context
+            and any((value or "").strip() for value in self.context.values())
+        ):
+            raise ValueError("A quick answer takes no follow-up context.")
         return self
 
 
@@ -352,6 +362,9 @@ class ActiveQueryRunResponse(BaseModel):
     model_slots: list[ModelSlot]
     cost_estimate: CostEstimate | None
     initial_answers: list[InitialModelAnswer]
+    #: W5 (ADR-0126): the active run's shape, so a resuming client renders a
+    #: quick answer as one; ``None`` when there is no active run.
+    mode: Literal["panel", "quick"] | None = None
 
 
 class QueryRunWarningsRequest(BaseModel):
@@ -1006,6 +1019,7 @@ def get_active_query_run(
         model_slots=query_run.model_slots,
         cost_estimate=query_run.cost_estimate,
         initial_answers=query_run.initial_answers,
+        mode=query_run.mode,
     )
 
 

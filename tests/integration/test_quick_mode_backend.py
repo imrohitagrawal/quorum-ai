@@ -24,6 +24,7 @@ from product_app import config, run_history_store
 from product_app.debate import debate_stub_service
 from product_app.main import app
 from product_app.model_slots import QUICK_SLOT_MESSAGE, default_model_slots
+from product_app.query_run_orchestration import QueryRunStatus
 from product_app.safety import WARNING_VERSION, WarningType
 from product_app.synthesis import synthesis_stub_service
 
@@ -51,8 +52,10 @@ def _estimate(client: TestClient, headers: dict[str, str], body: dict[str, Any])
     return client.post("/v1/query-runs/estimate", headers=headers, json=body)
 
 
-def test_the_quick_message_is_a_literal_the_board_can_pin() -> None:
-    """RED IF the message changes without the board row W5 needle (docs/65)."""
+def test_the_quick_refusal_is_the_wording_clients_see() -> None:
+    """Pins the wire wording a client gets for a quick request with other than
+    one model (board row W5's needle is the composer sentence, not this).
+    RED IF the message is reworded without deciding to."""
     assert QUICK_SLOT_MESSAGE == "A quick answer takes exactly one model."
 
 
@@ -192,6 +195,9 @@ def test_a_quick_run_answers_once_skips_debate_and_synthesis_and_completes(
         assert row is not None
         assert (row.agreement_aligned, row.agreement_total) == (0, 0)
         assert row.model_ids == DEFAULT_IDS[:1]
+        # No evaluation is persisted for a quick run until its trust shape
+        # exists (ADR-0126); the panel test below is the positive partner.
+        assert row.eval_json is None and row.trust_json is None
 
     assert payload["status"] == "completed", payload
     assert payload["mode"] == "quick"
@@ -219,7 +225,7 @@ def test_a_panel_run_still_reports_mode_panel_and_an_agreement(
     """Positive partner of the quick run: RED IF ``agreement`` is dropped for
     panels too, or a panel is labelled quick."""
     monkeypatch.setattr(config.settings, "stage_delay_ms", 0)
-    with isolated_run_semaphore(1) as semaphore:
+    with run_history_store.configure_for_tests() as store, isolated_run_semaphore(1) as semaphore:
         client, headers = _client_and_headers()
         body: dict[str, Any] = {
             "query_text": QUERY,
@@ -247,8 +253,11 @@ def test_a_panel_run_still_reports_mode_panel_and_an_agreement(
             if payload["status"] in {"completed", "failed", "partial", "cancelled"}:
                 break
             time.sleep(0.05)
+        row = store.get(str(created.json()["query_run_id"]))
     assert payload["status"] == "completed", payload
     assert payload["mode"] == "panel"
+    assert row is not None and row.eval_json is not None
+    assert row.agreement_total == 2
     assert payload["result"]["agreement"]["total"] == 2
     # Partner of the quick run's ``evaluation is None``: a panel still serves one.
     assert payload["evaluation"] is not None
@@ -280,4 +289,81 @@ def test_a_quick_run_whose_one_answer_fails_ends_partial(monkeypatch: pytest.Mon
     assert payload["status"] == "partial", payload
     stages = {s["stage"]: s for s in payload["progress"]["stages"]}
     assert stages["initial_answers"]["state"] == "failed"
-    assert stages["synthesis"]["state"] == "skipped"
+    # RED IF a failed quick answer reports debate and synthesis as failed or
+    # missing, or tells the user to review "the synthesis" (review round 1).
+    for name in ("debate_round_1", "debate_round_2", "synthesis"):
+        assert stages[name]["state"] == "skipped", stages[name]
+        assert stages[name]["detail"] == "Not part of a quick answer."
+    assert payload["failed_steps"] == ["initial_answers"]
+    assert payload["missing_steps"] == []
+    assert payload["partial_failure_notice"] == (
+        "This quick answer did not complete. Review the failed step before relying on it."
+    )
+
+
+def test_a_quick_request_with_follow_up_context_is_refused() -> None:
+    """Follow-up context is priced into and sent to debate and synthesis only,
+    which a quick answer does not run. RED IF it is accepted (review round 1:
+    it was, priced at $0 and never sent). Partner: a panel still takes it, and
+    a quick request with an empty context is still accepted."""
+    client, headers = _client_and_headers()
+    context = {"prior_question": "What is a database?", "prior_synthesis": "A store."}
+    quick = _estimate(
+        client,
+        headers,
+        {"query_text": QUERY, "model_slots": DEFAULT_IDS[:1], "mode": "quick", "context": context},
+    )
+    assert quick.status_code == 422, quick.text
+    assert "A quick answer takes no follow-up context." in quick.text
+    panel = _estimate(
+        client, headers, {"query_text": QUERY, "model_slots": DEFAULT_IDS[:2], "context": context}
+    )
+    assert panel.status_code == 200, panel.text
+    empty = _estimate(
+        client,
+        headers,
+        {
+            "query_text": QUERY,
+            "model_slots": DEFAULT_IDS[:1],
+            "mode": "quick",
+            "context": {"prior_question": " ", "prior_synthesis": None},
+        },
+    )
+    assert empty.status_code == 200, empty.text
+
+
+def test_the_active_run_reports_its_mode() -> None:
+    """RED IF ``/active`` drops ``mode`` (a resuming client would have to guess
+    the shape from the slot count). No active run reports ``None``."""
+    from decimal import Decimal
+
+    from product_app.costs import CostEstimate, CostThresholdAction
+    from product_app.model_slots import validate_model_slots_with_search
+    from product_app.query_run_orchestration import query_run_repository
+
+    # No session cookie: the account is the header's (the pattern
+    # ``test_query_run_active_rule.py`` uses), so the run below is this one's.
+    client = TestClient(app)
+    account_id = uuid4()
+    headers = {"X-Account-Id": str(account_id)}
+    none = client.get("/v1/query-runs/active", headers=headers)
+    assert none.status_code == 200 and none.json()["mode"] is None
+    run = query_run_repository.create(
+        account_id=account_id,
+        query_text=QUERY,
+        model_slots=validate_model_slots_with_search(DEFAULT_IDS[:1], mode="quick"),
+        cost_estimate=CostEstimate(
+            estimated_cost_usd=Decimal("0.0100"),
+            threshold_action=CostThresholdAction.ALLOW,
+            confirmation_token=None,
+            reasons=[],
+        ),
+        mode="quick",
+    )
+    try:
+        active = client.get("/v1/query-runs/active", headers=headers)
+        assert active.status_code == 200, active.text
+        assert active.json()["query_run_id"] == str(run.query_run_id)
+        assert active.json()["mode"] == "quick"
+    finally:
+        query_run_repository.transition(run.query_run_id, QueryRunStatus.CANCELLED)

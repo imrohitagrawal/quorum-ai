@@ -47,31 +47,53 @@ prompts) and that the measured receipt always emits the panel's four rows.
 4. **The token** binds a third shape, `"quick"` (ADR-0123's vocabulary), so
    a quick quote cannot confirm a panel run of the same list, nor the
    reverse.
-5. **The run.** `QueryRun.mode`, set at create and echoed on the create and
-   result responses. After the one answer, debate and synthesis are stamped
-   `skipped` with `Not part of a quick answer.`, the run goes
-   `initial_answers_running` to `completed` (a new edge in
-   `ALLOWED_TRANSITIONS`), and no debate or synthesis service is called. A
-   failed answer ends `partial`, as a panel with no answers does.
+5. **The run.** `QueryRun.mode`, set at create and echoed on the create,
+   result and active-run responses. After the one answer, debate and
+   synthesis are stamped `skipped` with `Not part of a quick answer.`, the
+   run goes `initial_answers_running` to `completed`, and no debate or
+   synthesis service is called. The pipeline writes that status through
+   `update_status`, which does not consult `ALLOWED_TRANSITIONS` (the panel's
+   own `synthesis_running` to `completed` write does the same); the table
+   gains the edge so it describes the pipeline, not because anything enforces
+   it. A quick answer that fails ends `partial` with only `initial_answers`
+   failed, debate and synthesis stamped with the quick reason, and the notice
+   `This quick answer did not complete. Review the failed step before relying
+   on it.`, since there is no synthesis to rely on.
+5a. **No follow-up context.** A quick request with a non-empty `context` is
+   a 422 (`A quick answer takes no follow-up context.`). The context is
+   priced into and sent to debate and synthesis only, which a quick answer
+   does not run, so accepting it would take the user's context and use none
+   of it. Follow-ups on a quick answer were not among the owner's decisions;
+   refusing is the honest default until they are.
 6. **The receipt.** `build_measured_breakdown(quick=True)` emits the same
    rows as the estimate, and refuses debate or synthesis spend on a quick
    run, which demotes the receipt to `estimated` instead of hiding money.
 7. **What is served.** `result.agreement` is `null` and
    `position_movements` is empty on a quick answer (the owner's decision).
-   `evaluation` is `null` on a quick answer until the second pull request
-   gives it its own trust shape: the panel composite would count one
-   answer's "1 of 1" as agreement. The judge still runs when configured and
-   is recorded, computed on the agreement the run actually has.
+   The evaluation is COMPUTED on every run, on the serving path and before
+   the cost is read, because that is where a configured judge first
+   dispatches: its dollar must be inside the figure the ledger books. On a
+   quick answer it is then withheld (`evaluation: null`) until the second
+   pull request gives it its own trust shape, since the panel composite would
+   count one answer's "1 of 1" as agreement. The first draft skipped the
+   computation instead, which moved the judge's first dispatch after the
+   booking; review measured the ledger short by the judge's cost, and
+   `test_the_judge_dollar_is_inside_the_figure_the_ledger_books[quick]` now
+   pins the order.
 8. **The run store** keeps its NOT NULL agreement columns; a quick run
-   stores 0 of 0, "nothing measured". Nothing in `src/` reads them back. The
-   `mode` column is the second pull request.
+   stores 0 of 0, "nothing measured", and no evaluation or trust row (the
+   panel composite is not written for it). Nothing in `src/` reads the
+   agreement columns back. The `mode` column and the quick evaluation row are
+   the second pull request.
 
 ## Measurements
 
 On the `wp/w5-quick-backend` worktree at `81eee7a` plus this change. Static
 price table (`_FALLBACK_CATALOG`), no network, no paid call. The judge is
-priced as `openai/gpt-5-mini`, the model ADR-0064 records for production;
-production's judge model is a secret and was not read.
+priced as `openai/gpt-5-mini`, a judge the static table lists. Production's
+judge was `openai/gpt-4.1-mini` in the 2026-09-10 telemetry (CHG-007); the
+static table does not list it, and production's current setting is a secret
+that was not read.
 
 | run | point | bound | band | `by_stage` |
 |---|---|---|---|---|

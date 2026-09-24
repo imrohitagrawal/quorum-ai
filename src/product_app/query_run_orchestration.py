@@ -1315,15 +1315,20 @@ def _execute_query_run(query_run_id: UUID, account_id: UUID) -> None:
             return
         query_run_repository.record_initial_answer(query_run_id, answer)
 
+    quick = query_run.mode == MODE_QUICK
+    # W5 (ADR-0126): debate and synthesis are not part of a quick answer, so
+    # when its one answer fails they are neither failed nor missing; they are
+    # stamped with the quick reason instead of "an earlier stage failed".
+    downstream = [] if quick else ["debate_round_1", "debate_round_2", "synthesis"]
     if deadline_breached:
         # ``and``-gate: when the cancel won the race the run is CANCELLED and
         # must not receive deadline stage attribution either.
         if _degrade_for_deadline(
             stage_name="initial_answers",
             failed_steps=["initial_answers"],
-            missing_steps=["debate_round_1", "debate_round_2", "synthesis"],
+            missing_steps=downstream,
         ):
-            _mark_remaining_stages(query_run_id, ["debate_round_1", "debate_round_2", "synthesis"])
+            _mark_after_terminal(query_run_id, quick=quick)
         return
 
     refreshed = query_run_repository.get(query_run_id)
@@ -1336,13 +1341,13 @@ def _execute_query_run(query_run_id: UUID, account_id: UUID) -> None:
             stage_name="initial_answers",
             stage_state=StageState.FAILED,
             detail="No usable initial model answers completed.",
-            failed_steps=["initial_answers", "debate_round_1", "debate_round_2", "synthesis"],
-            missing_steps=["debate_round_1", "debate_round_2", "synthesis"],
+            failed_steps=["initial_answers", *downstream],
+            missing_steps=downstream,
         )
         # Only stamp the skipped stages if OUR terminal write actually
         # landed; a cancel that won the race owns the run's story instead.
         if halted.status is QueryRunStatus.PARTIAL:
-            _mark_remaining_stages(query_run_id, ["debate_round_1", "debate_round_2", "synthesis"])
+            _mark_after_terminal(query_run_id, quick=quick)
         return
     if query_run.mode == MODE_QUICK:
         # W5 (ADR-0126): a quick answer ends here. Debate and synthesis are
@@ -1743,18 +1748,6 @@ def _persist_terminal_run(query_run_id: UUID) -> None:
         # path; a restart is not.
         _reconcile_run_billing(query_run=query_run, response=response)
         agreement = response.result.agreement
-        # W5: the served agreement is ``None`` on a quick answer, but the
-        # evaluation below is still computed (the judge still runs and is
-        # recorded), and it reads the agreement the run actually has.
-        evaluation_agreement = (
-            agreement
-            if agreement is not None
-            else build_agreement_and_positions(
-                initial_answers=list(query_run.initial_answers),
-                debate_outputs=list(query_run.debate_outputs),
-                final_synthesis=query_run.final_synthesis,
-            )[0]
-        )
         citation_ratio = None
         final_synthesis = query_run.final_synthesis
         if final_synthesis is not None and final_synthesis.citation_coverage is not None:
@@ -1791,7 +1784,11 @@ def _persist_terminal_run(query_run_id: UUID) -> None:
         # Ordered AFTER the metrics row: ``update_evaluation`` is an UPDATE
         # that does not check ``rowcount``, so attaching an evaluation to a
         # row that does not exist yet would be a silent no-op.
-        _persist_run_evaluation(query_run=query_run, agreement=evaluation_agreement)
+        # W5 (ADR-0126): a quick run persists no evaluation until its second
+        # pull request adds the quick trust shape and the run store's ``mode``
+        # column; the panel composite would store "1 of 1" as agreement.
+        if query_run.mode != MODE_QUICK and agreement is not None:
+            _persist_run_evaluation(query_run=query_run, agreement=agreement)
     except Exception as exc:  # noqa: BLE001 — run-history persistence is best-effort
         logger.debug("run_history persistence failed: %s", exc)
 
@@ -2725,8 +2722,13 @@ def _result_response(query_run: QueryRun) -> QueryRunResultResponse:
         QueryRunStatus.TIMED_OUT,
     }:
         partial_failure_notice = (
-            "This run finished without every planned stage. Review failed and missing steps "
-            "before relying on the synthesis."
+            # W5 (ADR-0126): a quick answer has no synthesis to rely on.
+            "This quick answer did not complete. Review the failed step before relying on it."
+            if query_run.mode == MODE_QUICK
+            else (
+                "This run finished without every planned stage. Review failed and missing steps "
+                "before relying on the synthesis."
+            )
         )
     # #247: both of these spelled the pair out inline, twice, and
     # ``providers.NOT_INVOKED_PATHS`` then made a third copy — while its own
@@ -2766,15 +2768,18 @@ def _result_response(query_run: QueryRun) -> QueryRunResultResponse:
         debate_outputs=debate_outputs,
         final_synthesis=final_synthesis,
     )
-    # W5 (ADR-0126): a quick answer serves NO evaluation yet. Its trust shape
+    # The evaluation is computed for EVERY run, here, before the cost below:
+    # this is where a configured judge first dispatches, so its dollar is
+    # inside the figure ``_actual_cost`` prices and the ledger books.
+    evaluation = _evaluation_projection(query_run, agreement=agreement)
+    # W5 (ADR-0126): a quick answer SERVES no evaluation yet. Its trust shape
     # (the judge's three-level verdict with reasons and evidence, the owner's
     # 2026-09-24 decision) is W5's second pull request; until then the panel
     # composite would score one answer's "1 of 1" agreement as agreement.
-    evaluation = (
-        None
-        if query_run.mode == MODE_QUICK
-        else _evaluation_projection(query_run, agreement=agreement)
-    )
+    # Computed and withheld, never skipped: skipping it moved the judge's
+    # first dispatch after the booking (review round 1 of W5's first PR).
+    if query_run.mode == MODE_QUICK:
+        evaluation = None
 
     # --- the COST, read LAST, from its own atomic snapshot -------------------
     actual_cost_usd, actual_breakdown, cost_source = _actual_cost(query_run)
@@ -3108,6 +3113,23 @@ def _running_stage_name(stages: list[QueryRunStageProgress]) -> str:
         if stage.state is StageState.RUNNING:
             return stage.stage
     return "estimate"
+
+
+def _mark_after_terminal(query_run_id: UUID, *, quick: bool) -> None:
+    """Stamp the three downstream stages after a failure the pipeline itself
+    just made terminal: the panel's "an earlier stage failed" reason, or, on a
+    quick answer, the quick reason (they were never part of it; ADR-0126)."""
+    if not quick:
+        _mark_remaining_stages(query_run_id, ["debate_round_1", "debate_round_2", "synthesis"])
+        return
+    for stage_name in ("debate_round_1", "debate_round_2", "synthesis"):
+        query_run_repository.update_status(
+            query_run_id,
+            stage_name=stage_name,
+            stage_state=StageState.SKIPPED,
+            detail=QUICK_SKIPPED_STAGE_DETAIL,
+            allow_terminal=True,
+        )
 
 
 def _mark_remaining_stages(query_run_id: UUID, stage_names: list[str]) -> None:
