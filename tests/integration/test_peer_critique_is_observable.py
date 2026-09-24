@@ -5,8 +5,9 @@ Why this file exists
 Measured 2026-09-03, on the deploy that turned peer critique ON in production
 (``6d13643``): ``/status``, ``/ready``, ``/metrics`` and ``/ui/ops`` reported
 NOTHING about ``PEER_CRITIQUE_ENABLED``, and ``scripts/live_posture_check.py``
-— the watchdog scheduled every 30 minutes against what production actually
-serves — never read it either. So the operator's answer to "is the expensive
+— the watchdog scheduled against what production actually serves (a cron
+declared every 30 minutes and measured at hours apart; #459) — never read it
+either. So the operator's answer to "is the expensive
 debate shape on?" was "read fly.toml and hope the deploy matches".
 
 That is the exact fault ADR-0013 named, one subsystem over: **a paid subsystem

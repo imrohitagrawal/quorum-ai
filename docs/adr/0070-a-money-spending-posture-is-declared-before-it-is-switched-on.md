@@ -73,8 +73,19 @@ answerable to it row by row.
 **Two checks, asking different questions, blind in opposite directions.**
 
 **1. Runtime, unbypassable — `scripts/live_posture_check.py` +
-`.github/workflows/live-posture-watchdog.yml`.** Every 30 minutes it reads
-`live_readiness.state` from both production hosts, reads the declared windows
+`.github/workflows/live-posture-watchdog.yml`.** On every scheduled run it reads
+`live_readiness.state` from both production hosts, *(Correction, 2026-09-24,
+#459, product-owner decision "option 1 only", CHG-012 D3: this said "every 30
+minutes", which is the cron the workflow DECLARES and not the interval GitHub
+runs it at. Measured on the issue's sample — 38 gaps over just under 6 days,
+2026-09-06T10:37Z to 2026-09-12T05:30Z — the interval was 2 to 6 hours: min 2h03,
+median 3h53, max 5h59, none under 35 minutes. Over the workflow's full
+scheduled history to 2026-09-19, 180 gaps, it was min 24 / median 193 /
+p90 328 / max 772 minutes (12.9h), 1 of 180 under 35. The
+workflow's header note is the one place that figure is maintained, and
+`tests/unit/test_live_posture_check.py` pins this sentence to it. The cron is
+not tightened and the check is not moved: a shorter cron does not buy a shorter
+real interval.)* reads the declared windows
 from `configs/live-execution-windows.json`, and alerts when a live posture is not
 covered by a window. Decision in tested Python per ADR-0024, thin shell,
 `$GITHUB_OUTPUT`, an alert step, a resolve step and an explicit fail step — the
