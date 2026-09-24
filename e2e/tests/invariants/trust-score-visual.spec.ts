@@ -6,6 +6,7 @@ import {
   withEvaluation,
   EVAL_MISSING_HIGH_STAKES,
 } from "../../fixtures/golden-run";
+import { stabilize } from "../../fixtures/stabilize";
 
 /**
  * FR-016 (S3) — trust-score element visual baselines.
@@ -27,20 +28,9 @@ import {
  * This is also the repo's first dark-theme pixel coverage.
  */
 
-const FREEZE =
-  "*,*::before,*::after{transition:none !important;animation:none !important;transition-duration:0s !important;animation-duration:0s !important;caret-color:transparent !important;}";
-
-async function stabilize(page: Page) {
-  await page.addStyleTag({ content: FREEZE });
-  await page.evaluate(() => {
-    for (let i = 1; i < 100000; i++) {
-      clearInterval(i);
-      clearTimeout(i);
-    }
-  });
-  await page.addStyleTag({ content: ".toast-region{display:none !important;}" });
-  await page.waitForTimeout(100);
-}
+// `stabilize` is the shared fixture (freeze + stop timers + hide toasts +
+// wait for web fonts). This spec used to carry its own copy, which the
+// fixture's own header names as a flake source; one definition, imported.
 
 const fulfil = (body: unknown, status = 200) => ({
   status,

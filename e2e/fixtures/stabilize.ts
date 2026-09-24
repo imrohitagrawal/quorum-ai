@@ -53,7 +53,33 @@ export async function freeze(page: Page): Promise<void> {
 export async function stabilize(page: Page): Promise<void> {
   await freeze(page);
   await page.addStyleTag({ content: ".toast-region{display:none !important;}" });
+  await waitForFonts(page);
   await page.waitForTimeout(100);
+}
+
+/**
+ * Block until every web font the page asked for has finished loading.
+ *
+ * The workspace loads Geist (400 to 700), Geist Mono and Newsreader from
+ * Google Fonts with `display=swap` (workspace.html, the `<link>` in `<head>`).
+ * `swap` paints text immediately in whatever is available and re-paints when
+ * each weight file arrives, so a screenshot taken before the last file lands
+ * captures a SYNTHESISED bold or a fallback face on some lines and the real
+ * one on others. Measured 2026-09-24: three CI runs in a row (two on a
+ * branch that changed no markup, one re-run of a previously green `main`
+ * commit) failed `trust-score-visual.spec.ts` on ONE bold line by 589 and
+ * 644 pixels, while the seed workflow on the same day reproduced the
+ * committed baselines byte-exact — the same page, rendered with the fonts
+ * either all present or not yet. `document.fonts.ready` resolves once every
+ * pending font load has settled, which is the state the baselines were
+ * seeded in.
+ *
+ * Bounded: `document.fonts.ready` settles on failure as well as success, so
+ * an unreachable font host cannot hang the capture; Playwright's expect
+ * timeout still bounds the whole step.
+ */
+export async function waitForFonts(page: Page): Promise<void> {
+  await page.evaluate(() => document.fonts.ready.then(() => undefined));
 }
 
 /**
