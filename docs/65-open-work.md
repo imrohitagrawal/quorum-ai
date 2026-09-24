@@ -476,7 +476,11 @@ twelve-model catalog and a different over-charge — the measured sweep for THIS
 change is 715 mixes, **0** band flips and **0** bound changes, because the
 bands key off the fail-safe bound, which this constant does not feed.
 **#268 stays open**: its other named half, `cost_web_search_context_tokens`,
-is untouched.
+keeps its value, 2000.
+The web-search half, the owner's 2026-09-24 "pick b" (CHG-012 D5), is built
+(ADR-0125): the bound prices that term from its own constant, 2000, so a
+later, truer setting moves the displayed estimate and no band. The value is
+still the owner's decision, with its own CHG row.
 
 **W14 — #105.** No code. It closes on production evidence, not a diff.
 

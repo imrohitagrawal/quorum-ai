@@ -344,6 +344,15 @@ _JUDGE_SOURCE_LINE_OVERHEAD_CHARS = Decimal(10)
 #: ``settings.synthesis_model_id`` — the models those calls actually use —
 #: not a proxy rate borrowed from the four slot models.
 
+#: The web-search context tokens the fail-safe BOUND prices per searching
+#: slot (#268, product-owner decision "pick b", 2026-09-24, CHG-012 D5;
+#: ADR-0125). It equals the shipped ``cost_web_search_context_tokens`` (2000),
+#: so every bound and band is unchanged today; it does NOT follow that setting,
+#: so a later, truer point value moves the displayed estimate and never a
+#: band. The bound was never a ceiling on this term: nothing bounds the context
+#: OpenRouter's ``:online`` suffix injects (48 readings: median 2438,
+#: max 3160 — ADR-0119, on the unmerged branch of draft PR #491).
+BOUND_WEB_SEARCH_CONTEXT_TOKENS = 2000
 CONFIRMATION_TOKEN_TTL = timedelta(minutes=5)
 
 
@@ -1655,6 +1664,7 @@ class CostEstimationService:
         init_output_tokens: Decimal,
         synthesis_sections: Decimal = Decimal(1),
         debate_output_override: Decimal | None = None,
+        search_context_override: Decimal | None = None,
         context_tokens: Decimal = Decimal(0),
         price_round_two_prior_critique: bool = False,
         price_judge: bool = False,
@@ -1707,7 +1717,15 @@ class CostEstimationService:
 
         query_tokens = Decimal(len(query_text)) / CHARS_PER_TOKEN
         system_tokens = Decimal(settings.cost_system_prompt_tokens)
-        search_tokens = Decimal(settings.cost_web_search_context_tokens)
+        # The point estimate prices the web-search context from the setting;
+        # the fail-safe bound passes its own figure (#268 option b, ADR-0125)
+        # so a truer setting moves the displayed estimate without moving any
+        # mix's band.
+        search_tokens = (
+            search_context_override
+            if search_context_override is not None
+            else Decimal(settings.cost_web_search_context_tokens)
+        )
         # Flat per-request web-search plugin fee (issue #18) — charged once per
         # SEARCHING slot regardless of the model's token price, so a :free model
         # still incurs it. String() so a float default becomes an exact Decimal.
@@ -2118,6 +2136,10 @@ class CostEstimationService:
             init_output_tokens=init_output_tokens,
             synthesis_sections=Decimal(settings.cost_synthesis_sections),
             debate_output_override=Decimal(settings.cost_debate_output_tokens_cap),
+            # #268 option (b), ADR-0125: the bound prices the web-search context
+            # from its OWN figure, not the setting, so a truer setting cannot
+            # move an affordable mix into BLOCK.
+            search_context_override=Decimal(BOUND_WEB_SEARCH_CONTEXT_TOKENS),
             context_tokens=context_tokens,
             # The bound is the only caller that must be a true CEILING, and the
             # only one with no breakdown to reconcile — which is why
