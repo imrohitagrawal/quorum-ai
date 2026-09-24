@@ -86,8 +86,9 @@ DEBATE_HARD_TIMEOUT_MS = 180_000
 #: completion tokens. Round 2 carries the REVISED ANSWER that synthesis reads
 #: as its primary input, so the tail being cut was the source-backed answer.
 #: 4000 was chosen against the CONFIRMATION RAIL, not in isolation. At
-#: production's real posture — judge ON **and peer critique ON**, which is what
-#: ``fly.toml`` sets and ``/status`` reports — the bound at cap 2000 is 0.1415
+#: production's posture on that date — judge ON **and peer critique ON**, which
+#: ``fly.toml`` set and ``/status`` reported until 2026-09-24 (off between live
+#: windows since; #458, ADR-0122) — the bound at cap 2000 is 0.1415
 #: with only $0.0085 of head-room under the old $0.15 line, so NO useful raise
 #: fitted under it. ADR-0102 therefore moved the whole ladder
 #: (0.15/0.20/0.25 -> 0.30/0.40/0.50) alongside this cap; at 4000 the bound is

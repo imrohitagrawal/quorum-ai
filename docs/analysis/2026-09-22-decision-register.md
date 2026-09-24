@@ -1,7 +1,9 @@
 # Decision register — W4, W5, W7 (2026-09-22)
 
-**RECONSTRUCTED FROM SESSION TRANSCRIPTS — AWAITING OWNER CONFIRMATION**, for
-the sections dated up to 2026-09-22. The section dated 2026-09-23 at the end
+**RECONSTRUCTED FROM SESSION TRANSCRIPTS — CONFIRMED BY THE PRODUCT OWNER on
+2026-09-24** (*"confirmed"*, transcript `df5e9b18`, `type: user`,
+`2026-09-24T06:59:26Z`; the 2026-09-24 section below, D9, records the
+exchange), for the sections dated up to 2026-09-22. The section dated 2026-09-23 at the end
 is different in kind: the owner gave those decisions in chat, in their own
 messages, and CHG-011 records them; see that section for how each was checked.
 
@@ -11,9 +13,9 @@ assistant and then sent by the owner; see below. It exists because none
 of it was in the repository, so every new session labelled these rows
 "undecided" and asked again.
 
-The sections up to 2026-09-22 are **not** a decision record: no CHG row and
-no ADR was filed from them, and none should be until the owner confirms that
-text. (W4's own decisions of 2026-09-22 were then taken in chat and recorded
+The sections up to 2026-09-22 were **not** a decision record when written: no
+CHG row and no ADR was filed from them. The owner confirmed their text on
+2026-09-24 (D9 below; CHG-012), so they may now be cited as confirmed. (W4's own decisions of 2026-09-22 were then taken in chat and recorded
 in CHG-010 and ADR-0120, as its section notes.) The 2026-09-23 section is
 recorded in CHG-011.
 
@@ -26,7 +28,8 @@ hard line breaks in the transcript, so a one-line `grep -F` finds only
 fragments of them; they are shown here with the breaks joined. Timestamps are
 the transcript's own, in UTC. The transcripts
 are outside this repository, so a reader without that machine cannot re-run
-the check; that is the reason for the AWAITING CONFIRMATION label. The
+the check; that was the reason for the AWAITING CONFIRMATION label this file
+carried until 2026-09-24. The
 2026-09-23 section marks, quote by quote, which words are the owner's and
 which are the session's.
 
@@ -180,3 +183,132 @@ request, above) queues it "only if its decision register entry is complete
 enough to build; otherwise write the scoping and stop". The entry above names the mode's SHAPE (what it keeps and
 drops) and nothing else; a W5 scoping note naming what is still owed follows
 in its own docs-only pull request.
+
+## 2026-09-24 — the backlog decisions: W5, #458, #459, #447, #268, the order, W7, BYOK timing, and this file's confirmation
+
+**DECIDED by the product owner, 2026-09-24, in chat.** Source and how it was
+checked: the owner's own messages (`type: user`) in transcript `df5e9b18`,
+at `2026-09-24T06:20:42Z`, `06:24:09Z`, `06:55:41Z`, `06:58:37Z` and
+`06:59:26Z`, each parsed from the transcript file and its record type
+confirmed. The session's replies the owner was answering are `assistant`
+records at `06:08:03Z`, `06:11:04Z`, `06:21:09Z`, `06:24:40Z`, `06:56:02Z`,
+`06:57:41Z` and `06:58:46Z`; the session's final restatement of the course of
+action, after the last decision, is the `assistant` record at `06:59:32Z`. Every
+sentence in quotation marks below is the owner's, verbatim, typing errors
+included; every sentence outside quotation marks is the session's phrasing
+of what the owner answered, or the session's own proposal, and says which.
+At `07:01:59Z` the session wrote these decisions into the root prompt
+`CONTINUE-BACKLOG-2026-09-24-ULTRACODE-PROMPT.md` (the `Write` tool record;
+untracked; announced in an `assistant` record at `07:02:14Z`), and the session that executed that prompt wrote this
+section from the transcript, not from the prompt. Recorded the same day in
+CHG-012.
+
+**D1. W5, the quick-answer mode (`06:20:42Z`).** Owner: *"W5: Guard: separate
+mode: "quick", Copy: "Quick answer — one model, no debate", show info message
+that "four models by default, 2 debates and 1 sourced answer" which we have
+been using in this product as a feature available, Price posture: judge on,
+cost gate kept, so user knows that did the 1 model approach was actually good
+for him/her or not. Judge will help user understand whether the answer that
+model give is how much accurate."* The session's reading: a separate request
+shape (`mode: "quick"`) that never touches the panel validator (2 to 4
+stays, `MIN_SLOT_COUNT = 2`); the mode's copy is the owner's sentence; the
+mode shows an information line stating the product default; the judge runs
+and is a priced `by_stage` row; the per-run cost gate applies. What the mode
+keeps and drops is unchanged from the approved plan of 2026-08-25 quoted in
+the W5 section above: it keeps the answer, source support, citation
+coverage, the safety notices and the receipt, and drops the agreement ring,
+the verdict band, the debate transcript and convergence-based trust. It adds
+no per-run toggle of any other kind (CHG-011 D9).
+
+**D2. #458, the peer-critique flag (`06:20:42Z`).** Owner: *"#458: yes,
+couple the flag"*. The owner was answering the session's recommendation at `06:11:04Z`
+("yes, couple the flag to the window scripts, and flip it to false now"),
+so the session's reading is: couple
+`PEER_CRITIQUE_ENABLED` to the live-execution window mechanism, so that
+closing a window turns it off together with live execution; flip the
+production value to `"false"` in `fly.toml` in the same change; peer
+critique turns on again only by the window mechanism.
+
+**D3. #459, the watchdog's latency (`06:20:42Z`).** Owner: *"#459: option 1
+only."* Option 1 is the first of the two the session listed at `06:08:03Z`, which
+are the issue's own two: correct every stated
+latency to the measured band, with the date and the sample size from the
+issue; do not tighten the cron; do not move the check.
+
+**D4. #447, the judge and the sources (`06:20:42Z`, `06:24:09Z`).** Owner:
+*"#447: JUdge should be able to verify the sources then only will be able to
+judge properly. I want you to choose the right option here. confirm me your
+answer."* The session had recommended Route A at `06:11:04Z`; asked to choose
+again after the owner's sentence, it chose the issue's Route B at
+`06:21:09Z`, a credential-guarded fetcher that reads the cited pages so the
+judge grades what it has read, with one free capture first to learn whether
+OpenRouter's annotations already carry page content. Owner: *"#447: I
+agree with your choice"*.
+
+**D5. #268 (`06:24:09Z`).** Owner: *"#268: pick b"*. Option (b) was the
+second of the two the session laid out at `06:21:09Z`: keep `cost_web_search_context_tokens = 2000` and
+restructure the worst-case bound so that a truer constant cannot move an
+affordable mix into `BLOCK`. The constant itself does not move on this
+decision; a new value is a later owner decision with its own CHG row.
+
+**D6. The order (`06:24:09Z`).** Owner: *"Order: W5 first (small, unblocked
+now), then W7 as its own package."* That sentence is the session's own line
+from `06:21:09Z` ("Order: W5 first (small, unblocked now), then W7 as its
+own package with …"), typed back by the owner — the same shape this file
+labels "assistant-drafted, sent by the owner" for the 2026-08-31 lines, so
+it carries that weight and no more. The owner had offered at `06:20:42Z`
+that W7 could be clubbed with W4 and W5 (*"you can decide to club this with
+W4 and W5 where things can be done in 1 shot."*); the session recommended
+against clubbing and the owner chose this order. The full order the
+session then proposed at `06:57:41Z` and restated at `06:59:32Z` — #458,
+the confirmation-token binding, W5, #459, #447, #268, W7, BYOK — is the
+session's sequencing around the owner's two fixed points (W5 before W7;
+BYOK last, D8) and was not contested.
+
+**D7. W7, sign-in with history (`06:20:42Z`, `06:55:41Z`).** Owner: *"W7:
+the purpose of sig-in is to preserve the history of the searches from a
+account. THis can be limited to last 5 searches for example if we face issue
+in storage."* Asked whether the session had a better rule, the session
+proposed (`06:24:40Z`) a count AND an age limit, storing a summary row per
+run rather than the whole run, and — wrongly — deleting on sign-out. Owner
+(`06:55:41Z`): *"do you suggest that Count and age together should be
+configurable like plug-and-play and not hard coded? what you suggest? what
+do you mean by Delete on sign-out? the whole purpose will be forfeited if we
+delete the history on every sign-out! but yes on account deletion we should
+remove, but how are we planning to give an option to User for account
+deletion?"* The session withdrew sign-out deletion and answered
+(`06:56:02Z`) with the design below, which it summarised back to the owner
+at `06:57:41Z` under "W7 details agreed"; the owner's next messages moved
+on to BYOK timing and the register without objection. So the design is the
+SESSION's, accepted by the owner in that sense and not restated by the
+owner in their own words:
+- keep the last 5 runs per account AND drop anything older than 30 days,
+  both as environment settings with pinned defaults (`HISTORY_KEEP_COUNT`,
+  `HISTORY_KEEP_DAYS`), not a toggle surface, not per-user;
+- store the summary row per run (question, date, verdict line, cost, run
+  id), not the whole run; the full result is re-openable only while the run
+  is still in the run store;
+- nothing is deleted on sign-out; history belongs to the account;
+- account deletion: a typed-confirmation action on one authenticated
+  endpoint that removes the account, its history rows and its session in one
+  transaction and signs the browser out; operator run rows keep their counts
+  with the account id set to null; the 24-hour spend envelope stays keyed on
+  a one-way hash of the Google subject for 24 hours after deletion so
+  deletion cannot reset it;
+- W7's pull request rewrites "Results are ephemeral" (`main.py`
+  `_app_description`, CHG-004) for signed-in users, files the CHG row and
+  the threat-model rows, and writes the ADR.
+Google sign-in only; no password; no durable provider key (that is BYOK, D8).
+
+**D8. BYOK timing (`06:58:37Z`).** Owner: *"BYOK delivery timing: after all
+the current features and bugs are worked upon."* BYOK is last, after every
+package above. ADR-0121 stays `PROPOSED — AWAITING OWNER` until then.
+
+**D9. This file (`06:58:37Z`, `06:59:26Z`).** The owner asked *"what is
+Confirmation of the reconstructed sections of the 2026-09-22 decision
+register.?"*, the session explained (`06:58:46Z`) that the sections dated
+up to 2026-09-22 were quoted from transcripts and carried the AWAITING label
+until the owner confirmed the quotes were theirs, and the owner answered
+*"confirmed"*. The label is removed from those sections by the pull request
+that adds this section, and they are cited as confirmed by the product owner
+on 2026-09-24 at `06:59:26Z`.

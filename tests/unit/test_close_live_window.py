@@ -15,14 +15,18 @@ from __future__ import annotations
 import datetime as dt
 import importlib.util
 import json
+import re
+import subprocess
 import sys
+import tomllib
 from pathlib import Path
 from types import ModuleType
 from typing import Any
 
 import pytest
+from tests.repo_root import find_repo_root
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = find_repo_root(Path(__file__))
 SCRIPT = REPO_ROOT / "scripts" / "close_live_window.py"
 
 _NOW = dt.datetime(2026, 9, 1, 12, 0, tzinfo=dt.UTC)
@@ -202,11 +206,18 @@ def test_set_flag_false_refuses_when_the_key_is_absent(closer: ModuleType) -> No
 
 
 def _write_fixture(
-    tmp_path: Path, *, flag_value: str, windows: list[dict[str, Any]]
+    tmp_path: Path,
+    *,
+    flag_value: str,
+    windows: list[dict[str, Any]],
+    peer_value: str | None = "true",
 ) -> tuple[Path, Path]:
+    """``peer_value=None`` writes a fly.toml WITHOUT the peer key, for the
+    tests that prove the closer refuses to edit blind (#458)."""
     fly = tmp_path / "fly.toml"
+    peer_line = "" if peer_value is None else f'  PEER_CRITIQUE_ENABLED = "{peer_value}"\n'
     fly.write_text(
-        f'app = "x"\n\n[env]\n  OPENROUTER_LIVE_EXECUTION_ENABLED = "{flag_value}"\n',
+        f'app = "x"\n\n[env]\n  OPENROUTER_LIVE_EXECUTION_ENABLED = "{flag_value}"\n{peer_line}',
         encoding="utf-8",
     )
     windows_file = tmp_path / "windows.json"
@@ -219,7 +230,10 @@ def test_main_refuses_when_nothing_is_open(closer: ModuleType, tmp_path: Path, c
     ``now`` — a silent no-op success here would let an operator believe they
     closed a window that was never open."""
     fly, windows_file = _write_fixture(
-        tmp_path, flag_value="false", windows=[_window(opened=_EXPIRED_START, expires=_EXPIRED_END)]
+        tmp_path,
+        flag_value="false",
+        peer_value="false",
+        windows=[_window(opened=_EXPIRED_START, expires=_EXPIRED_END)],
     )
     before = windows_file.read_text(encoding="utf-8")
     rc = closer.main(
@@ -296,6 +310,7 @@ def test_main_still_refuses_a_standing_window_even_though_the_flag_is_on(
     )
     assert rc == 1
     assert 'OPENROUTER_LIVE_EXECUTION_ENABLED = "true"' in fly.read_text(encoding="utf-8")
+    assert 'PEER_CRITIQUE_ENABLED = "true"' in fly.read_text(encoding="utf-8")  # #458
     # The two refusals must be DISTINGUISHABLE. Adversarial review showed that
     # making the standing refusal print the lapsed/already-off text instead
     # survived the whole suite, because nothing read this message. ``capsys``
@@ -369,6 +384,7 @@ def test_main_refuses_a_declaration_the_POSTURE_CHECKER_cannot_trust(
     )
     assert rc == 2, label
     assert 'OPENROUTER_LIVE_EXECUTION_ENABLED = "true"' in fly.read_text(encoding="utf-8")
+    assert 'PEER_CRITIQUE_ENABLED = "true"' in fly.read_text(encoding="utf-8")  # #458
     assert windows_file.read_text(encoding="utf-8") == before
     assert "cannot be trusted" in capsys.readouterr().err
 
@@ -436,6 +452,7 @@ def test_main_refuses_an_unrecognised_window_mode_and_leaves_the_flag_ALONE(
     )
     assert rc == 2
     assert 'OPENROUTER_LIVE_EXECUTION_ENABLED = "true"' in fly.read_text(encoding="utf-8")
+    assert 'PEER_CRITIQUE_ENABLED = "true"' in fly.read_text(encoding="utf-8")  # #458
     assert "unrecognised" in capsys.readouterr().err
 
 
@@ -466,6 +483,7 @@ def test_main_refuses_a_standing_window_sitting_beside_a_LAPSED_one(
     )
     assert rc == 1
     assert 'OPENROUTER_LIVE_EXECUTION_ENABLED = "true"' in fly.read_text(encoding="utf-8")
+    assert 'PEER_CRITIQUE_ENABLED = "true"' in fly.read_text(encoding="utf-8")  # #458
 
 
 def test_main_says_NO_WINDOW_DECLARED_rather_than_inventing_a_lapse(
@@ -668,3 +686,266 @@ def test_main_writes_the_flag_before_the_window_declaration(
             ["--fly-toml", str(fly), "--windows-file", str(windows_file), "--now", _NOW_ISO]
         )
     assert write_calls == [fly, windows_file]
+
+
+# --- #458 / ADR-0122: the peer-critique flag closes with the window ----------
+
+
+def _env(fly: Path) -> dict[str, Any]:
+    """Parse rather than substring-match the written file (AGENTS rule 8)."""
+    env = tomllib.loads(fly.read_text(encoding="utf-8"))["env"]
+    assert isinstance(env, dict) and env, "fixture fly.toml has no [env] block"
+    return env
+
+
+def test_main_closes_an_open_window_and_flips_BOTH_flags(
+    closer: ModuleType, tmp_path: Path
+) -> None:
+    """The coupling on the covering-window path.
+
+    RED IF: closing a window flips the live flag and leaves
+    ``PEER_CRITIQUE_ENABLED`` reading ``"true"`` — the state issue #458 named,
+    where re-opening a window turns peer critique back on unread.
+    """
+    fly, windows_file = _write_fixture(
+        tmp_path, flag_value="true", windows=[_window(opened=_OPEN_START, expires=_OPEN_END)]
+    )
+    rc = closer.main(
+        ["--fly-toml", str(fly), "--windows-file", str(windows_file), "--now", _NOW_ISO]
+    )
+    assert rc == 0
+    env = _env(fly)
+    assert env["OPENROUTER_LIVE_EXECUTION_ENABLED"] == "false"
+    assert env["PEER_CRITIQUE_ENABLED"] == "false"
+
+
+def test_the_lapsed_revert_flips_the_peer_flag_too_and_leaves_the_declaration_alone(
+    closer: ModuleType, tmp_path: Path, capsys: Any
+) -> None:
+    """The coupling on the #460 lapsed path.
+
+    RED IF: the lapsed revert flips only the live flag, or the peer edit adds
+    a write to the declaration file (mutation 06 of the proof harness).
+    """
+    fly, windows_file = _write_fixture(
+        tmp_path, flag_value="true", windows=[_window(opened=_EXPIRED_START, expires=_EXPIRED_END)]
+    )
+    windows_before = windows_file.read_text(encoding="utf-8")
+    rc = closer.main(
+        ["--fly-toml", str(fly), "--windows-file", str(windows_file), "--now", _NOW_ISO]
+    )
+    assert rc == 0
+    env = _env(fly)
+    assert env["OPENROUTER_LIVE_EXECUTION_ENABLED"] == "false"
+    assert env["PEER_CRITIQUE_ENABLED"] == "false"
+    assert windows_file.read_text(encoding="utf-8") == windows_before
+    assert "PEER_CRITIQUE_ENABLED" in capsys.readouterr().out
+
+
+def test_a_stranded_peer_flag_is_reverted_even_when_live_is_already_off(
+    closer: ModuleType, tmp_path: Path, capsys: Any
+) -> None:
+    """The shape production shipped from 2026-09-12 until this change: live
+    execution already reverted, peer critique still ``"true"``, no window.
+    Before #458 the closer answered "nothing to close" (exit 1) and changed
+    nothing; under the coupling the peer flag is stranded in exactly the way
+    a live flag is, so it is one edit, exit 0.
+
+    RED IF: the command exits 1 or leaves the peer flag ``"true"`` when only
+    the peer flag is on.
+    """
+    fly, windows_file = _write_fixture(
+        tmp_path, flag_value="false", windows=[_window(opened=_EXPIRED_START, expires=_EXPIRED_END)]
+    )
+    windows_before = windows_file.read_text(encoding="utf-8")
+    rc = closer.main(
+        ["--fly-toml", str(fly), "--windows-file", str(windows_file), "--now", _NOW_ISO]
+    )
+    assert rc == 0
+    env = _env(fly)
+    assert env["OPENROUTER_LIVE_EXECUTION_ENABLED"] == "false"
+    assert env["PEER_CRITIQUE_ENABLED"] == "false"
+    assert windows_file.read_text(encoding="utf-8") == windows_before
+    out = capsys.readouterr().out
+    assert "PEER_CRITIQUE_ENABLED was still on" in out
+    assert "DEPLOY" in out
+    # The trailing instruction names the field and the secret of the flag
+    # that MOVED, not the live flag (review finding, round 1).
+    assert "verify /status.peer_critique_enabled yourself" in out
+    assert "`fly secrets set PEER_CRITIQUE_ENABLED`" in out
+    assert "/status.live_execution" not in out
+
+
+def test_main_refuses_to_edit_blind_when_the_peer_key_is_absent(
+    closer: ModuleType, tmp_path: Path, capsys: Any
+) -> None:
+    """Same rule as the live flag: an absent key is a refusal, never a silent
+    skip, because a skip would report a closed window while peer critique
+    stayed exactly as armed as it was.
+
+    RED IF: a fly.toml without ``PEER_CRITIQUE_ENABLED`` closes cleanly.
+    """
+    fly, windows_file = _write_fixture(
+        tmp_path,
+        flag_value="true",
+        peer_value=None,
+        windows=[_window(opened=_OPEN_START, expires=_OPEN_END)],
+    )
+    fly_before = fly.read_text(encoding="utf-8")
+    windows_before = windows_file.read_text(encoding="utf-8")
+    rc = closer.main(
+        ["--fly-toml", str(fly), "--windows-file", str(windows_file), "--now", _NOW_ISO]
+    )
+    assert rc == 2
+    assert "PEER_CRITIQUE_ENABLED" in capsys.readouterr().err
+    assert fly.read_text(encoding="utf-8") == fly_before
+    assert windows_file.read_text(encoding="utf-8") == windows_before
+
+
+def test_set_flag_false_edits_the_peer_key_by_name_and_nothing_else(closer: ModuleType) -> None:
+    """The one text helper serves both keys, scoped to the key it was given.
+
+    RED IF: ``set_flag_false`` cannot be pointed at the peer key, or editing
+    the peer key touches the live key (or the reverse).
+    """
+    text = (
+        'app = "x"\n[env]\n  OPENROUTER_LIVE_EXECUTION_ENABLED = "true"\n'
+        '  PEER_CRITIQUE_ENABLED = "true"\n  OTHER = "true"\n'
+    )
+    new_text, changed = closer.set_flag_false(text, key=closer.PEER_FLAG)
+    assert changed is True
+    env = tomllib.loads(new_text)["env"]
+    assert env == {
+        "OPENROUTER_LIVE_EXECUTION_ENABLED": "true",
+        "PEER_CRITIQUE_ENABLED": "false",
+        "OTHER": "true",
+    }
+    again, changed_again = closer.set_flag_false(new_text, key=closer.PEER_FLAG)
+    assert changed_again is False
+    assert again == new_text
+
+
+def test_the_flag_names_the_closer_writes_are_exactly_the_two_coupled_keys(
+    closer: ModuleType,
+) -> None:
+    """Positive partner for the allowlist test below, and the pin that
+    ``PEER_FLAG`` is the key ``fly.toml`` actually carries.
+
+    RED IF: the closer's peer constant drifts from the key name production
+    reads, or a third flag is coupled here without a decision.
+    """
+    assert closer.FLAG == "OPENROUTER_LIVE_EXECUTION_ENABLED"
+    assert closer.PEER_FLAG == "PEER_CRITIQUE_ENABLED"
+
+
+_PEER_FLAG_MENTIONS_ALLOWED = frozenset(
+    {
+        # The two halves of the mechanism: the closer writes it, the checker
+        # refuses a committed stranded value and reports the served one.
+        "scripts/close_live_window.py",
+        "scripts/live_posture_check.py",
+        # Proof scripts that SET the environment variable for a local sweep;
+        # they write no file.
+        "scripts/proofs/debate_output_band_sweep.py",
+        # Names the key in the alert body it posts (operator instructions);
+        # its token is read-only and it writes nothing (its own :1655 test).
+        ".github/workflows/live-posture-watchdog.yml",
+        # The local-development template; sets the variable for a developer's
+        # shell, never fly.toml.
+        ".env.example",
+        # The operator procedure that names the Fly-secret route (the one
+        # writer this test cannot see, stated below).
+        "DEPLOY.md",
+    }
+)
+
+
+def test_no_file_outside_the_window_mechanism_names_the_peer_flag() -> None:
+    """ "No other writer of the flag exists" — pinned as the population of
+    files that so much as NAME the key, so a new writer cannot appear
+    without this test naming it (AGENTS rule 1a: a check, not a sentence).
+
+    Set equality is deliberate: a new mention is triaged, not tolerated.
+    What this cannot see, stated: a ``fly secrets set PEER_CRITIQUE_ENABLED``
+    (no tracked file records one); a hand edit of ``fly.toml`` (which the
+    pre-merge gate in ``test_live_execution_posture_declaration.py`` refuses
+    when it strands the flag); and ``docs/``, ``e2e/`` and ``tests/``, which
+    are deliberately outside the scan because they describe the flag in
+    prose and pin it in tests rather than write it — except their ``*.sh``
+    files, because the ``*.sh`` pathspec matches every tracked shell script
+    at any depth (a nested deploy script is exactly the writer to catch).
+    ``fly.toml`` itself is the target, not a writer, and is outside the scan
+    for that reason. A lower-case ASSIGNMENT (``ENV peer_critique_enabled=``,
+    ``export peer_critique_enabled=``) counts too, because the app's
+    ``Settings`` is ``case_sensitive=False`` and such a line would set the
+    flag; the attribute ``settings.peer_critique_enabled`` does not count.
+
+    RED IF: a tracked file under ``scripts/``, ``src/``, ``.github/``,
+    ``configs/``, the ``Makefile``, the ``Dockerfile``, ``docker-compose.yml``,
+    ``.env.example``, ``DEPLOY.md`` or any tracked ``*.sh`` starts or stops
+    naming ``PEER_CRITIQUE_ENABLED`` in any letter case.
+    """
+    listed = subprocess.run(
+        [
+            "git",
+            "ls-files",
+            "--",
+            "scripts",
+            "src",
+            ".github",
+            "configs",
+            "Makefile",
+            "Dockerfile",
+            "docker-compose.yml",
+            ".env.example",
+            "DEPLOY.md",
+            "*.sh",
+        ],
+        cwd=REPO_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.split()
+    assert len(listed) > 50, "git ls-files returned too little to be the repository"
+    # The exact key anywhere, OR a lower-case ASSIGNMENT at line start
+    # (``ENV x=``, ``export x=``, ``x=``) — the shapes a writer takes. The
+    # attribute ``settings.peer_critique_enabled`` and printed strings are
+    # not assignments and are not writers.
+    exact = re.compile(r"\bPEER_CRITIQUE_ENABLED\b")
+    assigned = re.compile(r"(?im)^\s*(?:ENV\s+|export\s+|set\s+)?peer_critique_enabled\s*=")
+    naming = set()
+    for path in listed:
+        text = (REPO_ROOT / path).read_text(encoding="utf-8", errors="replace")
+        if exact.search(text) or assigned.search(text):
+            naming.add(path)
+    # Positive partner: the mechanism itself must be in the population.
+    assert "scripts/close_live_window.py" in naming
+    assert naming == _PEER_FLAG_MENTIONS_ALLOWED, (
+        "files naming PEER_CRITIQUE_ENABLED changed: added "
+        f"{sorted(naming - _PEER_FLAG_MENTIONS_ALLOWED)}, gone "
+        f"{sorted(_PEER_FLAG_MENTIONS_ALLOWED - naming)}. A new writer of the flag is a "
+        "decision (ADR-0122); a new mention is triaged here, not tolerated."
+    )
+
+
+def test_a_lower_case_copy_of_the_key_is_a_duplicate_not_a_second_flag(closer: ModuleType) -> None:
+    """The app's ``Settings`` is ``case_sensitive=False``, so a lower-case
+    ``peer_critique_enabled = "true"`` line sets the flag exactly as the
+    upper-case one does. The closer's key match is therefore case-insensitive,
+    which turns that shape into the duplicate-key refusal instead of a
+    silent "already off".
+
+    RED IF: the key match is case-sensitive, so the lower-case copy is never
+    seen and the closer reports success with the flag still on.
+    """
+    text = (
+        'app = "x"\n[env]\n  OPENROUTER_LIVE_EXECUTION_ENABLED = "false"\n'
+        '  PEER_CRITIQUE_ENABLED = "false"\n  peer_critique_enabled = "true"\n'
+    )
+    with pytest.raises(ValueError, match="appears 2 times"):
+        closer.set_flag_false(text, key=closer.PEER_FLAG)
+    # Positive partner: a lower-case key ALONE is found and flipped.
+    lone = 'app = "x"\n[env]\n  peer_critique_enabled = "true"\n'
+    new_text, changed = closer.set_flag_false(lone, key=closer.PEER_FLAG)
+    assert changed is True
+    assert tomllib.loads(new_text)["env"] == {"PEER_CRITIQUE_ENABLED": "false"}

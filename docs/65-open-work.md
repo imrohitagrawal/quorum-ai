@@ -175,7 +175,8 @@ read is carried across faithfully but not fixed — settling that shape needs a
 live `:online` call, which is spend.
 
 **W2 — peer critique (#290, closure decided 2026-09-15). BUILT, shipping DEFAULT-OFF in
-`config.py` and switched ON in production by `fly.toml`.** ADR-0093's
+`config.py`, switched ON in production by `fly.toml` from 2026-09-03, and
+coupled to the live window since 2026-09-24 (#458, ADR-0122).** ADR-0093's
 shape is implemented in full (decisions 1, 1a, 1b, 2, 3, 4, 5) behind
 `settings.peer_critique_enabled`, which defaults to `false`. ADR-0095 records
 why the flag exists and it is not caution: `_estimate_bound_usd` calls itself a
@@ -200,8 +201,9 @@ rows — the run completed, `cost_source` measured (ADR-0110;
 show only `settings.debate_model_id`. Re-derive:
 `python3 -c` over that file, grouping `stage` by `query_run_id` and counting
 distinct `model_id`. The two 2026-09-10 runs' cost is reconciled against the
-provider bill in CHG-006. Production still runs `PEER_CRITIQUE_ENABLED = "true"`
-(`fly.toml`, `/status`), with live execution off since that window lapsed. What
+provider bill in CHG-006. Production ran `PEER_CRITIQUE_ENABLED = "true"` (`fly.toml`, `/status`) with
+live execution off from 2026-09-12 until 2026-09-24, when ADR-0122 coupled the
+flag to the window and turned it off. What
 #290 asked for is built, shipped and exercised; the per-model measurement W3
 wants is now derivable from that telemetry and is W3's work, not #290's. The
 needle was REPLACED for this row — the old one pinned
@@ -282,8 +284,9 @@ not yet re-derived them, and that is W3's work; #290's closure was decided
 
 **W4, W5 and W7: what the owner has already said** is recorded, with sources, in
 `docs/analysis/2026-09-22-decision-register.md` (reconstructed from session
-transcripts, awaiting the owner's confirmation). Read it before calling any of
-the three "undecided".
+transcripts and confirmed by the owner on 2026-09-24, CHG-012 D9; its
+2026-09-24 section holds that day's decisions on W5, W7, #458, #459, #447,
+#268 and BYOK). Read it before calling any of the three "undecided".
 
 **W4 — variable panel size.** Decided by the owner on 2026-09-22 (CHG-010,
 ADR-0120): a visible remove/add control, range 2..4, and at N=2 a green

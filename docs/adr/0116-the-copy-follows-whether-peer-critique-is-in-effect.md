@@ -9,6 +9,15 @@ the landing and `/status` say peer critique is in effect only when the flag AND
 live execution are both on. Code only, no flag flipped. I have approved this
 approach."* Nothing here records an approval beyond that sentence.
 
+**Amended by ADR-0122 (2026-09-24):** the product owner decided the coupling
+this record left open ("yes, couple the flag", CHG-012 D2). The Consequences
+line below that says "no gate couples the flags" and the closer "still does
+not touch `PEER_CRITIQUE_ENABLED` (grep: no hits)", and the rejected
+alternative "couple the two flags so the window script flips both", describe
+the tree before that date. `fly.toml` reads `PEER_CRITIQUE_ENABLED = "false"`
+between windows; the predicate this record added is unchanged and is what
+the copy still reads.
+
 Completes ADR-0099's premise — "the UI describes peer critique because peer
 critique is what runs" — which was false in production. Amends ADR-0097's
 "ONE predicate, two readers" by naming which predicate each reader uses.

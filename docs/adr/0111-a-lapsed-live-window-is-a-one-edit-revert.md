@@ -4,6 +4,14 @@
 
 Accepted — 2026-09-12.
 
+**Amended by ADR-0122 (2026-09-24):** the lapsed revert flips
+`PEER_CRITIQUE_ENABLED` too, on the same single write; "flag already off →
+refuse" in the table below now means BOTH flags already off, and a peer flag
+left on with the live flag already off is itself the one-edit revert. The
+proof harness named under "How this is proven" grew to 15 entries (all
+killed). It held 12 entries when this record said "11" (two are labelled
+"09"); the figures below are this record's dated text, left as written.
+
 **Authorises nothing.** No `**Authorises:**` line; it may not be cited to
 sanction a live-execution posture. It changes only the mechanics of TURNING ONE
 OFF.

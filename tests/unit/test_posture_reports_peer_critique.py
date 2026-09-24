@@ -298,8 +298,14 @@ def test_the_flag_off_line_does_not_claim_calls_are_being_dispatched(
         peer_states={_HOST_B: True},
     )
     assert result.decision is posture.PostureDecision.OFF_AS_DECLARED
+    assert result.should_alert is False
     assert "peer_critique_enabled=true" in result.detail
     assert "No critic call can be dispatched while live execution is off" in result.detail
+    # #458 / ADR-0122: the flags are coupled, so this state is DRIFT from the
+    # committed posture — named as such, still REPORTED rather than alerted
+    # (ADR-0097 §3; escalation is the owner's call, recorded in ADR-0122).
+    assert "DRIFT" in result.detail
+    assert "make close-window" in result.detail
     # The claim that must NOT be here, with a positive partner above so this is
     # not a negative check over an empty string.
     assert "would dispatch" not in result.detail

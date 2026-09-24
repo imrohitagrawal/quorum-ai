@@ -108,9 +108,11 @@ These requirements cover Release 1 MVP for the public AI cross-validation workfl
 - Trigger: Initial model answers are available or recoverable partial results exist.
 - Behavior: The system runs two critique/debate rounds where selected models evaluate disagreement, weak support, and missing reasoning in the other model answers.
 - Outcome: The workflow exposes material contradictions and quality gaps before final synthesis.
-- Implementation status: **BUILT AND ENABLED** (#290, ADR-0093, ADR-0095,
-  ADR-0096; enabled in production 2026-09-03, `fly.toml` sets
-  `PEER_CRITIQUE_ENABLED = "true"`).
+- Implementation status: **BUILT; ON ONLY INSIDE A DECLARED LIVE WINDOW**
+  (#290, ADR-0093, ADR-0095, ADR-0096; enabled in production 2026-09-03 with
+  the #290 window; since 2026-09-24 coupled to the window, #458, ADR-0122:
+  `fly.toml` reads `PEER_CRITIQUE_ENABLED = "false"` between windows and
+  `make close-window` turns it off with live execution).
   The mechanism the Behavior line describes now exists: under
   `settings.peer_critique_enabled` each ELIGIBLE answer slot writes its own
   critique of the others in both rounds, billed to its own model, with a
@@ -119,15 +121,18 @@ These requirements cover Release 1 MVP for the public AI cross-validation workfl
   ENABLED IS NOT THE SAME AS IN EFFECT (#458, ADR-0116). A slot is eligible to
   critique only if it was really invoked, and only a live provider call
   produces that — so with live execution off, every run takes the moderator
-  shape however this flag is set. Production has run exactly that posture
-  (flag true, live off) since 2026-09-12, when the live window opened on
-  2026-09-03 by the same commit that set this flag was closed. The copy surfaces and `/status`
+  shape however this flag is set. Production ran exactly that posture
+  (flag true, live off) from 2026-09-12, when the live window opened on
+  2026-09-03 by the same commit that set this flag was closed, until
+  2026-09-24, when ADR-0122 coupled the flag to the window and turned it off.
+  The copy surfaces and `/status`
   report both facts: `peer_critique_enabled` is the flag,
   `peer_critique_in_effect` is the flag AND live execution AND a key.
 
   The CODE default is still `false` (`config.py`, `.env.example`), so a local
   run and the whole test suite take the moderator shape unless the flag is set.
-  PRODUCTION sets it true, and has since 2026-09-03. Enabling it was a money
+  PRODUCTION set it true from 2026-09-03 to 2026-09-24; it is now on only
+  inside a declared live window that sets both flags. Enabling it was a money
   decision, not a feature toggle — the fail-safe cost bound rises with it,
   because a peer run makes two debate calls per eligible critic rather than two
   in total.

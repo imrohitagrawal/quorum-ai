@@ -186,6 +186,12 @@ also_copy = [
   # named this exact fix in its failure message. Twice now, that guard has
   # paid for itself on a doc gate someone had just added.
   "DEPLOY.md",
+  # ``docker-compose.yml`` is read from ``REPO_ROOT`` by
+  # tests/unit/test_close_live_window.py (#458, ADR-0122), whose pinned
+  # population of files naming ``PEER_CRITIQUE_ENABLED`` scans the root
+  # deployment files. Third time ``test_mutation_copy_completeness`` caught
+  # the omission and named this fix.
+  "docker-compose.yml",
   # ``README.md`` is read from ``REPO_ROOT`` by
   # tests/test_doc_gate_consistency.py Part G, which pins the four default
   # model slot ids the README states against ``model_slots.DEFAULT_MODEL_IDS``.

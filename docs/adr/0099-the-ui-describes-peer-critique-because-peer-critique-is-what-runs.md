@@ -4,6 +4,12 @@
 
 Accepted - 2026-09-04.
 
+**Posture note (ADR-0122, 2026-09-24):** the flag this record's title
+premise rests on was true in production from 2026-09-03 to 2026-09-24 and is
+now on only inside a declared live window, coupled to it; the copy has
+followed "in effect" rather than the flag since ADR-0116, so nothing here
+changes what is served.
+
 **Amended by ADR-0116 (2026-09-21):** the subhead and the API description
 follow whether peer critique is IN EFFECT — the flag AND live execution AND a
 key — not the flag alone. The sentences below that say the copy follows the
