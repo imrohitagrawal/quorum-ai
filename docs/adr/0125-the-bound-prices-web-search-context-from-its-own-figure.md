@@ -26,7 +26,12 @@ raises every searching mix's bound and tips mixes near a band edge.
    `_cost_components` takes `search_context_override`; `_estimate_bound_usd`
    passes the constant, and the point estimate passes nothing and keeps
    reading the setting. Raising the setting later moves the displayed
-   estimate and not the bound, so no band.
+   estimate and not the bound, so not the per-call band (allow, confirm or
+   block), which is what D5 is about. The two per-account spend rails, the
+   cumulative guard and the 24-hour cap, add the TYPICAL estimate to spend
+   already recorded (the `max_cost_usd` docstring in `costs.py` says why), so
+   after a raise they reach their limit sooner, as they should: they track
+   what runs are expected to cost.
 2. The constant is a LITERAL pin in the risk registry
    (`tests/unit/test_risk_constant_pins.py`). Moving it is a money-value
    change: the owner's decision, with its own CHG row.
@@ -42,19 +47,25 @@ public catalog (455 models priced on 2026-09-25) and used ADR-0119's judge,
 `openai/gpt-4.1-mini`, with a dummy key; production's judge model is a
 secret, so that choice is ADR-0119's, not a reading of production.
 
-**What a raise does, old structure against this one** (static table; mixes
-that change band, and of those, newly `BLOCK`):
+**What a raise does, old structure against this one** (static table, so no
+judge: the static table cannot price the judge production runs; mixes that
+change per-call band, and of those, newly `BLOCK`):
 
 | peer critique | query | value | old: change / new `BLOCK` | this: change |
 |---|---|---|---|---|
-| off (production) | 59 chars | 2500 | 48 / 29 | 0 |
-| off (production) | 59 chars | 2900, 3200 | 63 / 44 | 0 |
-| off (production) | 1,000 chars | 2500 to 3200 | 28 / 28 | 0 |
-| off (production) | 4,000 or 16,000 chars | 2500 to 3200 | 0 / 0 | 0 |
+| off | 59 chars | 2500 | 48 / 29 | 0 |
+| off | 59 chars | 2900, 3200 | 63 / 44 | 0 |
+| off | 1,000 chars | 2500 to 3200 | 28 / 28 | 0 |
+| off | 4,000 or 16,000 chars | 2500 to 3200 | 0 / 0 | 0 |
 | on | 59 to 16,000 chars | 2500 to 3200 | 1 to 6 / 0 | 0 |
 
 At 4,000 characters and more, the mixes a raise would tip are `BLOCK`
-already; a sweep over long queries alone reads 0 in production's posture.
+already; a sweep over long queries alone reads 0 with peer critique off. The
+judge changes the count: on the old structure at the 59-character query,
+peer critique off, review measured 63 / 44 with no judge, 38 / 38 with
+`openai/gpt-4o-mini` as judge, 28 / 28 with `openai/gpt-5-mini` and 0 / 0
+with `openai/gpt-4.1`. Production's posture is judge on and peer critique
+off; the live-price table below is the closer reading of it.
 This ADR's first draft made exactly that mistake and claimed the old
 structure moved no band with peer critique off; ADR-0119's short query
 showed otherwise.
@@ -64,7 +75,7 @@ showed otherwise.
 
 | peer critique | old: change / new `BLOCK` at 2500, 2900, 3200 | this |
 |---|---|---|
-| off | 0 / 0 at each | 0 at each |
+| off (production) | 0 / 0 at each | 0 at each |
 | on | 9 / 4, 11 / 5, 13 / 5 | 0 at each |
 
 **Unchanged at 2000**: every 2-, 3- and 4-model mix, search on and off, peer
@@ -81,17 +92,22 @@ against this branch: 12,948 estimates, 0 differ in point, bound or band.
 
 ## PROPOSED — AWAITING OWNER: the point may pass the bound after a raise
 
-The code states `estimated_cost_usd <= max_cost_usd` in two comments in
-`costs.py`, and four test files assert it at the shipped setting. It holds
-at 2000. With the setting raised and the bound fixed, it breaks on long
-queries (static table, peer critique off):
+`costs.py` states that the point never exceeds the bound in four places
+(the `max_cost_usd` docstring, the comment above the call to
+`_estimate_bound_usd`, the clamp comment in `_estimate_breakdown`, and the
+`_cost_components` docstring), and four test files assert it at the shipped
+setting. It holds at 2000. With the setting raised and the bound fixed, it
+breaks on long queries (static table, peer critique off; peer critique on
+reads 0 at every length measured; 2500 reads 0 everywhere):
 
 | query | 2900 | 3200 |
 |---|---|---|
-| up to 8,000 chars | 0 mixes | 0 mixes |
-| 12,000 to 20,000 chars | 55 mixes, all already `BLOCK` | 55 mixes, all already `BLOCK` |
+| 8,000 or 9,000 chars | 0 mixes | 0 mixes |
+| 10,000 chars | 0 mixes | 55 mixes |
+| 10,300 chars | 11 mixes | 55 mixes |
+| 10,500 to 20,000 chars | 55 mixes | 55 mixes |
 
-Every such mix is refused before it can run (its bound is 0.58 or more
+Every such mix is already `BLOCK` (the lowest bound among them is 0.5637
 against the 0.50 hard limit), so no money moves on it; what breaks is the
 displayed "typical" figure sitting above the "up to" figure on a refused
 estimate. The session's proposal, not decided: settle it in the CHG row
@@ -111,6 +127,7 @@ accepting it on refused mixes. Nothing here is changed until then.
 
 - Today nothing observable changes.
 - A later raise of the setting moves the displayed estimate on every
-  searching mix and no band, in either posture, on either price table
-  measured above.
+  searching mix and no per-call band, in either posture, on either price
+  table measured above. The per-account spend rails still see the higher
+  typical estimate.
 - #268 stays open: the value itself is the owner's later decision.

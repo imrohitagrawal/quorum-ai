@@ -3,8 +3,8 @@ an affordable mix into BLOCK, because the fail-safe bound prices that term
 from its own figure (``BOUND_WEB_SEARCH_CONTEXT_TOKENS``), not the setting.
 
 Swept over every four-model mix of the pinned fallback catalog (C(13,4) =
-715), at three query lengths, in BOTH peer-critique postures, at the values
-ADR-0119 measured.
+715), at three query lengths, in BOTH peer-critique postures, at the
+candidate values ADR-0119 swept (its readings: median 2438, max 3160).
 """
 
 from __future__ import annotations
@@ -83,12 +83,13 @@ def test_a_truer_constant_moves_every_point_and_no_bound_or_band(
     monkeypatch: pytest.MonkeyPatch, peer: bool
 ) -> None:
     """The package's proof. RED IF: the bound reads the setting again (bands
-    then move under peer critique), or the setting stops reaching the point
+    then move, in both postures), or the setting stops reaching the point
     estimate (the 'point moved' partner then reads 0).
 
     Not asserted here: ``point <= bound``. With peer critique off, a setting
-    of 2900 or 3200 puts the point above the bound on 55 mixes at queries of
-    12,000 characters and more, all of them already BLOCK. ADR-0125 leaves
+    of 2900 or 3200 puts the point above the bound on up to 55 mixes from
+    10,000 characters (3200) or 10,300 (2900), all of them already BLOCK.
+    ADR-0125 leaves
     that to the decision that raises the setting; a test pinning it either
     way would lock in an undecided answer."""
     monkeypatch.setattr(settings, "peer_critique_enabled", peer)

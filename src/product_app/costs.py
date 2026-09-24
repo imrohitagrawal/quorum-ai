@@ -348,8 +348,9 @@ _JUDGE_SOURCE_LINE_OVERHEAD_CHARS = Decimal(10)
 #: slot (#268, product-owner decision "pick b", 2026-09-24, CHG-012 D5;
 #: ADR-0125). It equals the shipped ``cost_web_search_context_tokens`` (2000),
 #: so every bound and band is unchanged today; it does NOT follow that setting,
-#: so a later, truer point value moves the displayed estimate and never a
-#: band. The bound was never a ceiling on this term: nothing bounds the context
+#: so a later, truer point value moves the displayed estimate and never the
+#: per-call band (the per-account spend rails add the typical estimate and do
+#: see it). The bound was never a ceiling on this term: nothing bounds the context
 #: OpenRouter's ``:online`` suffix injects (48 readings: median 2438,
 #: max 3160 — ADR-0119, on the unmerged branch of draft PR #491).
 BOUND_WEB_SEARCH_CONTEXT_TOKENS = 2000
@@ -434,10 +435,11 @@ class CostEstimate(BaseModel):
     #: call is represented. It bounds the OUTPUT side of every call from an
     #: enforced cap. It does NOT bound the input side: the per-call system
     #: prompt and web-search context are priced from
-    #: ``cost_system_prompt_tokens`` / ``cost_web_search_context_tokens``, which
-    #: are ASSUMPTIONS no code enforces (the search context is injected upstream
-    #: by the provider). So "real cost never exceeds it" is not a guarantee this
-    #: figure can make, and the shipped UI copy deliberately says "the worst
+    #: ``cost_system_prompt_tokens`` / ``BOUND_WEB_SEARCH_CONTEXT_TOKENS`` (the
+    #: bound's own figure since ADR-0125), which are ASSUMPTIONS no code
+    #: enforces (the search context is injected upstream by the provider). So
+    #: "real cost never exceeds it" is not a guarantee this figure can make,
+    #: and the shipped UI copy deliberately says "the worst
     #: case this run is priced at" instead. The per-call BAND (BLOCK /
     #: REQUIRE_CONFIRMATION) is evaluated against THIS value, not the point
     #: estimate, so that rail fails safe (issue #16 rec #2/#3). The two
@@ -449,8 +451,9 @@ class CostEstimate(BaseModel):
     #: before the run does. This comment listed "daily cap" among the things
     #: evaluated against the bound until 2026-08-22; that was wrong. Optional
     #: with a ``None`` default so pre-existing ``CostEstimate(...)``
-    #: constructions keep working; always >= ``estimated_cost_usd`` when
-    #: ``estimate()`` sets it.
+    #: constructions keep working; >= ``estimated_cost_usd`` when ``estimate()``
+    #: sets it at the shipped settings (a raised ``cost_web_search_context_tokens``
+    #: can put the point above it on long, already-BLOCK mixes; ADR-0125).
     max_cost_usd: Decimal | None = Field(default=None, ge=Decimal("0"))
     #: Itemized cost partition (by model AND by stage). Optional with a
     #: ``None`` default so pre-existing ``CostEstimate(...)`` constructions
@@ -1688,7 +1691,10 @@ class CostEstimationService:
         differing in the per-call output assumption (typical floor vs enforced
         cap) and, when a judge is priced, in the judge's token figures
         (``judge_typical``, clamped to the caps; ADR-0114). Every typical figure
-        is at or below its cap, so the point estimate is always <= the bound.
+        is at or below its cap, so the point estimate is <= the bound, with one
+        exception: the bound prices web-search context from
+        ``BOUND_WEB_SEARCH_CONTEXT_TOKENS``, not the setting (ADR-0125), so a
+        setting raised above that figure can put the point above the bound.
 
         ``context_tokens`` is the extra input tokens from a follow-up context
         (prior_question + prior_synthesis). It is priced into debate and synthesis
