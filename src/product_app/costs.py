@@ -453,7 +453,8 @@ class CostEstimate(BaseModel):
     #: with a ``None`` default so pre-existing ``CostEstimate(...)``
     #: constructions keep working; >= ``estimated_cost_usd`` when ``estimate()``
     #: sets it at the shipped settings (a raised ``cost_web_search_context_tokens``
-    #: can put the point above it on long, already-BLOCK mixes; ADR-0125).
+    #: can put the point above it on long queries: only on already-BLOCK
+    #: mixes up to 3300, on runnable ones too from 3400; ADR-0125).
     max_cost_usd: Decimal | None = Field(default=None, ge=Decimal("0"))
     #: Itemized cost partition (by model AND by stage). Optional with a
     #: ``None`` default so pre-existing ``CostEstimate(...)`` constructions
@@ -2107,15 +2108,16 @@ class CostEstimationService:
         guardrail is evaluated against (issue #16 rec #2/#3).
 
         Identical arithmetic to the displayed estimate, but priced at the
-        worst case on every dimension the point estimate models as typical
-        except the web-search context, which it prices from its own figure,
-        ``BOUND_WEB_SEARCH_CONTEXT_TOKENS`` (ADR-0125):
+        worst case on every dimension the point estimate models as typical:
         initial-answer output at the enforced
         ``settings.initial_answer_max_tokens`` cap (instead of the floor),
         debate output at the enforced per-round
         ``settings.cost_debate_output_tokens_cap`` (instead of the floor), and
         synthesis as all ``settings.cost_synthesis_sections`` section calls
-        (instead of one). Because the live calls are capped at exactly these
+        (instead of one). The web-search context is the exception: it is
+        priced from the bound's own figure, ``BOUND_WEB_SEARCH_CONTEXT_TOKENS``,
+        not from the setting the point estimate reads (ADR-0125). Because the
+        live calls are capped at exactly these
         values — initial (see ``providers._call_openrouter_with_optional_search``),
         debate (``debate.DEBATE_ROUND_MAX_TOKENS``), synthesis
         (``synthesis.SYNTHESIS_SECTION_MAX_TOKENS`` × section count) — this

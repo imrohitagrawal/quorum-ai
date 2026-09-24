@@ -142,9 +142,12 @@ accepting it on refused mixes. Nothing here is changed until then.
 
 - Today nothing observable changes.
 - A setting LOWERED below 2000 now moves the point down and not the bound,
-  so the bound is stricter than `main`'s would be at that setting (review
-  measured, at 1000, 1369 mixes on a stricter band than `main`, 483 of them
-  `require_confirmation` to `BLOCK`). That is the fail-safe direction, and
+  so the bound is stricter than `main`'s would be at that setting. Measured
+  at 1000 over the test's own population (715 four-model mixes times its
+  three queries, 2,145 estimates, static table): with peer critique off, 221
+  land on a stricter band (183 `allow` to `require_confirmation`, 38
+  `require_confirmation` to `BLOCK`); with it on, 10. None lands on a looser
+  one. That is the fail-safe direction, and
   no deployment sets it: `fly.toml` does not, `.env.example` says 2000.
 - A later raise of the setting moves the displayed estimate on every
   searching mix and no per-call band, in either posture, on either price
