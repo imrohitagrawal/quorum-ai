@@ -306,7 +306,7 @@ was asked to run.
    from one production sample is exactly the move ADR-0060's Decision (1)
    refused.
 7. **Comment on the open issue every cycle**, as the drift watchdog does.
-   Rejected: ~70 comments over a three-day posture.
+   Rejected: at this lane's cadence, 144 comments over a three-day posture at the declared 30 minutes, about 22 at the measured median gap (#459; this said ~70, the sibling lane's comment rate, until 2026-09-24).
 8. **Keep state (how many cycles the posture has been on).** Rejected: failure
    mode 13. A stateless check has nothing to lose or race.
 
@@ -347,7 +347,7 @@ was asked to run.
   if a genuine live posture follows in the next cycle, because the alert step
   deliberately does not re-comment. The window is one cycle and the job log
   carries the current decision, but the design has no way to say "the reason
-  changed". Accepted in exchange for not producing ~70 comments over three days.
+  changed". Accepted in exchange for not producing a comment per cycle over three days (144 at the declared cadence, about 22 at the measured median gap; #459 — this said ~70, the sibling lane's rate, until 2026-09-24).
 
 ## Open decisions for a human — numbers I refuse to guess
 
