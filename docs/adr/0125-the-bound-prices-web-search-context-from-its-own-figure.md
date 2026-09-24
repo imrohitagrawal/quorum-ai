@@ -107,8 +107,23 @@ reads 0 at every length measured; 2500 reads 0 everywhere):
 | 10,300 chars | 11 mixes | 55 mixes |
 | 10,500 to 20,000 chars | 55 mixes | 55 mixes |
 
-Every such mix is already `BLOCK` (the lowest bound among them is 0.5637
-against the 0.50 hard limit), so no money moves on it; what breaks is the
+At 2900 and 3200 every such mix is already `BLOCK` (the lowest bound among
+them is 0.5637 against the 0.50 hard limit), so no money moves on it. That
+stops holding a little higher. Break-it review found it, and it was
+re-measured over every 2-, 3- and 4-model mix at 8,000, 12,000, 16,000 and
+20,000 characters, peer critique and judge off, counting point-above-bound
+cases by band:
+
+| setting | `BLOCK` | `require_confirmation` |
+|---|---|---|
+| 3200 or 3300 | 201 | 0 |
+| 3400 | 201 | 6 |
+| 3600 | 201 | 462 |
+| 4000 | 201 | 1386 |
+
+The largest telemetry reading is 3160, below the first runnable case, but a
+raise to 3400 or more would show a runnable estimate whose typical figure is
+above its "up to" figure. On the refused mixes what breaks is the
 displayed "typical" figure sitting above the "up to" figure on a refused
 estimate. The session's proposal, not decided: settle it in the CHG row
 that raises the setting, by clamping the displayed point to the bound or by
@@ -126,6 +141,11 @@ accepting it on refused mixes. Nothing here is changed until then.
 ## Consequences
 
 - Today nothing observable changes.
+- A setting LOWERED below 2000 now moves the point down and not the bound,
+  so the bound is stricter than `main`'s would be at that setting (review
+  measured, at 1000, 1369 mixes on a stricter band than `main`, 483 of them
+  `require_confirmation` to `BLOCK`). That is the fail-safe direction, and
+  no deployment sets it: `fly.toml` does not, `.env.example` says 2000.
 - A later raise of the setting moves the displayed estimate on every
   searching mix and no per-call band, in either posture, on either price
   table measured above. The per-account spend rails still see the higher

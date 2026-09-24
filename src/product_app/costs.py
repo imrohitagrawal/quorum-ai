@@ -762,8 +762,9 @@ class CostEstimationService:
         # not the realistic point estimate, so it can only over-protect: real
         # cost is capped at the initial-answer ``max_tokens`` this bound
         # prices, and debate/synthesis are already capped. ``max_cost_usd``
-        # is >= ``estimated`` and is surfaced to the UI as the "up to $Y"
-        # figure. The cumulative / daily-cap accounting below stays on the
+        # is >= ``estimated`` at the shipped settings (ADR-0125 names the one
+        # exception) and is surfaced to the UI as the "up to $Y" figure. The
+        # cumulative / daily-cap accounting below stays on the
         # realistic ``estimated`` — those track accumulated REAL spend, which
         # tracks the point estimate, not the worst case.
         bound = self._estimate_bound_usd(
@@ -1498,7 +1499,8 @@ class CostEstimationService:
         # fixed-cap bound — printing a "typical ≈ $X" ABOVE the "up to $Y"
         # ceiling and breaking ``estimated_cost_usd <= max_cost_usd`` (issue #24;
         # the bound path :meth:`_estimate_bound_usd` uses exactly this cap, so
-        # the clamp makes the point <= bound invariant hold on every term).
+        # the clamp makes the point <= bound invariant hold on this term; the
+        # web-search context term is the exception, ADR-0125).
         query_tokens = Decimal(len(query_text)) / CHARS_PER_TOKEN
         init_output_tokens = min(
             Decimal(settings.cost_initial_output_tokens)
@@ -2105,7 +2107,9 @@ class CostEstimationService:
         guardrail is evaluated against (issue #16 rec #2/#3).
 
         Identical arithmetic to the displayed estimate, but priced at the
-        worst case on every dimension the point estimate models as typical:
+        worst case on every dimension the point estimate models as typical
+        except the web-search context, which it prices from its own figure,
+        ``BOUND_WEB_SEARCH_CONTEXT_TOKENS`` (ADR-0125):
         initial-answer output at the enforced
         ``settings.initial_answer_max_tokens`` cap (instead of the floor),
         debate output at the enforced per-round

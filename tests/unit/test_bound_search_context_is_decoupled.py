@@ -126,6 +126,20 @@ def test_under_the_old_structure_the_same_raise_blocks_affordable_mixes(
     assert newly_blocked > 0
 
 
+def test_a_lowered_setting_moves_the_point_down_and_not_the_bound(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The bound does not follow the setting DOWN either (break-it review:
+    a ``min(constant, setting)`` bound survived every other test). RED IF
+    the bound follows a lowered setting; partner: the point does."""
+    monkeypatch.setattr(settings, "cost_web_search_context_tokens", 2000)
+    base = _sweep()
+    monkeypatch.setattr(settings, "cost_web_search_context_tokens", 1000)
+    rows = _sweep()
+    assert sum(1 for b, r in zip(base, rows, strict=True) if r[1] != b[1]) == 0
+    assert sum(1 for b, r in zip(base, rows, strict=True) if r[0] < b[0]) == len(rows)
+
+
 def test_the_bound_constant_equals_the_shipped_setting() -> None:
     """At the shipped values the restructure changes nothing (ADR-0125):
     the bound's figure and the setting's default are both 2000. RED IF either
