@@ -932,8 +932,27 @@ def test_adr_0070_quotes_the_measured_interval_the_workflow_header_records() -> 
         assert token in adr, (
             f"ADR-0070 no longer quotes the header's measurement: missing {token!r}"
         )
-    # Neither place may still state the declared cadence as the interval.
-    assert "Every 30 minutes it reads" not in adr
+    assert f"({match['max_h']}h)" in adr
+    # EVERY place the ADR quotes this lane's min/median must match the header,
+    # not just one of them: a correction copied into two paragraphs must not
+    # let one copy go stale behind the other.
+    quoted = re.findall(r"min (\d+) / median (\d+) /", adr)
+    assert quoted, "ADR-0070 quotes no min/median pair at all"
+    assert all(pair == (str(figures["min"]), str(figures["median"])) for pair in quoted), quoted
+    # The ADR may not still state the declared cadence, or the SIBLING lane's
+    # 129.4-minute maximum, as THIS lane's interval. The sibling figure stays
+    # only in the dated measurement row that names the sibling lane.
+    assert not re.search(r"every 30 minutes it reads", adr, re.IGNORECASE)
+    # Judged per paragraph (and per table row), because a wrapped sentence
+    # can carry the figure and the word "sibling" on different lines.
+    blocks = [block for block in re.split(r"\n\s*\n", adr)]
+    blocks = [
+        row
+        for block in blocks
+        for row in (block.splitlines() if block.lstrip().startswith("|") else [block])
+    ]
+    stale = [block for block in blocks if "129.4" in block and "sibling" not in block.lower()]
+    assert not stale, f"ADR-0070 still gives the sibling lane's 129.4-minute figure: {stale}"
 
 
 def test_the_check_step_runs_the_tested_script() -> None:
@@ -1096,8 +1115,8 @@ def test_the_alert_step_does_not_open_a_second_issue(tmp_path: Path) -> None:
     """PARTNER: proves the create above is conditional, not unconditional.
 
     RED IF: the already-open branch is dropped, so every scheduled cycle files
-    another issue — which over a three-day posture would be ~70 of them at the
-    declared cadence (fewer at the measured one, #459), and that is how an
+    another issue — over a three-day posture 144 at the declared 30-minute
+    cadence, about 22 at the measured median gap (#459) — and that is how an
     alert gets muted.
     """
     code, calls = _exec_step("Alert on an undeclared", tmp_path, open_issue="4242")

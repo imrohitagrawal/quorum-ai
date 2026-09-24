@@ -77,15 +77,17 @@ answerable to it row by row.
 `live_readiness.state` from both production hosts, *(Correction, 2026-09-24,
 #459, product-owner decision "option 1 only", CHG-012 D3: this said "every 30
 minutes", which is the cron the workflow DECLARES and not the interval GitHub
-runs it at. Measured on the issue's sample — 38 gaps over just under 6 days,
-2026-09-06T10:37Z to 2026-09-12T05:30Z — the interval was 2 to 6 hours: min 2h03,
-median 3h53, max 5h59, none under 35 minutes. Over the workflow's full
+runs it at. On the issue's sample — 38 gaps over just under 6 days,
+2026-09-06T10:37Z to 2026-09-12T05:30Z — the interval was 2 to 6 hours: the issue
+reports min 2h03, median 3h53 (the upper of the two middle gaps; the midpoint is
+3h47), max 5h59, none under 35 minutes. Over the workflow's full
 scheduled history to 2026-09-19, 180 gaps, it was min 24 / median 193 /
 p90 328 / max 772 minutes (12.9h), 1 of 180 under 35. The
 workflow's header note is the one place that figure is maintained, and
 `tests/unit/test_live_posture_check.py` pins this sentence to it. The cron is
-not tightened and the check is not moved: a shorter cron does not buy a shorter
-real interval.)* reads the declared windows
+not tightened and the check is not moved, per the owner's decision; whether a
+shorter cron would shorten the real interval is unmeasured (#459 names it as an
+untested assumption).)* reads the declared windows
 from `configs/live-execution-windows.json`, and alerts when a live posture is not
 covered by a window. Decision in tested Python per ADR-0024, thin shell,
 `$GITHUB_OUTPUT`, an alert step, a resolve step and an explicit fail step — the
@@ -187,7 +189,7 @@ Every row run by me in this worktree on 2026-08-25 unless marked.
 | What does production serve? | `curl -s https://quorum-ai.fly.dev/status` | `live_execution: false`, `judge_enabled: **true**`, `global_daily_spend_usd: "0"`, ceiling `"5.00"` |
 | ...and `/ready`? | `curl -s https://quorum-ai.fly.dev/ready` | `live_readiness.state: offline_by_config` |
 | Does the state vocabulary have exactly one off-state? | `readiness.py:54-58`, `:429-446` | four states; `offline_by_config` is the `else`, so the equivalence with "flag off" is exact |
-| Real detection latency of a `*/30` lane | `gh api .../deploy-drift-watchdog.yml/runs?per_page=100`, gaps between the 100 most recent scheduled runs (2026-08-21T07:25Z → 08-24T22:33Z, 87.1h) | min **21.7** / median **53.4** / max **129.4** minutes against a declared 30 |
+| Real detection latency of a `*/30` lane — the SIBLING deploy-drift lane, not this one (this lane's own interval is hours: the correction under "Two checks" above) | `gh api .../deploy-drift-watchdog.yml/runs?per_page=100`, gaps between the 100 most recent scheduled runs (2026-08-21T07:25Z → 08-24T22:33Z, 87.1h) | min **21.7** / median **53.4** / max **129.4** minutes against a declared 30 |
 | Does the shipped watchdog alert on today's production? | `uv run python scripts/live_posture_check.py` | `decision=off_as_declared`, exit **0**, "read 2 of 2 host(s); 0 report a live-execution posture" |
 | Does it FIRE when the flag is on? | the script against a `file:` fixture serving `state: "live"` | `decision=live_undeclared`, `should_alert=true`, exit **1** |
 | Does it reproduce #357's shape? | same, with a window that expired 72h ago | `decision=live_past_declared_window`, exit **1**, "expired ..., 72.0h ago" |
@@ -206,7 +208,10 @@ driven by a `file:` fixture. No paid provider call was made.
 **The `*/30` cadence is not a money guardrail** — it is a detection-latency
 choice, matched to the existing sibling lane. Against a three-day exposure any of
 21.7–129.4 minutes closes it, so buying a faster cadence at the cost of a weaker
-question would be the wrong trade.
+question would be the wrong trade. *(Correction, 2026-09-24, #459: those are the
+sibling lane's gaps. This lane's measured gaps are min 24 / median 193 / max 772
+minutes (12.9h) over its full history to 2026-09-19 — the header note holds the
+figure. Against a three-day exposure that still closes it, later.)*
 
 ## The bite table
 
@@ -266,7 +271,8 @@ was right but the operator-facing "0.1h remaining" was taken from whichever was
 listed first rather than from when cover actually ends; and the alert issue's
 TITLE hard-coded "Live execution is on and no declared window covers it", which
 is false for the `unknown` verdict — an unparseable declaration file would have
-filed that title every thirty minutes while the flag was off. Both are the
+filed that title on every scheduled cycle (declared thirty minutes, hours
+apart in practice, #459) while the flag was off. Both are the
 repo's own "never report a value that was never read" rule pointed the wrong
 way, and both are exactly how a real alert learns to be ignored.
 
@@ -308,13 +314,17 @@ was asked to run.
 
 - Turning live execution on now costs one extra file edit, in the same pull
   request. If the operator uses `fly secrets set` instead, layer 2 is bypassed
-  and layer 1 alerts within ~1 hour — which is the intended shape.
+  and layer 1 alerts at its next scheduled run, which is hours away in practice
+  (up to 12.9h measured, #459; the header note holds the figure) — the intended
+  shape, with far less margin than "~1 hour", which this line said until
+  2026-09-24.
 - A red `Live-execution posture watchdog` job and an open `live-posture` issue
   mean production may be spending money nobody sanctioned. Neither closes itself
   on a deploy.
 - **This check is a level detector, not a transition detector.** A window that
-  opens and closes inside one throttled cron gap (up to 129.4 minutes, measured)
-  is never observed at all.
+  opens and closes inside one throttled cron gap (up to 772 minutes, 12.9h, on
+  this lane, measured; this line said 129.4 minutes, the sibling lane's figure,
+  until the 2026-09-24 #459 correction) is never observed at all.
 - `judge_enabled` is `true` in production today and remains unwatched.
   **Superseded by ADR-0071**: it is watched now, through the declaration. The
   reason it was never urgent is that it cannot spend while live execution is
