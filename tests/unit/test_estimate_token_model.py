@@ -24,6 +24,7 @@ import pytest
 from product_app.catalog_fetcher import _FALLBACK_CATALOG, openrouter_catalog_fetcher
 from product_app.config import settings
 from product_app.costs import (
+    BOUND_WEB_SEARCH_CONTEXT_TOKENS,
     CHARS_PER_TOKEN,
     COST_DISPLAY_QUANTUM,
     SOFT_THRESHOLD_USD,
@@ -412,7 +413,10 @@ def test_bound_covers_the_round_two_prompt_that_carries_round_ones_critique() ->
     # the estimator's own arithmetic.
     query_tokens = Decimal(len(query)) / CHARS_PER_TOKEN
     system_tokens = Decimal(settings.cost_system_prompt_tokens)
-    search_tokens = Decimal(settings.cost_web_search_context_tokens)
+    # The bound prices the web-search context from its own figure, not the
+    # point estimate's setting (#268, ADR-0125); nothing caps the context the
+    # provider injects, so this is the bound's modelled figure, not a cap.
+    search_tokens = Decimal(BOUND_WEB_SEARCH_CONTEXT_TOKENS)
     search_fee = Decimal(str(settings.cost_web_search_request_fee_usd))
     init_max = Decimal(settings.initial_answer_max_tokens)
     debate_cap = Decimal(settings.cost_debate_output_tokens_cap)

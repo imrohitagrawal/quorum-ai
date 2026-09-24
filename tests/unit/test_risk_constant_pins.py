@@ -188,6 +188,11 @@ BUCKET_A_LITERAL_PIN = (
     # debate caption, and nothing else constrains the text.
     "costs.CRITIQUE_SHAPE_MODERATOR",
     "costs.CRITIQUE_SHAPE_PEER",
+    # The web-search context the fail-safe BOUND prices (#268, ADR-0125).
+    # LITERAL pin: it sets every searching mix's bound and so its band, and
+    # it no longer follows ``cost_web_search_context_tokens``; moving it is a
+    # money-value change for the owner, with its own CHG row.
+    "costs.BOUND_WEB_SEARCH_CONTEXT_TOKENS",
     "auth.SESSION_TTL",
     "auth.SESSION_MINT_CAP_PER_IP",
     # The rolling window the cap is counted over. A LITERAL pin for the same
@@ -1109,6 +1114,7 @@ def test_money_constants_are_pinned_to_their_literal_values() -> None:
     assert costs.CRITIQUE_SHAPE_MODERATOR == "moderator"
     assert costs.CRITIQUE_SHAPE_PEER == "peer"
     assert timedelta(minutes=5) == costs.CONFIRMATION_TOKEN_TTL
+    assert costs.BOUND_WEB_SEARCH_CONTEXT_TOKENS == 2000
 
 
 def test_default_price_floor_never_undercharges_a_shipped_model() -> None:
