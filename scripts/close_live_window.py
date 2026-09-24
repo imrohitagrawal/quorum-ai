@@ -12,7 +12,10 @@ WHAT THIS IS FOR
     the next accidental ``true``.
 
     The only valid single-commit form is therefore TWO edits together:
-        1. the flag -> ``"false"`` in ``fly.toml``
+        1. the flag -> ``"false"`` in ``fly.toml`` — and, since #458
+           (ADR-0122), ``PEER_CRITIQUE_ENABLED`` -> ``"false"`` on the same
+           line-edit pass, because peer critique is a money multiplier that
+           is only ever on INSIDE a window and closes with it
         2. the open window's ``expires_at`` -> now, in
            ``configs/live-execution-windows.json``
 
@@ -34,8 +37,12 @@ WHAT THIS IS FOR
     which is why one edit is valid there and two are required when a window
     still covers ``now``.
 
-    It still refuses, loudly, in three cases: the flag already reads off; a
-    ``standing`` window is declared AND nothing covers ``now``; or the
+    It still refuses, loudly, in three cases: both flags already read off; a
+    ``standing`` window is declared AND nothing covers ``now`` (that refusal
+    covers the peer flag too: a peer flag left on beside a live flag already
+    off under a standing declaration is reverted only after the standing
+    entry is retired, which is the policy edit the refusal names — then the
+    same command takes the lapsed path and flips it); or the
     declaration cannot be trusted at all, which it decides with the posture
     checker's own ``parse_windows`` rather than a hand-rolled field check.
 
@@ -50,8 +57,8 @@ WHAT IT DOES NOT DO
     It never touches a ``standing`` window — those have no ``expires_at`` to
     close (the field is FORBIDDEN for that mode per the declaration file's own
     README) and ending one is a policy decision, not a mechanical revert. It
-    also refuses rather than guesses when ``fly.toml`` declares the flag more
-    than once, and (since #460) when a window's ``mode`` is anything other than
+    also refuses rather than guesses when ``fly.toml`` declares either flag
+    more than once or not at all, and (since #460) when a window's ``mode`` is anything other than
     exactly ``"time_boxed"`` or ``"standing"`` — that last one was ASSERTED here
     and not implemented, which was harmless while an unknown mode only produced
     a no-op refusal and became a real defect once the lapsed revert started
@@ -80,15 +87,34 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 FLY_TOML = REPO_ROOT / "fly.toml"
 WINDOWS_PATH = REPO_ROOT / "configs" / "live-execution-windows.json"
 FLAG = "OPENROUTER_LIVE_EXECUTION_ENABLED"
+#: #458 / ADR-0122: peer critique is a money multiplier that is only ever on
+#: INSIDE a live window, so it closes with the window. This script is its only
+#: writer; ``tests/unit/test_close_live_window.py`` pins that population.
+PEER_FLAG = "PEER_CRITIQUE_ENABLED"
 MODE_STANDING = "standing"
 MODE_TIME_BOXED = "time_boxed"
 _FLAG_OFF_VALUES = frozenset({"false", "0", "no", "off", ""})
+#: The ``/status`` field that shows each flag's effect in production.
+_STATUS_FIELD = {FLAG: "/status.live_execution", PEER_FLAG: "/status.peer_critique_enabled"}
 
-# Scoped to the flag's own key so a coincidentally-identical value elsewhere in
-# the file (e.g. another flag also set to "true") is never touched.
-_FLAG_LINE = re.compile(
-    r"(?m)^(?P<indent>[ \t]*)" + re.escape(FLAG) + r'[ \t]*=[ \t]*"(?P<value>[^"]*)"'
-)
+
+def _flag_line(key: str) -> re.Pattern[str]:
+    """The one ``KEY = "value"`` line for ``key``, scoped to the key's own name
+    so a coincidentally-identical value elsewhere in the file (e.g. another
+    flag also set to ``"true"``) is never touched."""
+    # Case-insensitive on the key (``(?i)``): the app's ``Settings`` is
+    # ``case_sensitive=False``, so a lower-case ``peer_critique_enabled`` line
+    # would set the flag just the same. Matching it here means a lower-case
+    # copy beside the upper-case key is a DUPLICATE (refused), not invisible.
+    # The value group excludes backslashes: a basic string with an escape
+    # (``"tr\"ue"``) is not a line this script can rewrite whole, so it is
+    # "not found" and refused rather than half-edited into invalid TOML.
+    return re.compile(
+        r"(?mi)^(?P<indent>[ \t]*)" + re.escape(key) + r'[ \t]*=[ \t]*"(?P<value>[^"\\]*)"'
+    )
+
+
+_FLAG_LINE = _flag_line(FLAG)
 
 
 def _parse_instant(value: object) -> dt.datetime | None:
@@ -206,8 +232,9 @@ def close_windows(payload: dict[str, Any], now: dt.datetime) -> list[dict[str, A
     return closed
 
 
-def set_flag_false(fly_toml_text: str) -> tuple[str, bool]:
-    """Set ``FLAG`` to ``"false"`` in ``fly.toml``'s text.
+def set_flag_false(fly_toml_text: str, *, key: str = FLAG) -> tuple[str, bool]:
+    """Set ``key`` (the live flag by default; ``PEER_FLAG`` for #458) to
+    ``"false"`` in ``fly.toml``'s text.
 
     Returns ``(new_text, changed)``. ``changed`` is ``False`` when the flag
     already read an off-spelling, so a caller can skip an unwarranted write
@@ -222,23 +249,24 @@ def set_flag_false(fly_toml_text: str) -> tuple[str, bool]:
     would report success while a second copy of the flag stayed live — fail
     loud instead, since a silent partial fix here is worse than a refusal.
     """
-    matches = list(_FLAG_LINE.finditer(fly_toml_text))
+    matches = list(_flag_line(key).finditer(fly_toml_text))
     if not matches:
         raise ValueError(
-            f"{FLAG} not found in fly.toml's [env] block — refusing to edit blind. "
-            "Set it by hand and verify /status.live_execution yourself."
+            f'{key} not found in fly.toml as a `{key} = "value"` line — refusing to '
+            "edit blind. Set it by hand and verify /status yourself."
         )
     if len(matches) > 1:
         raise ValueError(
-            f"{FLAG} appears {len(matches)} times in fly.toml — refusing to edit "
-            "blind, since fixing only one occurrence would report success while "
+            f"{key} appears {len(matches)} times in fly.toml (any table, any letter "
+            "case) — refusing to edit blind, since fixing only one occurrence would "
+            "report success while "
             "another copy stays live. Resolve the duplicate by hand and verify "
-            "/status.live_execution yourself."
+            "/status yourself."
         )
     match = matches[0]
     if match.group("value").strip().lower() in _FLAG_OFF_VALUES:
         return fly_toml_text, False
-    new_line = f'{match.group("indent")}{FLAG} = "false"'
+    new_line = f'{match.group("indent")}{key} = "false"'
     new_text = fly_toml_text[: match.start()] + new_line + fly_toml_text[match.end() :]
     return new_text, True
 
@@ -313,7 +341,7 @@ def main(argv: list[str] | None = None) -> int:
                 "refuses to parse it (an unrecognised mode, a timestamp without "
                 "an explicit offset, a missing required field, or a malformed "
                 "entry). Fix the declaration by hand, then re-run.\n"
-                f"{FLAG} is left exactly as it was.",
+                f"{FLAG} and {PEER_FLAG} are left exactly as they were.",
                 file=sys.stderr,
             )
             return 2
@@ -347,10 +375,16 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         try:
             reverted_text, flag_was_on = set_flag_false(stranded_text)
+            # #458 / ADR-0122: the peer flag is coupled to the window, so a
+            # peer flag left on with nothing sanctioning it is stranded in
+            # exactly the same way — including when the live flag was already
+            # reverted by hand (the shape production shipped 2026-09-12 to
+            # 2026-09-24). Both edits land on ONE text and ONE write.
+            reverted_text, peer_was_on = set_flag_false(reverted_text, key=PEER_FLAG)
         except ValueError as exc:
             print(str(exc), file=sys.stderr)
             return 2
-        if flag_was_on:
+        if flag_was_on or peer_was_on:
             stranded_path.write_text(reverted_text, encoding="utf-8")
             # Say what was ACTUALLY found. An earlier version asserted "the
             # window has already lapsed" in every branch, which is false for an
@@ -359,23 +393,31 @@ def main(argv: list[str] | None = None) -> int:
             # an operator at a lapse that never happened points them away from
             # the real cause, which fly.toml notes may be a ``fly secrets set``
             # override that no tracked file records.
+            stranded = " and ".join(
+                name for name, was_on in ((FLAG, flag_was_on), (PEER_FLAG, peer_was_on)) if was_on
+            )
+            flipped = [
+                name for name, was_on in ((FLAG, flag_was_on), (PEER_FLAG, peer_was_on)) if was_on
+            ]
+            fields = " and ".join(_STATUS_FIELD[name] for name in flipped)
+            secrets = " or ".join(f"`fly secrets set {name}`" for name in flipped)
             print(
-                f"{FLAG} was still on with NO window sanctioning it. "
-                f"{_describe_absence(payload, now)} Flipped the flag to "
-                f'"false" in {stranded_path}.\n'
+                f"{stranded} {'were' if len(flipped) > 1 else 'was'} still on with NO "
+                f"window sanctioning it. {_describe_absence(payload, now)} Flipped "
+                f'{stranded} to "false" in {stranded_path}.\n'
                 f"Left {windows_path} untouched: nothing covers now, so there is "
                 "no expires_at to close, and any entry there is the record of "
                 "what was declared.\n"
-                "Commit it, DEPLOY, then verify /status.live_execution yourself: "
+                f"Commit it, DEPLOY, then verify {fields} yourself: "
                 "editing this file changes nothing in production until it ships, "
-                f"and a `fly secrets set {FLAG}` would override it."
+                f"and {secrets} would override it."
             )
             return 0
         print(
             "no live-execution window is currently open — nothing to close.\n"
             f"Checked {windows_path}: every entry is either 'standing', not yet "
-            f"started, or already expired, and {FLAG} already reads off in "
-            f"{stranded_path}. There is nothing to revert.",
+            f"started, or already expired, and {FLAG} and {PEER_FLAG} already "
+            f"read off in {stranded_path}. There is nothing to revert.",
             file=sys.stderr,
         )
         return 1
@@ -400,6 +442,9 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         new_fly_text, flag_changed = set_flag_false(fly_text)
+        # #458 / ADR-0122: peer critique closes with the window. Same text,
+        # same single write below, so the write-order contract holds.
+        new_fly_text, peer_changed = set_flag_false(new_fly_text, key=PEER_FLAG)
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return 2
@@ -412,7 +457,7 @@ def main(argv: list[str] | None = None) -> int:
     # to let merge, so a retry is forced rather than silently accepted. The
     # reverse order risks the opposite: a window marked closed while the flag
     # is still "true", which that same gate would NOT catch.
-    if flag_changed:
+    if flag_changed or peer_changed:
         fly_path.write_text(new_fly_text, encoding="utf-8")
     windows_path.write_text(
         json.dumps(payload, indent=2, ensure_ascii=True) + "\n", encoding="utf-8"
@@ -423,11 +468,15 @@ def main(argv: list[str] | None = None) -> int:
             f"closed window owner={entry.get('owner')!r} "
             f"reason={entry.get('reason')!r} expires_at -> {entry['expires_at']}"
         )
-    if flag_changed:
-        print(f'{FLAG} set to "false" in {fly_path}')
-    else:
-        print(f'{FLAG} was already "false" in {fly_path}')
-    print("Commit both files together, deploy, then verify /status.live_execution yourself.")
+    for name, changed in ((FLAG, flag_changed), (PEER_FLAG, peer_changed)):
+        if changed:
+            print(f'{name} set to "false" in {fly_path}')
+        else:
+            print(f'{name} was already "false" in {fly_path}')
+    print(
+        "Commit both files together, deploy, then verify /status.live_execution "
+        "and /status.peer_critique_enabled yourself."
+    )
     return 0
 
 

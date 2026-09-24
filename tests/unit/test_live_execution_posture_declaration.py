@@ -297,3 +297,137 @@ def test_the_shipped_declaration_resolves_every_standing_citation(
     for window in standing:
         assert window.adr is not None
         assert window.adr not in posture.MECHANISM_OWN_ADRS
+
+
+# --- #458: the peer-critique flag may not outlive the live flag -------------
+
+PEER_FLAG = "PEER_CRITIQUE_ENABLED"
+
+
+def test_fly_toml_still_declares_the_peer_flag_this_gate_watches() -> None:
+    """POSITIVE PARTNER for the coupling gate below, and its empty-input floor.
+
+    RED IF: ``PEER_CRITIQUE_ENABLED`` is removed from ``fly.toml``'s ``[env]``
+    or renamed — the gate below would then be comparing nothing to something.
+    """
+    assert PEER_FLAG in _fly_env(), (
+        f"{PEER_FLAG} is no longer in fly.toml [env]. If the deployment moved it "
+        "elsewhere, the coupling gate is watching nothing — repoint it, do not delete it."
+    )
+
+
+def test_the_committed_peer_flag_never_outlives_the_live_flag(posture: ModuleType) -> None:
+    """The coupling, against the tree as it stands (#458, ADR-0122).
+
+    Peer critique is a money multiplier that is only ever meant to be on
+    INSIDE a live-execution window, and the window mechanism is its only
+    writer. So a committed ``fly.toml`` may not carry ``PEER_CRITIQUE_ENABLED``
+    on while ``OPENROUTER_LIVE_EXECUTION_ENABLED`` is off: that is a stranded
+    flag, and re-opening a window would turn it back on unread, at up to
+    eight critic calls per run instead of two.
+
+    RED IF: ``fly.toml`` sets the peer flag to an on-spelling while the live
+    flag reads off (the shape production shipped from 2026-09-12 to this
+    change), or if ``refuse_peer_without_live`` is removed from the checker.
+    """
+    env = _fly_env()
+    refusal = posture.refuse_peer_without_live(
+        peer_value=_flag_text(env.get(PEER_FLAG)),
+        live_value=_flag_text(env.get(FLAG)),
+    )
+    assert refusal is None, refusal
+
+
+def _flag_text(value: Any) -> str | None:
+    """An absent key stays ``None`` (an off-spelling), never the string
+    ``'None'`` (which is not); any other TOML value — a bare boolean ``true``
+    included — is passed as its text, which is an on-spelling the gate refuses
+    with the coupling message rather than an ``AttributeError``."""
+    return None if value is None else str(value)
+
+
+def test_no_two_env_keys_collide_case_insensitively() -> None:
+    """The app's ``Settings`` is ``case_sensitive=False``, so a lower-case
+    ``peer_critique_enabled`` (or ``openrouter_live_execution_enabled``) line
+    in ``[env]`` would set the flag while both gates above read only the
+    upper-case key. Refuse the collision rather than guess which wins.
+
+    RED IF: ``fly.toml``'s ``[env]`` carries two keys that differ only by case.
+    """
+    env = _fly_env()
+    folded: dict[str, list[str]] = {}
+    for key in env:
+        folded.setdefault(key.upper(), []).append(key)
+    collisions = {upper: keys for upper, keys in folded.items() if len(keys) > 1}
+    assert not collisions, f"fly.toml [env] keys collide case-insensitively: {collisions}"
+    # Positive partner: both coupled keys are present in their canonical case.
+    assert FLAG in env and PEER_FLAG in env
+
+
+def test_both_coupled_flag_lines_have_the_shape_the_closer_can_edit() -> None:
+    """``make close-window`` rewrites the flag lines with a regex that matches
+    exactly ``KEY = "value"`` (a basic double-quoted string). TOML also allows
+    ``KEY = true``, ``KEY = 'true'`` and ``KEY = \"\"\"true\"\"\"``, all of which
+    the app would read as on and the closer could not revert (or, for the
+    triple-quoted form, would report as already off). Refuse those spellings
+    pre-merge so a window opened by hand can always be closed by the script.
+
+    RED IF: either flag line in ``fly.toml`` stops being a basic-string
+    assignment, or appears more than once (case-insensitively).
+    """
+    spec = importlib.util.spec_from_file_location(
+        "close_live_window_under_test", REPO_ROOT / "scripts" / "close_live_window.py"
+    )
+    assert spec is not None and spec.loader is not None
+    closer = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = closer
+    spec.loader.exec_module(closer)
+    text = FLY_TOML.read_text(encoding="utf-8")
+    for key in (closer.FLAG, closer.PEER_FLAG):
+        matches = closer._flag_line(key).findall(text)
+        assert len(matches) == 1, (
+            f'{key}: expected exactly one `{key} = "..."` line, found {len(matches)}'
+        )
+
+
+@pytest.mark.parametrize(
+    ("peer_value", "live_value"),
+    [
+        ("false", "false"),
+        ("true", "true"),
+        ("", "false"),
+        ("0", "off"),
+        (None, "false"),
+        ("false", "true"),
+    ],
+)
+def test_a_peer_flag_that_does_not_outlive_the_live_flag_is_allowed(
+    posture: ModuleType, peer_value: str | None, live_value: str
+) -> None:
+    """The allowed rows, driven by fixtures the real file cannot reach.
+
+    RED IF: the coupling gate refuses a peer flag that is off, or one that is
+    on beside a live flag that is also on (the inside-a-window shape).
+    """
+    assert posture.refuse_peer_without_live(peer_value=peer_value, live_value=live_value) is None
+
+
+@pytest.mark.parametrize("peer_value", ["true", "True", "1", "yes", "on", "tru", "enabled"])
+@pytest.mark.parametrize("live_value", ["false", "0", "off", "", None])
+def test_a_peer_flag_on_while_live_is_off_is_refused_and_the_refusal_names_both(
+    posture: ModuleType, peer_value: str, live_value: str | None
+) -> None:
+    """THE case the gate exists for, in every on-spelling and any typo.
+
+    A typo is refused too, for the same reason the live gate refuses one:
+    ``config.py`` parses the value, and this gate must not be the one place
+    that guesses what a misspelling meant.
+
+    RED IF: any on-spelling of the peer flag is accepted beside an off live
+    flag, or the refusal fails to name the two keys an operator must now edit.
+    """
+    refusal = posture.refuse_peer_without_live(peer_value=peer_value, live_value=live_value)
+    assert refusal is not None
+    assert PEER_FLAG in refusal
+    assert FLAG in refusal
+    assert "make close-window" in refusal

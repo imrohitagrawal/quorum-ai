@@ -28,8 +28,10 @@ kill_timeout = "5s"
   ACCOUNT_LEGACY_HEADER_ENABLED = "false"
   OPENROUTER_APP_URL = "https://quorum.stackclimb.com"
   # OFF. Re-open only with `make close-window`'s counterpart: a covering entry
-  # in configs/live-execution-windows.json in the SAME pull request. Closing is
-  # `make close-window`. While a window still COVERS `now` it flips this AND
+  # in configs/live-execution-windows.json in the SAME pull request (and
+  # PEER_CRITIQUE_ENABLED below too, if the window is to run peer critique).
+  # Closing is `make close-window`, which turns BOTH flags off (#458,
+  # ADR-0122). While a window still COVERS `now` it flips this AND
   # expires the window atomically — flipping this alone is REFUSED, because a
   # window still covering `now` may not be committed with the flag off (#407).
   # Once the window has LAPSED, flipping this alone IS the correct revert and
@@ -80,35 +82,42 @@ kill_timeout = "5s"
   # the others in both rounds, and in round 2 reports where it now stands on
   # its OWN answer with rationale and sources.
   #
-  # ON ONLY INSIDE THE DECLARED WINDOW ABOVE. This is a MONEY switch, not a
-  # feature toggle: a peer run makes two debate calls PER ELIGIBLE CRITIC (up
-  # to eight, not two), so `_estimate_bound_usd` rises with it and more catalog
-  # mixes need a confirmation click. It flips back with
-  # OPENROUTER_LIVE_EXECUTION_ENABLED -- but NOT automatically, and NOT by
-  # `make close-window`. `close_live_window.py` touches only the live-execution
-  # flag and the window declaration, never this one: `grep -n PEER_CRITIQUE
-  # scripts/close_live_window.py` exits 1 (verified 2026-09-11). The claim that
-  # it flips back automatically was here and was FALSE.
+  # ON ONLY INSIDE THE DECLARED WINDOW ABOVE, AND COUPLED TO IT (#458,
+  # ADR-0122; product-owner decision 2026-09-24, CHG-012 D2). This is a MONEY
+  # switch, not a feature toggle: a peer run makes two debate calls PER
+  # ELIGIBLE CRITIC (up to eight, not two), so `_estimate_bound_usd` rises with
+  # it and more catalog mixes need a confirmation click. `make close-window`
+  # turns this off together with OPENROUTER_LIVE_EXECUTION_ENABLED, on both of
+  # its paths (`grep -c PEER_FLAG scripts/close_live_window.py` prints 7,
+  # verified 2026-09-24; until that date `grep -n PEER_CRITIQUE` on the same
+  # file exited 1 and this comment said so).
+  # tests/unit/test_live_execution_posture_declaration.py refuses a committed
+  # "true" here while the flag above reads off, and
+  # tests/unit/test_close_live_window.py pins, by set equality, the exact
+  # tracked files under scripts/, src/, .github/, configs/, the Makefile, the
+  # Dockerfile, docker-compose.yml, .env.example, DEPLOY.md and every tracked
+  # *.sh that name this key in any letter case (six on 2026-09-24), so a new
+  # writer cannot appear unnamed.
   #
-  # DELIBERATELY LEFT "true" while live execution is off, which is safe but is
-  # NOT the end state. It costs nothing today -- peer critique multiplies debate
-  # calls only INSIDE a live posture, and with the flag above false no provider
-  # call is made at all. Since #458 (ADR-0116) the landing subhead and the API
-  # description follow whether peer critique is IN EFFECT -- this flag AND live
-  # execution AND a key, the same three terms the dispatch gate reads -- so
-  # with live execution off they correctly say the moderator shape, which is
-  # what every run takes. `/status` reports BOTH: `peer_critique_enabled` (this
-  # flag) and `peer_critique_in_effect`. Flipping this is a human decision, not
-  # made here.
+  # TO RUN PEER CRITIQUE INSIDE A WINDOW: set this AND the flag above to "true"
+  # with the covering declaration entry, in the same pull request. A window
+  # opened for live execution alone runs the moderator shape.
   #
-  # The residual risk this leaves is UNCHANGED by ADR-0116: re-enabling live
-  # execution turns peer critique back on with it, at up to eight critic calls
-  # instead of two. No gate couples the flags -- the copy now tells the truth
-  # about it, which is not the same as coupling it. `peer_critique_enabled` on
-  # `/status` stays the labelled signal that this flag is set, precisely so
-  # that risk is visible while live is off. Read this comment before
-  # re-opening a window.
-  PEER_CRITIQUE_ENABLED = "true"
+  # It read "true" from 2026-09-03 (the #290 window) to 2026-09-24, including
+  # 2026-09-12 to 2026-09-24 with live execution off (#457 reverted the live
+  # flag alone). That cost nothing — peer critique multiplies debate calls only
+  # INSIDE a live posture — but the served ESTIMATE priced four critic calls
+  # per debate round that no run made, and re-opening a window would have
+  # turned peer critique back on unread. The "false" below is the output of
+  # `python3 scripts/close_live_window.py` run on that tree (ADR-0122).
+  #
+  # `/status` reports BOTH `peer_critique_enabled` (this flag) and
+  # `peer_critique_in_effect` (this flag AND live execution AND a key,
+  # ADR-0116); the landing subhead and the API description follow the second.
+  # The watchdog names a true value here beside an off live posture as DRIFT
+  # (a Fly secret, or a deploy older than the coupling) on every cycle, without
+  # alerting (ADR-0097 §3; escalation is the owner's call, ADR-0122 decision 5).
+  PEER_CRITIQUE_ENABLED = "false"
   # issue #27: keep the feedback-event SQLite trail on the persistent volume
   # (mounted at /data below), NOT the ephemeral rootfs default (.data/…) which
   # is wiped on every deploy — that erased the self-improving-loop history.

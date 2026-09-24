@@ -139,8 +139,9 @@ def _run(args: argparse.Namespace) -> int:
 
     # POSTURE FIRST, always. ``judge_configured()`` is the single real predicate
     # (a key AND a pinned model id), and ``/status.judge_enabled`` reports that
-    # same one. Production runs peer critique AND the judge ON, and both move
-    # every number below.
+    # same one. Production ran peer critique AND the judge ON when ADR-0113 was
+    # measured (peer critique is off between live windows since 2026-09-24,
+    # ADR-0122), and both move every number below.
     price_source = "static _FALLBACK_CATALOG, 13 models (offline-reproducible)"
     if not args.fallback_prices:
         price_source = (

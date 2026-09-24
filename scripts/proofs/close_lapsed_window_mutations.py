@@ -89,12 +89,8 @@ MUTATIONS: list[tuple[str, str, str, str]] = [
     (
         "05 the lapsed revert reports failure instead of success",
         "closer",
-        '                f"and a `fly secrets set {FLAG}` would override it."\n'
-        "            )\n"
-        "            return 0",
-        '                f"and a `fly secrets set {FLAG}` would override it."\n'
-        "            )\n"
-        "            return 1",
+        '                f"and {secrets} would override it."\n            )\n            return 0',
+        '                f"and {secrets} would override it."\n            )\n            return 1',
     ),
     (
         "06 the lapsed branch also rewrites the declaration file",
@@ -136,7 +132,7 @@ MUTATIONS: list[tuple[str, str, str, str]] = [
     (
         "10 the revert stops telling the operator to deploy and verify",
         "closer",
-        '                "Commit it, DEPLOY, then verify /status.live_execution yourself: "',
+        '                f"Commit it, DEPLOY, then verify {fields} yourself: "',
         '                "" ',
     ),
     (
@@ -151,8 +147,28 @@ MUTATIONS: list[tuple[str, str, str, str]] = [
     (
         "07 an already-off flag is treated as a successful revert",
         "closer",
-        "        if flag_was_on:",
+        "        if flag_was_on or peer_was_on:",
         "        if True:",
+    ),
+    # #458 / ADR-0122: the peer flag closes with the window, on BOTH paths.
+    (
+        "12 the peer flip is dropped from the LAPSED path",
+        "closer",
+        "            reverted_text, peer_was_on = set_flag_false(reverted_text, key=PEER_FLAG)",
+        "            peer_was_on = False",
+    ),
+    (
+        "13 the peer flip is dropped from the COVERING-window path",
+        "closer",
+        "        new_fly_text, peer_changed = set_flag_false(new_fly_text, key=PEER_FLAG)",
+        "        peer_changed = False",
+    ),
+    (
+        "14 the peer edit silently skips an absent key instead of refusing",
+        "closer",
+        "    if not matches:\n        raise ValueError(",
+        "    if not matches and key == PEER_FLAG:\n        return fly_toml_text, False\n"
+        "    if not matches:\n        raise ValueError(",
     ),
 ]
 

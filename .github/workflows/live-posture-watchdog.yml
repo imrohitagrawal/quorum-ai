@@ -149,8 +149,9 @@ jobs:
             "   every host it probed, the \`live_readiness.state\` each returned, how many" \
             "   windows are declared, and which instant is uncovered." \
             "2. If this was NOT intended: run \`make close-window\` — it performs the whole" \
-            "   revert of \`OPENROUTER_LIVE_EXECUTION_ENABLED\`, flipping it alone when the" \
-            "   window has already lapsed and doing both edits when one still covers now" \
+            "   revert of \`OPENROUTER_LIVE_EXECUTION_ENABLED\` AND \`PEER_CRITIQUE_ENABLED\`" \
+            "   (#458, ADR-0122), flipping the flags alone when the window has already" \
+            "   lapsed and also expiring the declaration when one still covers now" \
             "   (#460, ADR-0111). Then commit, deploy, and verify" \
             "   \`/status.live_execution\` yourself. Check \`fly secrets list\` too —" \
             "   DEPLOY.md tells operators to set the flag as a secret, which no file in" \

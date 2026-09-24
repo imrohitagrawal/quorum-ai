@@ -4,6 +4,14 @@
 
 Accepted — 2026-09-03 (follow-on to the #290 live window; issue #290)
 
+**Amended by ADR-0122 (2026-09-24):** `PEER_CRITIQUE_ENABLED` is now coupled
+to the live window (`make close-window` turns both flags off; a committed
+peer flag on beside a live flag off is refused pre-merge). Decision 3 below
+("it never alerts on its own") still holds in effect: the watchdog's flag-off
+line now NAMES a true peer flag beside an off live posture as DRIFT and still
+does not alert; escalating that line to an alert is recorded in ADR-0122 as
+PROPOSED — AWAITING OWNER.
+
 ## Context
 
 Peer critique went live in production on 2026-09-03 (`6d13643`), and it was

@@ -9,6 +9,13 @@ approved the merge on 2026-09-21 after seeing the review's findings, the
 long-query counterexample below, the mutation proofs and the local gate
 results.
 
+**Posture note (ADR-0122, 2026-09-24):** the envelope and band figures below
+were measured with peer critique ON, which was production's posture on their
+date. Since 2026-09-24 `PEER_CRITIQUE_ENABLED` is coupled to the live window
+and reads `"false"` between windows, so production's between-window estimate
+is lower by the two debate rows (ADR-0122, Measurements); the figures here
+are this record's dated measurement and are not restated.
+
 **Authorises nothing.** It opens no live window, flips no flag, and licenses no
 paid run.
 

@@ -8,6 +8,13 @@ file said "Accepted — 2026-09-13"; that was false — the decision had not bee
 taken then — and the file carried a PROPOSED status with a retraction from
 2026-09-13 until the decision was actually taken.
 
+**Posture note (ADR-0122, 2026-09-24):** the envelope and band figures below
+were measured with peer critique ON, which was production's posture on their
+date. Since 2026-09-24 `PEER_CRITIQUE_ENABLED` is coupled to the live window
+and reads `"false"` between windows, so production's between-window estimate
+is lower by the two debate rows (ADR-0122, Measurements); the figures here
+are this record's dated measurement and are not restated.
+
 **Authorises nothing.** No `**Authorises:**` line; it may not be cited to sanction
 a live-execution posture or a paid run. It prices a fee; it opens no window.
 

@@ -285,8 +285,9 @@ def _app_description(active_settings: Settings) -> str:
 
     SHAPE-AWARE, and it has to be. Review demonstrated the flat version was
     false in the configuration it is most often served from: peer critique is
-    ``False`` by default (``config.py``, ``.env.example``), production sets it
-    true via ``fly.toml`` — and production serves ``/openapi.json`` as **404**
+    ``False`` by default (``config.py``, ``.env.example``), production set it
+    true via ``fly.toml`` from 2026-09-03 to 2026-09-24 (since then only inside
+    a live window; #458, ADR-0122) — and production serves ``/openapi.json`` as **404**
     (``api_docs_enabled`` is LOCAL-only). So a description hard-coded to the
     peer wording is read ONLY by deployments where it is wrong, which is the
     same defect ADR-0099 exists to remove, one layer down.
@@ -1294,8 +1295,9 @@ def status_snapshot() -> dict[str, object]:
         # means peer critique needs no per-window declaration of its own.
         "peer_critique_enabled": settings.peer_critique_enabled,
         # ADR-0116, #458. The FLAG above says what is configured; this says
-        # whether a critic call can actually be dispatched. They differ in
-        # production today — flag true, live execution off — and that gap is
+        # whether a critic call can actually be dispatched. They differed in
+        # production from 2026-09-12 to 2026-09-24 — flag true, live execution
+        # off, until ADR-0122 coupled the flag to the window — and that gap is
         # why the landing page promised a mechanism no run took.
         #
         # BOTH are reported, deliberately. Redefining the flag field to mean

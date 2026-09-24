@@ -9,6 +9,13 @@ while the debate line is corrected, and the two values below (7300 and 150)
 are approved. The owner was shown the measurements table below, the review's
 findings and the mutation proofs before answering.
 
+**Posture note (ADR-0122, 2026-09-24):** the envelope and band figures below
+were measured with peer critique ON, which was production's posture on their
+date. Since 2026-09-24 `PEER_CRITIQUE_ENABLED` is coupled to the live window
+and reads `"false"` between windows, so production's between-window estimate
+is lower by the two debate rows (ADR-0122, Measurements); the figures here
+are this record's dated measurement and are not restated.
+
 Supersedes ADR-0064's decision 4 ("the judge term is the SAME formula on both
 paths"). ADR-0064's other decisions stand: the judge keeps its own reconciled
 `"judge"` row in both partitions.

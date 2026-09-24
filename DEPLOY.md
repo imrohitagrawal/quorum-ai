@@ -121,8 +121,16 @@ through legitimate work; skip it and the alert fires at its next run, on purpose
 fly secrets set OPENROUTER_LIVE_EXECUTION_ENABLED="true"
 ```
 
-**When the window closes**, set it back to `"false"` (or
-`fly secrets unset OPENROUTER_LIVE_EXECUTION_ENABLED`) and redeploy. Leave the
+**Peer critique is coupled to the window (#458, ADR-0122).** If the window is
+to run the peer shape, set `PEER_CRITIQUE_ENABLED="true"` beside the live flag
+by the same route, in the same pull request; a window opened for live
+execution alone runs the moderator shape. The pre-merge gate refuses a
+`fly.toml` that carries the peer flag on while the live flag is off.
+
+**When the window closes**, run `make close-window` — it sets BOTH flags back
+to `"false"` in `fly.toml` and expires a declaration that still covers now —
+or `fly secrets unset OPENROUTER_LIVE_EXECUTION_ENABLED PEER_CRITIQUE_ENABLED`
+if you set them as secrets, and redeploy. Leave the
 declaration in the file — an expired entry sanctions nothing and is the record
 of what was authorised. Confirm with
 `curl -s https://quorum-ai.fly.dev/ready` reporting `offline_by_config`.

@@ -1074,6 +1074,12 @@ def _peer_critique_note(peer_states: Mapping[str, bool | None], *, live: bool | 
             " No critic call can be dispatched while live execution is off — "
             "every one is gated on it — so this is REPORTED and not alerted, "
             "because it reads like activity and an operator should know."
+            " Since #458 (ADR-0122) the flag is coupled to the live window: "
+            "`make close-window` turns it off with live execution and the "
+            "committed fly.toml may not carry it on while live is off, so a "
+            "true value here is DRIFT from the committed posture (a Fly secret, "
+            "or a deploy that predates the coupling); `make close-window` "
+            "reverts it."
         )
     elif state == "true":
         note += (
@@ -1417,6 +1423,48 @@ def _cover_ends(window: DeclaredWindow) -> dt.datetime:
 #: unrecognised value as "off" is the silently-green shape this whole package
 #: exists to abolish.
 _FLAG_OFF_VALUES = frozenset({"", "false", "0", "no", "off"})
+
+
+def refuse_peer_without_live(*, peer_value: str | None, live_value: str | None) -> str | None:
+    """Why a COMMITTED peer-critique flag must not merge, or None if it may (#458).
+
+    The pre-merge half of ADR-0122's coupling, the sibling of
+    ``refuse_undeclared_flag`` below and used by the same blocking lane.
+    ``PEER_CRITIQUE_ENABLED`` multiplies the debate stage from 2 moderator
+    calls to up to 8 critic calls at four models' prices, and it is only ever
+    meant to be on INSIDE a live-execution window: ``make close-window`` turns
+    it off together with the live flag, and nothing else writes it. So a
+    committed ``fly.toml`` carrying the peer flag on while the live flag is
+    off is a STRANDED flag — it would come back on, unread, the moment the
+    next window opens. That is the shape production shipped from 2026-09-12
+    (#457 reverted live execution alone) until the change that added this.
+
+    ``None`` means the key is absent, which is an off-spelling here exactly
+    as it is for the live flag (``config.py`` defaults the setting to
+    ``False``). Anything that is not an off-spelling — including a typo — is
+    treated as ON, for the reason ``refuse_undeclared_flag`` gives: this gate
+    must not be the one place that guesses what a misspelling meant.
+
+    WHAT IT CANNOT SEE, stated: a ``fly secrets set PEER_CRITIQUE_ENABLED``
+    touches no tracked file. The runtime half is ``_peer_critique_note``,
+    which reads ``/status.peer_critique_enabled`` on every watchdog cycle and
+    names a true value beside an off live posture as DRIFT.
+    """
+    live_on = (live_value or "").strip().lower() not in _FLAG_OFF_VALUES
+    peer_on = (peer_value or "").strip().lower() not in _FLAG_OFF_VALUES
+    if not peer_on or live_on:
+        return None
+    return (
+        f"fly.toml sets PEER_CRITIQUE_ENABLED = {peer_value!r} while "
+        f"OPENROUTER_LIVE_EXECUTION_ENABLED reads {live_value!r}. Peer critique "
+        "is coupled to the live-execution window (#458, ADR-0122): it may only "
+        "be on inside a window that also turns live execution on, and `make "
+        "close-window` turns both off. A peer flag left on while live execution "
+        "is off is stranded — re-opening a window would turn it back on unread, "
+        "at up to eight critic calls per run instead of two. Either set "
+        'PEER_CRITIQUE_ENABLED to "false", or open a window for both flags in '
+        "this same pull request."
+    )
 
 
 def refuse_undeclared_flag(

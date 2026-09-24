@@ -108,6 +108,9 @@ open-work-write:
 # AND nothing covers `now`, and when the declaration cannot be trusted at all
 # (decided with the posture checker's own `parse_windows`, not a field check).
 # A covering window still takes the two-edit path even alongside a standing one.
+# #458 / ADR-0122: on both paths it also turns the peer-critique flag off in
+# fly.toml (same text, same single write), and a peer-critique flag left on
+# with live execution already off is reverted the same one-edit way.
 close-window: check-python
 	$(PYTHON) scripts/close_live_window.py
 
