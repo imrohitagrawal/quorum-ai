@@ -8,8 +8,9 @@ WHY THIS FILE EXISTS
 --------------------
 Measured 2026-09-03, on the deploy that turned peer critique on in production
 (``6d13643``): ``grep -n peer_critique scripts/live_posture_check.py`` returned
-NOTHING. The watchdog scheduled every 30 minutes against production, whose whole
-purpose is to notice an unattended paid posture, could not see the flag that
+NOTHING. The watchdog scheduled against production (a cron declared every 30
+minutes and measured at hours apart; #459), whose whole purpose is to notice an
+unattended paid posture, could not see the flag that
 replaces 2 moderator debate calls with up to 8 critic calls at four models'
 prices.
 

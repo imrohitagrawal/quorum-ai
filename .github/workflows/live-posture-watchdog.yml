@@ -179,8 +179,9 @@ jobs:
             # The title carries the DECISION rather than asserting a posture the
             # check may not have established. `unknown` alerts too — an
             # unparseable declaration file would otherwise file an issue titled
-            # "Live execution is on" while the flag was off, every 30 minutes,
-            # which is how a real alert learns to be ignored.
+            # "Live execution is on" while the flag was off, on every scheduled
+            # cycle (declared 30 minutes, hours apart in practice — the header
+            # note), which is how a real alert learns to be ignored.
             gh issue create --repo "$REPO" --title "Live-execution posture needs attention: ${DECISION:-crashed-before-reporting}" --label live-posture --body "$BODY"
           fi
 

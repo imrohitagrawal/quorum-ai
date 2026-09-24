@@ -900,6 +900,61 @@ def test_the_schedule_is_the_declared_cadence() -> None:
     assert [entry["cron"] for entry in triggers["schedule"]] == ["*/30 * * * *"]
 
 
+_HEADER_MEASUREMENT = re.compile(
+    r"min (?P<min>\d+) / median (?P<median>\d+) / p90 (?P<p90>\d+) \(index 0\.9n\) / "
+    r"max (?P<max>\d+) \((?P<max_h>\d+\.\d+)h\); (?P<under>\d+) of (?P<gaps>\d+) under 35"
+)
+
+
+def test_adr_0070_quotes_the_measured_interval_the_workflow_header_records() -> None:
+    """#459, option 1 (CHG-012 D3): the workflow's header note is the ONE place
+    the watchdog's real interval is maintained, and ADR-0070's correction
+    must quote the same figures — a check, not a corrected sentence (AGENTS
+    rule 1a). The figures are READ from the header, never typed here, so a
+    re-measurement changes one file and this test says which other one lags.
+
+    RED IF: the header's measurement line is removed or reshaped (the regex is
+    the positive partner: it must match, with non-zero counts), or ADR-0070
+    stops quoting the header's min, median, p90, max and sample size.
+    """
+    header = WORKFLOW.read_text(encoding="utf-8")
+    match = _HEADER_MEASUREMENT.search(header)
+    assert match is not None, "the watchdog header no longer carries its measurement line"
+    figures = {key: int(value) for key, value in match.groupdict().items() if key != "max_h"}
+    assert figures["gaps"] > 0 and figures["median"] > 0
+    adr = next((REPO_ROOT / "docs" / "adr").glob("0070-*.md")).read_text(encoding="utf-8")
+    for token in (
+        f"{figures['gaps']} gaps",
+        f"min {figures['min']} / median {figures['median']} /",
+        f"p90 {figures['p90']} / max {figures['max']} minutes",
+        f"{figures['under']} of {figures['gaps']} under 35",
+    ):
+        assert token in adr, (
+            f"ADR-0070 no longer quotes the header's measurement: missing {token!r}"
+        )
+    assert f"({match['max_h']}h)" in adr
+    # EVERY place the ADR quotes this lane's min/median must match the header,
+    # not just one of them: a correction copied into two paragraphs must not
+    # let one copy go stale behind the other.
+    quoted = re.findall(r"min (\d+) / median (\d+) /", adr)
+    assert quoted, "ADR-0070 quotes no min/median pair at all"
+    assert all(pair == (str(figures["min"]), str(figures["median"])) for pair in quoted), quoted
+    # The ADR may not still state the declared cadence, or the SIBLING lane's
+    # 129.4-minute maximum, as THIS lane's interval. The sibling figure stays
+    # only in the dated measurement row that names the sibling lane.
+    assert not re.search(r"every 30 minutes it reads", adr, re.IGNORECASE)
+    # Judged per paragraph (and per table row), because a wrapped sentence
+    # can carry the figure and the word "sibling" on different lines.
+    blocks = [block for block in re.split(r"\n\s*\n", adr)]
+    blocks = [
+        row
+        for block in blocks
+        for row in (block.splitlines() if block.lstrip().startswith("|") else [block])
+    ]
+    stale = [block for block in blocks if "129.4" in block and "sibling" not in block.lower()]
+    assert not stale, f"ADR-0070 still gives the sibling lane's 129.4-minute figure: {stale}"
+
+
 def test_the_check_step_runs_the_tested_script() -> None:
     """RED IF: the invocation is replaced by an inline shell block while the
     script name survives only in a comment — which the raw-text version of this
@@ -1059,9 +1114,10 @@ def test_the_alert_step_opens_an_issue_when_none_is_open(tmp_path: Path) -> None
 def test_the_alert_step_does_not_open_a_second_issue(tmp_path: Path) -> None:
     """PARTNER: proves the create above is conditional, not unconditional.
 
-    RED IF: the already-open branch is dropped, so every 30-minute cycle files
-    another issue — which over a three-day posture is ~70 of them, and that is
-    how an alert gets muted.
+    RED IF: the already-open branch is dropped, so every scheduled cycle files
+    another issue — over a three-day posture 144 at the declared 30-minute
+    cadence, about 22 at the measured median gap (#459) — and that is how an
+    alert gets muted.
     """
     code, calls = _exec_step("Alert on an undeclared", tmp_path, open_issue="4242")
     assert code == 0, calls
@@ -1255,7 +1311,8 @@ def test_the_alert_title_names_the_decision_and_asserts_no_posture(
     tmp_path: Path,
 ) -> None:
     """``unknown`` alerts too, and an unparseable declaration file would file an
-    issue every 30 minutes titled "Live execution is on" while the flag was OFF.
+    issue every scheduled cycle titled "Live execution is on" while the flag was
+    OFF.
     That is the repo's own "never report a value that was never read" rule
     pointed the wrong way, and it is how a real alert learns to be ignored.
 
