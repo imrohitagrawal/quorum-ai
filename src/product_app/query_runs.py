@@ -14,7 +14,7 @@ from __future__ import annotations
 import logging
 import time as _time_module
 from threading import BoundedSemaphore, RLock, Thread
-from typing import Annotated, Self
+from typing import Annotated, Literal, Self
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -302,6 +302,13 @@ class _QueryRunRequestBase(BaseModel):
     # ``providers.py`` guards on truthiness), so rejecting it would break a
     # working client to fix a different bug (adversarial review, WP-G2).
     context: dict[str, str | None] | None = Field(default=None)
+    # W5 (CHG-012 D1, ADR-0126): the request's SHAPE. ``"panel"`` (the
+    # default, and everything a client sent before W5) is two to four models,
+    # two debate rounds and a synthesis; ``"quick"`` is one model's sourced
+    # answer, checked by the judge, with no debate and no synthesis. On the
+    # shared base so ``/estimate`` and create price the same shape; a closed
+    # set so a typo is a 422, never a silently priced panel.
+    mode: Literal["panel", "quick"] = "panel"
 
     @model_validator(mode="after")
     def _validate_context(self) -> Self:
@@ -333,6 +340,8 @@ class QueryRunCreateResponse(BaseModel):
     cost_estimate: CostEstimate
     progress: QueryRunProgress
     initial_answers: list[InitialModelAnswer]
+    #: W5 (ADR-0126): the shape this run was created with.
+    mode: Literal["panel", "quick"] = "panel"
 
 
 class ActiveQueryRunResponse(BaseModel):
@@ -567,6 +576,7 @@ def estimate_query_run(
     model_slots = _validated_model_slots(
         payload.model_slots,
         slot_search=payload.slot_search,
+        mode=payload.mode,
     )
     estimate = cost_estimation_service.estimate(
         query_text=payload.query_text,
@@ -580,6 +590,7 @@ def estimate_query_run(
         # what silently returned ``None`` for as long as the estimate body had
         # no such field, quoting a follow-up at the price of a fresh query.
         context=payload.context,
+        mode=payload.mode,
     )
     cost_estimation_service.record_guardrail_event(
         account_id=session.account_id,
@@ -616,6 +627,7 @@ def create_query_run(
     model_slots = _validated_model_slots(
         payload.model_slots,
         slot_search=payload.slot_search,
+        mode=payload.mode,
     )
     # Issue #155: ``context`` reaches provider prompts, so it is scanned too.
     required_warnings = safety_warning_policy.required_warnings_for_query(
@@ -647,6 +659,7 @@ def create_query_run(
         model_slots=model_slots,
         account_id=session.account_id,
         context=payload.context,
+        mode=payload.mode,
     )
     cost_decision = cost_estimation_service.evaluate_confirmation(
         estimate=cost_estimate,
@@ -655,6 +668,7 @@ def create_query_run(
         # with each slot's search flag) and the shape this estimate priced.
         model_slots=model_slots,
         account_id=session.account_id,
+        mode=payload.mode,
     )
     if cost_estimate.threshold_action is CostThresholdAction.BLOCK:
         cost_estimation_service.record_guardrail_event(
@@ -783,6 +797,7 @@ def _start_reserved_query_run(
             model_slots=model_slots,
             cost_estimate=cost_estimate,
             context=payload.context,
+            mode=payload.mode,
         )
     except ActiveQueryRunExistsError as exc:
         raise HTTPException(
@@ -936,6 +951,7 @@ def _create_response_for(query_run: QueryRun) -> QueryRunCreateResponse:
         cost_estimate=query_run.cost_estimate,
         progress=_progress_model(query_run),
         initial_answers=query_run.initial_answers,
+        mode=query_run.mode,
     )
 
 

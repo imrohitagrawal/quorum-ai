@@ -89,8 +89,11 @@ from product_app.evaluation import (
 from product_app.feedback_store import ChargeOutcome
 from product_app.feedback_store import record_event as _record_feedback_event
 from product_app.model_slots import (
+    MODE_PANEL,
+    MODE_QUICK,
     InvalidModelSlotError,
     ModelSlot,
+    RunMode,
     openrouter_model_catalog_service,
     panel_size_word,
     validate_model_slots_with_search,
@@ -196,6 +199,9 @@ class StageBillingState(StrEnum):
     RECORDED = "recorded"
 
 
+#: W5: the reason a quick answer's debate and synthesis stages read SKIPPED.
+QUICK_SKIPPED_STAGE_DETAIL = "Not part of a quick answer."
+
 TERMINAL_STATUSES = frozenset(
     {
         QueryRunStatus.COMPLETED,
@@ -224,6 +230,8 @@ ALLOWED_TRANSITIONS: dict[QueryRunStatus, frozenset[QueryRunStatus]] = {
     QueryRunStatus.INITIAL_ANSWERS_RUNNING: frozenset(
         {
             QueryRunStatus.DEBATE_ROUND_1_RUNNING,
+            # W5 (ADR-0126): a quick answer completes after its one answer.
+            QueryRunStatus.COMPLETED,
             QueryRunStatus.PARTIAL,
             QueryRunStatus.FAILED,
             QueryRunStatus.TIMED_OUT,
@@ -282,7 +290,9 @@ class ResultProjection(BaseModel):
     debate_outputs: list[DebateOutput]
     final_synthesis: FinalSynthesis | None
     #: Verdict-ring numerator/denominator (aligned of total) for screen 05.
-    agreement: AgreementSummary
+    #: ``None`` on a quick answer (W5, ADR-0126): one answer has nothing to
+    #: agree with, and the owner decided no agreement figure is shown for it.
+    agreement: AgreementSummary | None
     #: One row per model, in slot order, for the "how positions moved" table.
     position_movements: list[PositionMovement]
 
@@ -350,6 +360,9 @@ class QueryRunResultResponse(BaseModel):
     provider_failure_notices: list[str]
     result: ResultProjection
     result_generated_at_utc: datetime
+    #: W5 (ADR-0126): the run's shape, echoed so a client can render a quick
+    #: answer as one, never infer it from ``len(model_slots)``.
+    mode: Literal["panel", "quick"] = "panel"
     #: ``True`` when any model answer was produced by Quorum's local
     #: simulation helpers (or the fallback search stub) rather than by a
     #: live model provider. The UI uses this flag to render a prominent
@@ -483,6 +496,10 @@ class QueryRun:
     #: pipeline can inject prior context into debate/synthesis prompts
     #: and the cost estimator can account for the extra tokens.
     context: dict[str, Any] | None = None
+    #: W5: the request's shape, ``"panel"`` or ``"quick"`` (ADR-0126). Decided
+    #: once at create and never re-derived from the slot count: a panel that
+    #: lost answers is still a panel.
+    mode: RunMode = MODE_PANEL
     #: E2: how far each billable stage got in the usage-recording handshake.
     #: Read by ``_actual_cost`` to tell an honestly-empty usage list (nothing
     #: was billable) from a silently-empty one (billed, never recorded). Both
@@ -581,6 +598,7 @@ class InMemoryQueryRunRepository:
         model_slots: list[ModelSlot],
         cost_estimate: CostEstimate,
         context: dict[str, Any] | None = None,
+        mode: RunMode = MODE_PANEL,
     ) -> QueryRun:
         with self._lock:
             self._purge_expired_locked()
@@ -601,6 +619,7 @@ class InMemoryQueryRunRepository:
                 cost_estimate=cost_estimate,
                 progress=_initial_progress(),
                 context=context,
+                mode=mode,
             )
             self._query_runs[query_run_id] = query_run
             return query_run
@@ -1203,8 +1222,15 @@ def _execute_query_run(query_run_id: UUID, account_id: UUID) -> None:
         stage_state=StageState.RUNNING,
         # W4: the live stage strip shows this beside "N/M answers"; it names the
         # REQUESTED panel size (review found it still said "four" at N=2).
+        # W5: ``panel_size_word`` covers two to four only, and a quick run has
+        # one model, so its detail is its own sentence.
         detail=(
-            f"Running {panel_size_word(len(query_run.model_slots)).lower()} initial model calls."
+            "Running one model call."
+            if query_run.mode == MODE_QUICK
+            else (
+                f"Running {panel_size_word(len(query_run.model_slots)).lower()} "
+                "initial model calls."
+            )
         ),
         mark_started=True,
     )
@@ -1317,6 +1343,28 @@ def _execute_query_run(query_run_id: UUID, account_id: UUID) -> None:
         # landed; a cancel that won the race owns the run's story instead.
         if halted.status is QueryRunStatus.PARTIAL:
             _mark_remaining_stages(query_run_id, ["debate_round_1", "debate_round_2", "synthesis"])
+        return
+    if query_run.mode == MODE_QUICK:
+        # W5 (ADR-0126): a quick answer ends here. Debate and synthesis are
+        # not part of it, so they are stamped SKIPPED with that reason BEFORE
+        # the terminal write (a terminal run refuses stage writes), and no
+        # debate or synthesis service is called: ``panel_size_word`` and
+        # ``all_models_phrase`` in their prompts are undefined at one model.
+        for stage_name in ("debate_round_1", "debate_round_2", "synthesis"):
+            query_run_repository.update_status(
+                query_run_id,
+                stage_name=stage_name,
+                stage_state=StageState.SKIPPED,
+                detail=QUICK_SKIPPED_STAGE_DETAIL,
+            )
+        query_run_repository.update_status(
+            query_run_id,
+            status_value=QueryRunStatus.COMPLETED,
+            stage_name="initial_answers",
+            stage_state=StageState.COMPLETED,
+            detail="Model answer collected.",
+        )
+        _log_estimate_accuracy(query_run_id)
         return
     query_run_repository.update_status(
         query_run_id,
@@ -1695,6 +1743,18 @@ def _persist_terminal_run(query_run_id: UUID) -> None:
         # path; a restart is not.
         _reconcile_run_billing(query_run=query_run, response=response)
         agreement = response.result.agreement
+        # W5: the served agreement is ``None`` on a quick answer, but the
+        # evaluation below is still computed (the judge still runs and is
+        # recorded), and it reads the agreement the run actually has.
+        evaluation_agreement = (
+            agreement
+            if agreement is not None
+            else build_agreement_and_positions(
+                initial_answers=list(query_run.initial_answers),
+                debate_outputs=list(query_run.debate_outputs),
+                final_synthesis=query_run.final_synthesis,
+            )[0]
+        )
         citation_ratio = None
         final_synthesis = query_run.final_synthesis
         if final_synthesis is not None and final_synthesis.citation_coverage is not None:
@@ -1712,8 +1772,12 @@ def _persist_terminal_run(query_run_id: UUID) -> None:
             live_count=response.live_count,
             local_count=response.local_count,
             material_claim_count=response.material_claim_count,
-            agreement_aligned=agreement.aligned,
-            agreement_total=agreement.total,
+            # W5: a quick answer serves no agreement (``None``); the columns
+            # are NOT NULL, so it is stored as 0 of 0, "nothing measured".
+            # Nothing in ``src/`` reads these columns back; the ``mode``
+            # column the owner agreed is W5's second pull request (ADR-0126).
+            agreement_aligned=agreement.aligned if agreement is not None else 0,
+            agreement_total=agreement.total if agreement is not None else 0,
             citation_ratio=citation_ratio,
             cost_source=response.cost_source,
             estimated_cost_usd=query_run.cost_estimate.estimated_cost_usd,
@@ -1727,7 +1791,7 @@ def _persist_terminal_run(query_run_id: UUID) -> None:
         # Ordered AFTER the metrics row: ``update_evaluation`` is an UPDATE
         # that does not check ``rowcount``, so attaching an evaluation to a
         # row that does not exist yet would be a silent no-op.
-        _persist_run_evaluation(query_run=query_run, agreement=agreement)
+        _persist_run_evaluation(query_run=query_run, agreement=evaluation_agreement)
     except Exception as exc:  # noqa: BLE001 — run-history persistence is best-effort
         logger.debug("run_history persistence failed: %s", exc)
 
@@ -1842,6 +1906,7 @@ def _validated_model_slots(
     model_ids: list[str],
     *,
     slot_search: list[bool] | None = None,
+    mode: str = MODE_PANEL,
 ) -> list[ModelSlot]:
     # L2: thread the optional per-slot ``search`` flag from the request
     # body through validation. When ``slot_search`` is None, every slot
@@ -1854,6 +1919,7 @@ def _validated_model_slots(
         return validate_model_slots_with_search(
             model_ids,
             slot_search=slot_search,
+            mode=mode,
         )
     except InvalidModelSlotError as exc:
         raise HTTPException(
@@ -2700,7 +2766,15 @@ def _result_response(query_run: QueryRun) -> QueryRunResultResponse:
         debate_outputs=debate_outputs,
         final_synthesis=final_synthesis,
     )
-    evaluation = _evaluation_projection(query_run, agreement=agreement)
+    # W5 (ADR-0126): a quick answer serves NO evaluation yet. Its trust shape
+    # (the judge's three-level verdict with reasons and evidence, the owner's
+    # 2026-09-24 decision) is W5's second pull request; until then the panel
+    # composite would score one answer's "1 of 1" agreement as agreement.
+    evaluation = (
+        None
+        if query_run.mode == MODE_QUICK
+        else _evaluation_projection(query_run, agreement=agreement)
+    )
 
     # --- the COST, read LAST, from its own atomic snapshot -------------------
     actual_cost_usd, actual_breakdown, cost_source = _actual_cost(query_run)
@@ -2720,10 +2794,13 @@ def _result_response(query_run: QueryRun) -> QueryRunResultResponse:
             model_answers=initial_answers,
             debate_outputs=debate_outputs,
             final_synthesis=final_synthesis,
-            agreement=agreement,
-            position_movements=position_movements,
+            # W5: a quick answer serves no agreement figure and no position
+            # table (owner, 2026-09-24); a panel serves both, unchanged.
+            agreement=None if query_run.mode == MODE_QUICK else agreement,
+            position_movements=[] if query_run.mode == MODE_QUICK else position_movements,
         ),
         result_generated_at_utc=datetime.now(UTC),
+        mode=query_run.mode,
         demo_mode=demo_mode,
         live_count=live_count,
         local_count=local_count,
@@ -2994,6 +3071,7 @@ def _actual_cost(
             synthesis_cost=synthesis_cost,
             judge=judge_line,
             critique_by_model=critique_lines,
+            quick=query_run.mode == MODE_QUICK,
         )
         return breakdown.total, breakdown, "measured"
     except (InvalidOperation, ArithmeticError, ValueError):

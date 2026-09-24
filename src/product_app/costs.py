@@ -65,6 +65,8 @@ from product_app.model_slots import (
     DEFAULT_MODEL_IDS,
     MAX_SLOT_COUNT,
     MIN_SLOT_COUNT,
+    MODE_PANEL,
+    MODE_QUICK,
     ModelSlot,
     openrouter_model_catalog_service,
 )
@@ -74,6 +76,15 @@ from product_app.model_slots import (
 #: are the same vocabulary by construction). ADR-0123.
 CRITIQUE_SHAPE_MODERATOR = "moderator"
 CRITIQUE_SHAPE_PEER = "peer"
+#: W5 (ADR-0126): a quick answer has no critique at all. It is a third shape
+#: the token binds, so a token minted for a quick quote cannot confirm a
+#: panel run of the same model list, nor the reverse.
+CRITIQUE_SHAPE_QUICK = "quick"
+
+
+def token_shape(mode: str) -> str:
+    """The shape a confirmation token binds for a request of ``mode``."""
+    return CRITIQUE_SHAPE_QUICK if mode == MODE_QUICK else priced_critique_shape()
 
 
 def priced_critique_shape() -> str:
@@ -700,6 +711,7 @@ class CostEstimationService:
         account_id: UUID | None = None,
         query_run_id: UUID | None = None,
         context: dict[str, Any] | None = None,
+        mode: str = MODE_PANEL,
     ) -> CostEstimate:
         # Issue #123: the cheapest, most frequently-hit request path is where
         # a stale-store reconnect gets kicked off. Both calls are cheap on
@@ -738,6 +750,7 @@ class CostEstimationService:
             query_text=query_text,
             model_slots=model_slots,
             context=context,
+            mode=mode,
         )
         # ``breakdown.total`` is the quantized grand total (same value the
         # old ``_estimate_total(...).quantize(...)`` produced). Compute the
@@ -755,7 +768,7 @@ class CostEstimationService:
         # realistic ``estimated`` — those track accumulated REAL spend, which
         # tracks the point estimate, not the worst case.
         bound = self._estimate_bound_usd(
-            query_text=query_text, model_slots=model_slots, context=context
+            query_text=query_text, model_slots=model_slots, context=context, mode=mode
         )
         threshold_action, reasons = self._threshold_for(bound)
         # C8: cumulative-spend guard. A user can issue many small
@@ -1003,7 +1016,7 @@ class CostEstimationService:
                 # ADR-0123: bound to the panel and the shape THIS estimate
                 # priced, read inside the same call as the price.
                 panel=panel_key(model_slots),
-                critique_shape=priced_critique_shape(),
+                critique_shape=token_shape(mode),
             )
         return CostEstimate(
             estimated_cost_usd=estimated,
@@ -1098,6 +1111,7 @@ class CostEstimationService:
         confirmation: CostConfirmation | None,
         model_slots: Sequence[ModelSlot],
         account_id: UUID | None = None,
+        mode: str = MODE_PANEL,
     ) -> CostGuardrailDecision:
         """``model_slots`` is the panel of THIS request (the create body's
         validated slots) and the shape is the one the fresh ``estimate`` was
@@ -1121,7 +1135,7 @@ class CostEstimationService:
             account_id=account_id,
             estimated_cost_usd=estimate.estimated_cost_usd,
             panel=panel_key(model_slots),
-            critique_shape=priced_critique_shape(),
+            critique_shape=token_shape(mode),
         ):
             reasons.append(
                 "Confirmation token is invalid, expired, was issued to a different "
@@ -1460,6 +1474,7 @@ class CostEstimationService:
         query_text: str,
         model_slots: list[ModelSlot],
         context: dict[str, Any] | None = None,
+        mode: str = MODE_PANEL,
     ) -> CostBreakdown:
         """Compute the itemized cost partition (by model AND by stage).
 
@@ -1547,8 +1562,16 @@ class CostEstimationService:
             context_tokens=context_tokens,
             price_judge=price_judge,
             judge_typical=True,
+            quick=mode == MODE_QUICK,
         )
         total = raw_total.quantize(COST_DISPLAY_QUANTUM, rounding=ROUND_HALF_UP)
+        if mode == MODE_QUICK:
+            return self._quick_breakdown(
+                model_slots=model_slots,
+                initial_total=initial_total,
+                judge_cost=judge_cost if price_judge else None,
+                total=total,
+            )
 
         # --- by_stage: initial + the two debate rounds + synthesis ------
         # Stage keys mirror ``progress.stages[].stage`` (see
@@ -1647,6 +1670,51 @@ class CostEstimationService:
 
         return CostBreakdown(by_model=by_model, by_stage=by_stage, total=total)
 
+    def _quick_breakdown(
+        self,
+        *,
+        model_slots: list[ModelSlot],
+        initial_total: Decimal,
+        judge_cost: Decimal | None,
+        total: Decimal,
+    ) -> CostBreakdown:
+        """W5 (ADR-0126): a quick answer's two partitions. ``by_stage`` is the
+        one answer and, when a judge is configured, its ``judge`` row; no
+        debate rows (so no round equaliser) and no synthesis row. ``by_model``
+        is the one model and the judge; no writer row, because no debate or
+        synthesis model runs. Both are reconciled to ``total`` in one call each,
+        like the panel partitions, so every line is >= 0 and they sum exactly."""
+        stage_names = ["initial_answers"]
+        stage_raw = [initial_total]
+        (slot,) = model_slots
+        raw_model: list[tuple[str, str, str, Decimal]] = [
+            (
+                "model",
+                slot.model_id,
+                openrouter_model_catalog_service.lookup_short_name(slot.model_id) or slot.model_id,
+                initial_total,
+            )
+        ]
+        if judge_cost is not None:
+            stage_names.append("judge")
+            stage_raw.append(judge_cost)
+            raw_model.append(
+                ("judge", settings.quorum_eval_judge_model_id, "Layer-B judge", judge_cost)
+            )
+        stage_usd = self._reconcile_usd_lines(stage_raw, total)
+        model_usd = self._reconcile_usd_lines([v for *_, v in raw_model], total)
+        return CostBreakdown(
+            by_stage=[
+                CostLineByStage(stage=name, usd=usd)
+                for name, usd in zip(stage_names, stage_usd, strict=True)
+            ],
+            by_model=[
+                CostLineByModel(model_id=mid, display_name=name, usd=usd, kind=kind)
+                for (kind, mid, name, _), usd in zip(raw_model, model_usd, strict=True)
+            ],
+            total=total,
+        )
+
     def _cost_components(
         self,
         *,
@@ -1659,6 +1727,7 @@ class CostEstimationService:
         price_round_two_prior_critique: bool = False,
         price_judge: bool = False,
         judge_typical: bool = False,
+        quick: bool = False,
     ) -> tuple[list[Decimal], Decimal, Decimal, Decimal, Decimal, Decimal]:
         """The shared per-call token model, parameterised by the initial-answer
         output token count and the synthesis section count.
@@ -1687,7 +1756,12 @@ class CostEstimationService:
         """
         if not model_slots:
             raise ValueError("model_slots must not be empty")
-        if not MIN_SLOT_COUNT <= len(model_slots) <= MAX_SLOT_COUNT:
+        # W5 (ADR-0126): ``quick`` prices ONE answer and the judge, and no
+        # debate or synthesis; its count is checked instead of the panel's.
+        if quick:
+            if len(model_slots) != 1:
+                raise ValueError("a quick answer prices exactly one slot")
+        elif not MIN_SLOT_COUNT <= len(model_slots) <= MAX_SLOT_COUNT:
             raise ValueError(
                 f"model_slots must contain between {MIN_SLOT_COUNT} and {MAX_SLOT_COUNT} slots"
             )
@@ -2054,6 +2128,11 @@ class CostEstimationService:
                 judge_input_tokens,
                 judge_output_tokens,
             )
+        if quick:
+            # No debate round, no round-two critique input, no synthesis.
+            debate_round_cost = Decimal(0)
+            prior_critique_input_cost = Decimal(0)
+            synthesis_cost = Decimal(0)
         raw_total = (
             initial_total
             + Decimal(2) * debate_round_cost
@@ -2076,6 +2155,7 @@ class CostEstimationService:
         query_text: str,
         model_slots: list[ModelSlot],
         context: dict[str, Any] | None = None,
+        mode: str = MODE_PANEL,
     ) -> Decimal:
         """Fail-safe upper bound on real cost — the "up to $Y" figure the cost
         guardrail is evaluated against (issue #16 rec #2/#3).
@@ -2136,6 +2216,9 @@ class CostEstimationService:
             # (ADR-0114).
             price_round_two_prior_critique=True,
             price_judge=judge_configured(),
+            # W5: the quick bound shares this arithmetic: the one answer at
+            # its cap and the judge at its caps (ADR-0126).
+            quick=mode == MODE_QUICK,
         )
         return raw_total.quantize(COST_DISPLAY_QUANTUM, rounding=ROUND_HALF_UP)
 
@@ -2390,6 +2473,35 @@ def measured_call_cost_usd(*, model_id: str, prompt_tokens: int, completion_toke
     ) / Decimal(1000)
 
 
+def _quick_measured_breakdown(
+    per_model_initial: list[tuple[str, str, Decimal]],
+    judge: tuple[str, Decimal] | None,
+    initial_total: Decimal,
+    judge_cost: Decimal,
+) -> CostBreakdown:
+    total = (initial_total + judge_cost).quantize(COST_DISPLAY_QUANTUM, rounding=ROUND_HALF_UP)
+    raw_stage: list[tuple[str, Decimal]] = [("initial_answers", initial_total)]
+    raw_model: list[tuple[str, str, Decimal, str]] = [
+        (mid, name, cost, "model") for mid, name, cost in per_model_initial
+    ]
+    if judge is not None:
+        raw_stage.append(("judge", judge_cost))
+        raw_model.append((judge[0], "Layer-B judge", judge_cost, "judge"))
+    stage_usd = CostEstimationService._reconcile_usd_lines([v for _, v in raw_stage], total)
+    model_usd = CostEstimationService._reconcile_usd_lines([c for _, _, c, _ in raw_model], total)
+    return CostBreakdown(
+        by_stage=[
+            CostLineByStage(stage=name, usd=usd)
+            for (name, _), usd in zip(raw_stage, stage_usd, strict=True)
+        ],
+        by_model=[
+            CostLineByModel(model_id=mid, display_name=name, usd=usd, kind=kind)
+            for (mid, name, _c, kind), usd in zip(raw_model, model_usd, strict=True)
+        ],
+        total=total,
+    )
+
+
 def build_measured_breakdown(
     *,
     per_model_initial: list[tuple[str, str, Decimal]],
@@ -2397,6 +2509,7 @@ def build_measured_breakdown(
     synthesis_cost: Decimal,
     judge: tuple[str, Decimal] | None = None,
     critique_by_model: list[tuple[str, str, Decimal]] | None = None,
+    quick: bool = False,
 ) -> CostBreakdown:
     """Assemble a measured :class:`CostBreakdown` that re-sums to the total.
 
@@ -2449,6 +2562,14 @@ def build_measured_breakdown(
     """
     judge_cost = judge[1] if judge is not None else Decimal("0")
     initial_total = sum((cost for _, _, cost in per_model_initial), Decimal("0"))
+    if quick:
+        # W5 (ADR-0126): the receipt of a quick answer has the same rows as its
+        # estimate, the one answer and the judge. Debate or synthesis spend on
+        # a quick run is incoherent input, and raising demotes the run to
+        # ``estimated`` in ``_actual_cost`` rather than hiding the money.
+        if debate_by_round or synthesis_cost or critique_by_model:
+            raise ValueError("a quick answer has no debate or synthesis spend")
+        return _quick_measured_breakdown(per_model_initial, judge, initial_total, judge_cost)
     debate_total = sum(debate_by_round.values(), Decimal("0"))
     raw_total = initial_total + debate_total + synthesis_cost + judge_cost
     total = raw_total.quantize(COST_DISPLAY_QUANTUM, rounding=ROUND_HALF_UP)

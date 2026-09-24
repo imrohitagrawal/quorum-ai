@@ -188,6 +188,14 @@ BUCKET_A_LITERAL_PIN = (
     # debate caption, and nothing else constrains the text.
     "costs.CRITIQUE_SHAPE_MODERATOR",
     "costs.CRITIQUE_SHAPE_PEER",
+    # W5 (ADR-0126): the third shape the confirmation token binds, and the two
+    # request modes. LITERAL pins: the modes are wire vocabulary (the request's
+    # closed ``Literal`` set and every stored run's ``mode``); a changed
+    # spelling would silently stop matching the requests clients send, and a
+    # changed quick shape would mismatch tokens against the shape they bind.
+    "costs.CRITIQUE_SHAPE_QUICK",
+    "model_slots.MODE_PANEL",
+    "model_slots.MODE_QUICK",
     "auth.SESSION_TTL",
     "auth.SESSION_MINT_CAP_PER_IP",
     # The rolling window the cap is counted over. A LITERAL pin for the same
@@ -244,6 +252,22 @@ BUCKET_A_LITERAL_PIN = (
 #: Pin the BEHAVIOUR, not the literal — these legitimately change, and a literal
 #: pin would teach people to edit the test alongside the code.
 BUCKET_B_PIN_BEHAVIOUR = {
+    # --- Added 2026-09-25 with W5 (ADR-0126) ---
+    "model_slots.QUICK_SLOT_MESSAGE": (
+        "the refusal a quick request with other than one model gets. The "
+        "wording may change; what must not is that such a request is refused "
+        "with it and a one-model request without mode quick still gets the "
+        "panel's range message: tests/integration/test_quick_mode_backend.py::"
+        "test_quick_refuses_more_than_one_model_with_its_own_message and "
+        "::test_the_panel_validator_is_untouched"
+    ),
+    "query_run_orchestration.QUICK_SKIPPED_STAGE_DETAIL": (
+        "the reason a quick answer's debate and synthesis stages read "
+        "skipped. The wording may change; what must not is that a quick run "
+        "stamps all three stages skipped with it and calls neither service: "
+        "tests/integration/test_quick_mode_backend.py::"
+        "test_a_quick_run_answers_once_skips_debate_and_synthesis_and_completes"
+    ),
     # --- Added 2026-09-01 with ADR-0085 ---
     "credentialed_url._FORBIDDEN_IN_A_BASE_URL": (
         "the character class that makes a configured base URL unusable for a "
@@ -1108,6 +1132,9 @@ def test_money_constants_are_pinned_to_their_literal_values() -> None:
     assert Decimal("0.0001") == costs.COST_DISPLAY_QUANTUM
     assert costs.CRITIQUE_SHAPE_MODERATOR == "moderator"
     assert costs.CRITIQUE_SHAPE_PEER == "peer"
+    assert costs.CRITIQUE_SHAPE_QUICK == "quick"
+    assert model_slots.MODE_PANEL == "panel"
+    assert model_slots.MODE_QUICK == "quick"
     assert timedelta(minutes=5) == costs.CONFIRMATION_TOKEN_TTL
 
 

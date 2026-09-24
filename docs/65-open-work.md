@@ -6,7 +6,7 @@ original, because a gate and an offline agent can read it and cannot read `gh`.
 
 Verified at: `b1209b5a785e95fb208c55c4303ada85065aeb54`
 
-The board holds **28** rows, **4** of them unpinned.
+The board holds **28** rows, **3** of them unpinned.
 
 `scripts/check_open_work.py --check` reads every row's evidence off disk and
 refuses if a claim is false. It runs inside `make validate`, and
@@ -85,7 +85,7 @@ Stated narrowly, because both earlier drafts overclaimed here and were wrong:
 - **Work that lands by a different route under the same name.** W15 is pinned on
   `_bound_sniff_time` being present-and-undefined; deleting the dangling
   references flips it, but *defining* the function would not.
-- **The five unpinned rows.** Nothing is checked about them.
+- **The unpinned rows.** Nothing is checked about them.
 - **A row that should exist and does not.**
 
 Review remains the primary defence — measured here, 0 of 16 `src/` defects were
@@ -100,7 +100,7 @@ caught by any automated check and 10 of 16 by adversarial review
 | W2 | Peer critique: the answer models critique each other, two rounds (built; ships default-off) | DONE | `ABSENT src/product_app/debate.py :: def _build_peer_round(` | #290 | W1 |
 | W3 | Re-set the money constants against a measured bound — ladder moved 2026-09-07 (ADR-0102); token constants remain (W13/#268) | DONE | `PRESENT src/product_app/costs.py :: DAILY_CAP_USD = Decimal("0.20")` | — | W2 |
 | W4 | Variable panel size N ∈ {2,3,4} — shipped in three PRs: the backend (#493), the workspace control with the validator widening (#494), and the copy outside the run path (third PR) (ADR-0120, CHG-010, CHG-011) | DONE | `ABSENT src/product_app/model_slots.py :: Between 2 and 4 model slots are required.` | — | — (W10 done) |
-| W5 | Quick-answer N=1 mode | UNPINNED | `—` | — | W4 |
+| W5 | Quick-answer mode (`mode: "quick"`, one model, judge on) — backend in progress, three more PRs (ADR-0126, CHG-016) | PENDING | `ABSENT src/product_app/templates/workspace.html :: Quick answer — one model, no debate` | — | W4 |
 | W6 | A panel of one reports strong consensus | DONE | `ABSENT src/product_app/synthesis_consensus.py :: if len(stance) == 1:` | #383 | — |
 | W7 | Google sign-in and logout | UNPINNED | `—` | — | — |
 | W9 | Guard the moderator model overlapping a panel slot | DONE | `ABSENT src/product_app/model_slots.py :: debate_model_id` | — | — |
@@ -302,8 +302,16 @@ first,"* and W10 fixed it (ADR-0083). The CSS is cheaper than feared:
 single-column media query, not a 2×2 `grid-template-areas`, so N=2 and N=3
 already reflow (verified 2026-08-28).
 
-**W5 — N=1.** Unreachable while `_validate_model_id_list` rejects any count but
-four. Unpinned: no honest needle exists before the shape is chosen.
+**W5 — the quick-answer mode.** Every decision is taken (CHG-012 D1 and the
+owner's answers of 2026-09-24 evening, recorded in
+`docs/analysis/2026-09-24-w5-parked.md`). Four pull requests: (1) the backend
+request shape, estimate, bound, token shape, run path and receipt (ADR-0126,
+CHG-016); (2) what a quick result serves: the safety-notice carrier, the
+quick trust shape and the run store's `mode` column; (3) the workspace
+control and result view; (4) the judge prompt, verification only. The needle
+is the composer sentence in the owner's words, which only the THIRD pull
+request adds, so the row cannot read DONE while the mode has no UI (the
+parked page's polarity trap).
 
 **W6 — #383. DONE** (ADR-0083). The stance branch of `compute_consensus_strength`
 called a panel of exactly ONE scored answer "strong" — `len(sizes) == 1` is
