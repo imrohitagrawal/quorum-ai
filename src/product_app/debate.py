@@ -34,6 +34,8 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from product_app.config import RuntimeEnvironment, settings
 from product_app.costs import CHARS_PER_TOKEN
+from product_app.costs import CRITIQUE_SHAPE_MODERATOR as CRITIQUE_SHAPE_MODERATOR
+from product_app.costs import CRITIQUE_SHAPE_PEER as CRITIQUE_SHAPE_PEER
 from product_app.feedback_store import record_event as _record_feedback_event
 from product_app.model_slots import (
     EXPECTED_SLOT_COUNT,
@@ -420,8 +422,8 @@ class PanelStance(BaseModel):
 #: its current meaning without editing.
 #: ``"peer"`` = each eligible answer slot wrote its own critique of the others
 #: (#290 / ADR-0093).
-CRITIQUE_SHAPE_MODERATOR = "moderator"
-CRITIQUE_SHAPE_PEER = "peer"
+# The two strings are defined in ``costs`` (ADR-0123) so the run's recorded
+# shape and the confirmation token's bound shape share one vocabulary.
 CRITIQUE_SHAPES: frozenset[str] = frozenset({CRITIQUE_SHAPE_MODERATOR, CRITIQUE_SHAPE_PEER})
 
 #: ``PanelStance.author_model_id`` for a stance DERIVED from several critics.

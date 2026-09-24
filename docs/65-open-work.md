@@ -122,7 +122,7 @@ caught by any automated check and 10 of 16 by adversarial review
 | W25 | A truncated mutation run with no survivor passes, so the gate gets greener as it measures less | DONE | `ABSENT Makefile :: print("INCONCLUSIVE: no survivor` | #464 | ADR-0118 |
 | W26 | The citation gate reports `.tsx`, `.mdx` and `.pyi` citations under a truncated path nobody wrote | DONE | `ABSENT tests/unit/test_cited_paths_resolve.py :: def test_a_longer_extension_is_not_truncated_to_a_listed_shorter_one` | #469 | — |
 | W27 | 35 mutants of `_tavily_search` survive: the request's shape, its socket timeout and both of its log events are unasserted | DONE | `ABSENT src/product_app/providers.py :: _CONTENT_TYPE_HEADER: Final = "Content-Type"` | #465 | W25 |
-| W28 | BYOK: two postures, the party paying chooses — PLANNED by the owner 2026-09-23 (CHG-011 D8), delivery not decided (ADR-0121 PROPOSED; failure modes in `docs/analysis/2026-09-23-byok-failure-modes.md`) | PENDING | `PRESENT src/product_app/query_run_orchestration.py :: credential_source = ProviderCredentialSource.APP_OWNED` | — | owner decision; the token binding (CHG-011 D9) before any per-run toggle |
+| W28 | BYOK: two postures, the party paying chooses — PLANNED by the owner 2026-09-23 (CHG-011 D8), delivery not decided (ADR-0121 PROPOSED; failure modes in `docs/analysis/2026-09-23-byok-failure-modes.md`) | PENDING | `PRESENT src/product_app/query_run_orchestration.py :: credential_source = ProviderCredentialSource.APP_OWNED` | — | owner decision; the token binding (CHG-011 D9) landed 2026-09-24 (ADR-0123) |
 
 **STOP** marks a row that cannot be finished without a human decision — a money,
 cost or safety guardrail value that only real measurement could justify. Do not

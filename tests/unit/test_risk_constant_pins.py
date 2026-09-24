@@ -180,6 +180,14 @@ BUCKET_A_LITERAL_PIN = (
     "costs.CHARS_PER_TOKEN",
     "costs.COST_DISPLAY_QUANTUM",
     "costs.CONFIRMATION_TOKEN_TTL",
+    # The two critique-shape strings (ADR-0123). LITERAL pins: they are the
+    # vocabulary of every recorded run's ``critique_shape`` (stamped per
+    # round, read by the debate caption and the card tooltip in app.js) and
+    # of the confirmation token's bound shape; a changed spelling would
+    # silently mismatch stored runs against new tokens and mislabel the
+    # debate caption, and nothing else constrains the text.
+    "costs.CRITIQUE_SHAPE_MODERATOR",
+    "costs.CRITIQUE_SHAPE_PEER",
     "auth.SESSION_TTL",
     "auth.SESSION_MINT_CAP_PER_IP",
     # The rolling window the cap is counted over. A LITERAL pin for the same
@@ -1098,6 +1106,8 @@ def test_money_constants_are_pinned_to_their_literal_values() -> None:
     assert Decimal("0.005") == costs._DEFAULT_PRICE_PER_1K_OUTPUT
     assert Decimal(4) == costs.CHARS_PER_TOKEN
     assert Decimal("0.0001") == costs.COST_DISPLAY_QUANTUM
+    assert costs.CRITIQUE_SHAPE_MODERATOR == "moderator"
+    assert costs.CRITIQUE_SHAPE_PEER == "peer"
     assert timedelta(minutes=5) == costs.CONFIRMATION_TOKEN_TTL
 
 

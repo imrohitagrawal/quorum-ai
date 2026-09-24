@@ -651,6 +651,9 @@ def create_query_run(
     cost_decision = cost_estimation_service.evaluate_confirmation(
         estimate=cost_estimate,
         confirmation=payload.cost_confirmation,
+        # ADR-0123: the token must have been minted for THIS panel (ordered,
+        # with each slot's search flag) and the shape this estimate priced.
+        model_slots=model_slots,
         account_id=session.account_id,
     )
     if cost_estimate.threshold_action is CostThresholdAction.BLOCK:
