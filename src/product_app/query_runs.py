@@ -241,7 +241,7 @@ _CONTEXT_MAX_LENGTHS = {
 }
 
 
-def _check_context(ctx: dict[str, str | None] | None) -> None:
+def _check_context(ctx: dict[str, str | None] | None, mode: str = "panel") -> None:
     """Validate a ``context`` mapping, or raise ``ValueError``.
 
     A module-level function rather than a base-class method because the
@@ -266,6 +266,13 @@ def _check_context(ctx: dict[str, str | None] | None) -> None:
         limit = _CONTEXT_MAX_LENGTHS[key]
         if len(value) > limit:
             raise ValueError(f"context.{key} may be at most {limit} characters; got {len(value)}")
+    # W5 (ADR-0126): a quick answer is one model call, and the follow-up
+    # context is priced into and sent to debate and synthesis only, which a
+    # quick answer does not run. Accepting it would take the user's context
+    # and silently use none of it, so it is refused, here, where the probe
+    # and create share one implementation (issue #155).
+    if mode == "quick" and any((value or "").strip() for value in ctx.values()):
+        raise ValueError("A quick answer takes no follow-up context.")
 
 
 class _QueryRunRequestBase(BaseModel):
@@ -312,17 +319,7 @@ class _QueryRunRequestBase(BaseModel):
 
     @model_validator(mode="after")
     def _validate_context(self) -> Self:
-        _check_context(self.context)
-        # W5 (ADR-0126): a quick answer is one model call, and the follow-up
-        # context is priced into and sent to debate and synthesis only, which
-        # a quick answer does not run. Accepting it would take the user's
-        # context and silently use none of it, so it is refused.
-        if (
-            self.mode == "quick"
-            and self.context
-            and any((value or "").strip() for value in self.context.values())
-        ):
-            raise ValueError("A quick answer takes no follow-up context.")
+        _check_context(self.context, self.mode)
         return self
 
 
@@ -392,12 +389,15 @@ class QueryRunWarningsRequest(BaseModel):
     #: Optional and defaulted, so a pre-#155 client that omits it is
     #: unaffected — it simply gets the query-text-only answer it got before.
     context: dict[str, str | None] | None = Field(default=None)
+    #: W5 (ADR-0126): the request's shape, so the probe refuses exactly the
+    #: context create refuses for it (issue #155: probe and create agree).
+    mode: Literal["panel", "quick"] = "panel"
 
     @model_validator(mode="after")
     def _validate_context(self) -> Self:
         # The SAME callable the create route validates with, not a copy of
         # its rules — a copy is what drifts.
-        _check_context(self.context)
+        _check_context(self.context, self.mode)
         return self
 
 

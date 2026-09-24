@@ -575,9 +575,11 @@ def test_the_judge_dollar_is_inside_the_figure_the_ledger_books(
 
     W5 (ADR-0126): the ``quick`` case is the same claim for a quick answer,
     which serves no evaluation. RED IF the serving path skips the evaluation
-    (and with it the judge's first dispatch) on a quick run: the judge then
-    fires only after the ledger is booked, and its dollar never reaches it
-    (review round 1 of W5's first pull request measured the gap).
+    on a quick run. In W5's first draft the judge then first dispatched at
+    persistence, after the booking, and the ledger missed its dollar (review
+    round 1 measured it); with persistence now skipping a quick evaluation,
+    the same mutation stops the judge dispatching at all, and this test fails
+    at ``bool(judge_calls) is enable``.
     """
     from product_app.feedback_store import get_store
 

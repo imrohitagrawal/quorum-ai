@@ -55,12 +55,17 @@ prompts) and that the measured receipt always emits the panel's four rows.
    `update_status`, which does not consult `ALLOWED_TRANSITIONS` (the panel's
    own `synthesis_running` to `completed` write does the same); the table
    gains the edge so it describes the pipeline, not because anything enforces
-   it. A quick answer that fails ends `partial` with only `initial_answers`
-   failed, debate and synthesis stamped with the quick reason, and the notice
+   it. A quick answer that fails lists only `initial_answers` as failed,
+   with debate and synthesis stamped with the quick reason (tested for no
+   usable answer and for no server key; the run-deadline path calls the
+   same helper and has no quick test), and the notice
    `This quick answer did not complete. Review the failed step before relying
    on it.`, since there is no synthesis to rely on.
 5a. **No follow-up context.** A quick request with a non-empty `context` is
-   a 422 (`A quick answer takes no follow-up context.`). The context is
+   a 422 (`A quick answer takes no follow-up context.`), on the estimate,
+   create and safety-warnings routes alike: the rule lives in the one
+   `_check_context` the three share, so the probe never advises what create
+   refuses (issue #155). The context is
    priced into and sent to debate and synthesis only, which a quick answer
    does not run, so accepting it would take the user's context and use none
    of it. Follow-ups on a quick answer were not among the owner's decisions;
@@ -76,10 +81,18 @@ prompts) and that the measured receipt always emits the panel's four rows.
    quick answer it is then withheld (`evaluation: null`) until the second
    pull request gives it its own trust shape, since the panel composite would
    count one answer's "1 of 1" as agreement. The first draft skipped the
-   computation instead, which moved the judge's first dispatch after the
-   booking; review measured the ledger short by the judge's cost, and
+   computation instead, which moved the judge's first dispatch to
+   persistence, after the booking; review measured the ledger short by the
+   judge's cost, and
    `test_the_judge_dollar_is_inside_the_figure_the_ledger_books[quick]` now
    pins the order.
+   **Known gap until the second pull request:** a quick run whose judge fires
+   is billed for it, and the verdict is kept only in the in-memory memo the
+   second pull request will serve from; it is not shown, stored or audited.
+   Production is not affected today: live execution is off there
+   (`/status` reads `live_execution: false`), every answer is a local
+   simulation, and the judge is dispatched only for an answer outside
+   `NOT_INVOKED_PATHS`, so it never fires on a production quick run.
 8. **The run store** keeps its NOT NULL agreement columns; a quick run
    stores 0 of 0, "nothing measured", and no evaluation or trust row (the
    panel composite is not written for it). Nothing in `src/` reads the
@@ -88,7 +101,9 @@ prompts) and that the measured receipt always emits the panel's four rows.
 
 ## Measurements
 
-On the `wp/w5-quick-backend` worktree at `81eee7a` plus this change. Static
+Measured on the `wp/w5-quick-backend` worktree at `81eee7a` plus this
+change, and reproduced unchanged by review on the tree merged with #505
+(ADR-0125) at `fb7ac48`. Static
 price table (`_FALLBACK_CATALOG`), no network, no paid call. The judge is
 priced as `openai/gpt-5-mini`, a judge the static table lists. Production's
 judge was `openai/gpt-4.1-mini` in the 2026-09-10 telemetry (CHG-007); the

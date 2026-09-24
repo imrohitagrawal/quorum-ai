@@ -712,10 +712,12 @@ class InMemoryQueryRunRepository:
         * ``updated_at`` drives the served ``elapsed_time_ms``, which must
           stop at the terminal event, not creep on with the doomed run.
 
-        ``allow_terminal=True`` is the narrow opt-in for the two callers that
+        ``allow_terminal=True`` is the narrow opt-in for the callers that
         legitimately annotate a run they THEMSELVES just made terminal:
-        ``cancel_query_run`` (stage → SKIPPED) and ``_degrade_run_for_deadline``
-        (stage → FAILED, plus ``_mark_remaining_stages`` behind it).
+        ``cancel_query_run`` (stage → SKIPPED), ``_degrade_run_for_deadline``
+        (stage → FAILED, plus ``_mark_remaining_stages`` behind it), and W5's
+        ``_mark_after_terminal`` (a failed quick answer's downstream stages →
+        SKIPPED with the quick reason; ADR-0126).
 
         The refusal is a NO-OP, not an exception: the eleven pipeline call
         sites are plain forward-progress statements that do not expect to
@@ -1207,13 +1209,13 @@ def _execute_query_run(query_run_id: UUID, account_id: UUID) -> None:
             stage_name="initial_answers",
             stage_state=StageState.FAILED,
             detail=("Live execution is enabled but no server-side key is configured."),
-            failed_steps=["initial_answers", "debate_round_1", "debate_round_2", "synthesis"],
-            missing_steps=["initial_answers", "debate_round_1", "debate_round_2", "synthesis"],
+            failed_steps=["initial_answers", *_downstream_stages(query_run)],
+            missing_steps=["initial_answers", *_downstream_stages(query_run)],
         )
         # Only stamp the skipped stages if OUR terminal write actually
         # landed; a cancel that won the race owns the run's story instead.
         if halted.status is QueryRunStatus.FAILED:
-            _mark_remaining_stages(query_run_id, ["debate_round_1", "debate_round_2", "synthesis"])
+            _mark_after_terminal(query_run_id, quick=query_run.mode == MODE_QUICK)
         return
     query_run_repository.update_status(
         query_run_id,
@@ -1316,10 +1318,7 @@ def _execute_query_run(query_run_id: UUID, account_id: UUID) -> None:
         query_run_repository.record_initial_answer(query_run_id, answer)
 
     quick = query_run.mode == MODE_QUICK
-    # W5 (ADR-0126): debate and synthesis are not part of a quick answer, so
-    # when its one answer fails they are neither failed nor missing; they are
-    # stamped with the quick reason instead of "an earlier stage failed".
-    downstream = [] if quick else ["debate_round_1", "debate_round_2", "synthesis"]
+    downstream = _downstream_stages(query_run)
     if deadline_breached:
         # ``and``-gate: when the cancel won the race the run is CANCELLED and
         # must not receive deadline stage attribution either.
@@ -3113,6 +3112,15 @@ def _running_stage_name(stages: list[QueryRunStageProgress]) -> str:
         if stage.state is StageState.RUNNING:
             return stage.stage
     return "estimate"
+
+
+def _downstream_stages(query_run: QueryRun) -> list[str]:
+    """The stages after the initial answers that a failure leaves failed or
+    missing. W5 (ADR-0126): none on a quick answer, whose debate and synthesis
+    were never part of it (they are stamped with the quick reason instead)."""
+    if query_run.mode == MODE_QUICK:
+        return []
+    return ["debate_round_1", "debate_round_2", "synthesis"]
 
 
 def _mark_after_terminal(query_run_id: UUID, *, quick: bool) -> None:

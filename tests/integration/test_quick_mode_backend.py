@@ -367,3 +367,58 @@ def test_the_active_run_reports_its_mode() -> None:
         assert active.json()["mode"] == "quick"
     finally:
         query_run_repository.transition(run.query_run_id, QueryRunStatus.CANCELLED)
+
+
+def test_the_warnings_probe_refuses_the_context_create_refuses_on_quick() -> None:
+    """Issue #155: the probe and create must agree, or the probe hands out
+    advice create will refuse. RED IF the probe accepts context on a quick
+    request (round 2 of review measured it answering 200 while create gave
+    422). Partner: the probe still takes the same context on a panel."""
+    client, headers = _client_and_headers()
+    context = {"prior_question": "What is a database?", "prior_synthesis": "A store."}
+    quick = client.post(
+        "/v1/query-runs/warnings",
+        headers=headers,
+        json={"query_text": QUERY, "context": context, "mode": "quick"},
+    )
+    assert quick.status_code == 422, quick.text
+    assert "A quick answer takes no follow-up context." in quick.text
+    panel = client.post(
+        "/v1/query-runs/warnings", headers=headers, json={"query_text": QUERY, "context": context}
+    )
+    assert panel.status_code == 200, panel.text
+
+
+def test_a_quick_run_with_no_server_key_fails_in_the_quick_shape(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The no-key failure path: live execution on, no key. RED IF it still
+    lists debate and synthesis as failed and missing on a quick run (review
+    round 2). Nothing is dispatched: the run fails before any call."""
+    monkeypatch.setattr(config.settings, "stage_delay_ms", 0)
+    monkeypatch.setattr(config.settings, "openrouter_live_execution_enabled", True)
+    monkeypatch.setattr(config.settings, "openrouter_api_key", "")
+    with isolated_run_semaphore(1) as semaphore:
+        client, headers = _client_and_headers()
+        body: dict[str, Any] = {
+            "query_text": QUERY,
+            "model_slots": DEFAULT_IDS[:1],
+            "mode": "quick",
+            "safety_acknowledgements": [
+                {"warning_type": WarningType.SENSITIVE_DATA, "version": WARNING_VERSION},
+                {"warning_type": WarningType.HIGH_STAKES, "version": WARNING_VERSION},
+            ],
+        }
+        created = client.post("/v1/query-runs", headers=headers, json=body)
+        assert created.status_code == 202, created.text
+        assert wait_for_free_permits(semaphore, 1, timeout_s=60.0) == 1
+        payload = client.get(
+            f"/v1/query-runs/{created.json()['query_run_id']}", headers=headers
+        ).json()
+    assert payload["status"] == "failed", payload
+    assert payload["failed_steps"] == ["initial_answers"]
+    assert payload["missing_steps"] == ["initial_answers"]
+    stages = {s["stage"]: s for s in payload["progress"]["stages"]}
+    for name in ("debate_round_1", "debate_round_2", "synthesis"):
+        assert stages[name]["state"] == "skipped", stages[name]
+        assert stages[name]["detail"] == "Not part of a quick answer."
