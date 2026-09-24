@@ -18,6 +18,13 @@ that the first BYOK pull request builds to the recorded shape instead of
 re-asking it, and so that the one prerequisite it has (the token binding in
 "Consequences") is visible before anyone adds a per-run toggle.
 
+**Amended by ADR-0123 (2026-09-24):** the prerequisite named in Consequences
+below has landed — the confirmation token now binds the ordered panel
+(`(model_id, search)` pairs) and the priced critique shape, and refuses a
+token minted for another panel or shape. The Consequences bullet that calls
+it "a live debt today" describes the tree before that date. Nothing else
+here changes: the record stays PROPOSED — AWAITING OWNER.
+
 ADR-0119 is reserved by draft PR #491 (#268); ADR-0120 is the panel-size
 record. This takes 0121.
 
