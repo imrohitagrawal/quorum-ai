@@ -58,6 +58,7 @@ from product_app.costs import (
 from product_app.evaluation import judge_configured
 from product_app.feedback_store import FeedbackStore, get_store
 from product_app.feedback_store import configure as configure_feedback_store
+from product_app.forwarded_probe import ForwardedProbeMiddleware
 from product_app.google_signin import (
     CALLBACK_PATH,
     log_sign_in_configuration,
@@ -517,6 +518,10 @@ class _NormalizeMethodLabelMiddleware:
 
 
 app.add_middleware(_NormalizeMethodLabelMiddleware)
+
+# W30 measurement, temporary: logs what Fly forwards, as kinds, for a request
+# that opts in. Removed by the W30 fix (see product_app.forwarded_probe).
+app.add_middleware(ForwardedProbeMiddleware)
 
 # OD-3: per-request ID correlation. Added LAST so it is the outermost
 # add_middleware layer: the contextvar is bound before the instrumentator
