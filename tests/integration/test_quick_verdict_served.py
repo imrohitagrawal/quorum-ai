@@ -221,6 +221,12 @@ def test_a_panel_run_serves_no_quick_verdict_and_no_judge_prose(
     quick = qr._result_response(_run(mode="quick"))
     assert quick.quick_verdict is not None
     assert "PANEL-SENTINEL" in (quick.quick_verdict.reasons or "")
+    # D-5, narrowed and no wider: the judge's text reaches the served body at
+    # exactly ONE place, quick_verdict.reasons. RED IF it also lands anywhere
+    # else (a second field, the evaluation, the result projection).
+    body = quick.model_dump(mode="json")
+    body["quick_verdict"]["reasons"] = None
+    assert "PANEL-SENTINEL" not in json.dumps(body)
 
 
 def test_a_high_stakes_quick_answer_carries_the_safety_notice() -> None:
@@ -314,3 +320,120 @@ def test_a_quick_run_is_stored_as_quick(monkeypatch: pytest.MonkeyPatch) -> None
         panel_row = store.get(str(panel.query_run_id))
     assert quick_row is not None and quick_row.mode == "quick"
     assert panel_row is not None and panel_row.mode == "panel"
+
+
+@pytest.mark.parametrize(
+    "rationale",
+    [
+        "seehttps://evil.example/login",
+        "ref_https://evil.example/login?x=1",
+        "https://user:pw@evil.example:8443/p",
+        "[link](https://evil.example/a?t=1)",
+        "h&#116;tps://evil.example/x",
+        "ht​tps://evil.example/x",
+        "//evil.example/x",
+        "www.evil.example/login?x",
+        "evil.example/login?x",
+        "javascript:alert(1)",
+        "data:text/html;base64,PHNjcmlwdD4=",
+        "http://pаypal.com/login",
+    ],
+)
+def test_no_link_shape_survives_into_the_reasons(rationale: str) -> None:
+    """Failure mode 1, the shapes review round 1 got past the first pattern.
+    RED IF any scheme, path, query, credential, port or non-ASCII host is
+    served. The host itself may stay, as plain text."""
+    from product_app.quick_verdict import plain_reasons
+
+    served = plain_reasons(rationale)
+    lowered = served.lower()
+    for leaked in (
+        "://",
+        "/login",
+        "/p",
+        "/a",
+        "/x",
+        "?",
+        "user:pw",
+        ":8443",
+        "javascript:",
+        "data:",
+    ):
+        assert leaked not in lowered, (rationale, served)
+    assert served.isascii(), (rationale, served)
+
+
+def test_ordinary_reasons_are_left_alone() -> None:
+    """Partner of the link test: prose with no link is served unchanged, and
+    a reduced link keeps the punctuation after it."""
+    from product_app.quick_verdict import plain_reasons
+
+    text = "Grounding is 4/5 and faithfulness 5/5; the sources agree."
+    assert plain_reasons(text) == text
+    assert plain_reasons("see https://evil.example/login now.") == "see evil.example now."
+
+
+def test_well_supported_needs_a_source_the_judge_could_check(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An answer with NO source cannot read "well supported" whatever the
+    scores. RED IF the cap is removed. Partner: the same verdict with sources
+    does read well_supported."""
+    top = _verdict(faithfulness=5, grounding=5, hallucination_risk="low")
+    _judge(monkeypatch, top)
+    none = qr._result_response(_run(mode="quick", n_sources=0))
+    assert none.quick_verdict is not None and none.quick_verdict.level == "partly_supported"
+    qr._judge_verdict_memo_clear_for_tests()
+    some = qr._result_response(_run(mode="quick", n_sources=2))
+    assert some.quick_verdict is not None and some.quick_verdict.level == "well_supported"
+
+
+def test_a_running_quick_answer_serves_no_verdict_yet(monkeypatch: pytest.MonkeyPatch) -> None:
+    """While the run is in flight no judge has been asked, and "not checked"
+    would read as a verdict. RED IF a non-terminal quick run serves one.
+    Partner: the same run, finished, does."""
+    _judge(monkeypatch, _verdict())
+    run = _run(mode="quick")
+    query_run_repository._query_runs[run.query_run_id].status = (  # noqa: SLF001
+        QueryRunStatus.INITIAL_ANSWERS_RUNNING
+    )
+    running = qr._result_response(query_run_repository.get(run.query_run_id))
+    assert running.quick_verdict is None
+    query_run_repository._query_runs[run.query_run_id].status = QueryRunStatus.COMPLETED  # noqa: SLF001
+    done = qr._result_response(query_run_repository.get(run.query_run_id))
+    assert done.quick_verdict is not None and done.quick_verdict.level == "partly_supported"
+
+
+def test_a_migration_race_loser_still_opens_the_store(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two processes opening one old database can both see ``mode`` missing;
+    the second ALTER fails with "duplicate column name". RED IF that error
+    stops the store opening. Simulated by making the column check miss once
+    on a database that already has the column."""
+    from product_app.run_history_store import RunHistoryStore
+
+    db = str(tmp_path / "runs.sqlite3")
+    RunHistoryStore(db).close()
+    monkeypatch.setattr(RunHistoryStore, "_columns", lambda self: set())
+    store = RunHistoryStore(db)
+    try:
+        assert store.get("absent") is None
+    finally:
+        store.close()
+
+
+@pytest.mark.parametrize(
+    "rationale",
+    ["javascript:alert(1)", "data:text/html;base64,PHNjcmlwdD4=", "javascript&#58;alert(1)"],
+)
+def test_a_code_or_data_scheme_is_removed_not_rewritten(rationale: str) -> None:
+    """A ``javascript:`` or ``data:`` link has no host worth keeping; it is
+    replaced by the marker, including when its colon is written as an HTML
+    entity. RED IF the scheme branch or the entity decoding is dropped: the
+    token then survives, or is served as a stray host name."""
+    from product_app.quick_verdict import LINK_REMOVED, plain_reasons
+
+    served = plain_reasons(rationale)
+    assert served.startswith(LINK_REMOVED), (rationale, served)
+    assert "&#" not in served

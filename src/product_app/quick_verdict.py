@@ -1,8 +1,8 @@
 """What a quick answer serves of the judge (W5, ADR-0127).
 
 The owner decided on 2026-09-24 that a quick answer shows the judge's
-verdict as "well supported / partly supported / not supported along with
-reasons and artifacts". This module turns one memoised judge outcome into
+verdict in three levels with the reasons and the evidence behind it (their
+words: ``docs/analysis/2026-09-24-w5-parked.md``, decision 1). This module turns one memoised judge outcome into
 that shape. Failure modes, listed before the code:
 ``docs/analysis/2026-09-25-w5-quick-verdict-failure-modes.md``.
 
@@ -13,8 +13,11 @@ and only on a quick answer.
 
 from __future__ import annotations
 
+import html
 import re
+import unicodedata
 from typing import Literal
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, Field
 
@@ -34,10 +37,27 @@ QuickVerdictLevel = Literal["well_supported", "partly_supported", "not_supported
 #: says what a 4 means against human labels.
 WELL_SUPPORTED_MIN_SCORE = 4
 
-#: A URL in the judge's prose, reduced to its host before it is served
-#: (failure mode 1: an injected page could otherwise choose a destination
-#: the product shows under its own "Judge" label).
-_URL = re.compile(r"\bhttps?://([^\s/?#<>\"']+)[^\s<>\"']*", re.IGNORECASE)
+#: Link-shaped text in the judge's prose, reduced before it is served
+#: (failure mode 1: an injected page could otherwise choose a destination the
+#: product shows under its own "Judge" label). Matched AFTER the text is
+#: normalised (HTML entities decoded, NFKC, zero-width and control characters
+#: removed), in three shapes, with no word boundary in front so a URL glued to
+#: a preceding word is still caught:
+#:   * anything with ``//`` after an optional scheme (``https://``,
+#:     ``ftp://``, ``//host``): reduced to its bare host name;
+#:   * a ``www.`` address, or a domain followed by a path: reduced to the host;
+#:   * a scheme with no ``//`` that runs code or embeds data (``javascript:``,
+#:     ``data:``, ``vbscript:``, ``file:``): replaced by ``[link removed]``.
+_STOP = r"[^\s<>\"'()\[\]{}]"
+_URL = re.compile(
+    rf"(?P<scheme>(?:javascript|data|vbscript|file):{_STOP}*)"
+    rf"|(?P<authority>(?:[a-z][a-z0-9+.\-]*:)?//{_STOP}+)"
+    rf"|(?P<bare>www\.{_STOP}+|[a-z0-9\-]+(?:\.[a-z0-9\-]+)+/{_STOP}*)",
+    re.IGNORECASE,
+)
+_INVISIBLE = re.compile("[\u200b-\u200f\u202a-\u202e\u2060-\u2064\ufeff\x00-\x08\x0b-\x1f\x7f]")
+_TRAILING = ".,;:!?"
+LINK_REMOVED = "[link removed]"
 
 
 class QuickVerdictSource(BaseModel):
@@ -79,9 +99,42 @@ def verdict_level(verdict: EvalJudgeVerdict | None) -> QuickVerdictLevel:
     return "partly_supported"
 
 
+def _host(link: str) -> str:
+    """The bare host of a link, lower-cased, with no user, password or port,
+    in ASCII: an internationalised name is shown as punycode, so a look-alike
+    cannot pass for the name it imitates. ``[link removed]`` when there is no
+    usable host."""
+    candidate = link if "//" in link else f"//{link}"
+    try:
+        host = urlsplit(candidate).hostname or ""
+    except ValueError:
+        return LINK_REMOVED
+    if not host:
+        return LINK_REMOVED
+    try:
+        return host.encode("idna").decode("ascii")
+    except UnicodeError:
+        return LINK_REMOVED
+
+
+def _reduce(match: re.Match[str]) -> str:
+    if match.group("scheme"):
+        return LINK_REMOVED
+    link = match.group(0)
+    trailing = ""
+    while link and link[-1] in _TRAILING:
+        trailing = link[-1] + trailing
+        link = link[:-1]
+    return _host(link) + trailing
+
+
 def plain_reasons(rationale: str) -> str:
-    """The judge's rationale with every URL reduced to its host."""
-    return _URL.sub(lambda match: match.group(1), rationale).strip()
+    """The judge's rationale as plain text with every link-shaped token
+    reduced to its bare host, or removed. The client must still render it as
+    text: this is the server's half of failure mode 1, not all of it."""
+    text = unicodedata.normalize("NFKC", html.unescape(rationale))
+    text = _INVISIBLE.sub("", text)
+    return _URL.sub(_reduce, text).strip()
 
 
 def build_quick_verdict(
@@ -95,12 +148,14 @@ def build_quick_verdict(
         return QuickVerdict(
             level=level, reasons=None, sources_checked=[], judge_status=judge_status
         )
+    sources = judge_evidence_sources(initial_answers)
+    # A verdict on an answer the judge could check against NO source cannot
+    # read "well supported": there was nothing for the support to be in.
+    if level == "well_supported" and not sources:
+        level = "partly_supported"
     return QuickVerdict(
         level=level,
         reasons=plain_reasons(verdict.rationale) or None,
-        sources_checked=[
-            QuickVerdictSource(title=title, url=url)
-            for title, url in judge_evidence_sources(initial_answers)
-        ],
+        sources_checked=[QuickVerdictSource(title=title, url=url) for title, url in sources],
         judge_status=judge_status,
     )

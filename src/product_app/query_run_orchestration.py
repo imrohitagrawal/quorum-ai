@@ -2794,8 +2794,13 @@ def _result_response(query_run: QueryRun) -> QueryRunResultResponse:
     safety_notice: str | None = None
     if query_run.mode == MODE_QUICK:
         evaluation = None
+        if high_stakes_required(query_run.query_text, context=query_run.context):
+            safety_notice = HIGH_STAKES_NOTICE_FRAGMENT
+    if query_run.mode == MODE_QUICK and status in TERMINAL_STATUSES:
         # W5 (ADR-0127): read AFTER the evaluation above, which is where the
-        # judge dispatches; the memo then holds this run's outcome.
+        # judge dispatches; the memo then holds this run's outcome. Only for a
+        # finished run: while it runs, no judge has been asked yet, and
+        # "not checked" would be read as a verdict (review round 1).
         with _judge_memo_lock:
             outcome = _judge_verdict_memo.get(str(query_run_id))
         quick_verdict = build_quick_verdict(
@@ -2803,8 +2808,6 @@ def _result_response(query_run: QueryRun) -> QueryRunResultResponse:
             judge_status=None if outcome is None else outcome.status,
             initial_answers=initial_answers,
         )
-        if high_stakes_required(query_run.query_text, context=query_run.context):
-            safety_notice = HIGH_STAKES_NOTICE_FRAGMENT
 
     # --- the COST, read LAST, from its own atomic snapshot -------------------
     actual_cost_usd, actual_breakdown, cost_source = _actual_cost(query_run)

@@ -196,9 +196,19 @@ class RunHistoryStore:
         ``ADD COLUMN`` with a default fills every existing row with "panel",
         which is what every run before W5 was, with no table rebuild.
         """
-        columns = {row["name"] for row in self._conn.execute("PRAGMA table_info(runs)")}
-        if "mode" not in columns:
+        if "mode" in self._columns():
+            return
+        try:
             self._conn.execute("ALTER TABLE runs ADD COLUMN mode TEXT NOT NULL DEFAULT 'panel'")
+        except sqlite3.OperationalError as exc:
+            # Two processes opening the same old database can both see the
+            # column missing and both add it; the second loses the race with
+            # "duplicate column name". The column is there, which is the goal.
+            if "duplicate column" not in str(exc).lower():
+                raise
+
+    def _columns(self) -> set[str]:
+        return {row["name"] for row in self._conn.execute("PRAGMA table_info(runs)")}
 
     @classmethod
     def from_env(cls) -> RunHistoryStore:
