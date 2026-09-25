@@ -1514,14 +1514,21 @@ class SynthesisOrchestrationService:
         ``context`` now goes through the same discriminator, so the two
         agree by construction rather than by coincidence.
         """
-        if HIGH_STAKES_PATTERN.search(query_text):
-            return True
+        return high_stakes_required(query_text, context=context)
+
+
+def high_stakes_required(query_text: str, *, context: dict[str, Any] | None = None) -> bool:
+    """Whether an answer to this query must carry the high-stakes notice: the
+    rule the synthesis applies, as a module function so a quick answer, which
+    has no synthesis, decides it identically (W5, ADR-0127)."""
+    if HIGH_STAKES_PATTERN.search(query_text):
+        return True
+    return any(
+        warning.warning_type is WarningType.HIGH_STAKES
         for warning in safety_warning_policy.required_warnings_for_query(
             query_text, context=context
-        ):
-            if warning.warning_type is WarningType.HIGH_STAKES:
-                return True
-        return False
+        )
+    )
 
 
 def _final_synthesis_alignment_text(final_synthesis: FinalSynthesis | None) -> str | None:

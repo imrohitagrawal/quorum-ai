@@ -1369,6 +1369,10 @@ components:
           - quick
           title: Mode
           default: panel
+        quick_verdict:
+          anyOf:
+          - $ref: '#/components/schemas/QuickVerdict'
+          - type: 'null'
         demo_mode:
           type: boolean
           title: Demo Mode
@@ -1504,6 +1508,73 @@ components:
       required:
       - warnings
       title: QueryRunWarningsResponse
+    QuickVerdict:
+      properties:
+        level:
+          type: string
+          enum:
+          - well_supported
+          - partly_supported
+          - not_supported
+          - not_checked
+          title: Level
+        faithfulness:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Faithfulness
+        grounding:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Grounding
+        hallucination_risk:
+          anyOf:
+          - type: string
+            enum:
+            - low
+            - medium
+            - high
+          - type: 'null'
+          title: Hallucination Risk
+        reasons:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          title: Reasons
+        sources_checked:
+          items:
+            $ref: '#/components/schemas/QuickVerdictSource'
+          type: array
+          title: Sources Checked
+        judge_status:
+          anyOf:
+          - $ref: '#/components/schemas/JudgeCallOutcome'
+          - type: 'null'
+      type: object
+      required:
+      - level
+      - sources_checked
+      title: QuickVerdict
+      description: The judge's verdict on a quick answer. ``null`` on every panel run.
+    QuickVerdictSource:
+      properties:
+        title:
+          type: string
+          title: Title
+        url:
+          type: string
+          title: Url
+      type: object
+      required:
+      - title
+      - url
+      title: QuickVerdictSource
+      description: 'One source the judge was shown, as it was shown (title and URL
+
+        collapsed and truncated by ``judge_evidence_sources``).'
     ResultProjection:
       properties:
         model_answers:
@@ -1529,6 +1600,11 @@ components:
             $ref: '#/components/schemas/PositionMovement'
           type: array
           title: Position Movements
+        safety_notice:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Safety Notice
       type: object
       required:
       - model_answers

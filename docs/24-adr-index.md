@@ -129,6 +129,7 @@ ways, so the record shows what was believed on a date and what replaced it.
 | [ADR-0124](adr/0124-the-judge-reads-the-cited-page-the-fetcher-ships-off.md) | The judge reads the cited page, not the model's memory of it — the fetcher, behind a default-off setting | Architecture | Accepted — 2026-09-24 |
 | [ADR-0125](adr/0125-the-bound-prices-web-search-context-from-its-own-figure.md) | The bound prices web-search context from its own figure, not the setting | Architecture | Accepted — 2026-09-25 |
 | [ADR-0126](adr/0126-the-quick-answer-is-a-separate-request-shape.md) | The quick answer is a separate request shape, priced and run as one answer plus the judge | Architecture | Accepted — 2026-09-25, first of four pull requests |
+| [ADR-0127](adr/0127-a-quick-answer-shows-the-judges-verdict.md) | A quick answer shows the judge's verdict, its reasons and the sources it checked | Architecture | Accepted — 2026-09-25, W5's second of four pull requests |
 
 **This index was itself stale** until 2026-07-30: ADR-0002 had existed since
 2026-07-19 and was never listed here. A hand-maintained index is a derived fact

@@ -110,6 +110,7 @@ from product_app.providers import (
     estimate_material_claim_count,
 )
 from product_app.providers import provider_execution_service as provider_execution_service
+from product_app.quick_verdict import QuickVerdict, build_quick_verdict
 from product_app.run_history_store import RunHistoryRow
 from product_app.run_history_store import (
     fill_layer_a_evaluation_if_absent as _fill_run_layer_a_evaluation,
@@ -117,8 +118,10 @@ from product_app.run_history_store import (
 from product_app.run_history_store import record_terminal_run as _record_run_history
 from product_app.run_history_store import update_evaluation as _update_run_evaluation
 from product_app.synthesis import (
+    HIGH_STAKES_NOTICE_FRAGMENT,
     FinalSynthesis,
     build_agreement_and_positions,
+    high_stakes_required,
     synthesis_stub_service,
 )
 from product_app.visible_text import is_visible
@@ -295,6 +298,10 @@ class ResultProjection(BaseModel):
     agreement: AgreementSummary | None
     #: One row per model, in slot order, for the "how positions moved" table.
     position_movements: list[PositionMovement]
+    #: W5 (ADR-0127): the high-stakes caveat on a QUICK answer, which has no
+    #: synthesis to carry ``high_stakes_notice``. The same text and the same
+    #: rule the synthesis uses. ``None`` on every panel run.
+    safety_notice: str | None = None
 
 
 class QueryRunEvaluationProjection(BaseModel):
@@ -363,6 +370,11 @@ class QueryRunResultResponse(BaseModel):
     #: W5 (ADR-0126): the run's shape, echoed so a client can render a quick
     #: answer as one, never infer it from ``len(model_slots)``.
     mode: Literal["panel", "quick"] = "panel"
+    #: W5 (ADR-0127): the judge's verdict on a QUICK answer, once the run has
+    #: finished: three levels (or ``not_checked``), the judge's scores, reasons
+    #: the APP writes from them, and the sources the judge was shown. No
+    #: judge-written text (D-5). ``None`` on every panel run.
+    quick_verdict: QuickVerdict | None = None
     #: ``True`` when any model answer was produced by Quorum's local
     #: simulation helpers (or the fallback search stub) rather than by a
     #: live model provider. The UI uses this flag to render a prominent
@@ -1766,8 +1778,8 @@ def _persist_terminal_run(query_run_id: UUID) -> None:
             material_claim_count=response.material_claim_count,
             # W5: a quick answer serves no agreement (``None``); the columns
             # are NOT NULL, so it is stored as 0 of 0, "nothing measured".
-            # Nothing in ``src/`` reads these columns back; the ``mode``
-            # column the owner agreed is W5's second pull request (ADR-0126).
+            # Nothing in ``src/`` reads these columns back; the row's ``mode``
+            # column says it is a quick answer (ADR-0127).
             agreement_aligned=agreement.aligned if agreement is not None else 0,
             agreement_total=agreement.total if agreement is not None else 0,
             citation_ratio=citation_ratio,
@@ -1778,6 +1790,7 @@ def _persist_terminal_run(query_run_id: UUID) -> None:
             missing_steps=list(query_run.missing_steps),
             eval_json=None,
             trust_json=None,
+            mode=query_run.mode,
         )
         _record_run_history(row)
         # Ordered AFTER the metrics row: ``update_evaluation`` is an UPDATE
@@ -2771,14 +2784,29 @@ def _result_response(query_run: QueryRun) -> QueryRunResultResponse:
     # this is where a configured judge first dispatches, so its dollar is
     # inside the figure ``_actual_cost`` prices and the ledger books.
     evaluation = _evaluation_projection(query_run, agreement=agreement)
-    # W5 (ADR-0126): a quick answer SERVES no evaluation yet. Its trust shape
-    # (the judge's three-level verdict with reasons and evidence, the owner's
-    # 2026-09-24 decision) is W5's second pull request; until then the panel
-    # composite would score one answer's "1 of 1" agreement as agreement.
-    # Computed and withheld, never skipped: skipping it moved the judge's
-    # first dispatch after the booking (review round 1 of W5's first PR).
+    # W5 (ADR-0126): a quick answer serves no panel evaluation, whose
+    # composite would score one answer's "1 of 1" agreement as agreement; its
+    # trust shape is ``quick_verdict`` (ADR-0127), built below. Computed and
+    # withheld, never skipped: skipping it moved the judge's first dispatch
+    # after the booking (review round 1 of W5's first pull request).
+    quick_verdict: QuickVerdict | None = None
+    safety_notice: str | None = None
     if query_run.mode == MODE_QUICK:
         evaluation = None
+        if high_stakes_required(query_run.query_text, context=query_run.context):
+            safety_notice = HIGH_STAKES_NOTICE_FRAGMENT
+    if query_run.mode == MODE_QUICK and status in TERMINAL_STATUSES:
+        # W5 (ADR-0127): read AFTER the evaluation above, which is where the
+        # judge dispatches; the memo then holds this run's outcome. Only for a
+        # finished run: while it runs, no judge has been asked yet, and
+        # "not checked" would be read as a verdict (review round 1).
+        with _judge_memo_lock:
+            outcome = _judge_verdict_memo.get(str(query_run_id))
+        quick_verdict = build_quick_verdict(
+            verdict=None if outcome is None else outcome.verdict,
+            judge_status=None if outcome is None else outcome.status,
+            initial_answers=initial_answers,
+        )
 
     # --- the COST, read LAST, from its own atomic snapshot -------------------
     actual_cost_usd, actual_breakdown, cost_source = _actual_cost(query_run)
@@ -2802,9 +2830,11 @@ def _result_response(query_run: QueryRun) -> QueryRunResultResponse:
             # table (owner, 2026-09-24); a panel serves both, unchanged.
             agreement=None if query_run.mode == MODE_QUICK else agreement,
             position_movements=[] if query_run.mode == MODE_QUICK else position_movements,
+            safety_notice=safety_notice,
         ),
         result_generated_at_utc=datetime.now(UTC),
         mode=query_run.mode,
+        quick_verdict=quick_verdict,
         demo_mode=demo_mode,
         live_count=live_count,
         local_count=local_count,

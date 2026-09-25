@@ -1680,21 +1680,16 @@ class JudgeEvidence:
     synthesis_sections: tuple[tuple[str, str], ...]
 
 
-def build_judge_evidence(
-    *,
-    query_text: str,
-    initial_answers: list[InitialModelAnswer],
-    final_synthesis: FinalSynthesis | None,
-) -> JudgeEvidence:
-    sections: tuple[tuple[str, str], ...] = ()
-    if final_synthesis is not None:
-        sections = (
-            ("consensus", final_synthesis.consensus),
-            ("disagreement", final_synthesis.disagreement),
-            ("source_support", final_synthesis.source_support),
-            ("uncertainty", final_synthesis.uncertainty),
-            ("recommendation", final_synthesis.recommendation),
-        )
+def judge_evidence_sources(initial_answers: list[InitialModelAnswer]) -> list[tuple[str, str]]:
+    """The ``(title, url)`` pairs the judge is shown, in its order, exactly as
+    it sees them: placeholders dropped, capped at ``JUDGE_MAX_SOURCE_LINES``
+    round-robin across the answers, each field collapsed and truncated.
+
+    One function for two readers: :func:`build_judge_evidence` numbers these
+    into the prompt's SOURCES block, and W5's quick verdict serves them as the
+    sources the judge checked (ADR-0127), so the list a user reads cannot
+    drift from what the judge was given.
+    """
     per_answer = [
         [
             s
@@ -1741,10 +1736,33 @@ def build_judge_evidence(
     # url_citation), and a line break inside it forged a whole
     # "[N] ... :: url" evidence line the judge would read as a source.
     # ``str.split()`` breaks on every Unicode line separator, not just "\n".
+    return [
+        (
+            " ".join(source.title.split())[:JUDGE_MAX_SOURCE_TITLE_LEN],
+            source.url[:JUDGE_MAX_SOURCE_URL_LEN],
+        )
+        for source in kept_sources
+    ]
+
+
+def build_judge_evidence(
+    *,
+    query_text: str,
+    initial_answers: list[InitialModelAnswer],
+    final_synthesis: FinalSynthesis | None,
+) -> JudgeEvidence:
+    sections: tuple[tuple[str, str], ...] = ()
+    if final_synthesis is not None:
+        sections = (
+            ("consensus", final_synthesis.consensus),
+            ("disagreement", final_synthesis.disagreement),
+            ("source_support", final_synthesis.source_support),
+            ("uncertainty", final_synthesis.uncertainty),
+            ("recommendation", final_synthesis.recommendation),
+        )
     source_lines = tuple(
-        f"[{index}] {' '.join(source.title.split())[:JUDGE_MAX_SOURCE_TITLE_LEN]}"
-        f" :: {source.url[:JUDGE_MAX_SOURCE_URL_LEN]}"
-        for index, source in enumerate(kept_sources, start=1)
+        f"[{index}] {title} :: {url}"
+        for index, (title, url) in enumerate(judge_evidence_sources(initial_answers), start=1)
     )
     return JudgeEvidence(
         query_text=query_text,

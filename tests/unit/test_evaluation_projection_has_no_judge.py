@@ -6,6 +6,15 @@ must be no path, present or future, by which it reaches a client. And the
 frontend must contain no ``judge`` identifier at all, so no judge-reading code
 path can be added by habit. Building one would manufacture an API shape that
 does not exist and create standing pressure to add it.
+
+STILL WHOLE after ADR-0127 (W5, 2026-09-25). A quick answer now serves the
+judge's verdict (``quick_verdict``: a level, the judge's scores, reasons the
+APP writes from those scores, and the sources the judge was shown), but no
+judge-written text: a first draft served a cleaned ``rationale`` and two
+review rounds kept finding link shapes the cleaning let through, so that
+design was dropped. ``tests/integration/test_quick_verdict_served.py`` pins
+that a sentinel rationale reaches no quick and no panel response. The
+frontend ban below is unchanged by this pull request.
 """
 
 from __future__ import annotations

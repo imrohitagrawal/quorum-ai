@@ -132,6 +132,9 @@ class RunHistoryRow:
     missing_steps: list[str]
     eval_json: dict[str, Any] | None
     trust_json: dict[str, Any] | None
+    #: W5 (ADR-0127): the run's shape, so a reader never takes a quick
+    #: answer's 0-of-0 agreement for a panel's.
+    mode: str = "panel"
 
 
 class RunHistoryStore:
@@ -160,7 +163,8 @@ class RunHistoryStore:
         failed_steps TEXT NOT NULL,
         missing_steps TEXT NOT NULL,
         eval_json TEXT,
-        trust_json TEXT
+        trust_json TEXT,
+        mode TEXT NOT NULL DEFAULT 'panel'
     );
     CREATE INDEX IF NOT EXISTS runs_completed_at_idx
         ON runs (completed_at);
@@ -180,7 +184,31 @@ class RunHistoryStore:
         self._conn.row_factory = sqlite3.Row
         with self._lock:
             self._conn.executescript(self._SCHEMA)
+            self._add_missing_columns()
         _open_stores.add(self)
+
+    def _add_missing_columns(self) -> None:
+        """Bring a database created by an older schema up to this one.
+
+        ``CREATE TABLE IF NOT EXISTS`` does nothing to a table that already
+        exists, and production's run store is a file on a volume that predates
+        every column added since. W5 (ADR-0127) adds ``mode``: an in-place
+        ``ADD COLUMN`` with a default fills every existing row with "panel",
+        which is what every run before W5 was, with no table rebuild.
+        """
+        if "mode" in self._columns():
+            return
+        try:
+            self._conn.execute("ALTER TABLE runs ADD COLUMN mode TEXT NOT NULL DEFAULT 'panel'")
+        except sqlite3.OperationalError as exc:
+            # Two processes opening the same old database can both see the
+            # column missing and both add it; the second loses the race with
+            # "duplicate column name". The column is there, which is the goal.
+            if "duplicate column" not in str(exc).lower():
+                raise
+
+    def _columns(self) -> set[str]:
+        return {row["name"] for row in self._conn.execute("PRAGMA table_info(runs)")}
 
     @classmethod
     def from_env(cls) -> RunHistoryStore:
@@ -220,6 +248,7 @@ class RunHistoryStore:
             json.dumps(row.missing_steps),
             json.dumps(row.eval_json) if row.eval_json is not None else None,
             json.dumps(row.trust_json) if row.trust_json is not None else None,
+            row.mode,
         )
         # Upsert keyed on query_run_id. On conflict we update the METRIC
         # columns only and deliberately leave ``eval_json``/``trust_json``
@@ -234,8 +263,8 @@ class RunHistoryStore:
                 "completed_at, elapsed_time_ms, model_ids, demo_mode, live_count, "
                 "local_count, material_claim_count, agreement_aligned, agreement_total, "
                 "citation_ratio, cost_source, estimated_cost_usd, actual_cost_usd, "
-                "failed_steps, missing_steps, eval_json, trust_json"
-                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "failed_steps, missing_steps, eval_json, trust_json, mode"
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT(query_run_id) DO UPDATE SET "
                 "account_id=excluded.account_id, "
                 "correlation_id=excluded.correlation_id, "
@@ -255,7 +284,8 @@ class RunHistoryStore:
                 "estimated_cost_usd=excluded.estimated_cost_usd, "
                 "actual_cost_usd=excluded.actual_cost_usd, "
                 "failed_steps=excluded.failed_steps, "
-                "missing_steps=excluded.missing_steps",
+                "missing_steps=excluded.missing_steps, "
+                "mode=excluded.mode",
                 values,
             )
 
@@ -437,6 +467,7 @@ def _row_from_sqlite(row: sqlite3.Row) -> RunHistoryRow:
         missing_steps=json.loads(row["missing_steps"]),
         eval_json=json.loads(row["eval_json"]) if row["eval_json"] is not None else None,
         trust_json=json.loads(row["trust_json"]) if row["trust_json"] is not None else None,
+        mode=row["mode"],
     )
 
 
