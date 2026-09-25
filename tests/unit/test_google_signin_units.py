@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 import pytest
 
 from product_app import google_signin
+from product_app.config import settings
 from product_app.google_signin import PendingSignIns
 
 
@@ -91,7 +92,7 @@ def test_the_host_rule_compares_as_a_browser_does(
     refused."""
     from starlette.requests import Request
 
-    monkeypatch.setattr(google_signin.settings, "google_oauth_redirect_uri", redirect_uri)
+    monkeypatch.setattr(settings, "google_oauth_redirect_uri", redirect_uri)
     from urllib.parse import urlsplit
 
     parts = urlsplit(request_url)
