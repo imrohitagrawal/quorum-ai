@@ -56,12 +56,15 @@ the owner's.
 order was: the address fix, the allow-list, then W7's second pull request.
 That proposal put the invite link "later, only if needed"; the owner's
 13:48:26Z message brings it into the plan without placing it. W29 (#447's
-second half) was in neither message; the 2026-09-24 order put #447 before W7
-(CHG-012 D6). So placing the invite link third and W29 fourth is the
-session's reading, put to the owner at the close of this session; the next
-session uses the owner's answer if there is one.
+second half) was in neither message; the session's uncontested 2026-09-24
+sequence put #447 before W7 (CHG-012 D6 records that sequence as the
+session's, not the owner's words). The list below therefore keeps the order
+the owner approved (address fix, allow-list, W7's second), places the invite
+link right after the allow-list because the owner said it *"should not be
+later"*, and places W29 after W7. The session asked the owner to confirm this
+in its closing message; the next session uses the answer if there is one.
 
-1. **W30 — the per-network session limit counts the app's own address.**
+1. **W30 — the per-network session limit counts the app's ingress address.**
    Found 2026-09-25 when the owner could not retest #511 ("This network has
    reached its session limit"). Measured: `fly ips list` shows
    `2a09:8280:1::131:de60:0` (dedicated v6) and `66.241.125.57` (shared v4)
@@ -73,17 +76,13 @@ session uses the owner's answer if there is one.
    forwards (`Fly-Client-IP`, the `X-Forwarded-For` order). `main.py` keys
    both limits on `request.client.host`; the Dockerfile trusts
    `--forwarded-allow-ips 172.16.0.0/12,fdaa::/16,127.0.0.1,::1` (since #58,
-   2026-07-21), and uvicorn then reported the app's own address. CHG-022.
+   2026-07-21), and uvicorn then reported the app's ingress address. CHG-022.
 2. **W31 — the allow-list**, as CHG-022 item (2). ADR in the same PR.
 3. **W32 — the invite link**, CHG-022 item (4). Owner, 13:48:26Z: *"Invite
    link should not be later. I expect it should be planned and included."*
    Failure modes first: a leaked link, revocation, whether uses are capped,
    who can mint one, that it never lifts a spend limit.
-4. **W29 — #447, 2 of 2: the judge wiring** (page text into the judge's
-   evidence, the input reserve, the receipt row, the posture-keyed copy;
-   ADR-0124). If the input reserve moves a shipped money value, DRAFT and
-   stop.
-5. **W7, 2 of 3 — history and deletion.** CHG-012 D7 (keep the last 5 runs
+4. **W7, 2 of 3 — history and deletion.** CHG-012 D7 (keep the last 5 runs
    and 30 days as `HISTORY_KEEP_COUNT` / `HISTORY_KEEP_DAYS`, summary rows
    only, nothing deleted on sign-out, typed-confirmation deletion, the
    24-hour spend envelope on a one-way hash of the Google subject, "Results
@@ -96,12 +95,16 @@ session uses the owner's answer if there is one.
    only, not re-run): 200 rounds of 8 simultaneous first sign-ins for one
    Google account gave 1 account row each time; a copy with the database lock
    weakened failed on round 1.
-6. **W7, 3 of 3 — session safety.** CHG-021 (b) idle expiry with a
+5. **W7, 3 of 3 — session safety.** CHG-021 (b) idle expiry with a
    keep-active reminder, (c) sign out everywhere, (d) sign-in events (time
    and outcome, never tokens), (e) a rate-limited sign-in start. The idle
    length and the rate-limit value are the session's proposals, as settings.
    The third promised race gets a test here: "sign out everywhere" while
    other requests of that account are in flight.
+6. **W29 — #447, 2 of 2: the judge wiring** (page text into the judge's
+   evidence, the input reserve, the receipt row, the posture-keyed copy;
+   ADR-0124). If the input reserve moves a shipped money value, DRAFT and
+   stop.
 7. **Package 8 — BYOK.** Last (CHG-012 D8). First PR as a DRAFT and stop;
    ADR-0121 stays `PROPOSED — AWAITING OWNER`.
 
@@ -112,11 +115,13 @@ session uses the owner's answer if there is one.
 - **Google Auth Platform → Audience.** An account not on the test-user list
   signed in (owner, 2026-09-25). The app has no allow-list of accounts;
   Google enforces the test-user list only while the app is in "Testing".
-  **Likely cause, the session's own error:** its first setup steps
-  (08:58:29Z) said *"click "Publish app" so it is **In production**"*; its
-  later steps (§6 below) said to leave it on Testing. If the first were
-  followed, any Google account can sign in. UNVERIFIED until the owner reads
-  the publishing status. To restrict sign-in, set it back to Testing (only
+  **Cause UNVERIFIED.** The session's first steps (08:58:29Z, step 5) said
+  to click "Publish app"; its 11:42:24Z runbook, which the owner asked for at
+  11:41:39Z, said to leave the app on Testing and add test users; the owner
+  reported the unlisted sign-in at 11:59:46Z, after that runbook. If the
+  publishing status reads "In production", that explains it; if it reads
+  "Testing", the cause is still open (for example the account's role on the
+  Google Cloud project; the session could not check Google's rules). To restrict sign-in, set it back to Testing (only
   listed users) or accept the allowed-emails offer below.
 - **Visual-flake tolerance.** `e2e/tests/invariants/trust-score-visual.spec.ts`
   allows `maxDiffPixels: 120`; the trust-score card (dark, 1440) differed by
@@ -178,8 +183,9 @@ session uses the owner's answer if there is one.
   allowance is shared with every visitor); production browser checks need the owner
   until W30 is live.
 - **Background wait loops outlived their purpose**: at the owner's question
-  (09:17:51Z) the session found 8 of its own polling shells, up to 1 day
-  1 hour old. Every wait loop needs a wall-clock limit.
+  (09:17:51Z) the session stopped 8 of its own background wait loops: the 5
+  the owner listed (oldest 1 day 1 hour, `ps` etime `01-01:22:21`) and 3 more
+  of the same kind, not timed. Every wait loop needs a wall-clock limit.
 - **The `scriptPath` + `script` trap** (memory
   `workflow-scriptpath-wins-over-script`) re-ran an old review; pass `script`
   only for a new round.
@@ -191,7 +197,7 @@ the practices rather than copying them, and says so here, because a second
 copy drifts from the first. Most live in `AGENTS.md` and the owner's global
 instructions; the rest were only in the 2026-09-24 prompt, and
 `CONTINUE-2026-09-25-ULTRACODE-PROMPT.md` §2, §3, §6 and §7 carry them
-forward in full. The ones that decided outcomes today:
+forward. The ones that decided outcomes today:
 rule 1 (execute, including where things are), 6/6a (mutation, verbatim red),
 7 (a positive partner), 8c (measure the upstream first — W30), 9/9a/12b
 (read-only reviewers in their own `git archive` copies, never move the tree
@@ -203,7 +209,8 @@ failure modes first), 17c (explicit squash message, close-guard), 18/18a
 ## 6. Google sign-in setup — the operator runbook (corrected)
 
 The owner has already done this once. Kept here because chat is not a
-record, and because the first version (08:58:29Z) was wrong about step 4.
+record, and because the first version (08:58:29Z, its step 5) said to click
+"Publish app"; the 11:42:24Z runbook corrected that to leave it on Testing.
 
 1. Google Cloud Console → Google Auth Platform (menu names may differ).
 2. **Branding:** app name, support email, authorised domain `stackclimb.com`.
