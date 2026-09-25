@@ -24,6 +24,7 @@ from contextlib import asynccontextmanager
 from html import escape
 from pathlib import Path
 from typing import Annotated, Any
+from uuid import UUID
 
 import sentry_sdk
 from fastapi import Depends, FastAPI, Request, status
@@ -57,6 +58,13 @@ from product_app.costs import (
 from product_app.evaluation import judge_configured
 from product_app.feedback_store import FeedbackStore, get_store
 from product_app.feedback_store import configure as configure_feedback_store
+from product_app.google_signin import (
+    CALLBACK_PATH,
+    log_sign_in_configuration,
+    sign_in_enabled,
+    signed_in_account,
+)
+from product_app.google_signin import router as google_signin_router
 from product_app.logging_config import setup_json_logging
 from product_app.model_slots import (
     ModelDefaultsResponse,
@@ -140,6 +148,12 @@ def _scrub_user_text(event: SentryEvent) -> SentryEvent:
     request = event.get("request")
     if isinstance(request, dict) and "data" in request:
         request["data"] = "[REDACTED]"
+    if isinstance(request, dict) and CALLBACK_PATH in str(request.get("url", "")):
+        # W7. The sign-in callback's query carries Google's one-time
+        # authorization code and the ``state``. Neither is useful to an error
+        # report, so the whole query goes, wherever the SDK put it.
+        request["query_string"] = "[REDACTED]"
+        request["url"] = str(request["url"]).split("?", 1)[0]
 
     extra = event.get("extra")
     if isinstance(extra, dict):
@@ -454,6 +468,7 @@ _warn_if_docs_exposed_in_deployed_env(settings, logging.getLogger(__name__))
 app = _build_fastapi(settings)
 _register_docs_routes(app, settings)
 app.include_router(query_runs_router)
+app.include_router(google_signin_router)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 # OD-1 observability: Prometheus exposition at /metrics. Routes are grouped
@@ -519,6 +534,11 @@ _APP_START_MONOTONIC = time.monotonic()
 # legacy header enabled) before they start serving traffic. The guard
 # returns immediately for the "local" environment.
 validate_production_environment()
+
+# W7 (ADR-0130). Sign-in is optional, so a half-set configuration does not stop
+# the app: it runs with sign-in off and says so at ERROR, naming the missing
+# settings (never their values).
+log_sign_in_configuration()
 
 # Smoke-probe: log a WARNING at startup if the app is running in
 # offline mode without the operator realizing it (no API key, or
@@ -758,7 +778,44 @@ async def validation_exception_handler(
     return _format_validation_error(exc)
 
 
-def _render_workspace_html() -> str:
+#: W7 (ADR-0130). The only text the sign-in failure notice ever shows. Fixed,
+#: so nothing from the request reaches the page.
+SIGN_IN_FAILED_NOTICE = "Sign-in did not complete. Please try again."
+
+
+def _account_controls_html(account_id: UUID | None, *, sign_in_failed: bool) -> str:
+    """The top bar's sign-in control, or nothing at all when sign-in is off.
+
+    Off renders the EMPTY string, so the page a deployment without the three
+    settings serves is the page it served before W7. Signed in shows the
+    email Google verified (escaped) and "Sign out"; otherwise "Sign in with
+    Google". ``app.js`` wires both buttons.
+    """
+    if not sign_in_enabled():
+        return ""
+    account = None if account_id is None else signed_in_account(account_id)
+    if account is not None:
+        return (
+            '<span class="account-email" id="account-email">'
+            + escape(account.email)
+            + "</span>"
+            + '<button id="sign-out" class="topbar-howitworks" type="button">Sign out</button>'
+        )
+    notice = (
+        '<span class="account-notice" id="sign-in-notice" role="status">'
+        + SIGN_IN_FAILED_NOTICE
+        + "</span>"
+        if sign_in_failed
+        else ""
+    )
+    return (
+        notice
+        + '<button id="sign-in-google" class="topbar-howitworks" type="button">'
+        + "Sign in with Google</button>"
+    )
+
+
+def _render_workspace_html(account_controls: str = "") -> str:
     """Render the workspace page with the catalog and default model ids.
 
     Both JSON data islands must be ``</``-escaped before being inserted
@@ -861,7 +918,10 @@ def _render_workspace_html() -> str:
         rendered = rendered.replace(
             "{{ model_slot_" + str(slot_index + 1) + "_value }}", default_id
         ).replace("{{ model_slot_" + str(slot_index + 1) + "_selected }}", "selected")
-    return rendered
+    # LAST, and the first occurrence only (the top bar comes before every data
+    # island in the template): the email is the one value here a person chose,
+    # so no later substitution may run over it.
+    return rendered.replace("{{ account_controls }}", account_controls, 1)
 
 
 @app.get("/", tags=["operations"])
@@ -1298,6 +1358,10 @@ def status_snapshot() -> dict[str, object]:
         # (it reads arbitrary cited hosts), so its flag is reported like the
         # others (ADR-0013). State only. Shipped off.
         "source_fetch_enabled": settings.quorum_source_fetch_enabled,
+        # W7 (ADR-0130). Whether Google sign-in can run: all three
+        # GOOGLE_OAUTH_* settings set and the redirect URI well formed. A
+        # boolean only; the client id, secret and redirect URI never appear.
+        "sign_in_enabled": sign_in_enabled(),
         # ADR-0116, #458. The FLAG above says what is configured; this says
         # whether a critic call can actually be dispatched. They differed in
         # production from 2026-09-12 to 2026-09-24 — flag true, live execution
@@ -1513,7 +1577,14 @@ def browser_ui(request: Request) -> HTMLResponse:
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             headers=_retry_after_header(exc.retry_after_seconds),
         )
-    response = HTMLResponse(_render_workspace_html())
+    response = HTMLResponse(
+        _render_workspace_html(
+            _account_controls_html(
+                session.account_id,
+                sign_in_failed=request.query_params.get("sign_in") == "failed",
+            )
+        )
+    )
     attach_session_cookie(response, session)
     return response
 

@@ -47,7 +47,7 @@ from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from uuid import UUID
+from uuid import UUID, uuid4
 
 _log = logging.getLogger(__name__)
 
@@ -91,6 +91,20 @@ class StoredSession:
     csrf_token: str
     created_at: datetime
     last_used_at: datetime
+
+
+@dataclass(frozen=True)
+class StoredAccount:
+    """One signed-in account, as the page needs it (W7, ADR-0130).
+
+    Deliberately narrow. The row also holds the Google subject, which is the
+    account's key; it is not carried here because nothing outside this module
+    needs it, and a value that is never handed out cannot leak through a
+    template or a log line.
+    """
+
+    account_id: UUID
+    email: str
 
 
 def _digest(session_id: str) -> str:
@@ -211,6 +225,37 @@ class SessionStore:
         ON sessions (last_used_at);
     """
 
+    #: W7 (ADR-0130). The accounts table is a LATER schema change, so it is
+    #: made exactly the way the note on ``_SCHEMA`` says: in a guarded,
+    #: once-only ``schema_migrations`` block, the shape
+    #: ``feedback_store._backfill_f01_preview_rows`` uses. Adding it to
+    #: ``_SCHEMA`` would make the first open of an existing read-only database
+    #: raise; guarded, that open succeeds, sessions work as before, and only
+    #: sign-in is unavailable (``accounts_available`` is ``False``).
+    _MIGRATIONS_DDL = (
+        "CREATE TABLE IF NOT EXISTS schema_migrations ("
+        "name TEXT PRIMARY KEY, applied_at TEXT NOT NULL)"
+    )
+
+    #: Name of the W7 migration in ``schema_migrations``.
+    _ACCOUNTS_MIGRATION = "w7_accounts"
+
+    #: One row per Google identity, and nothing the owner's hard stop forbids:
+    #: no token, no password, no provider key. ``google_sub`` is the key Google
+    #: guarantees stable for an account (an email address can change hands);
+    #: ``email`` is kept for display only. ``account_id`` is the id every
+    #: per-account rail already keys on, minted here once per Google identity,
+    #: so a returning user gets the same id from any browser. The history table
+    #: and account deletion (W7's second pull request) key on this id.
+    _ACCOUNTS_DDL = (
+        "CREATE TABLE IF NOT EXISTS accounts ("
+        "account_id TEXT PRIMARY KEY, "
+        "google_sub TEXT NOT NULL UNIQUE, "
+        "email TEXT NOT NULL, "
+        "created_at TEXT NOT NULL, "
+        "last_sign_in_at TEXT NOT NULL)"
+    )
+
     def __init__(self, db_path: str) -> None:
         self._db_path = db_path
         self._lock = threading.RLock()
@@ -223,7 +268,53 @@ class SessionStore:
         self._conn.row_factory = sqlite3.Row
         with self._lock:
             self._conn.executescript(self._SCHEMA)
+        self._accounts_ready = self._migrate_accounts()
         _open_stores.add(self)
+
+    def _migrate_accounts(self) -> bool:
+        """Create the accounts table once; ``True`` if it is there to use.
+
+        Best-effort, for the reason on ``_MIGRATIONS_DDL``: an unwritable
+        volume must still boot and serve sessions. The table and its marker
+        land in one transaction, so a failure leaves neither and the next open
+        retries. A database whose marker is already recorded needs no write
+        at all, so a read-only volume that has run this once still reports the
+        table as usable; the writes sign-in makes then fail and it refuses
+        plainly (``upsert_google_account`` returns ``None``).
+        """
+        try:
+            with self._lock:
+                self._conn.execute(self._MIGRATIONS_DDL)
+                applied = self._conn.execute(
+                    "SELECT 1 FROM schema_migrations WHERE name = ?",
+                    (self._ACCOUNTS_MIGRATION,),
+                ).fetchone()
+                if applied is not None:
+                    return True
+                self._conn.execute("BEGIN IMMEDIATE")
+                try:
+                    self._conn.execute(self._ACCOUNTS_DDL)
+                    self._conn.execute(
+                        "INSERT INTO schema_migrations (name, applied_at) VALUES (?, ?)",
+                        (self._ACCOUNTS_MIGRATION, datetime.now(UTC).isoformat()),
+                    )
+                    self._conn.execute("COMMIT")
+                except BaseException:
+                    self._conn.execute("ROLLBACK")
+                    raise
+                return True
+        except sqlite3.Error as exc:
+            _log.warning(
+                "session_store: the accounts table could not be created, so sign-in "
+                "is unavailable until a restart on a writable volume: %s",
+                exc,
+            )
+            return False
+
+    @property
+    def accounts_available(self) -> bool:
+        """Whether the accounts table exists. ``False`` means sign-in refuses."""
+        return self._accounts_ready
 
     @classmethod
     def from_env(cls) -> SessionStore:
@@ -371,6 +462,77 @@ class SessionStore:
             except sqlite3.Error:
                 return 0
 
+    # -- accounts (W7, ADR-0130) -----------------------------------------------
+
+    def upsert_google_account(self, *, google_sub: str, email: str, now: datetime) -> UUID | None:
+        """Return the account id for ``google_sub``, creating the row if needed.
+
+        One transaction: a first sign-in inserts a row with a new id, a later
+        one updates ``email`` (it can change at Google) and
+        ``last_sign_in_at`` and keeps the id. ``None`` on any failure, which
+        the sign-in route reports as a plain "did not complete": nothing is
+        half-written, because the transaction rolls back.
+        """
+        if not self._accounts_ready:
+            return None
+        stamp = now.astimezone(UTC).isoformat()
+        with self._lock:
+            if self._closed:
+                return None
+            try:
+                self._conn.execute("BEGIN IMMEDIATE")
+                try:
+                    row = self._conn.execute(
+                        "SELECT account_id FROM accounts WHERE google_sub = ?", (google_sub,)
+                    ).fetchone()
+                    if row is None:
+                        account_id = uuid4()
+                        self._conn.execute(
+                            "INSERT INTO accounts "
+                            "(account_id, google_sub, email, created_at, last_sign_in_at) "
+                            "VALUES (?, ?, ?, ?, ?)",
+                            (str(account_id), google_sub, email, stamp, stamp),
+                        )
+                    else:
+                        account_id = UUID(row["account_id"])
+                        self._conn.execute(
+                            "UPDATE accounts SET email = ?, last_sign_in_at = ? "
+                            "WHERE google_sub = ?",
+                            (email, stamp, google_sub),
+                        )
+                    self._conn.execute("COMMIT")
+                except BaseException:
+                    self._conn.execute("ROLLBACK")
+                    raise
+            except (sqlite3.Error, ValueError) as exc:
+                self._warn("record a signed-in account", exc)
+                return None
+        return account_id
+
+    def account_for(self, account_id: UUID) -> StoredAccount | None:
+        """The signed-in account behind ``account_id``, or ``None``.
+
+        ``None`` for every anonymous session (its id is in no row), and on any
+        read failure: the page then shows the anonymous controls, which is the
+        closed direction.
+        """
+        if not self._accounts_ready:
+            return None
+        with self._lock:
+            if self._closed:
+                return None
+            try:
+                row = self._conn.execute(
+                    "SELECT account_id, email FROM accounts WHERE account_id = ?",
+                    (str(account_id),),
+                ).fetchone()
+            except sqlite3.Error as exc:
+                self._warn("read a signed-in account", exc)
+                return None
+        if row is None:
+            return None
+        return StoredAccount(account_id=account_id, email=row["email"])
+
     # -- lifecycle -----------------------------------------------------------
 
     def _warn(self, what: str, exc: BaseException) -> None:
@@ -436,6 +598,7 @@ __all__ = [
     "DEFAULT_DB_PATH",
     "SESSION_TOUCH_PERSIST_INTERVAL_S",
     "SessionStore",
+    "StoredAccount",
     "StoredSession",
     "configure",
     "get_store",

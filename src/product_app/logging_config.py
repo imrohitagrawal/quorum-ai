@@ -92,6 +92,12 @@ _REDACTION_PATTERNS: tuple[re.Pattern[str], ...] = (
     # ``AKIA...`` access-key IDs.
     re.compile(r"\bsk-[A-Za-z0-9_-]{10,}\b"),
     re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
+    # W7 (ADR-0130): the query of the Google sign-in callback, which carries
+    # the one-time authorization code and the ``state``. uvicorn's access log
+    # writes every request line, query included, through this same record
+    # factory. Keyed on the PATH, not on ``code=``: a bare ``code=`` pattern
+    # would also eat "error code=RATE_LIMITED" in unrelated lines.
+    re.compile(r"(?<=/v1/auth/google/callback\?)[^\s\"\\]+"),
 )
 
 _REDACTED = "[REDACTED]"
