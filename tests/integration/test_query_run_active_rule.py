@@ -128,6 +128,8 @@ def test_active_query_endpoint_returns_empty_after_completed_run() -> None:
         "model_slots": [],
         "cost_estimate": None,
         "initial_answers": [],
+        # W5 (ADR-0126): no active run has no shape.
+        "mode": None,
     }
     result_response = client.get(
         f"/v1/query-runs/{query_run_id}",
@@ -143,6 +145,7 @@ def test_active_query_endpoint_returns_empty_after_completed_run() -> None:
         "model_slots": [],
         "cost_estimate": None,
         "initial_answers": [],
+        "mode": None,
     }
 
 

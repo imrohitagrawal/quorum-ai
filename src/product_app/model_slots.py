@@ -17,6 +17,7 @@ from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from decimal import Decimal
 from threading import RLock
+from typing import Final, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -36,6 +37,10 @@ __all__ = [
     "EXPECTED_SLOT_COUNT",
     "MAX_SLOT_COUNT",
     "MIN_SLOT_COUNT",
+    "MODE_PANEL",
+    "MODE_QUICK",
+    "RunMode",
+    "QUICK_SLOT_MESSAGE",
     "default_model_slots",
     "all_models_phrase",
     "panel_size_word",
@@ -55,6 +60,16 @@ __all__ = [
 MIN_SLOT_COUNT = 2
 MAX_SLOT_COUNT = 4
 EXPECTED_SLOT_COUNT = 4
+
+#: W5, the quick-answer mode (CHG-012 D1; ADR-0126). A SEPARATE request shape,
+#: ``mode: "quick"``, that takes exactly one model; the panel range above is
+#: untouched. The two modes a request can name, and the quick refusal, which
+#: board row W5 does not pin (its needle is the composer copy the last W5
+#: pull request adds) but ``tests/integration/test_quick_mode_backend.py`` does.
+RunMode = Literal["panel", "quick"]
+MODE_PANEL: Final = "panel"
+MODE_QUICK: Final = "quick"
+QUICK_SLOT_MESSAGE = "A quick answer takes exactly one model."
 
 #: The word served prose and prompts use for the REQUESTED panel size (W4,
 #: ADR-0120 decision 5). A literal table, not ``str(n)``: at four every string
@@ -338,7 +353,7 @@ def default_moderator_overlap_slots() -> tuple[int, ...]:
     )
 
 
-def _validate_model_id_list(model_ids: list[str]) -> None:
+def _validate_model_id_list(model_ids: list[str], *, mode: str = MODE_PANEL) -> None:
     """Validate the model id strings; raise ``InvalidModelSlotError`` on any problem.
 
     W4: the list may hold ``MIN_SLOT_COUNT`` to ``MAX_SLOT_COUNT`` ids (two to
@@ -356,7 +371,15 @@ def _validate_model_id_list(model_ids: list[str]) -> None:
     "is the model id list well-formed?" check.
     """
     errors: list[ModelSlotError] = []
-    if not MIN_SLOT_COUNT <= len(model_ids) <= MAX_SLOT_COUNT:
+    # W5: the quick shape has its own count, checked INSTEAD of the panel range
+    # (never by widening it), so a one-model request without ``mode: "quick"``
+    # is still refused with the range message below.
+    if mode == MODE_QUICK:
+        if len(model_ids) != 1:
+            raise InvalidModelSlotError(
+                [ModelSlotError(slot_number=0, model_id=None, message=QUICK_SLOT_MESSAGE)]
+            )
+    elif not MIN_SLOT_COUNT <= len(model_ids) <= MAX_SLOT_COUNT:
         errors.append(
             ModelSlotError(
                 slot_number=0,
@@ -454,6 +477,7 @@ def validate_model_slots_with_search(
     model_ids: list[str],
     *,
     slot_search: list[bool] | None = None,
+    mode: str = MODE_PANEL,
 ) -> list[ModelSlot]:
     """Validate ``model_ids`` and a parallel ``slot_search`` list.
 
@@ -464,9 +488,10 @@ def validate_model_slots_with_search(
     element is a bool that overrides the per-slot default.
 
     Invalid lengths raise the same ``InvalidModelSlotError`` envelope the
-    existing request-validation tests assert on.
+    existing request-validation tests assert on. ``mode`` is the request's
+    shape (W5): ``"quick"`` takes exactly one model.
     """
-    _validate_model_id_list(model_ids)
+    _validate_model_id_list(model_ids, mode=mode)
     if slot_search is not None and len(slot_search) != len(model_ids):
         raise InvalidModelSlotError(
             [

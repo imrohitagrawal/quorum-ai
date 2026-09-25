@@ -89,8 +89,11 @@ from product_app.evaluation import (
 from product_app.feedback_store import ChargeOutcome
 from product_app.feedback_store import record_event as _record_feedback_event
 from product_app.model_slots import (
+    MODE_PANEL,
+    MODE_QUICK,
     InvalidModelSlotError,
     ModelSlot,
+    RunMode,
     openrouter_model_catalog_service,
     panel_size_word,
     validate_model_slots_with_search,
@@ -196,6 +199,9 @@ class StageBillingState(StrEnum):
     RECORDED = "recorded"
 
 
+#: W5: the reason a quick answer's debate and synthesis stages read SKIPPED.
+QUICK_SKIPPED_STAGE_DETAIL = "Not part of a quick answer."
+
 TERMINAL_STATUSES = frozenset(
     {
         QueryRunStatus.COMPLETED,
@@ -224,6 +230,8 @@ ALLOWED_TRANSITIONS: dict[QueryRunStatus, frozenset[QueryRunStatus]] = {
     QueryRunStatus.INITIAL_ANSWERS_RUNNING: frozenset(
         {
             QueryRunStatus.DEBATE_ROUND_1_RUNNING,
+            # W5 (ADR-0126): a quick answer completes after its one answer.
+            QueryRunStatus.COMPLETED,
             QueryRunStatus.PARTIAL,
             QueryRunStatus.FAILED,
             QueryRunStatus.TIMED_OUT,
@@ -282,7 +290,9 @@ class ResultProjection(BaseModel):
     debate_outputs: list[DebateOutput]
     final_synthesis: FinalSynthesis | None
     #: Verdict-ring numerator/denominator (aligned of total) for screen 05.
-    agreement: AgreementSummary
+    #: ``None`` on a quick answer (W5, ADR-0126): one answer has nothing to
+    #: agree with, and the owner decided no agreement figure is shown for it.
+    agreement: AgreementSummary | None
     #: One row per model, in slot order, for the "how positions moved" table.
     position_movements: list[PositionMovement]
 
@@ -350,6 +360,9 @@ class QueryRunResultResponse(BaseModel):
     provider_failure_notices: list[str]
     result: ResultProjection
     result_generated_at_utc: datetime
+    #: W5 (ADR-0126): the run's shape, echoed so a client can render a quick
+    #: answer as one, never infer it from ``len(model_slots)``.
+    mode: Literal["panel", "quick"] = "panel"
     #: ``True`` when any model answer was produced by Quorum's local
     #: simulation helpers (or the fallback search stub) rather than by a
     #: live model provider. The UI uses this flag to render a prominent
@@ -483,6 +496,10 @@ class QueryRun:
     #: pipeline can inject prior context into debate/synthesis prompts
     #: and the cost estimator can account for the extra tokens.
     context: dict[str, Any] | None = None
+    #: W5: the request's shape, ``"panel"`` or ``"quick"`` (ADR-0126). Decided
+    #: once at create and never re-derived from the slot count: a panel that
+    #: lost answers is still a panel.
+    mode: RunMode = MODE_PANEL
     #: E2: how far each billable stage got in the usage-recording handshake.
     #: Read by ``_actual_cost`` to tell an honestly-empty usage list (nothing
     #: was billable) from a silently-empty one (billed, never recorded). Both
@@ -581,6 +598,7 @@ class InMemoryQueryRunRepository:
         model_slots: list[ModelSlot],
         cost_estimate: CostEstimate,
         context: dict[str, Any] | None = None,
+        mode: RunMode = MODE_PANEL,
     ) -> QueryRun:
         with self._lock:
             self._purge_expired_locked()
@@ -601,6 +619,7 @@ class InMemoryQueryRunRepository:
                 cost_estimate=cost_estimate,
                 progress=_initial_progress(),
                 context=context,
+                mode=mode,
             )
             self._query_runs[query_run_id] = query_run
             return query_run
@@ -693,10 +712,12 @@ class InMemoryQueryRunRepository:
         * ``updated_at`` drives the served ``elapsed_time_ms``, which must
           stop at the terminal event, not creep on with the doomed run.
 
-        ``allow_terminal=True`` is the narrow opt-in for the two callers that
+        ``allow_terminal=True`` is the narrow opt-in for the callers that
         legitimately annotate a run they THEMSELVES just made terminal:
-        ``cancel_query_run`` (stage → SKIPPED) and ``_degrade_run_for_deadline``
-        (stage → FAILED, plus ``_mark_remaining_stages`` behind it).
+        ``cancel_query_run`` (stage → SKIPPED), ``_degrade_run_for_deadline``
+        (stage → FAILED, plus ``_mark_remaining_stages`` behind it), and W5's
+        ``_mark_after_terminal`` (a failed quick answer's downstream stages →
+        SKIPPED with the quick reason; ADR-0126).
 
         The refusal is a NO-OP, not an exception: the eleven pipeline call
         sites are plain forward-progress statements that do not expect to
@@ -1188,13 +1209,13 @@ def _execute_query_run(query_run_id: UUID, account_id: UUID) -> None:
             stage_name="initial_answers",
             stage_state=StageState.FAILED,
             detail=("Live execution is enabled but no server-side key is configured."),
-            failed_steps=["initial_answers", "debate_round_1", "debate_round_2", "synthesis"],
-            missing_steps=["initial_answers", "debate_round_1", "debate_round_2", "synthesis"],
+            failed_steps=["initial_answers", *_downstream_stages(query_run)],
+            missing_steps=["initial_answers", *_downstream_stages(query_run)],
         )
         # Only stamp the skipped stages if OUR terminal write actually
         # landed; a cancel that won the race owns the run's story instead.
         if halted.status is QueryRunStatus.FAILED:
-            _mark_remaining_stages(query_run_id, ["debate_round_1", "debate_round_2", "synthesis"])
+            _mark_after_terminal(query_run_id, quick=query_run.mode == MODE_QUICK)
         return
     query_run_repository.update_status(
         query_run_id,
@@ -1203,8 +1224,15 @@ def _execute_query_run(query_run_id: UUID, account_id: UUID) -> None:
         stage_state=StageState.RUNNING,
         # W4: the live stage strip shows this beside "N/M answers"; it names the
         # REQUESTED panel size (review found it still said "four" at N=2).
+        # W5: ``panel_size_word`` covers two to four only, and a quick run has
+        # one model, so its detail is its own sentence.
         detail=(
-            f"Running {panel_size_word(len(query_run.model_slots)).lower()} initial model calls."
+            "Running one model call."
+            if query_run.mode == MODE_QUICK
+            else (
+                f"Running {panel_size_word(len(query_run.model_slots)).lower()} "
+                "initial model calls."
+            )
         ),
         mark_started=True,
     )
@@ -1289,15 +1317,17 @@ def _execute_query_run(query_run_id: UUID, account_id: UUID) -> None:
             return
         query_run_repository.record_initial_answer(query_run_id, answer)
 
+    quick = query_run.mode == MODE_QUICK
+    downstream = _downstream_stages(query_run)
     if deadline_breached:
         # ``and``-gate: when the cancel won the race the run is CANCELLED and
         # must not receive deadline stage attribution either.
         if _degrade_for_deadline(
             stage_name="initial_answers",
             failed_steps=["initial_answers"],
-            missing_steps=["debate_round_1", "debate_round_2", "synthesis"],
+            missing_steps=downstream,
         ):
-            _mark_remaining_stages(query_run_id, ["debate_round_1", "debate_round_2", "synthesis"])
+            _mark_after_terminal(query_run_id, quick=quick)
         return
 
     refreshed = query_run_repository.get(query_run_id)
@@ -1310,13 +1340,35 @@ def _execute_query_run(query_run_id: UUID, account_id: UUID) -> None:
             stage_name="initial_answers",
             stage_state=StageState.FAILED,
             detail="No usable initial model answers completed.",
-            failed_steps=["initial_answers", "debate_round_1", "debate_round_2", "synthesis"],
-            missing_steps=["debate_round_1", "debate_round_2", "synthesis"],
+            failed_steps=["initial_answers", *downstream],
+            missing_steps=downstream,
         )
         # Only stamp the skipped stages if OUR terminal write actually
         # landed; a cancel that won the race owns the run's story instead.
         if halted.status is QueryRunStatus.PARTIAL:
-            _mark_remaining_stages(query_run_id, ["debate_round_1", "debate_round_2", "synthesis"])
+            _mark_after_terminal(query_run_id, quick=quick)
+        return
+    if query_run.mode == MODE_QUICK:
+        # W5 (ADR-0126): a quick answer ends here. Debate and synthesis are
+        # not part of it, so they are stamped SKIPPED with that reason BEFORE
+        # the terminal write (a terminal run refuses stage writes), and no
+        # debate or synthesis service is called: ``panel_size_word`` and
+        # ``all_models_phrase`` in their prompts are undefined at one model.
+        for stage_name in ("debate_round_1", "debate_round_2", "synthesis"):
+            query_run_repository.update_status(
+                query_run_id,
+                stage_name=stage_name,
+                stage_state=StageState.SKIPPED,
+                detail=QUICK_SKIPPED_STAGE_DETAIL,
+            )
+        query_run_repository.update_status(
+            query_run_id,
+            status_value=QueryRunStatus.COMPLETED,
+            stage_name="initial_answers",
+            stage_state=StageState.COMPLETED,
+            detail="Model answer collected.",
+        )
+        _log_estimate_accuracy(query_run_id)
         return
     query_run_repository.update_status(
         query_run_id,
@@ -1712,8 +1764,12 @@ def _persist_terminal_run(query_run_id: UUID) -> None:
             live_count=response.live_count,
             local_count=response.local_count,
             material_claim_count=response.material_claim_count,
-            agreement_aligned=agreement.aligned,
-            agreement_total=agreement.total,
+            # W5: a quick answer serves no agreement (``None``); the columns
+            # are NOT NULL, so it is stored as 0 of 0, "nothing measured".
+            # Nothing in ``src/`` reads these columns back; the ``mode``
+            # column the owner agreed is W5's second pull request (ADR-0126).
+            agreement_aligned=agreement.aligned if agreement is not None else 0,
+            agreement_total=agreement.total if agreement is not None else 0,
             citation_ratio=citation_ratio,
             cost_source=response.cost_source,
             estimated_cost_usd=query_run.cost_estimate.estimated_cost_usd,
@@ -1727,7 +1783,11 @@ def _persist_terminal_run(query_run_id: UUID) -> None:
         # Ordered AFTER the metrics row: ``update_evaluation`` is an UPDATE
         # that does not check ``rowcount``, so attaching an evaluation to a
         # row that does not exist yet would be a silent no-op.
-        _persist_run_evaluation(query_run=query_run, agreement=agreement)
+        # W5 (ADR-0126): a quick run persists no evaluation until its second
+        # pull request adds the quick trust shape and the run store's ``mode``
+        # column; the panel composite would store "1 of 1" as agreement.
+        if query_run.mode != MODE_QUICK and agreement is not None:
+            _persist_run_evaluation(query_run=query_run, agreement=agreement)
     except Exception as exc:  # noqa: BLE001 — run-history persistence is best-effort
         logger.debug("run_history persistence failed: %s", exc)
 
@@ -1842,6 +1902,7 @@ def _validated_model_slots(
     model_ids: list[str],
     *,
     slot_search: list[bool] | None = None,
+    mode: str = MODE_PANEL,
 ) -> list[ModelSlot]:
     # L2: thread the optional per-slot ``search`` flag from the request
     # body through validation. When ``slot_search`` is None, every slot
@@ -1854,6 +1915,7 @@ def _validated_model_slots(
         return validate_model_slots_with_search(
             model_ids,
             slot_search=slot_search,
+            mode=mode,
         )
     except InvalidModelSlotError as exc:
         raise HTTPException(
@@ -2659,8 +2721,13 @@ def _result_response(query_run: QueryRun) -> QueryRunResultResponse:
         QueryRunStatus.TIMED_OUT,
     }:
         partial_failure_notice = (
-            "This run finished without every planned stage. Review failed and missing steps "
-            "before relying on the synthesis."
+            # W5 (ADR-0126): a quick answer has no synthesis to rely on.
+            "This quick answer did not complete. Review the failed step before relying on it."
+            if query_run.mode == MODE_QUICK
+            else (
+                "This run finished without every planned stage. Review failed and missing steps "
+                "before relying on the synthesis."
+            )
         )
     # #247: both of these spelled the pair out inline, twice, and
     # ``providers.NOT_INVOKED_PATHS`` then made a third copy — while its own
@@ -2700,7 +2767,18 @@ def _result_response(query_run: QueryRun) -> QueryRunResultResponse:
         debate_outputs=debate_outputs,
         final_synthesis=final_synthesis,
     )
+    # The evaluation is computed for EVERY run, here, before the cost below:
+    # this is where a configured judge first dispatches, so its dollar is
+    # inside the figure ``_actual_cost`` prices and the ledger books.
     evaluation = _evaluation_projection(query_run, agreement=agreement)
+    # W5 (ADR-0126): a quick answer SERVES no evaluation yet. Its trust shape
+    # (the judge's three-level verdict with reasons and evidence, the owner's
+    # 2026-09-24 decision) is W5's second pull request; until then the panel
+    # composite would score one answer's "1 of 1" agreement as agreement.
+    # Computed and withheld, never skipped: skipping it moved the judge's
+    # first dispatch after the booking (review round 1 of W5's first PR).
+    if query_run.mode == MODE_QUICK:
+        evaluation = None
 
     # --- the COST, read LAST, from its own atomic snapshot -------------------
     actual_cost_usd, actual_breakdown, cost_source = _actual_cost(query_run)
@@ -2720,10 +2798,13 @@ def _result_response(query_run: QueryRun) -> QueryRunResultResponse:
             model_answers=initial_answers,
             debate_outputs=debate_outputs,
             final_synthesis=final_synthesis,
-            agreement=agreement,
-            position_movements=position_movements,
+            # W5: a quick answer serves no agreement figure and no position
+            # table (owner, 2026-09-24); a panel serves both, unchanged.
+            agreement=None if query_run.mode == MODE_QUICK else agreement,
+            position_movements=[] if query_run.mode == MODE_QUICK else position_movements,
         ),
         result_generated_at_utc=datetime.now(UTC),
+        mode=query_run.mode,
         demo_mode=demo_mode,
         live_count=live_count,
         local_count=local_count,
@@ -2994,6 +3075,7 @@ def _actual_cost(
             synthesis_cost=synthesis_cost,
             judge=judge_line,
             critique_by_model=critique_lines,
+            quick=query_run.mode == MODE_QUICK,
         )
         return breakdown.total, breakdown, "measured"
     except (InvalidOperation, ArithmeticError, ValueError):
@@ -3030,6 +3112,32 @@ def _running_stage_name(stages: list[QueryRunStageProgress]) -> str:
         if stage.state is StageState.RUNNING:
             return stage.stage
     return "estimate"
+
+
+def _downstream_stages(query_run: QueryRun) -> list[str]:
+    """The stages after the initial answers that a failure leaves failed or
+    missing. W5 (ADR-0126): none on a quick answer, whose debate and synthesis
+    were never part of it (they are stamped with the quick reason instead)."""
+    if query_run.mode == MODE_QUICK:
+        return []
+    return ["debate_round_1", "debate_round_2", "synthesis"]
+
+
+def _mark_after_terminal(query_run_id: UUID, *, quick: bool) -> None:
+    """Stamp the three downstream stages after a failure the pipeline itself
+    just made terminal: the panel's "an earlier stage failed" reason, or, on a
+    quick answer, the quick reason (they were never part of it; ADR-0126)."""
+    if not quick:
+        _mark_remaining_stages(query_run_id, ["debate_round_1", "debate_round_2", "synthesis"])
+        return
+    for stage_name in ("debate_round_1", "debate_round_2", "synthesis"):
+        query_run_repository.update_status(
+            query_run_id,
+            stage_name=stage_name,
+            stage_state=StageState.SKIPPED,
+            detail=QUICK_SKIPPED_STAGE_DETAIL,
+            allow_terminal=True,
+        )
 
 
 def _mark_remaining_stages(query_run_id: UUID, stage_names: list[str]) -> None:

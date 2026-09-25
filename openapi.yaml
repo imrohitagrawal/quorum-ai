@@ -313,6 +313,14 @@ components:
             $ref: '#/components/schemas/InitialModelAnswer'
           type: array
           title: Initial Answers
+        mode:
+          anyOf:
+          - type: string
+            enum:
+            - panel
+            - quick
+          - type: 'null'
+          title: Mode
       type: object
       required:
       - query_run_id
@@ -1074,6 +1082,13 @@ components:
             type: object
           - type: 'null'
           title: Context
+        mode:
+          type: string
+          enum:
+          - panel
+          - quick
+          title: Mode
+          default: panel
         safety_acknowledgements:
           items:
             $ref: '#/components/schemas/SafetyAcknowledgement'
@@ -1113,6 +1128,13 @@ components:
             $ref: '#/components/schemas/InitialModelAnswer'
           type: array
           title: Initial Answers
+        mode:
+          type: string
+          enum:
+          - panel
+          - quick
+          title: Mode
+          default: panel
       type: object
       required:
       - query_run_id
@@ -1152,6 +1174,13 @@ components:
             type: object
           - type: 'null'
           title: Context
+        mode:
+          type: string
+          enum:
+          - panel
+          - quick
+          title: Mode
+          default: panel
       type: object
       required:
       - query_text
@@ -1333,6 +1362,13 @@ components:
           type: string
           format: date-time
           title: Result Generated At Utc
+        mode:
+          type: string
+          enum:
+          - panel
+          - quick
+          title: Mode
+          default: panel
         demo_mode:
           type: boolean
           title: Demo Mode
@@ -1445,6 +1481,13 @@ components:
             type: object
           - type: 'null'
           title: Context
+        mode:
+          type: string
+          enum:
+          - panel
+          - quick
+          title: Mode
+          default: panel
       type: object
       required:
       - query_text
@@ -1478,7 +1521,9 @@ components:
           - $ref: '#/components/schemas/FinalSynthesis'
           - type: 'null'
         agreement:
-          $ref: '#/components/schemas/AgreementSummary'
+          anyOf:
+          - $ref: '#/components/schemas/AgreementSummary'
+          - type: 'null'
         position_movements:
           items:
             $ref: '#/components/schemas/PositionMovement'

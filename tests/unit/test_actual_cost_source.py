@@ -140,6 +140,9 @@ def _run(
     slots = [ModelSlot(slot_number=i + 1, model_id=mid) for i, mid in enumerate(ids)]
     return SimpleNamespace(
         query_run_id=uuid4(),
+        # W5 (ADR-0126): ``_actual_cost`` reads the run's shape to pick the
+        # receipt's rows, so a stand-in carries it. A panel here.
+        mode="panel",
         cost_estimate=estimate,
         # #290 / ADR-0093 decision 3. ``BillingSnapshot`` now copies which
         # rounds ran the PEER shape, under the same lock as the usage list, so

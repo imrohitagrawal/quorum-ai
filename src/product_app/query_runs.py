@@ -14,7 +14,7 @@ from __future__ import annotations
 import logging
 import time as _time_module
 from threading import BoundedSemaphore, RLock, Thread
-from typing import Annotated, Self
+from typing import Annotated, Literal, Self
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -241,7 +241,7 @@ _CONTEXT_MAX_LENGTHS = {
 }
 
 
-def _check_context(ctx: dict[str, str | None] | None) -> None:
+def _check_context(ctx: dict[str, str | None] | None, mode: str = "panel") -> None:
     """Validate a ``context`` mapping, or raise ``ValueError``.
 
     A module-level function rather than a base-class method because the
@@ -266,6 +266,13 @@ def _check_context(ctx: dict[str, str | None] | None) -> None:
         limit = _CONTEXT_MAX_LENGTHS[key]
         if len(value) > limit:
             raise ValueError(f"context.{key} may be at most {limit} characters; got {len(value)}")
+    # W5 (ADR-0126): a quick answer is one model call, and the follow-up
+    # context is priced into and sent to debate and synthesis only, which a
+    # quick answer does not run. Accepting it would take the user's context
+    # and silently use none of it, so it is refused, here, where the probe
+    # and create share one implementation (issue #155).
+    if mode == "quick" and any((value or "").strip() for value in ctx.values()):
+        raise ValueError("A quick answer takes no follow-up context.")
 
 
 class _QueryRunRequestBase(BaseModel):
@@ -302,10 +309,17 @@ class _QueryRunRequestBase(BaseModel):
     # ``providers.py`` guards on truthiness), so rejecting it would break a
     # working client to fix a different bug (adversarial review, WP-G2).
     context: dict[str, str | None] | None = Field(default=None)
+    # W5 (CHG-012 D1, ADR-0126): the request's SHAPE. ``"panel"`` (the
+    # default, and everything a client sent before W5) is two to four models,
+    # two debate rounds and a synthesis; ``"quick"`` is one model's sourced
+    # answer, checked by the judge, with no debate and no synthesis. On the
+    # shared base so ``/estimate`` and create price the same shape; a closed
+    # set so a typo is a 422, never a silently priced panel.
+    mode: Literal["panel", "quick"] = "panel"
 
     @model_validator(mode="after")
     def _validate_context(self) -> Self:
-        _check_context(self.context)
+        _check_context(self.context, self.mode)
         return self
 
 
@@ -333,6 +347,8 @@ class QueryRunCreateResponse(BaseModel):
     cost_estimate: CostEstimate
     progress: QueryRunProgress
     initial_answers: list[InitialModelAnswer]
+    #: W5 (ADR-0126): the shape this run was created with.
+    mode: Literal["panel", "quick"] = "panel"
 
 
 class ActiveQueryRunResponse(BaseModel):
@@ -343,6 +359,9 @@ class ActiveQueryRunResponse(BaseModel):
     model_slots: list[ModelSlot]
     cost_estimate: CostEstimate | None
     initial_answers: list[InitialModelAnswer]
+    #: W5 (ADR-0126): the active run's shape, so a resuming client renders a
+    #: quick answer as one; ``None`` when there is no active run.
+    mode: Literal["panel", "quick"] | None = None
 
 
 class QueryRunWarningsRequest(BaseModel):
@@ -370,12 +389,15 @@ class QueryRunWarningsRequest(BaseModel):
     #: Optional and defaulted, so a pre-#155 client that omits it is
     #: unaffected — it simply gets the query-text-only answer it got before.
     context: dict[str, str | None] | None = Field(default=None)
+    #: W5 (ADR-0126): the request's shape, so the probe refuses exactly the
+    #: context create refuses for it (issue #155: probe and create agree).
+    mode: Literal["panel", "quick"] = "panel"
 
     @model_validator(mode="after")
     def _validate_context(self) -> Self:
         # The SAME callable the create route validates with, not a copy of
         # its rules — a copy is what drifts.
-        _check_context(self.context)
+        _check_context(self.context, self.mode)
         return self
 
 
@@ -567,6 +589,7 @@ def estimate_query_run(
     model_slots = _validated_model_slots(
         payload.model_slots,
         slot_search=payload.slot_search,
+        mode=payload.mode,
     )
     estimate = cost_estimation_service.estimate(
         query_text=payload.query_text,
@@ -580,6 +603,7 @@ def estimate_query_run(
         # what silently returned ``None`` for as long as the estimate body had
         # no such field, quoting a follow-up at the price of a fresh query.
         context=payload.context,
+        mode=payload.mode,
     )
     cost_estimation_service.record_guardrail_event(
         account_id=session.account_id,
@@ -616,6 +640,7 @@ def create_query_run(
     model_slots = _validated_model_slots(
         payload.model_slots,
         slot_search=payload.slot_search,
+        mode=payload.mode,
     )
     # Issue #155: ``context`` reaches provider prompts, so it is scanned too.
     required_warnings = safety_warning_policy.required_warnings_for_query(
@@ -647,6 +672,7 @@ def create_query_run(
         model_slots=model_slots,
         account_id=session.account_id,
         context=payload.context,
+        mode=payload.mode,
     )
     cost_decision = cost_estimation_service.evaluate_confirmation(
         estimate=cost_estimate,
@@ -655,6 +681,7 @@ def create_query_run(
         # with each slot's search flag) and the shape this estimate priced.
         model_slots=model_slots,
         account_id=session.account_id,
+        mode=payload.mode,
     )
     if cost_estimate.threshold_action is CostThresholdAction.BLOCK:
         cost_estimation_service.record_guardrail_event(
@@ -783,6 +810,7 @@ def _start_reserved_query_run(
             model_slots=model_slots,
             cost_estimate=cost_estimate,
             context=payload.context,
+            mode=payload.mode,
         )
     except ActiveQueryRunExistsError as exc:
         raise HTTPException(
@@ -936,6 +964,7 @@ def _create_response_for(query_run: QueryRun) -> QueryRunCreateResponse:
         cost_estimate=query_run.cost_estimate,
         progress=_progress_model(query_run),
         initial_answers=query_run.initial_answers,
+        mode=query_run.mode,
     )
 
 
@@ -990,6 +1019,7 @@ def get_active_query_run(
         model_slots=query_run.model_slots,
         cost_estimate=query_run.cost_estimate,
         initial_answers=query_run.initial_answers,
+        mode=query_run.mode,
     )
 
 

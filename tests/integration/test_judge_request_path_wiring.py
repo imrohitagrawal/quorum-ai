@@ -472,7 +472,7 @@ def _live_terminal_run(account_id: Any) -> Any:
     return _measured_run(account_id)
 
 
-def _measured_run(account_id: Any) -> Any:
+def _measured_run(account_id: Any, *, mode: str = "panel") -> Any:
     """A terminal run whose every entered stage has captured usage.
 
     ``_reconcile_run_billing`` books nothing unless ``cost_source`` is
@@ -497,16 +497,19 @@ def _measured_run(account_id: Any) -> Any:
     )
     from product_app.query_runs import QueryRunStatus
 
+    # W5 (ADR-0126): a quick run is the same shape with one model.
+    model_ids = list(DEFAULT_MODEL_IDS)[:1] if mode == "quick" else list(DEFAULT_MODEL_IDS)
     run = query_run_repository.create(
         account_id=account_id,
         query_text=QUERY_TEXT,
-        model_slots=validate_model_slots_with_search(list(DEFAULT_MODEL_IDS)),
+        model_slots=validate_model_slots_with_search(model_ids, mode=mode),
         cost_estimate=CostEstimate(
             estimated_cost_usd=Decimal("0.0200"),
             threshold_action=CostThresholdAction.ALLOW,
             confirmation_token=None,
             reasons=[],
         ),
+        mode=mode,  # type: ignore[arg-type]
     )
     cost_estimation_service.try_record_run_charge(
         account_id=account_id,
@@ -516,7 +519,7 @@ def _measured_run(account_id: Any) -> Any:
         confirmed=False,
         global_ceiling_reached=False,
     )
-    for slot, model_id in enumerate(DEFAULT_MODEL_IDS, 1):
+    for slot, model_id in enumerate(model_ids, 1):
         query_run_repository.record_initial_answer(
             run.query_run_id,
             InitialModelAnswer(
@@ -545,8 +548,9 @@ def _measured_run(account_id: Any) -> Any:
     return run
 
 
+@pytest.mark.parametrize("mode", ["panel", "quick"])
 def test_the_judge_dollar_is_inside_the_figure_the_ledger_books(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, mode: str
 ) -> None:
     """The money half of the ordering claim, on a genuinely ``measured`` run.
 
@@ -568,6 +572,14 @@ def test_the_judge_dollar_is_inside_the_figure_the_ledger_books(
     * In ``_evaluation_projection``, call ``evaluate_run`` without a judge so
       the first dispatch moves after reconciliation. Same failure.
     Either way the judge-ON total collapses onto the judge-OFF control.
+
+    W5 (ADR-0126): the ``quick`` case is the same claim for a quick answer,
+    which serves no evaluation. RED IF the serving path skips the evaluation
+    on a quick run. In W5's first draft the judge then first dispatched at
+    persistence, after the booking, and the ledger missed its dollar (review
+    round 1 measured it); with persistence now skipping a quick evaluation,
+    the same mutation stops the judge dispatching at all, and this test fails
+    at ``bool(judge_calls) is enable``.
     """
     from product_app.feedback_store import get_store
 
@@ -589,7 +601,7 @@ def test_the_judge_dollar_is_inside_the_figure_the_ledger_books(
             judge_calls = _judge_seam(mp, usage=usage)
             observed = _reconcile_spy(mp, judge_calls)
             account_id = uuid4()
-            run = _measured_run(account_id)
+            run = _measured_run(account_id, mode=mode)
             with run_history_store.configure_for_tests():
                 qr._persist_terminal_run(run.query_run_id)
             assert observed.get("spy_completed"), f"spy did not complete: {observed}"
