@@ -95,3 +95,21 @@ def test_a_session_gone_between_lookup_and_resume_gets_a_new_one(
 
     assert page.status_code == 200
     assert page.cookies.get(COOKIE) not in (None, first)
+
+
+def test_a_page_load_still_extends_the_sessions_life() -> None:
+    """The rotating resume stamped ``last_used_at``; the non-rotating one
+    must too, or a visitor who only reloads the page is timed out while
+    using it. RED IF the ``/ui`` resume stops touching the session."""
+    from datetime import UTC, datetime, timedelta
+
+    client = TestClient(app)
+    client.get("/ui")
+    session = session_repository.get(str(client.cookies.get(COOKIE)))
+    assert session is not None
+    an_hour_ago = datetime.now(UTC) - timedelta(hours=1)
+    session.last_used_at = an_hour_ago
+
+    client.get("/ui")
+
+    assert session.last_used_at > an_hour_ago + timedelta(minutes=59)

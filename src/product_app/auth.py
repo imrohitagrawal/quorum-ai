@@ -792,7 +792,8 @@ def issue_or_resume_session(
     ``X-Account-Id`` header is *not* consulted here; that path lives in
     ``require_session`` and is used by the legacy X-Account-Id tests.
 
-    On a successful resume, the CSRF token is rotated. The rotation
+    On a successful resume, the CSRF token is rotated, unless
+    ``rotate_csrf=False`` (below). The rotation
     narrows the window in which a leaked CSRF token can be reused:
     a token issued for the previous ``/v1/session`` call is no
     longer valid after the next call. The ``session_id`` itself is
@@ -800,7 +801,7 @@ def issue_or_resume_session(
     it would force every active client to drop their cookie.
 
     ``client_ip`` is passed straight through to :func:`issue_session` on
-    every path that actually mints (both below) — a RESUME never touches
+    every path that actually mints (all three below) — a RESUME never touches
     it, since resuming never consumes a mint-cap slot (issue #100 §2.3).
 
     ``rotate_csrf=False`` resumes WITHOUT a new token. ``/ui`` passes it:
