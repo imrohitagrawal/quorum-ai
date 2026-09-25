@@ -55,3 +55,16 @@ def test_the_code_challenge_is_rfc_7636_s256() -> None:
     assert google_signin.code_challenge_for(verifier) == (
         "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
     )
+
+
+def test_an_expired_entry_is_purged_when_another_session_starts() -> None:
+    """RED-IF: begin() stops purging expired entries (the table would keep
+    every abandoned sign-in until the size bound evicts it)."""
+    from datetime import timedelta
+
+    table = PendingSignIns()
+    started = datetime.now(UTC)
+    table.begin("abandoned", now=started)
+    table.begin("fresh", now=started + timedelta(minutes=10, seconds=1))
+    assert len(table) == 1
+    assert table.take("fresh", now=started + timedelta(minutes=10, seconds=2)) is not None

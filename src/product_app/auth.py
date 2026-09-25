@@ -46,7 +46,7 @@ from threading import RLock
 from typing import Annotated
 from uuid import UUID, uuid4
 
-from fastapi import Depends, HTTPException, Request, status
+from fastapi import Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel
 
 from product_app import session_store
@@ -592,17 +592,14 @@ def issue_signed_in_session(previous_session_id: str, *, account_id: UUID) -> Se
     )
 
 
-def clear_session_cookie(response: object) -> None:
+def clear_session_cookie(response: Response) -> None:
     """Tell the browser to drop the session cookie (sign-out, W7).
 
     The same name, path and flags :func:`attach_session_cookie` sets, or the
     browser keeps the original: a cookie is only replaced by one that matches
     its name, domain and path.
     """
-    delete_cookie = getattr(response, "delete_cookie", None)
-    if delete_cookie is None:
-        return
-    delete_cookie(
+    response.delete_cookie(
         key=get_session_cookie_name(),
         path="/",
         secure=settings.session_cookie_secure,

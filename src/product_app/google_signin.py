@@ -148,10 +148,9 @@ def _redirect_uri_is_usable(uri: str) -> bool:
     """
     if not is_credential_safe(uri):
         return False
-    try:
-        parts = urlsplit(uri)
-    except ValueError:
-        return False
+    # ``is_credential_safe`` has already parsed this URL and returns False
+    # (never raises) on one ``urlsplit`` rejects, so this parse cannot raise.
+    parts = urlsplit(uri)
     return parts.path == CALLBACK_PATH and not parts.query and not parts.fragment
 
 

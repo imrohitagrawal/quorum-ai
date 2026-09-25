@@ -873,3 +873,178 @@ def test_with_no_accounts_table_the_callback_fails_plainly(
     assert response.headers["location"] == "/ui?sign_in=failed"
     assert COOKIE not in response.cookies
     assert before is None or auth.session_repository.get(before) is not None
+
+
+# --- the remaining refusal paths ---------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("raw", "reason"),
+    [
+        (b"<html>not json</html>", "token_response_unreadable"),
+        (b"\xff\xfe", "token_response_unreadable"),
+        (b'{"access_token": "x"}', "token_response_has_no_id_token"),
+        (b'["id_token"]', "token_response_has_no_id_token"),
+    ],
+)
+def test_a_token_response_without_a_readable_id_token_is_refused(
+    sign_in: SignIn, raw: bytes, reason: str
+) -> None:
+    """RED-IF: an unparseable or id-token-less 200 raises something other than
+    SignInFailed (the callback would 500) or is accepted."""
+    sign_in.stub.raw_body = raw
+    with pytest.raises(google_signin.SignInFailed) as caught:
+        google_signin.exchange_code("c", "v")
+    assert caught.value.reason == reason
+
+
+def test_an_unreachable_token_endpoint_is_a_plain_failure(
+    sign_in: SignIn, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """RED-IF: a connection error escapes the worker as an exception (the
+    callback would 500) instead of a refusal."""
+    import socket
+
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        closed_port = probe.getsockname()[1]
+    monkeypatch.setattr(
+        google_signin, "GOOGLE_TOKEN_ENDPOINT", f"http://127.0.0.1:{closed_port}/token"
+    )
+    with pytest.raises(google_signin.SignInFailed) as caught:
+        google_signin.exchange_code("c", "v")
+    assert caught.value.reason == "token_exchange_unreachable"
+
+
+def test_a_callback_with_no_session_cookie_fails_plainly(sign_in: SignIn) -> None:
+    """RED-IF: a callback without a session reaches the pending table or
+    Google."""
+    response = _callback(TestClient(app), code="c", state="s")
+    assert response.headers["location"] == "/ui?sign_in=failed"
+    assert sign_in.stub.requests == []
+
+
+def test_the_legacy_test_header_cannot_start_a_sign_in(sign_in: SignIn) -> None:
+    """RED-IF: a request with no server-side session can start a sign-in."""
+    response = TestClient(app).post("/v1/auth/google/start", headers={"X-Account-Id": str(uuid4())})
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "SIGN_IN_NEEDS_A_BROWSER_SESSION"
+    assert len(google_signin.pending_sign_ins) == 0
+
+
+def test_the_startup_message_says_when_sign_in_is_on(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """RED-IF: a fully configured deployment says nothing at startup."""
+    _enable(monkeypatch)
+    caplog.set_level(logging.INFO)
+    assert google_signin.log_sign_in_configuration() is google_signin.SignInState.ON
+    assert "google sign-in is on" in caplog.text
+    assert CLIENT_SECRET not in caplog.text
+
+
+def test_with_no_session_store_nobody_is_shown_as_signed_in() -> None:
+    """RED-IF: signed_in_account raises when the durable store is absent."""
+    saved = session_store.get_store()
+    session_store.configure(None)
+    try:
+        assert google_signin.signed_in_account(uuid4()) is None
+    finally:
+        session_store.configure(saved)
+
+
+def _now() -> Any:
+    from datetime import UTC, datetime
+
+    return datetime.now(UTC)
+
+
+def test_a_closed_store_records_and_reads_no_account(tmp_path: Path) -> None:
+    """RED-IF: a closed store's account methods touch the closed connection."""
+    store = SessionStore(str(tmp_path / "s.sqlite3"))
+    account_id = store.upsert_google_account(google_sub="s", email="e@x.com", now=_now())
+    assert account_id is not None and store.account_for(account_id) is not None
+    store.close()
+    assert store.upsert_google_account(google_sub="s", email="e@x.com", now=_now()) is None
+    assert store.account_for(account_id) is None
+
+
+def test_a_store_without_the_table_reads_no_account(tmp_path: Path) -> None:
+    """RED-IF: account_for queries a table the migration could not create."""
+    store = SessionStore(str(tmp_path / "s.sqlite3"))
+    try:
+        account_id = store.upsert_google_account(google_sub="s", email="e@x.com", now=_now())
+        assert account_id is not None
+        store._accounts_ready = False
+        assert store.account_for(account_id) is None
+    finally:
+        store.close()
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root ignores file permissions")
+def test_a_read_only_volume_after_the_migration_refuses_the_write_and_rolls_back(
+    tmp_path: Path,
+) -> None:
+    """The production shape of an unwritable volume once the migration has run:
+    the table is there, so ``accounts_available()`` is True, and the INSERT is
+    what fails. RED-IF: the failed write escapes as an exception, or leaves a
+    transaction open."""
+    path = tmp_path / "sessions.sqlite3"
+    SessionStore(str(path)).close()  # migrate on a writable volume first
+    path.chmod(stat.S_IRUSR)
+    tmp_path.chmod(stat.S_IRUSR | stat.S_IXUSR)
+    try:
+        store = SessionStore(str(path))
+        try:
+            assert store.accounts_available() is True
+            assert store.upsert_google_account(google_sub="s", email="e@x.com", now=_now()) is None
+            assert store._conn.in_transaction is False
+        finally:
+            store.close()
+    finally:
+        tmp_path.chmod(stat.S_IRWXU)
+        path.chmod(stat.S_IRUSR | stat.S_IWUSR)
+
+
+def test_a_read_failure_shows_the_anonymous_controls(tmp_path: Path) -> None:
+    """RED-IF: a failing read of the accounts table raises into /ui."""
+    path = tmp_path / "sessions.sqlite3"
+    store = SessionStore(str(path))
+    try:
+        account_id = store.upsert_google_account(google_sub="s", email="e@x.com", now=_now())
+        assert account_id is not None
+        other = sqlite3.connect(str(path))
+        other.execute("DROP TABLE accounts")
+        other.commit()
+        other.close()
+        assert store.account_for(account_id) is None
+    finally:
+        store.close()
+
+
+def test_a_migration_that_fails_part_way_leaves_no_marker_so_the_next_open_retries(
+    tmp_path: Path,
+) -> None:
+    """RED-IF: the marker lands without the table (a later open would then
+    never create it), or the failure escapes out of the constructor."""
+
+    class _BrokenDdl(SessionStore):
+        _ACCOUNTS_DDL = "CREATE TABLE accounts ("  # malformed on purpose
+
+    path = tmp_path / "sessions.sqlite3"
+    broken = _BrokenDdl(str(path))
+    try:
+        assert broken.accounts_available() is False
+    finally:
+        broken.close()
+    connection = sqlite3.connect(str(path))
+    try:
+        markers = list(connection.execute("SELECT name FROM schema_migrations"))
+    finally:
+        connection.close()
+    assert markers == []
+    healed = SessionStore(str(path))
+    try:
+        assert healed.accounts_available() is True
+    finally:
+        healed.close()

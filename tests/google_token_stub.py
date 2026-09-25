@@ -61,6 +61,8 @@ class StubConfig:
     #: ``drip_interval_s`` seconds: each read is quick, so only a bound on the
     #: TOTAL time stops the wait (a per-read socket timeout never fires).
     drip_bytes: int = 0
+    #: When set, sent as the whole 200 body instead of the token response.
+    raw_body: bytes | None = None
     drip_interval_s: float = 0.0
     requests: list[dict[str, Any]] = field(default_factory=list)
 
@@ -94,7 +96,12 @@ def token_stub() -> Iterator[tuple[str, StubConfig]]:
             )
             if config.delay_s:
                 time.sleep(config.delay_s)
-            body = config.body() if config.status == 200 else b'{"error":"invalid_grant"}'
+            if config.raw_body is not None:
+                body = config.raw_body
+            elif config.status == 200:
+                body = config.body()
+            else:
+                body = b'{"error":"invalid_grant"}'
             try:
                 self.send_response(config.status)
                 self.send_header("Content-Type", "application/json")
