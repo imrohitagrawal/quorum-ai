@@ -16,7 +16,7 @@ loopback, counting IPv6 by /64, carrying the scheme over, failing closed.
 
 Two per-network limits guard session creation: the daily new-session cap
 (`SESSION_MINT_CAP_PER_IP = 2` in 24 hours, the dollar-drain guard from #100)
-and the per-minute session limit (30 a minute). Both keyed on
+and the per-minute session limit (10 a minute). Both keyed on
 `request.client.host`, which uvicorn's `--proxy-headers` derived from
 `X-Forwarded-For` for peers in Fly's private ranges (#58).
 
@@ -42,7 +42,8 @@ The failure modes were listed before the code:
 ## Decision
 
 1. uvicorn's proxy handling is off (`--no-proxy-headers`; its default is on).
-2. `auth.VisitorAddressMiddleware`, the outermost layer, replaces the client
+2. `auth.VisitorAddressMiddleware`, the last `add_middleware` layer (only the
+   security-headers function, which never reads the client, wraps it), replaces the client
    address with `Fly-Client-IP` only when the connecting peer is inside
    `auth.TRUSTED_PROXY_NETWORKS` (`172.16.0.0/12`, `fdaa::/16`, the ranges #58
    measured). Loopback is not trusted. An absent, unparseable or repeated
@@ -53,7 +54,7 @@ The failure modes were listed before the code:
 4. Both limits count `auth.client_ip_of(request)`: the visitor's address, an
    IPv6 visitor's /64 network (`auth.IPV6_LIMIT_PREFIX = 64`), an
    IPv4-mapped IPv6 address as its IPv4 address.
-5. No limit value moves. The daily cap stays 2 and the per-minute limit 30.
+5. No limit value moves. The daily cap stays 2 and the per-minute limit 10.
 
 ## Rejected alternatives
 
@@ -66,7 +67,8 @@ The failure modes were listed before the code:
   it depends on Fly adding exactly one entry, and it reads a header Fly keeps
   from the client. `Fly-Client-IP` is replaced by the proxy, which the probe
   measured.
-- **Count IPv6 per address.** A home IPv6 connection holds a /64 and rotates
+- **Count IPv6 per address.** A home IPv6 connection commonly holds a /64 (or
+  more) and rotates
   through it, so one visitor could mint sessions without limit.
 - **Fail open on an absent header** (skip the limit). Fails the dollar-drain
   guard; failing to the peer is today's too-strict behaviour instead.
@@ -74,10 +76,33 @@ The failure modes were listed before the code:
 ## Consequences
 
 - Each visitor now has their own allowance of 2 a day. People behind one
-  IPv4 address (an office, a mobile carrier) still share one, as CHG-022
-  item (3) says; the allow-list (W31) and the invite link (W32) address that.
+  IPv4 address (an office, a mobile carrier) still share one; that is the
+  per-address design CHG-022 item (1) keeps ("the cap stays 2"), and the
+  allow-list (W31) and the invite link (W32) are the answer for a firm.
+- The /64 is a floor, not a full answer (the session's measurement, in
+  review): one holder of a /56 gets 256 allowances and of a /48 65,536, a
+  6to4 address counts separately from its IPv4, and a dual-stack visitor has
+  one allowance per address family. What bounds spend there is unchanged:
+  the per-account `DAILY_CAP_USD` and the site-wide `GLOBAL_DAILY_CEILING_USD`.
+  Counting by a wider prefix, or an extra cap per /48, would change a pinned
+  constant and is not decided here.
 - Old cap rows carry the app's ingress address and match no visitor; they
-  age out within 24 hours. Every visitor starts with a full allowance.
+  leave the 24-hour window within a day. Every visitor starts with a full
+  allowance. Nothing prunes that table (`feedback_store.py`), so from now on
+  each new-session row keeps the visitor's address (or /64) with no end date,
+  where it kept the app's address before.
+- The per-minute limiter now forgets idle visitors: at most once a minute it
+  drops every entry idle longer than `STALE_BUCKET_SECONDS`. Review measured
+  that without this a sweep of one /48 left 65,536 entries (about 11.5 MB)
+  held for the life of the process. A dropped entry had already refilled, so
+  dropping it grants nothing.
+- `TRUSTED_PROXY_NETWORKS` is correct for Fly only. Under the README's
+  `docker compose up`, a local browser arrives from the Docker bridge gateway
+  (review measured 172.20.0.1, inside 172.16.0.0/12), so a forged
+  `Fly-Client-IP` is believed there. Any other host must not put the app
+  behind a hop inside those ranges without revisiting this.
+- If Fly's proxy connects from more than one address, the no-header fallback
+  is one allowance per proxy address, not one in total.
 - uvicorn's access log shows Fly's private proxy address instead of the app's
   ingress address; neither is the visitor.
 - The global-ceiling Sentry alert (#100 §2.8) reads `request.client.host`

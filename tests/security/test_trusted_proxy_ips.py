@@ -45,7 +45,8 @@ DOCKERFILE = REPO_ROOT / "Dockerfile"
 
 #: A directly connecting client on the public internet.
 UNTRUSTED_PEER = "203.0.113.7"
-#: The peers Fly's proxy connects from (measured in #58).
+#: Addresses #58 measured on the machine: a health-check peer and the
+#: machine's private network address. Both inside the trusted ranges.
 TRUSTED_PEER_V4 = "172.19.4.129"
 TRUSTED_PEER_V6 = "fdaa:87:4c93:a7b:f9:e8c4:d114:2"
 VISITOR = "198.51.100.42"
@@ -97,7 +98,8 @@ def test_the_trusted_ranges_are_flys_private_ranges_exactly() -> None:
 
 
 def test_a_forged_header_from_an_untrusted_peer_is_ignored() -> None:
-    """THE REGRESSION TEST from #58. Turns red if the peer check is dropped."""
+    """W30's successor to #58's regression test: a public client cannot choose
+    its own key. Turns red if the peer check is dropped."""
     seen = _resolve(UNTRUSTED_PEER, [(b"fly-client-ip", VISITOR.encode())])
     assert seen["client"] == (UNTRUSTED_PEER, 12345)
 
@@ -132,7 +134,7 @@ def test_x_forwarded_for_is_never_read() -> None:
     ids=["absent", "unparseable", "two-headers"],
 )
 def test_an_absent_or_ambiguous_header_counts_the_peer(headers: list[tuple[bytes, bytes]]) -> None:
-    """Fails closed to one shared bucket, never open. Turns red if an absent,
+    """Fails closed to the peer's bucket, never open. Turns red if an absent,
     garbled or doubled header is believed."""
     seen = _resolve(TRUSTED_PEER_V4, headers)
     assert seen["client"] == (TRUSTED_PEER_V4, 12345)

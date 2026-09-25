@@ -433,6 +433,13 @@ class _InMemoryIpRateLimiter:
     # capacity (refill window). Without this, a /16 IPv4 scan would
     # add 65K entries that never expire.
     STALE_BUCKET_SECONDS = 300.0
+    # W30 (ADR-0132): the eviction above runs only when the SAME key comes
+    # back, so keys that never return were kept for the life of the process.
+    # Harmless while every visitor shared one key; not once each visitor (an
+    # IPv6 visitor by /64) is a key. So at most once per interval every stale
+    # bucket is dropped. A bucket idle that long has refilled to CAPACITY, so
+    # dropping it grants nothing a returning visitor would not get anyway.
+    SWEEP_INTERVAL_SECONDS = 60.0
 
     def __init__(
         self,
@@ -448,10 +455,17 @@ class _InMemoryIpRateLimiter:
             self.REFILL_PER_MINUTE if refill_per_minute is None else refill_per_minute
         )
         self._buckets: dict[str, tuple[float, float]] = {}
+        self._last_sweep: float | None = None
         self._lock = RLock()
 
     def allow(self, *, ip: str, now_epoch: float) -> bool:
         with self._lock:
+            if self._last_sweep is None:
+                self._last_sweep = now_epoch
+            elif now_epoch - self._last_sweep >= self.SWEEP_INTERVAL_SECONDS:
+                cutoff = now_epoch - self.STALE_BUCKET_SECONDS
+                self._buckets = {k: v for k, v in self._buckets.items() if v[1] >= cutoff}
+                self._last_sweep = now_epoch
             tokens, last = self._buckets.get(ip, (float(self.CAPACITY), now_epoch))
             elapsed_minutes = max(0.0, (now_epoch - last) / 60.0)
             tokens = min(
@@ -475,9 +489,9 @@ class _InMemoryIpRateLimiter:
 
 
 # Stage B / D0: seed the per-IP limiter from the LOCAL-only override when
-# set, else keep the pinned production default (30/min). Both capacity and
+# set, else keep the pinned production default (10/min). Both capacity and
 # refill move together so an overridden bucket does not refill to N but cap
-# at 30. The override is applied ONLY in LOCAL — belt-and-suspenders behind
+# at 10. The override is applied ONLY in LOCAL — belt-and-suspenders behind
 # ``validate_production_environment()``, which additionally REFUSES TO START
 # if the override is set in any non-LOCAL environment. So even if that
 # startup guard were bypassed, a deployed limiter stays at 30/min.
@@ -766,10 +780,9 @@ def create_query_run(
             cost_decision=cost_decision,
             capacity_permit=capacity_permit,
             # Issue #100 §2.8: the global-ceiling Sentry alert wants an
-            # IP breakdown alongside account_id. Same extraction as
-            # ``main.browser_session`` — no shared helper existed before
-            # this, and adding one is out of scope for a one-field alert
-            # payload.
+            # IP breakdown alongside account_id. The visitor's own address
+            # (VisitorAddressMiddleware, ADR-0132); the session limits key on
+            # ``auth.client_ip_of`` instead, which counts IPv6 by /64.
             client_ip=(request.client.host if request.client else None),
         )
     except BaseException:

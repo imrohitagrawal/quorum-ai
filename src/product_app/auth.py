@@ -84,9 +84,11 @@ SESSION_TTL = timedelta(hours=2)
 SESSION_MINT_CAP_PER_IP = 2
 
 #: The networks Fly's proxy connects to the app from (W30, ADR-0132). Only a
-#: peer inside these may tell the app who the visitor is. Measured in #58:
-#: the proxy peers were 172.19.4.128-135 and the machine's private network
-#: address fdaa:87:4c93:... . Loopback is deliberately absent: nothing in
+#: peer inside these may tell the app who the visitor is. The ranges #58
+#: trusted, from its measurement of the machine (own routes 172.19.4.128-135,
+#: health-check peer 172.19.4.129, private network address fdaa:87:4c93:...).
+#: Correct for Fly only: under docker compose a local browser arrives from the
+#: bridge gateway, inside 172.16.0.0/12 (ADR-0132). Loopback is deliberately absent: nothing in
 #: production connects from it, and trusting it would let a local process
 #: choose its own limit key.
 TRUSTED_PROXY_NETWORKS = ("172.16.0.0/12", "fdaa::/16")

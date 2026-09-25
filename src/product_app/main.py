@@ -520,16 +520,18 @@ class _NormalizeMethodLabelMiddleware:
 
 app.add_middleware(_NormalizeMethodLabelMiddleware)
 
-# OD-3: per-request ID correlation. Added LAST so it is the outermost
-# add_middleware layer: the contextvar is bound before the instrumentator
+# OD-3: per-request ID correlation. Added after the instrumentator so it
+# wraps it: the contextvar is bound before the instrumentator
 # and every handler run, and every log record emitted inside the request
 # (including middleware logs) carries the id. See product_app.request_id
 # for the echo-vs-regenerate safety rules on the inbound header.
 app.add_middleware(RequestIdMiddleware)
 
 # W30 (ADR-0132): the visitor's address as Fly's proxy reports it, trusted
-# only from Fly's private ranges. Added after RequestIdMiddleware so it is the
-# outermost layer and every handler, limiter and log sees the visitor.
+# only from Fly's private ranges. The last add_middleware layer, so every
+# handler and limiter sees the visitor (uvicorn's own access log still shows
+# the connecting peer). Only the security-headers function below wraps it,
+# and that never reads the client.
 app.add_middleware(VisitorAddressMiddleware)
 
 # Monotonic start reference for /status uptime. Captured after the

@@ -3,7 +3,7 @@
 Written before the code (AGENTS rule 16e), for board row W30 and CHG-022
 item (1). The two limits concerned are the per-network session limits: the
 daily new-session cap (`SESSION_MINT_CAP_PER_IP`, 2 in 24 hours) and the
-per-minute session limit (30 a minute). Neither value moves. What moves is
+per-minute session limit (10 a minute, `query_runs._InMemoryIpRateLimiter.CAPACITY`). Neither value moves. What moves is
 WHOSE address they count.
 
 ## What was measured (2026-09-25, PR #513's probe, production)
@@ -35,7 +35,10 @@ address. That is the fault.
 2. **A client connects to the machine directly, not through Fly's proxy.**
    The header is believed only when the connecting peer is inside Fly's
    private ranges (`172.16.0.0/12`, `fdaa::/16`, the ranges the Dockerfile
-   already trusted, measured in #58). Any other peer is counted as itself and
+   already trusted; #58 measured the machine's own routes as
+   172.19.4.128-135, its health-check peer as 172.19.4.129 and its private
+   network address as fdaa:87:4c93:… ; that the public proxy connects from
+   inside these ranges is inferred, and checked after deploy). Any other peer is counted as itself and
    its header is ignored. Loopback is NOT trusted: nothing in production
    connects from loopback, and trusting it would let any local process
    choose its own key.
@@ -44,11 +47,11 @@ address. That is the fault.
    the owner's own applications can do this; recorded, not defended.
 4. **The trusted peer sends no header, an unparseable one, or more than
    one.** Counted as the peer itself. For Fly's proxy that means one shared
-   bucket, which is today's behaviour: the failure is back to too strict,
+   bucket per proxy address, which is today's behaviour: the failure is back to too strict,
    never to open. Health checks carry no header and never call the session
    routes.
 5. **An IPv6 visitor rotates addresses.** A home IPv6 connection usually
-   holds at least a /64 (2^64 addresses), and privacy extensions rotate the
+   commonly holds at least a /64 (2^64 addresses), and privacy extensions rotate the
    address on their own. Counting single IPv6 addresses would let one
    visitor mint sessions without limit. An IPv6 visitor is therefore counted
    by their /64 network. An IPv4-mapped IPv6 address counts as the IPv4
@@ -59,8 +62,9 @@ address. That is the fault.
 7. **Keys already stored.** The daily cap's rows carry the address they were
    counted under. Rows written before this change carry the app's ingress
    address, which no visitor will present again, so every visitor starts
-   with a full allowance of 2. The rows age out in 24 hours; nothing is
-   migrated.
+   with a full allowance of 2. The old rows leave the 24-hour window within
+   a day; nothing is migrated. Nothing prunes that table, so new rows keep
+   the visitor's address (or /64) with no end date.
 8. **What reaches logs and Sentry.** uvicorn's access log stops showing the
    app's ingress address and shows Fly's private proxy address instead (no
    visitor address either way). The global-ceiling Sentry alert (#100 §2.8)
