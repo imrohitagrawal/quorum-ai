@@ -137,10 +137,12 @@ call.
 
 ## Consequences
 
-- Board row W5 derives DONE: its needle is the control's label. The fourth
-  pull request, the verification-only judge prompt, is still open; the row's
-  title and section say so.
+- Board row W5 reads PENDING: its needle is `JUDGE_QUICK_PROMPT_ID`, a name
+  the fourth pull request (the verification-only judge prompt) adds.
 - FR-018 and AC-051 trace the behaviour; `quick-answer.spec.ts` joins the
   first blocking lane, and AGENTS.md's invariant spec count is 22.
-- The visual baselines are untouched: `goldenCompletedResp()` is unchanged
-  and the two new nodes are hidden on a panel run.
+- The visual baselines are untouched: they capture the panel result page
+  (`result-verdict.png`), the transcript and the trust-score surface, all on
+  `goldenCompletedResp()`, which is unchanged, and `#result-quick` is hidden
+  on a panel result. The composer, where `#quick-mode` is visible, has no
+  baseline.

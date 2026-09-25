@@ -343,6 +343,10 @@ def test_a_finished_quick_answer_opens_the_result_view_without_a_synthesis() -> 
     answer = {"slot_number": 1, "status": "completed", "answer_text": "x"}
     failed = {"slot_number": 1, "status": "failed", "answer_text": ""}
     blank = {"slot_number": 1, "status": "completed", "answer_text": "   "}
+    # A failed slot WITH text pins the status check itself: the server sends
+    # empty text on every failed slot today, so without this case a rule that
+    # ignored status would pass (review round 2).
+    failed_with_text = {"slot_number": 1, "status": "failed", "answer_text": "partial"}
 
     def quick(*answers: dict[str, Any]) -> list[dict[str, Any]]:
         return [
@@ -355,13 +359,14 @@ def test_a_finished_quick_answer_opens_the_result_view_without_a_synthesis() -> 
             quick(answer),
             quick(failed),
             quick(blank),
+            quick(failed_with_text),
             quick(),
             [{"mode": "panel", "result": {"final_synthesis": None, "model_answers": [answer]}}],
             [{"result": {"final_synthesis": {"status": "completed"}, "model_answers": []}}],
             [{}],
         ],
     )
-    assert got == [True, False, False, False, False, True, False]
+    assert got == [True, False, False, False, False, False, True, False]
 
 
 # --- the e2e quick-verdict fixture is a shape the server can serve -------------
@@ -407,6 +412,7 @@ def test_the_quick_verdict_fixtures_validate_against_the_served_model() -> None:
     assert variants["WELL_SUPPORTED"]["reasons"]
 
 
+@needs_node
 def test_the_quick_export_quotes_the_safety_notice_as_untrusted_text() -> None:
     """The quick Markdown export writes the safety notice through the same
     untrusted-block wrapper the panel export uses (``mdUntrustedBlock``), so
