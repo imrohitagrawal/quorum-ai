@@ -72,13 +72,20 @@ Failure modes were listed before the code:
    text, `displayed_text_blocks`; whitespace collapsed), is non-empty, at
    most 300 characters, part of ONE block of the answer's displayed text
    starting and ending on word boundaries, AND part of the answer's raw text
-   read with only its emphasis and code markers removed (`_raw_reading`), and
-   carries no `<br`. The server's Markdown reading is NOT the page's: the
+   read with spaces collapsed and every backtick, `**` and `__` removed, and
+   every single `*` or `_` removed unless it sits between two letters or
+   digits (`_raw_reading`), and carries no `<br`. The server's Markdown reading is NOT the page's: the
    page keeps an intra-word star literally ("3*40") and turns `<br>` into a
    line break, and review measured the first draft serving "340 and 212"
    under "Supported" for an answer that says "3*40 and 2*12". The raw-text
-   rule makes any such difference drop the claim instead of showing it
-   wrongly; its `source` is null or one of
+   rule makes such differences drop the claim instead of showing it wrongly.
+   It is conservative and costs honest quotes: round-2 review measured that
+   a quote spanning a link, a code span holding `**` or `__`, a spaced star
+   ("2 * 500"), an HTML entity, a backslash escape, strikethrough or an
+   autolink is dropped, and an answer's "3*40" can never be quoted. Two
+   limits remain: the raw check searches the whole answer, not the block, so
+   characters that also occur in a hidden link address can pass; and a cut
+   at a hyphen ("non" out of "non-addictive") counts as a word boundary; its `source` is null or one of
    `sources_checked` (1-based, the same list that numbers the prompt's
    SOURCES block); and "unsourced" goes with a null source and the other two
    words with a number. Only the first 8 claims are read. The served quote is

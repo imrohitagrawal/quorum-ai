@@ -362,3 +362,16 @@ def test_a_quote_carrying_a_line_break_tag_is_dropped() -> None:
     answer = _answer(text="Line one<br>line two [1].")
     served = _served(_verdict(_claim("Line one<br>line two", 1)), answer)
     assert served.claims == [] and served.claims_dropped == 1
+
+
+def test_underscore_bold_and_a_raw_line_break_do_not_drop_an_honest_quote() -> None:
+    """The raw-text rule collapses the raw answer's whitespace and removes
+    underscore emphasis markers, so an honest quote across underscore bold or
+    a line break inside a paragraph is served. RED IF the whitespace collapse
+    is removed from ``_raw_reading`` (round-2 review found it could be
+    deleted with every test green). The explicit ``__`` replace is redundant
+    with the single-``_`` rule that follows it, so removing it alone changes
+    nothing (measured: 20 passed)."""
+    answer = _answer(text="The __capital__ was\nchosen in 1908 [1].")
+    served = _served(_verdict(_claim("The capital was chosen in 1908", 1)), answer)
+    assert [c.quote for c in served.claims] == ["The capital was chosen in 1908"]

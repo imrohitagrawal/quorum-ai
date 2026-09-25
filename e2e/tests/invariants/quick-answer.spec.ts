@@ -304,7 +304,7 @@ test.describe("W5 quick answer (ADR-0128)", () => {
       if (claim.source !== null) expect(claim.source).toBeLessThanOrEqual(checkedCount);
     }
     await expect(verdict.locator(".result-quick-claims-dropped")).toHaveText(
-      "1 claim the judge named is not shown, because it did not pass the app's checks (its words must be the answer's own, and its source one the judge was shown).",
+      "1 claim the judge named is not shown, because it did not pass the app's checks for showing a quote exactly as the answer shows it.",
     );
     await expect(verdict.locator(".result-quick-claims-note")).toHaveText(
       "The judge saw each source's title and address, not the page itself.",
