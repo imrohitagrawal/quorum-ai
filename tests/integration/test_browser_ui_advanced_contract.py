@@ -76,7 +76,7 @@ def test_workspace_html_contains_all_dom_hooks_used_by_javascript(
     requested_ids |= set(re.findall(r'getElementById\(["\']([a-z0-9-]+)["\']\)', js))
     # The ``document.getElementById("model-catalog-data")`` in app.js
     # also lives in the template — check separately.
-    assert _RENDERED_ONLY_WITH_SIGN_IN <= requested_ids  # both really are app.js hooks
+    assert requested_ids >= _RENDERED_ONLY_WITH_SIGN_IN  # both really are app.js hooks
     for element_id in requested_ids:
         page = sign_in_html if element_id in _RENDERED_ONLY_WITH_SIGN_IN else html
         assert f'id="{element_id}"' in page, (
