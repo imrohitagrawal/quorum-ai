@@ -2,8 +2,8 @@
 
 The owner decided on 2026-09-24 that a quick answer shows the judge's
 verdict in three levels with the reasons and the evidence behind it (their
-words: ``docs/analysis/2026-09-24-w5-parked.md``, decision 1). This module turns one memoised judge outcome into
-that shape. Failure modes, listed before the code:
+words: ``docs/analysis/2026-09-24-w5-parked.md``, decision 1). This module
+turns one memoised judge outcome into that shape. Failure modes, listed before the code:
 ``docs/analysis/2026-09-25-w5-quick-verdict-failure-modes.md``.
 
 It is the ONE place judge prose reaches a client (decision D-5 is narrowed
