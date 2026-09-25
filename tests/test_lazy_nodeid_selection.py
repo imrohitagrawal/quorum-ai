@@ -15,7 +15,7 @@ change. MEASURED, under this repo's own pytest config: a plain parametrized id
 containing a space selects fine (this module proves it below). What fails is a
 node id whose case is produced by a LAZILY EXPANDED collector: schemathesis
 returns ONE node named ``test_api_conforms_to_openapi_contract`` from
-``Module.collect()``, and the 13 per-operation items appear only when that node
+``Module.collect()``, and the 15 per-operation items appear only when that node
 is expanded afterwards. pytest resolves a node id by matching the requested
 name against the module's DIRECT children, so a bracketed schemathesis id never
 matches. An ordinary parametrized test works because ``Metafunc`` puts its
@@ -166,11 +166,11 @@ def test_a_schemathesis_case_is_selectable_by_its_node_id() -> None:
         f"gate cannot run on any diff a documented endpoint covers:\n"
         f"{result.stdout}\n{result.stderr}"
     )
-    # EXACTLY one, not the whole function's 13. A superset would still let the
-    # gate run, but it would also multiply every mutant's test time by 13 and
+    # EXACTLY one, not the whole function's 15. A superset would still let the
+    # gate run, but it would also multiply every mutant's test time by 15 and
     # quietly change what "the tests that cover this mutant" means.
-    assert "1/13 tests collected" in result.stdout, (
-        f"expected exactly the requested case out of the function's thirteen, got:\n{result.stdout}"
+    assert "1/15 tests collected" in result.stdout, (
+        f"expected exactly the requested case out of the function's fifteen, got:\n{result.stdout}"
     )
     assert "[GET /status]" in result.stdout, result.stdout
 
@@ -183,7 +183,7 @@ def test_the_parent_function_still_selects_every_case() -> None:
     """
     result = _collect(SCHEMATHESIS_FUNCTION_ID)
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "13 tests collected" in result.stdout, (
+    assert "15 tests collected" in result.stdout, (
         f"the bare function id no longer collects every operation:\n{result.stdout}"
     )
 
@@ -200,7 +200,7 @@ def test_two_schemathesis_cases_select_together() -> None:
     )
     result = _collect(SCHEMATHESIS_CASE_ID, second)
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "2/13 tests collected" in result.stdout, result.stdout
+    assert "2/15 tests collected" in result.stdout, result.stdout
     assert "[GET /status]" in result.stdout and "[GET /ready]" in result.stdout, result.stdout
 
 
@@ -318,7 +318,7 @@ def test_two_runs_in_one_process_do_not_leak_requested_ids() -> None:
     )
     # POSITIVE PARTNER: the first run really did filter, so RC1 == 0 is not
     # "the plugin did nothing".
-    assert "1/13 tests collected" in result.stdout, result.stdout
+    assert "1/15 tests collected" in result.stdout, result.stdout
 
 
 def test_only_the_requested_case_actually_RUNS() -> None:
@@ -327,10 +327,10 @@ def test_only_the_requested_case_actually_RUNS() -> None:
     Every other test here reads the ``N/M tests collected`` summary from
     ``--collect-only``. Review demonstrated that deleting ``items[:] = kept``
     — so the filter reports a deselection and then runs everything anyway —
-    survives all of them: collection prints ``1/13 tests collected``, while a
-    real run prints ``13 passed, 12 deselected``. That is the substring-vs-
+    survives all of them: collection prints ``1/15 tests collected``, while a
+    real run prints ``15 passed, 14 deselected``. That is the substring-vs-
     structure trap of rule 8 inside the guard meant to prevent it, and it is
-    exactly the 13x-per-mutant outcome ADR-0117 rejected.
+    exactly the every-case-per-mutant outcome ADR-0117 rejected.
 
     RED IF: the filter stops being applied to the items pytest executes.
     """
@@ -352,12 +352,12 @@ def test_only_the_requested_case_actually_RUNS() -> None:
         text=True,
     )
     assert result.returncode == 0, result.stdout[-3000:] + result.stderr[-2000:]
-    # ONE test ran. The other twelve were deselected, not executed.
+    # ONE test ran. The other fourteen were deselected, not executed.
     assert "1 passed" in result.stdout, (
         f"expected exactly the requested case to run:\n{result.stdout[-3000:]}"
     )
-    assert "12 deselected" in result.stdout, result.stdout[-3000:]
-    assert "13 passed" not in result.stdout, (
+    assert "14 deselected" in result.stdout, result.stdout[-3000:]
+    assert "15 passed" not in result.stdout, (
         f"the whole function ran — the filter reported a deselection it did not "
         f"apply:\n{result.stdout[-3000:]}"
     )
@@ -378,4 +378,4 @@ def test_an_absolute_case_id_still_selects() -> None:
     assert result.returncode == 0, (
         f"an absolute node id no longer selects:\n{result.stdout}\n{result.stderr}"
     )
-    assert "1/13 tests collected" in result.stdout, result.stdout
+    assert "1/15 tests collected" in result.stdout, result.stdout

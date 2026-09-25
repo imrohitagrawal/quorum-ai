@@ -92,6 +92,12 @@ _REDACTION_PATTERNS: tuple[re.Pattern[str], ...] = (
     # ``AKIA...`` access-key IDs.
     re.compile(r"\bsk-[A-Za-z0-9_-]{10,}\b"),
     re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
+    # W7 (ADR-0130): the query of the Google sign-in callback, which carries
+    # the one-time authorization code and the ``state``. uvicorn's access log
+    # writes every request line, query included, through this same record
+    # factory. Keyed on the PATH, not on ``code=``: a bare ``code=`` pattern
+    # would also eat "error code=RATE_LIMITED" in unrelated lines.
+    re.compile(r"(?<=/v1/auth/google/callback\?)[^\s\"\\]+"),
 )
 
 _REDACTED = "[REDACTED]"
@@ -543,6 +549,43 @@ def _rebuild_container(value: object, ancestors: frozenset[int]) -> object:
     return redacted_items if isinstance(value, set) else frozenset(redacted_items)
 
 
+def _redact_args_in_place(record: logging.LogRecord) -> bool:
+    """Redact each string argument and KEEP ``record.args`` a tuple.
+
+    W7 review round 1. Formatters exist that read ``record.args`` directly
+    rather than the rendered message: uvicorn's ``AccessFormatter`` unpacks
+    it into five names (client address, method, path, HTTP version, status).
+    Setting ``args = None`` made every access line this factory redacted
+    raise ``TypeError`` inside ``logging``, so the line was lost and a
+    traceback printed instead; the sign-in callback's line is redacted on
+    every request. Measured with the real ``uvicorn`` CLI.
+
+    Returns ``True`` only if the redacted arguments, formatted back into the
+    message, leave nothing the patterns would still redact. Otherwise (the
+    secret sat in the template, or spans two arguments, or ``args`` is not a
+    tuple) it changes nothing and returns ``False``, and the caller falls back
+    to the pre-rendered message, which is the old, always-safe behaviour.
+    """
+    args = record.args
+    if not isinstance(args, tuple) or not args:
+        return False
+    # Only plain values: an object's text is decided by its own ``__str__`` /
+    # ``__repr__``, which this helper cannot see, and Sentry reads the args
+    # themselves (round-2 review measured an object's repr reaching
+    # ``logentry.params``). Anything else falls back to the old path.
+    if not all(isinstance(a, (str, int, float, bool)) or a is None for a in args):
+        return False
+    redacted_args = tuple(_redact_secrets(a) if isinstance(a, str) else a for a in args)
+    try:
+        rendered = str(record.msg) % redacted_args
+    except Exception:  # noqa: BLE001 - never let a bad %-format crash logging
+        return False
+    if _redact_secrets(rendered) != rendered:
+        return False
+    record.args = redacted_args
+    return True
+
+
 def install_redaction_record_factory() -> None:
     """Scrub secret-shaped substrings from every log record at CREATION time.
 
@@ -700,12 +743,13 @@ def install_redaction_record_factory() -> None:
             except Exception:  # noqa: BLE001 - never let a bad %-format crash logging
                 return record
             redacted = _redact_secrets(rendered)
-            if redacted != rendered:
-                # Replace msg/args with the already-interpolated,
+            if redacted != rendered and not _redact_args_in_place(record):
+                # Redacting the arguments alone was not enough (or args is
+                # not a tuple): replace msg/args with the already-interpolated,
                 # already-redacted text so every later call to getMessage()
-                # (JsonFormatter, Sentry's BreadcrumbHandler, caplog) sees
-                # the redacted string and does not re-apply %-formatting
-                # against the original args.
+                # (JsonFormatter, Sentry's BreadcrumbHandler, caplog) sees the
+                # redacted string and does not re-apply %-formatting against
+                # the original args.
                 record.msg = redacted
                 record.args = None
             return record

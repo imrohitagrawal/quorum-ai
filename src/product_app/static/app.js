@@ -9864,6 +9864,49 @@
     });
   }
 
+  // W7 (ADR-0130): the top bar's "Sign in with Google" and "Sign out"
+  // buttons. The server renders "Sign in" only when sign-in is enabled and
+  // this is its host, and "Sign out" for any signed-in session (so a session
+  // signed in before sign-in was switched off can still end); on a page with
+  // neither, this does nothing.
+  // Sign-in asks the server to start (POST, CSRF) and then navigates to the
+  // Google URL it returns, but only if that URL really is Google's consent
+  // page. Sign-out asks the server to end the session, then reloads /ui.
+  const GOOGLE_CONSENT_HOST = "accounts.google.com";
+
+  function initAccountControls() {
+    const signIn = el("sign-in-google");
+    if (signIn) {
+      signIn.addEventListener("click", async () => {
+        signIn.disabled = true;
+        try {
+          const started = await api("/v1/auth/google/start", { method: "POST" });
+          const target = new URL(started.authorization_url);
+          if (target.protocol !== "https:" || target.host !== GOOGLE_CONSENT_HOST) {
+            throw new Error("unexpected sign-in address");
+          }
+          window.location.assign(target.href);
+        } catch (_) {
+          signIn.disabled = false;
+          toast({ message: "Sign-in could not start. Please try again.", tone: "error" });
+        }
+      });
+    }
+    const signOut = el("sign-out");
+    if (signOut) {
+      signOut.addEventListener("click", async () => {
+        signOut.disabled = true;
+        try {
+          await api("/v1/auth/sign-out", { method: "POST" });
+          window.location.assign("/ui");
+        } catch (_) {
+          signOut.disabled = false;
+          toast({ message: "Sign-out did not complete. Please try again.", tone: "error" });
+        }
+      });
+    }
+  }
+
   function initWorkflowKeyboard() {
     workflowSteps.forEach((step) => {
       step.addEventListener("keydown", (event) => {
@@ -9924,6 +9967,7 @@
     initBannerDismiss();
     initReadinessBannerToggle();
     initWorkflowKeyboard();
+    initAccountControls();
     // PR8: wire the session-trail clear button and render the initial (empty) state.
     const trailClearBtn = el("session-trail-clear");
     if (trailClearBtn) {

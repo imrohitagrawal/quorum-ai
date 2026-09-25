@@ -760,6 +760,24 @@ class Settings(BaseSettings):
                 )
         return value
 
+    # --- Google sign-in (W7, ADR-0130) ------------------------------------
+    #: Sign-in exists only when ALL THREE are set; with any one blank the
+    #: routes answer 404, the page shows no control and ``/status`` reports
+    #: ``sign_in_enabled: false``. ``google_signin.sign_in_state`` is the one
+    #: predicate every reader uses. The operator sets them (``fly secrets``);
+    #: nothing in the repository does. The client id is not a secret (Google
+    #: puts it in the browser's address bar), the client secret is, so only the
+    #: secret carries ``repr=False``: that keeps it inside the credential set
+    #: ``tests/unit/test_no_credential_reaches_a_test_run.py`` derives from
+    #: this file, and out of any ``repr`` of the settings object.
+    google_oauth_client_id: str = ""
+    google_oauth_client_secret: str = Field(default="", repr=False)
+    #: The absolute URL Google sends the browser back to. It must be the
+    #: callback route on this deployment, ``https`` (or ``http`` to loopback
+    #: for local development), with no query or fragment; anything else is
+    #: treated as a misconfiguration and sign-in stays off.
+    google_oauth_redirect_uri: str = ""
+
     # --- Catalog fetcher -------------------------------------------------
     # The  model catalog is fetched from a public, unauthenticated
     # endpoint and cached in process memory. Six hours is the

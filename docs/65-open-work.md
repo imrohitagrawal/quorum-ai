@@ -6,7 +6,7 @@ original, because a gate and an offline agent can read it and cannot read `gh`.
 
 Verified at: `b1209b5a785e95fb208c55c4303ada85065aeb54`
 
-The board holds **28** rows, **3** of them unpinned.
+The board holds **28** rows, **2** of them unpinned.
 
 `scripts/check_open_work.py --check` reads every row's evidence off disk and
 refuses if a claim is false. It runs inside `make validate`, and
@@ -102,7 +102,7 @@ caught by any automated check and 10 of 16 by adversarial review
 | W4 | Variable panel size N ∈ {2,3,4} — shipped in three PRs: the backend (#493), the workspace control with the validator widening (#494), and the copy outside the run path (third PR) (ADR-0120, CHG-010, CHG-011) | DONE | `ABSENT src/product_app/model_slots.py :: Between 2 and 4 model slots are required.` | — | — (W10 done) |
 | W5 | Quick-answer mode (`mode: "quick"`, one model, judge on) — complete in four PRs: backend (#506), served verdict (#507), workspace UI (#508) and the verification-only judge prompt with per-claim evidence (fourth PR) (ADR-0126, ADR-0127, ADR-0128, ADR-0129; CHG-016, CHG-017, CHG-018, CHG-019) | DONE | `ABSENT src/product_app/evaluation.py :: JUDGE_QUICK_PROMPT_ID` | — | W4 |
 | W6 | A panel of one reports strong consensus | DONE | `ABSENT src/product_app/synthesis_consensus.py :: if len(stance) == 1:` | #383 | — |
-| W7 | Google sign-in and logout | UNPINNED | `—` | — | — |
+| W7 | Google sign-in and logout — in two PRs: sign-in and sign-out (first PR, ADR-0130, CHG-020), then history, retention, account deletion and the hashed spend key (second PR) | PENDING | `ABSENT src/product_app/config.py :: history_keep_count` | — | the second pull request |
 | W9 | Guard the moderator model overlapping a panel slot | DONE | `ABSENT src/product_app/model_slots.py :: debate_model_id` | — | — |
 | W10 | Consensus certifies a mutual cluster it never checked | DONE | `PRESENT src/product_app/synthesis_consensus.py :: return sum(1 for partners in counts if partners >= 2) >= 3` | #382 | — |
 | W11 | Completeness divides by answers recorded, not slots requested | DONE | `ABSENT src/product_app/query_run_orchestration.py :: requested_slot_count = len(query_run.model_slots)` | #380 | — |
@@ -338,10 +338,24 @@ left this row `PENDING` forever, fixed or not.
 no session or account code (verified 2026-08-28) — the plan was wrong. A `users`
 or `identities` table goes in a guarded `schema_migrations` block, **never** in
 `session_store._SCHEMA`, whose own docstring records that adding a table there
-makes the first open of an existing read-only database raise. Unpinned: its
-first needle was the bare word `google`, which review satisfied by adding a
+makes the first open of an existing read-only database raise. Its first
+needle was the bare word `google`, which review satisfied by adding a
 *comment* to `auth.py` saying the work was still to do. A needle that a comment
 can satisfy is not evidence.
+
+The first of W7's two pull requests (ADR-0130, CHG-020) built sign-in and
+sign-out: an `accounts` table in a guarded `schema_migrations` block of the
+sessions database, the OpenID Connect flow in `google_signin.py`, and the
+session rotation in `auth.py`. It is off in production until the operator
+creates the Google OAuth client and sets the three `GOOGLE_OAUTH_*` secrets.
+The row is pinned on `history_keep_count`, the snake_case settings field for
+`HISTORY_KEEP_COUNT`, the name the decision register gives (the session's wording in its 2026-09-24 section, accepted by the owner; that section is not among the ones the owner confirmed verbatim) the
+keep-the-last-5 setting (`docs/analysis/2026-09-22-decision-register.md`, D7).
+Only the second pull request adds it, so the row reads PENDING until the
+history lands. (It was pinned on `history_max_runs_per_account`, the
+failure-modes page's name, until review round 1 found the register names it
+differently.) If that setting ships under another name, the second pull
+request must move the needle.
 
 **W8 — DECIDED 2026-08-28, and removed from the table.**
 `min_machines_running` stays `0`: the app keeps scaling to zero. It was never a

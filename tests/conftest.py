@@ -132,6 +132,17 @@ os.environ["SENTRY_DSN"] = (
     if os.environ.get("QUORUM_TEST_LIVE_CREDENTIALS", "") == "1"
     else ""
 )
+# W7 (ADR-0130). The client secret is a credential (``repr=False`` in
+# config.py); the other two are blanked with it so a developer's ``.env`` can
+# never switch sign-in ON for the whole suite. Tests that exercise sign-in turn
+# it on for themselves with ``monkeypatch.setattr(settings, ...)``.
+os.environ["GOOGLE_OAUTH_CLIENT_SECRET"] = (
+    os.environ.get("GOOGLE_OAUTH_CLIENT_SECRET", "")
+    if os.environ.get("QUORUM_TEST_LIVE_CREDENTIALS", "") == "1"
+    else ""
+)
+os.environ["GOOGLE_OAUTH_CLIENT_ID"] = ""
+os.environ["GOOGLE_OAUTH_REDIRECT_URI"] = ""
 # Not a credential, but the OTHER half of the two-value judge gate. Leaving it
 # set makes the local config differ from CI's, and since #269 priced the judge
 # into ``max_cost_usd`` that divergence moves the SPEND RAILS — CI would
@@ -147,6 +158,7 @@ import pytest
 
 from product_app import feedback_store, session_store, store_reconnect
 from product_app.auth import session_repository
+from product_app.google_signin import pending_sign_ins
 from product_app.query_runs import (
     _account_rate_limiter,
     _evaluation_memo_clear_for_tests,
@@ -232,6 +244,9 @@ def _reset_state() -> None:
     """Reset all in-memory state between tests."""
     query_run_repository.clear()
     session_repository.clear()
+    # W7: started-and-unfinished sign-ins are a process global keyed by
+    # session id (rule 16a).
+    pending_sign_ins.clear()
     _ip_rate_limiter.clear()
     _account_rate_limiter.clear()
     # Issue #284. The terminal evaluation is memoised per

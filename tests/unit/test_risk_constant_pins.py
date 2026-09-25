@@ -102,9 +102,11 @@ from product_app import (
     catalog_fetcher,
     costs,
     feedback_store,
+    google_signin,
     main,
     model_slots,
     query_runs,
+    session_store,
 )
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -160,11 +162,39 @@ RISK_TIER_MODULES = (
     # Added 2026-09-25 with ADR-0127 (W5). It decides what level of judge
     # assurance a quick answer shows and which judge text reaches a client.
     "quick_verdict.py",
+    # Added 2026-09-25 with ADR-0130 (W7). It decides who is signed in as
+    # whom: the issuers and audience an ID token must carry, how long a
+    # started sign-in stays valid, and where the client secret may be sent.
+    "google_signin.py",
 )
 
 #: A wrong value here is silently harmful and nothing else constrains it.
 #: Every name must have a literal `== VALUE` assertion in tests/.
 BUCKET_A_LITERAL_PIN = (
+    # W7 (ADR-0130). Each is silently harmful if wrong and nothing else
+    # constrains it: a wrong endpoint sends the client secret elsewhere, a
+    # wider issuer set or scope accepts or asks for more than designed, a
+    # longer state lifetime or clock skew widens a replay window, a longer
+    # exchange bound lets Google hold a request, and the two redirect paths
+    # are the whole open-redirect defence (failure mode 12).
+    "google_signin.GOOGLE_AUTHORIZATION_ENDPOINT",
+    "google_signin.GOOGLE_TOKEN_ENDPOINT",
+    "google_signin.GOOGLE_ISSUERS",
+    "google_signin.SIGN_IN_SCOPE",
+    "google_signin.SIGN_IN_STATE_TTL",
+    "google_signin.TOKEN_EXCHANGE_TIMEOUT_S",
+    "google_signin.TOKEN_RESPONSE_MAX_BYTES",
+    "google_signin.ID_TOKEN_CLOCK_SKEW_S",
+    "google_signin.AFTER_SIGN_IN_PATH",
+    "google_signin.SIGN_IN_FAILED_PATH",
+    "google_signin.CALLBACK_PATH",
+    # The ports a browser leaves out of ``Host``. A wrong entry makes the
+    # host rule refuse the one host sign-in can finish on, or accept a
+    # different port as the same origin (round-2 review).
+    "google_signin._DEFAULT_PORTS",
+    # The marker name is how an existing database knows the table exists;
+    # renaming it re-runs the migration on every database.
+    "session_store.SessionStore._ACCOUNTS_MIGRATION",
     # A wrong value is silently harmful in both directions: dropping "https"
     # breaks every production catalog fetch, and adding "file" turns an
     # operator's typo into an arbitrary local-file read served as live prices.
@@ -260,6 +290,25 @@ BUCKET_A_LITERAL_PIN = (
 #: Pin the BEHAVIOUR, not the literal — these legitimately change, and a literal
 #: pin would teach people to edit the test alongside the code.
 BUCKET_B_PIN_BEHAVIOUR = {
+    # --- Added 2026-09-25 with W7's first pull request (ADR-0130) ---
+    "google_signin.MAX_PENDING_SIGN_INS": (
+        "a memory backstop on started-and-unfinished sign-ins; the value may "
+        "move, what must not is that a full table drops its OLDEST entry and "
+        "never grows past the bound: tests/unit/test_google_signin_units.py::"
+        "test_the_pending_table_drops_its_oldest_entry_when_full"
+    ),
+    "google_signin._SETTING_NAMES": (
+        "the names the startup message prints when sign-in is half set; what "
+        "must hold is that it names the missing one and never a value: tests/"
+        "integration/test_google_sign_in.py::"
+        "test_the_startup_message_names_missing_settings_and_never_values"
+    ),
+    "main.SIGN_IN_FAILED_NOTICE": (
+        "the fixed failure sentence; the wording may change, what must hold is "
+        "that it is shown on ?sign_in=failed and reflects nothing from the "
+        "request: tests/integration/test_google_sign_in.py::"
+        "test_the_failure_notice_reflects_nothing_from_the_request"
+    ),
     # --- Added 2026-09-25 with W5's second pull request (ADR-0127) ---
     "quick_verdict.WELL_SUPPORTED_MIN_SCORE": (
         "the lowest judge faithfulness and grounding that read 'well "
@@ -527,6 +576,23 @@ BUCKET_B_PIN_BEHAVIOUR = {
 
 #: No pin. A literal here restates the implementation and catches nothing.
 BUCKET_C_NO_PIN = {
+    # --- Added 2026-09-25 with W7's first pull request (ADR-0130) ---
+    "google_signin._SIGN_OUT_ERRORS": (
+        "OpenAPI documentation of sign-out's error shapes (review round 1); "
+        "openapi-check and the schemathesis contract gate fail if it drifts"
+    ),
+    "google_signin._DOCUMENTED_ERRORS": (
+        "OpenAPI documentation of the two routes' error shapes; openapi-check "
+        "and the schemathesis contract gate already fail if it drifts"
+    ),
+    "session_store.SessionStore._MIGRATIONS_DDL": (
+        "SQL DDL, not a value; malformed SQL fails loudly at open, exercised "
+        "by every test in tests/integration/test_google_sign_in.py"
+    ),
+    "session_store.SessionStore._ACCOUNTS_DDL": (
+        "SQL DDL, not a value; the migration tests in tests/integration/"
+        "test_google_sign_in.py open old databases with it"
+    ),
     # --- Added 2026-08-03 with feedback_store / query_runs / readiness ---
     "feedback_store.DEFAULT_DB_PATH": (
         "filesystem path, overridden by FEEDBACK_DB_PATH everywhere it matters"
@@ -1206,6 +1272,28 @@ def test_auth_and_transport_constants_are_pinned() -> None:
     assert auth._SESSION_COOKIE_NAME_PREFIXED == "__Host-quorum_session"
     assert auth.CSRF_HEADER_NAME == "X-CSRF-Token"
     assert main._HSTS_HEADER == "max-age=31536000; includeSubDomains"
+
+
+def test_the_google_sign_in_constants_are_pinned() -> None:
+    """Turns red if: any W7 sign-in constant in bucket A moves (ADR-0130).
+
+    Literals on both sides (rule 7a).
+    """
+    assert google_signin.GOOGLE_AUTHORIZATION_ENDPOINT == (
+        "https://accounts.google.com/o/oauth2/v2/auth"
+    )
+    assert google_signin.GOOGLE_TOKEN_ENDPOINT == "https://oauth2.googleapis.com/token"
+    assert {"https://accounts.google.com", "accounts.google.com"} == google_signin.GOOGLE_ISSUERS
+    assert google_signin.SIGN_IN_SCOPE == "openid email"
+    assert timedelta(minutes=10) == google_signin.SIGN_IN_STATE_TTL
+    assert google_signin.TOKEN_EXCHANGE_TIMEOUT_S == 10.0
+    assert google_signin.TOKEN_RESPONSE_MAX_BYTES == 65_536
+    assert google_signin.ID_TOKEN_CLOCK_SKEW_S == 300
+    assert google_signin.AFTER_SIGN_IN_PATH == "/ui"
+    assert google_signin.SIGN_IN_FAILED_PATH == "/ui?sign_in=failed"
+    assert google_signin.CALLBACK_PATH == "/v1/auth/google/callback"
+    assert google_signin._DEFAULT_PORTS == {"http": 80, "https": 443}
+    assert session_store.SessionStore._ACCOUNTS_MIGRATION == "w7_accounts"
 
 
 def test_the_session_mint_window_is_pinned() -> None:

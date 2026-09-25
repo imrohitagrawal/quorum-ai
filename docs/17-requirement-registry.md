@@ -32,6 +32,7 @@
 | FR-016 | Functional | Trust and confidence result surface — number-free, judge-OFF-safe, DEBT-012-guarded evaluation rendering (R2) | `docs/09-roadmap.md`; `docs/30-ux-design.md`; `docs/32-ui-state-matrix.md`; `docs/42-ai-safety-grounding.md`; `docs/63-technical-debt-register.md` | Frontend engineer | Must | AC-044, AC-045, AC-046 | TEST-FR-016 | Not created | Not published | Draft |
 | FR-017 | Functional | Hermetic evaluation harness and golden set — blocking structural gate off the deploy path, vocabulary-only (no DeepEval/RAGAS), with a deferred human-label operator queue (R2) | `docs/09-roadmap.md`; `docs/42-ai-safety-grounding.md`; `docs/44-model-risk-register.md`; `docs/50-test-strategy.md`; `docs/55-performance-baseline.md` | Backend engineer | Must | AC-047, AC-048 | TEST-FR-017 | Not created | Not published | Draft |
 | FR-018 | Functional | Quick answer — one model, no debate, the judge's verdict shown and no agreement figure (W5) | `docs/19-change-control-log.md` (CHG-012 D1, CHG-016, CHG-017, CHG-018); `docs/analysis/2026-09-24-w5-parked.md` | Product owner | Should | AC-051 | TEST-FR-018 | Not created | Not published | Draft |
+| FR-019 | Functional | Sign in with Google and sign out — an account per Google subject, no token stored (W7, first pull request) | `docs/19-change-control-log.md` (CHG-012 D7, CHG-020); `docs/analysis/2026-09-25-w7-google-sign-in-failure-modes.md` | Product owner | Should | AC-052 | TEST-FR-019 | Not created | Not published | Draft |
 
 ## Registry Notes
 

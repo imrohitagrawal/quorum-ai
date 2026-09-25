@@ -150,6 +150,77 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+  /v1/auth/google/start:
+    post:
+      tags:
+      - session
+      summary: Start Google Sign In
+      description: 'Begin a sign-in: returns the Google URL the browser should open.'
+      operationId: start_google_sign_in_v1_auth_google_start_post
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SignInStartResponse'
+        '401':
+          description: No usable browser session.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SignInErrorResponse'
+        '403':
+          description: CSRF token missing or wrong.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SignInErrorResponse'
+        '404':
+          description: Sign-in is not enabled here.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SignInErrorResponse'
+        '409':
+          description: Sign-in was started on a host other than the redirect URI's.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SignInErrorResponse'
+  /v1/auth/sign-out:
+    post:
+      tags:
+      - session
+      summary: Sign Out
+      description: 'End this browser''s session. Deletes nothing but the session.
+
+
+        NOT gated on the sign-in settings (review round 1): a browser that signed
+
+        in before the operator switched sign-in off must still be able to sign
+
+        out, or it stays signed in until the session expires.'
+      operationId: sign_out_v1_auth_sign_out_post
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SignOutResponse'
+        '401':
+          description: No usable browser session.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SignInErrorResponse'
+        '403':
+          description: CSRF token missing or wrong.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SignInErrorResponse'
   /:
     get:
       tags:
@@ -1689,6 +1760,46 @@ components:
       - version
       - message
       title: SafetyWarning
+    SignInErrorDetail:
+      properties:
+        code:
+          type: string
+          title: Code
+        message:
+          type: string
+          title: Message
+      type: object
+      required:
+      - code
+      - message
+      title: SignInErrorDetail
+    SignInErrorResponse:
+      properties:
+        detail:
+          $ref: '#/components/schemas/SignInErrorDetail'
+      type: object
+      required:
+      - detail
+      title: SignInErrorResponse
+    SignInStartResponse:
+      properties:
+        authorization_url:
+          type: string
+          title: Authorization Url
+      type: object
+      required:
+      - authorization_url
+      title: SignInStartResponse
+      description: 'Where the browser goes next: Google''s consent page.'
+    SignOutResponse:
+      properties:
+        signed_out:
+          type: boolean
+          title: Signed Out
+      type: object
+      required:
+      - signed_out
+      title: SignOutResponse
     SlotCritique:
       properties:
         critic_slot_number:

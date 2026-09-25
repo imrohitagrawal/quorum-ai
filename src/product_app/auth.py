@@ -46,7 +46,7 @@ from threading import RLock
 from typing import Annotated
 from uuid import UUID, uuid4
 
-from fastapi import Depends, HTTPException, Request, status
+from fastapi import Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel
 
 from product_app import session_store
@@ -558,6 +558,53 @@ def issue_session(
         csrf_token=session.csrf_token,
         expires_at=session.last_used_at + SESSION_TTL,
         session_expires_in_seconds=int(SESSION_TTL.total_seconds()),
+    )
+
+
+def issue_signed_in_session(previous_session_id: str, *, account_id: UUID) -> SessionIssueResponse:
+    """Replace the caller's session with a NEW one bound to a signed-in account.
+
+    W7 (ADR-0130). Session fixation is the failure this exists for: a session
+    id that existed BEFORE sign-in must not work after it, or an id planted in
+    a victim's browser becomes a signed-in one. So the id and the CSRF token
+    are both new, and the previous session is revoked from both halves of the
+    repository (the process cache and the durable sink).
+
+    It does NOT consult the per-IP mint cap (``SESSION_MINT_CAP_PER_IP``), and
+    that is decided, not forgotten. The cap bounds how many ANONYMOUS account
+    ids one address can create per day; sign-in creates none of those. The
+    account id comes from the accounts table, one per Google identity, and a
+    returning user gets the same one. The caller has also already passed the
+    cap once: the sign-in callback only reaches here holding a session that
+    ``issue_session`` minted. Counting the rotation would lock a visitor out
+    of sign-in exactly when they had used their two anonymous sessions for the
+    day, which is the common case for anyone who came back.
+    """
+    _enforce_production_guards(require_legacy_disabled=True)
+    session_repository.revoke(previous_session_id)
+    session = session_repository.create(account_id=account_id)
+    return SessionIssueResponse(
+        account_id=session.account_id,
+        session_id=session.session_id,
+        csrf_token=session.csrf_token,
+        expires_at=session.last_used_at + SESSION_TTL,
+        session_expires_in_seconds=int(SESSION_TTL.total_seconds()),
+    )
+
+
+def clear_session_cookie(response: Response) -> None:
+    """Tell the browser to drop the session cookie (sign-out, W7).
+
+    The same name, path and flags :func:`attach_session_cookie` sets, or the
+    browser keeps the original: a cookie is only replaced by one that matches
+    its name, domain and path.
+    """
+    response.delete_cookie(
+        key=get_session_cookie_name(),
+        path="/",
+        secure=settings.session_cookie_secure,
+        httponly=True,
+        samesite="lax",
     )
 
 

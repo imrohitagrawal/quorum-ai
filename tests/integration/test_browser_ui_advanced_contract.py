@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import re
 
+import pytest
 from fastapi.testclient import TestClient
 
 from product_app.main import app
@@ -27,9 +28,45 @@ def _fetch_ui() -> str:
     return response.text
 
 
-def test_workspace_html_contains_all_dom_hooks_used_by_javascript() -> None:
-    """Every ``getElementById`` call in app.js must resolve at load time."""
+#: W7 (ADR-0130). Ids the server renders only when Google sign-in is enabled:
+#: "sign-in-google" for an anonymous visitor, "sign-out" for a signed-in one.
+#: ``initAccountControls`` in app.js checks each for null, so their absence on
+#: the shipped (sign-in off) page is correct; they are checked instead against
+#: the markup the enabled page renders, below.
+_RENDERED_ONLY_WITH_SIGN_IN = frozenset({"sign-in-google", "sign-out"})
+
+
+def _sign_in_markup(monkeypatch: pytest.MonkeyPatch) -> str:
+    from uuid import uuid4
+
+    from product_app import main
+    from product_app.config import settings
+    from product_app.session_store import StoredAccount
+
+    monkeypatch.setattr(settings, "google_oauth_client_id", "id.apps.googleusercontent.com")
+    monkeypatch.setattr(settings, "google_oauth_client_secret", "secret-for-the-test")
+    monkeypatch.setattr(
+        settings, "google_oauth_redirect_uri", "https://q.example/v1/auth/google/callback"
+    )
+    anonymous, _ = main._account_controls_html(None, sign_in_failed=False)
+    account_id = uuid4()
+    monkeypatch.setattr(
+        main, "signed_in_account", lambda _id: StoredAccount(account_id=account_id, email="a@b.c")
+    )
+    signed_in, _ = main._account_controls_html(account_id, sign_in_failed=False)
+    return anonymous + signed_in
+
+
+def test_workspace_html_contains_all_dom_hooks_used_by_javascript(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every ``getElementById`` call in app.js must resolve at load time.
+
+    The two sign-in ids resolve against the enabled markup instead; the
+    partner assertions below prove each list is non-empty and really used.
+    """
     html = _fetch_ui()
+    sign_in_html = _sign_in_markup(monkeypatch)
     # Read the JS to know which IDs it depends on.
     app_js_response = TestClient(app).get("/static/app.js")
     assert app_js_response.status_code == 200
@@ -39,8 +76,10 @@ def test_workspace_html_contains_all_dom_hooks_used_by_javascript() -> None:
     requested_ids |= set(re.findall(r'getElementById\(["\']([a-z0-9-]+)["\']\)', js))
     # The ``document.getElementById("model-catalog-data")`` in app.js
     # also lives in the template — check separately.
+    assert requested_ids >= _RENDERED_ONLY_WITH_SIGN_IN  # both really are app.js hooks
     for element_id in requested_ids:
-        assert f'id="{element_id}"' in html, (
+        page = sign_in_html if element_id in _RENDERED_ONLY_WITH_SIGN_IN else html
+        assert f'id="{element_id}"' in page, (
             f"app.js expects id={element_id!r} but /ui does not contain it"
         )
 

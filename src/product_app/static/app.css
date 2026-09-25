@@ -308,6 +308,23 @@ a { color: var(--accent); text-underline-offset: 2px; }
   background: var(--overlay-inset);
 }
 
+/* W7 (ADR-0130): the signed-in email and the sign-in failure notice sit in
+   the top bar beside the sign-in / sign-out button. Rendered only when
+   Google sign-in is enabled. The email truncates rather than pushing the
+   buttons off a narrow screen. */
+.account-email,
+.account-notice {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+.account-email {
+  min-width: 0;
+  max-width: 22ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* ----- Status banner (errors, warnings, success) ----------------------- */
 
 .status-banner {
@@ -4920,6 +4937,14 @@ main:focus { outline: none; }
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+  /* W7 (ADR-0130): with Google sign-in enabled the row carries one or two
+     more items and cannot fit a phone on one line, so it wraps. Scoped with
+     :has() to the page that renders them: with sign-in off (the shipped
+     state) this rule matches nothing and the row above is unchanged. */
+  .topbar-actions:has(#sign-in-google, #sign-out) {
+    flex-wrap: wrap;
+    justify-content: flex-end;
   }
 }
 
