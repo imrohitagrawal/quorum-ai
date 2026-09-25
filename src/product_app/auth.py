@@ -35,6 +35,7 @@ do not survive a restart — never to "nobody can obtain a session".
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import logging
 import secrets
 import threading
@@ -43,7 +44,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from threading import RLock
-from typing import Annotated
+from typing import Annotated, Any
 from uuid import UUID, uuid4
 
 from fastapi import Depends, HTTPException, Request, Response, status
@@ -81,6 +82,86 @@ SESSION_TTL = timedelta(hours=2)
 #: same shape as that daily total, not the same shape as a per-minute burst
 #: bucket, so it follows the durable precedent.
 SESSION_MINT_CAP_PER_IP = 2
+
+#: The networks Fly's proxy connects to the app from (W30, ADR-0132). Only a
+#: peer inside these may tell the app who the visitor is. The ranges #58
+#: trusted, from its measurement of the machine (own routes 172.19.4.128-135,
+#: health-check peer 172.19.4.129, private network address fdaa:87:4c93:...).
+#: Correct for Fly only: under docker compose a local browser arrives from the
+#: bridge gateway, inside 172.16.0.0/12 (ADR-0132). Loopback is deliberately absent: nothing in
+#: production connects from it, and trusting it would let a local process
+#: choose its own limit key.
+TRUSTED_PROXY_NETWORKS = ("172.16.0.0/12", "fdaa::/16")
+
+#: An IPv6 visitor is counted by this network prefix, not their one address:
+#: a home connection usually holds a whole /64 and rotates through it, so
+#: per-address counting would let one visitor mint without limit (W30).
+IPV6_LIMIT_PREFIX = 64
+
+
+def _peer_is_trusted(host: str) -> bool:
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return any(address in ipaddress.ip_network(net) for net in TRUSTED_PROXY_NETWORKS)
+
+
+class VisitorAddressMiddleware:
+    """Put the visitor's address, as Fly's proxy reports it, in ``scope["client"]``.
+
+    W30 (ADR-0132). Measured in production on 2026-09-25: Fly's proxy
+    REPLACES any ``Fly-Client-IP`` a client sends with the address it accepted
+    the connection from, and KEEPS a client's ``X-Forwarded-For``, so only
+    ``Fly-Client-IP`` is read, and only when the connecting peer is inside
+    :data:`TRUSTED_PROXY_NETWORKS`. An absent, unparseable or repeated header
+    leaves the peer as the client: too strict, never open. The scheme from
+    ``X-Forwarded-Proto`` is carried over from the same peers, because the
+    sign-in host check reads it (uvicorn's ``--proxy-headers``, now off, did
+    both).
+    """
+
+    def __init__(self, app: Any) -> None:
+        self._app = app
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        client = scope.get("client")
+        if client and _peer_is_trusted(str(client[0])):
+            scope = dict(scope)
+            fly = [v for k, v in scope.get("headers") or () if k.lower() == b"fly-client-ip"]
+            if len(fly) == 1:
+                try:
+                    visitor = ipaddress.ip_address(fly[0].decode("latin-1").strip())
+                except ValueError:
+                    pass
+                else:
+                    scope["client"] = (str(visitor), 0)
+            proto = [v for k, v in scope.get("headers") or () if k.lower() == b"x-forwarded-proto"]
+            if len(proto) == 1 and proto[0].strip().lower() in (b"http", b"https"):
+                scope["scheme"] = proto[0].strip().lower().decode("latin-1")
+        await self._app(scope, receive, send)
+
+
+def client_ip_of(request: Request) -> str | None:
+    """The key both per-network session limits count a request under.
+
+    The visitor's address (put in place by :class:`VisitorAddressMiddleware`),
+    except that an IPv6 visitor is counted by their /64 and an IPv4-mapped
+    IPv6 address by the IPv4 address. A client that is not an address (the
+    test client's ``"testclient"``) is its own key; no client is ``None``.
+    """
+    if request.client is None:
+        return None
+    host = request.client.host
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return host
+    if isinstance(address, ipaddress.IPv6Address):
+        if address.ipv4_mapped is not None:
+            return str(address.ipv4_mapped)
+        return str(ipaddress.ip_network(f"{address}/{IPV6_LIMIT_PREFIX}", strict=False))
+    return str(address)
 
 
 def _effective_session_mint_cap() -> int:

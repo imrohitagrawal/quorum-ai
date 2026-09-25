@@ -212,9 +212,9 @@ also_copy = [
   # Note this is the tracked EXAMPLE file, which holds no real values; ``.env``
   # itself stays uncopied for the hermetic/$0 reason given above.
   ".env.example",
-  # ``Dockerfile`` carries the deployed uvicorn argv, including which peers may
-  # set X-Forwarded-For. tests/security/test_trusted_proxy_ips.py reads it from
-  # ``REPO_ROOT`` to prove the per-IP rate limiter is not header-spoofable.
+  # ``Dockerfile`` carries the deployed uvicorn argv, including
+  # --no-proxy-headers. tests/security/test_trusted_proxy_ips.py reads it from
+  # ``REPO_ROOT`` to prove uvicorn's own proxy handling stays off (ADR-0132).
   "Dockerfile",
   # ``fly.toml`` pins the deployed posture (RUNTIME_ENVIRONMENT=production,
   # secure cookies, no session-rate override). Stage B's

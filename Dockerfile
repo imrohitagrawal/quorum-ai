@@ -52,25 +52,21 @@ EXPOSE 8000
 #   lost-charge signal on another worker is invisible. Raising the count means
 #   moving those signals out of process memory first.
 # - bind to 0.0.0.0 so Fly's proxy can reach it
-# - proxy headers enabled so we get the real client IP from Fly's edge, but
-#   TRUSTED ONLY from Fly's private proxy networks. This was "*", which believed
-#   X-Forwarded-For from ANY peer — so a client could forge the header and mint a
-#   fresh rate-limit bucket per request. Reproduced against these exact flags: 40
-#   requests rotating a forged IP returned 40x200 and ZERO 429s, defeating the
-#   /v1/session limiter completely (main.py keys it on request.client.host).
-#   Ranges measured on the running machine: its own routes are 172.19.4.128-135,
-#   the health-check peer is 172.19.4.129, and its 6PN address is fdaa:87:4c93:...
-#   Public traffic can never originate inside these, so a forged header from the
-#   internet is now ignored — while the real client IP Fly forwards is still
-#   honoured, which keeps the limit per-user rather than one global bucket.
-#   Behaviour (both directions) is pinned by tests/security/test_trusted_proxy_ips.py.
+# - uvicorn's own proxy handling OFF (--no-proxy-headers; its default is ON).
+#   History: "*" believed X-Forwarded-For from any peer, so a client could forge
+#   a fresh rate-limit bucket per request (#58, reproduced 40x200, zero 429s).
+#   #58 narrowed trust to Fly's private ranges, but Fly APPENDS the app's own
+#   ingress address to X-Forwarded-For and uvicorn takes the rightmost
+#   untrusted entry, so every visitor was counted as the app (W30, measured in
+#   production 2026-09-25). The app now reads Fly-Client-IP, which Fly's proxy
+#   overwrites, only from Fly's private ranges: auth.VisitorAddressMiddleware,
+#   ADR-0132, pinned by tests/security/test_trusted_proxy_ips.py.
 # - timeout 60s (queries can take that long for synthesis)
 # - graceful shutdown on SIGTERM (Fly's default kill signal)
 CMD ["uvicorn", "product_app.main:app", \
      "--host", "0.0.0.0", \
      "--port", "8000", \
      "--workers", "1", \
-     "--proxy-headers", \
-     "--forwarded-allow-ips", "172.16.0.0/12,fdaa::/16,127.0.0.1,::1", \
+     "--no-proxy-headers", \
      "--timeout-keep-alive", "30", \
      "--timeout-graceful-shutdown", "30"]

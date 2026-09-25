@@ -236,6 +236,10 @@ BUCKET_A_LITERAL_PIN = (
     "costs.BOUND_WEB_SEARCH_CONTEXT_TOKENS",
     "auth.SESSION_TTL",
     "auth.SESSION_MINT_CAP_PER_IP",
+    # W30 (ADR-0132): who may name the visitor, and how an IPv6 visitor is
+    # counted. Widening either lets one visitor mint more sessions.
+    "auth.TRUSTED_PROXY_NETWORKS",
+    "auth.IPV6_LIMIT_PREFIX",
     # The rolling window the cap is counted over. A LITERAL pin for the same
     # reason the cap itself is one: cap and window are one control, and
     # widening the window silently tightens the cap while narrowing it
@@ -282,6 +286,8 @@ BUCKET_A_LITERAL_PIN = (
     "query_runs._InMemoryIpRateLimiter.CAPACITY",
     "query_runs._InMemoryIpRateLimiter.REFILL_PER_MINUTE",
     "query_runs._InMemoryIpRateLimiter.STALE_BUCKET_SECONDS",
+    # W30 (ADR-0132): how often idle visitors are forgotten.
+    "query_runs._InMemoryIpRateLimiter.SWEEP_INTERVAL_SECONDS",
     "query_runs._InMemoryAccountRateLimiter.CAPACITY",
     "query_runs._InMemoryAccountRateLimiter.REFILL_PER_MINUTE",
     "query_runs._InMemoryAccountRateLimiter.STALE_BUCKET_SECONDS",
