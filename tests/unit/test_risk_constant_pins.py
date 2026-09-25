@@ -188,6 +188,10 @@ BUCKET_A_LITERAL_PIN = (
     "google_signin.AFTER_SIGN_IN_PATH",
     "google_signin.SIGN_IN_FAILED_PATH",
     "google_signin.CALLBACK_PATH",
+    # The ports a browser leaves out of ``Host``. A wrong entry makes the
+    # host rule refuse the one host sign-in can finish on, or accept a
+    # different port as the same origin (round-2 review).
+    "google_signin._DEFAULT_PORTS",
     # The marker name is how an existing database knows the table exists;
     # renaming it re-runs the migration on every database.
     "session_store.SessionStore._ACCOUNTS_MIGRATION",
@@ -1288,6 +1292,7 @@ def test_the_google_sign_in_constants_are_pinned() -> None:
     assert google_signin.AFTER_SIGN_IN_PATH == "/ui"
     assert google_signin.SIGN_IN_FAILED_PATH == "/ui?sign_in=failed"
     assert google_signin.CALLBACK_PATH == "/v1/auth/google/callback"
+    assert {"http": 80, "https": 443} == google_signin._DEFAULT_PORTS
     assert session_store.SessionStore._ACCOUNTS_MIGRATION == "w7_accounts"
 
 
