@@ -805,7 +805,7 @@ def test_the_migration_adds_the_accounts_table_to_an_old_database(tmp_path: Path
     old_id = _old_database(path)
     store = SessionStore(str(path))
     try:
-        assert store.accounts_available is True
+        assert store.accounts_available() is True
         assert store.fetch(old_id, not_used_before=_long_ago()) is not None
         from datetime import UTC, datetime
 
@@ -846,7 +846,7 @@ def test_an_old_read_only_database_still_opens_and_only_sign_in_is_unavailable(
     try:
         store = SessionStore(str(path))
         try:
-            assert store.accounts_available is False
+            assert store.accounts_available() is False
             assert store.fetch(old_id, not_used_before=_long_ago()) is not None
             from datetime import UTC, datetime
 

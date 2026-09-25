@@ -496,6 +496,9 @@ _DOCUMENTED_ERRORS: dict[int | str, dict[str, object]] = {
     404: {"model": SignInErrorResponse, "description": "Sign-in is not enabled here."},
 }
 
+#: The routes are registered with ``add_api_route`` at the end of this module,
+#: not with decorators: mutmut cannot mutate a decorated function, and
+#: ``tests/unit/test_mutation_test_set_integrity.py`` caps how many exist.
 router = APIRouter()
 
 
@@ -524,12 +527,6 @@ def _require_cookie_session(request: Request) -> auth.SessionContext:
     return session
 
 
-@router.post(
-    "/v1/auth/google/start",
-    tags=["session"],
-    response_model=SignInStartResponse,
-    responses=_DOCUMENTED_ERRORS,
-)
 def start_google_sign_in(request: Request) -> SignInStartResponse:
     """Begin a sign-in: returns the Google URL the browser should open."""
     _require_enabled()
@@ -545,7 +542,6 @@ def _failed(reason: str) -> RedirectResponse:
     return response
 
 
-@router.get(CALLBACK_PATH, include_in_schema=False)
 def google_sign_in_callback(request: Request) -> RedirectResponse:
     """Google sends the browser here. Not part of the API: it is a redirect
     target, protected by ``state`` rather than by a CSRF header, which a
@@ -586,12 +582,6 @@ def google_sign_in_callback(request: Request) -> RedirectResponse:
     return response
 
 
-@router.post(
-    "/v1/auth/sign-out",
-    tags=["session"],
-    response_model=SignOutResponse,
-    responses=_DOCUMENTED_ERRORS,
-)
 def sign_out(request: Request) -> JSONResponse:
     """End this browser's session. Deletes nothing but the session."""
     _require_enabled()
@@ -600,6 +590,27 @@ def sign_out(request: Request) -> JSONResponse:
     response = JSONResponse(SignOutResponse(signed_out=True).model_dump())
     auth.clear_session_cookie(response)
     return response
+
+
+router.add_api_route(
+    "/v1/auth/google/start",
+    start_google_sign_in,
+    methods=["POST"],
+    tags=["session"],
+    response_model=SignInStartResponse,
+    responses=_DOCUMENTED_ERRORS,
+)
+router.add_api_route(
+    CALLBACK_PATH, google_sign_in_callback, methods=["GET"], include_in_schema=False
+)
+router.add_api_route(
+    "/v1/auth/sign-out",
+    sign_out,
+    methods=["POST"],
+    tags=["session"],
+    response_model=SignOutResponse,
+    responses=_DOCUMENTED_ERRORS,
+)
 
 
 def signed_in_account(account_id: UUID) -> session_store.StoredAccount | None:

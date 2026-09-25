@@ -231,7 +231,7 @@ class SessionStore:
     #: ``feedback_store._backfill_f01_preview_rows`` uses. Adding it to
     #: ``_SCHEMA`` would make the first open of an existing read-only database
     #: raise; guarded, that open succeeds, sessions work as before, and only
-    #: sign-in is unavailable (``accounts_available`` is ``False``).
+    #: sign-in is unavailable (``accounts_available()`` is ``False``).
     _MIGRATIONS_DDL = (
         "CREATE TABLE IF NOT EXISTS schema_migrations ("
         "name TEXT PRIMARY KEY, applied_at TEXT NOT NULL)"
@@ -311,7 +311,6 @@ class SessionStore:
             )
             return False
 
-    @property
     def accounts_available(self) -> bool:
         """Whether the accounts table exists. ``False`` means sign-in refuses."""
         return self._accounts_ready

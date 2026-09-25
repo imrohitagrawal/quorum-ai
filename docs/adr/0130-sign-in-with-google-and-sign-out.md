@@ -45,7 +45,7 @@ the code, see that page).
    bound to the caller's session id, and returns Google's authorization URL
    with the `S256` challenge. Scope `openid email`; no `access_type`, so no
    refresh token; no `prompt`. The browser navigates there (`app.js`), but
-   only if the URL's origin is `https://accounts.google.com`.
+   only if the URL is `https` on the host `accounts.google.com`.
 2. **The callback is protected by `state`, not CSRF.** `GET
    /v1/auth/google/callback` takes the pending entry for the CURRENT session
    (removed on first use, whatever follows), refuses it after 10 minutes, and
@@ -169,6 +169,11 @@ call, no call to Google (the token endpoint is a loopback stub,
 - The callback is left out of the OpenAPI schema (it is a browser redirect
   target, not an API); the start and sign-out routes are in it, with their
   401, 403 and 404 shapes.
+- The three routes are registered with `add_api_route`, not decorators, so
+  mutmut can mutate their bodies; `tests/unit/test_mutation_test_set_integrity.py`
+  caps decorated functions at 55, and `origin/main` already had 55. The
+  OpenAPI output is identical either way (`scripts/export_openapi.py` produced
+  no change when the decorators were removed).
 - The legacy `X-Account-Id` test header cannot start a sign-in or sign out
   (403): it has no server-side session to bind or revoke.
 - The copy: "Sign in with Google", "Sign out", "Sign-in did not complete.

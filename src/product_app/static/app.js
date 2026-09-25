@@ -9870,7 +9870,7 @@
   // Sign-in asks the server to start (POST, CSRF) and then navigates to the
   // Google URL it returns, but only if that URL really is Google's consent
   // page. Sign-out asks the server to end the session, then reloads /ui.
-  const GOOGLE_CONSENT_ORIGIN = "https://accounts.google.com";
+  const GOOGLE_CONSENT_HOST = "accounts.google.com";
 
   function initAccountControls() {
     const signIn = el("sign-in-google");
@@ -9880,7 +9880,7 @@
         try {
           const started = await api("/v1/auth/google/start", { method: "POST" });
           const target = new URL(started.authorization_url);
-          if (target.origin !== GOOGLE_CONSENT_ORIGIN) {
+          if (target.protocol !== "https:" || target.host !== GOOGLE_CONSENT_HOST) {
             throw new Error("unexpected sign-in address");
           }
           window.location.assign(target.href);
