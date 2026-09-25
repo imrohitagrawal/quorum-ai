@@ -25,62 +25,73 @@ ADR-0126 made a quick answer serve no evaluation, because the panel's trust
 composite would score one answer's "1 of 1" as agreement. The served result
 carries no judge text at all (decision D-5), because the judge's
 `rationale` is model-written text about provider prose. The owner's decision
-needs a quick answer to show exactly that. Failure modes were listed before
-the code: `docs/analysis/2026-09-25-w5-quick-verdict-failure-modes.md`.
+needs a quick answer to show the verdict, its reasons and its evidence.
+Failure modes were listed before the code: `docs/analysis/2026-09-25-w5-quick-verdict-failure-modes.md`.
 
 ## Decision
 
-1. **`quick_verdict` on the result**, `null` on every panel run: `level`,
+1. **`quick_verdict` on the result**, `null` on every panel run and on a
+   quick run that has not finished (no judge has been asked yet): `level`,
+   the judge's `faithfulness`, `grounding` and `hallucination_risk`,
    `reasons`, `sources_checked`, `judge_status`. Built in
    `src/product_app/quick_verdict.py` after the evaluation has run (the
    judge dispatches there, ADR-0126), from the per-run judge memo.
-2. **Four levels, not three, and none while the run is still running**
-   (`quick_verdict` is `null` until the run is terminal, since no judge has
-   been asked yet). `not_checked` whenever there is no conforming
+2. **Four levels, not three.** `not_checked` whenever there is no conforming
    verdict (no judge configured, the call failed, a non-conforming answer),
    so a level is never shown that the judge did not give. Otherwise:
    `not_supported` whenever `verdict_supports_verification` refuses it (a
    zero, or high risk; #267); `well_supported` when faithfulness and
-   grounding are both 4 or more (`WELL_SUPPORTED_MIN_SCORE`) and risk is
-   low, AND the judge was shown at least one source (a verdict on an answer
-   it could check against nothing cannot read "well supported");
+   grounding are both 4 or more (`WELL_SUPPORTED_MIN_SCORE`), risk is low,
+   AND the judge was shown at least one source (a verdict on an answer it
+   could check against nothing cannot read "well supported");
    `partly_supported` otherwise. The threshold is a design choice, not a
    calibration: nothing in this repo measures what a judge's 4 means.
-3. **Reasons as plain text.** The judge's rationale, normalised (HTML
-   entities decoded, NFKC, zero-width and control characters removed), with
-   every link-shaped token reduced: anything with `//` after an optional
-   scheme, a `www.` address and a domain followed by a path become the bare
-   host (lower-case, no user, password or port, punycode for a non-ASCII
-   name); `javascript:`, `data:`, `vbscript:` and `file:` become `[link
-   removed]`. So an injected page cannot put a destination it chose under the
-   product's "Judge" label as text; a host name may remain, as plain text.
-   Review round 1 got full URLs past the first pattern (a URL glued to a
-   word, an HTML-entity scheme, a zero-width character, a user and password,
-   a look-alike host); each is now a test case. Capped at 4,000 characters by the verdict
-   schema. The UI must render it as text, never through the Markdown
-   renderer; that is the third pull request's contract.
+3. **Reasons in the app's words, never the judge's.** `reasons` is a list of
+   sentences this app writes from the judge's three scores and the number of
+   sources it checked. The judge's own `rationale` is not served anywhere.
+   It is model-written text about provider prose, and a cited page can steer
+   it. The first draft of this pull request served it after reducing every
+   link to its host. Two review rounds kept finding shapes that got through,
+   among them a URL glued to a word, HTML-entity schemes, IPv6 hosts and
+   soft-hyphen splits, and the cleaning itself could lengthen the text past
+   its limit, which failed the response. Cleaning free text with a pattern is
+   a list of known bad shapes, and the list was never complete, so the
+   approach was dropped (see "Re-planned" below).
 4. **The sources the judge saw**, from `judge_evidence_sources`, now the one
    function `build_judge_evidence` also uses to number the prompt's SOURCES
    block, so the served list cannot drift from the judge's (capped at
-   `JUDGE_MAX_SOURCE_LINES`, fields truncated as the judge read them).
-5. **The safety caveat.** `result.safety_notice` on a quick answer is the
-   synthesis's own `HIGH_STAKES_NOTICE_FRAGMENT`, decided by the same rule,
-   now the module function `high_stakes_required` (query and context).
-   `null` on panel runs, which keep `final_synthesis.high_stakes_notice`.
+   `JUDGE_MAX_SOURCE_LINES`, fields truncated as the judge read them). These
+   are the answer's own citations, which a panel page already shows.
+5. **The safety caveat.** `result.safety_notice` on a quick answer, running
+   or finished, is the synthesis's own `HIGH_STAKES_NOTICE_FRAGMENT`, decided
+   by the same rule, now the module function `high_stakes_required` (query
+   and context). `null` on panel runs, which keep
+   `final_synthesis.high_stakes_notice`.
 6. **The run store's `mode` column.** Added in place to an existing database
    (`ALTER TABLE runs ADD COLUMN mode TEXT NOT NULL DEFAULT 'panel'` when
    absent), so every run stored before W5 reads "panel"; a second process
-   losing the race to add it ("duplicate column name") opens normally. The
-   orchestrator writes the run's mode. Nothing of the verdict's text is
-   stored.
-7. **D-5 narrowed, deliberately.** `quick_verdict.reasons` is the one path
-   by which judge prose reaches a client. The schema ban on the keys `judge`
-   and `rationale` is unchanged in code; `reasons` sits outside it by name,
-   so the guarantee that it is the ONLY path is a separate test: a sentinel
-   rationale appears in a quick response at that field and nowhere else, and
-   in a panel response nowhere. The served evaluation projection still has
-   no judge field, and the frontend ban is unchanged until the UI pull
-   request, which must justify its own change.
+   losing the race to add it ("duplicate column name") opens normally, and
+   any other error still stops the store. The orchestrator writes the run's
+   mode. Nothing of the verdict is stored.
+7. **D-5 stays whole.** No judge-written text reaches a client; the served
+   evaluation projection has no judge field; the keys `judge` and
+   `rationale` stay banned at every depth; a sentinel rationale is pinned to
+   reach no quick and no panel response.
+
+## Re-planned after two review rounds
+
+Round 1 found that the link cleaning let full URLs through; its fix widened
+the cleaning, and round 2 found both more shapes and a new defect the fix
+introduced (the cleaned text could exceed its 4,000-character limit and fail
+the response, which also skipped the run's billing correction). Two fixes in
+a row adding defects is this repo's signal to change the approach rather
+than patch again (AGENTS.md rule 12). The root cause was serving free,
+steerable text at all. The replacement serves only values the app controls:
+an enum, three integers or enums from the judge's strict schema, sentences
+the app writes from them, and citations the answer already carries. The
+owner's "reasons and artifacts" are met by the scores, the app's sentences
+and the sources; the judge's per-claim evidence, pointing into text already
+on the page, is W5's fourth pull request.
 
 ## Measurements
 
@@ -90,14 +101,15 @@ call; the judge seam is stubbed.
 | what | result |
 |---|---|
 | the level table, boundaries on both sides | `test_the_level_follows_the_verdict`: 8 cases pass (4/4/low well; 4/3 and 5/5/medium partly; 1/1/low partly; a zero or high risk not supported) |
-| RED before the change | the 14 tests written first all failed on the pre-change source (no `quick_verdict` field, no `safety_notice`); tests added later in review are listed with the fix commits |
-| full suite | `4749 passed, 67 skipped` on the first commit; gates in the pull request |
-| mutations (copy aside, clear `__pycache__`, restore, `cmp`; baseline 123 passed over `test_quick_verdict_served.py`, `test_risk_constant_pins.py`, `test_evaluation_judge.py` and `test_judge_request_path_wiring.py`) | 12 of 12 killed on the first commit: the threshold 4 to 3; low risk dropped; the refusal rule dropped; no verdict read as partly; URLs served whole; sources uncapped; a panel run given a verdict; no safety notice; no migration; stored mode always "panel"; the verdict read without the memo; reasons dropped |
+| RED before the change | the 14 tests written first all failed on the pre-change source (no `quick_verdict` field, no `safety_notice`) |
+| full suite and mutations on the final head | recorded in the pull request |
 
 ## Rejected alternatives
 
 - **Three levels only.** A missing verdict would have to borrow one of them,
   which is failure mode 2.
+- **Serving the judge's rationale, cleaned.** Built, reviewed twice, and
+  dropped; see "Re-planned".
 - **Serving the rationale through the evaluation projection.** It would open
   D-5 for panel runs too.
 - **Per-claim evidence now.** Today's verdict has no claim list; it needs the

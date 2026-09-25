@@ -268,13 +268,6 @@ BUCKET_B_PIN_BEHAVIOUR = {
         "tests/integration/test_quick_verdict_served.py::"
         "test_the_level_follows_the_verdict (4/4/low well, 4/3 and 5/5/medium partly)"
     ),
-    "quick_verdict._URL": (
-        "the pattern that reduces a URL in the judge's reasons to its host. "
-        "The pattern may widen; what must not change is that no scheme or "
-        "path survives into served reasons: tests/integration/"
-        "test_quick_verdict_served.py::"
-        "test_the_reasons_are_served_as_plain_text_with_links_reduced_to_hosts"
-    ),
     # --- Added 2026-09-25 with W5 (ADR-0126) ---
     "model_slots.QUICK_SLOT_MESSAGE": (
         "the refusal a quick request with other than one model gets. The "

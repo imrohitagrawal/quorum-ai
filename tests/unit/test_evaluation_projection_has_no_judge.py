@@ -7,16 +7,14 @@ frontend must contain no ``judge`` identifier at all, so no judge-reading code
 path can be added by habit. Building one would manufacture an API shape that
 does not exist and create standing pressure to add it.
 
-NARROWED DELIBERATELY by ADR-0127 (W5, 2026-09-25), on the owner's decision
-of 2026-09-24 that a quick answer shows the judge's verdict "along with
-reasons". Exactly one path now carries judge prose to a client:
-``QueryRunResultResponse.quick_verdict.reasons``, on a QUICK answer only,
-served as plain text with URLs reduced to hosts. The served evaluation
-projection still has no judge field, the keys ``judge`` and ``rationale``
-are still banned at every depth, and a panel run's ``quick_verdict`` is
-``None`` (``tests/integration/test_quick_verdict_served.py``). The frontend
-ban below is unchanged by this pull request; the UI pull request that reads
-``quick_verdict`` must justify its own change here.
+STILL WHOLE after ADR-0127 (W5, 2026-09-25). A quick answer now serves the
+judge's verdict (``quick_verdict``: a level, the judge's scores, reasons the
+APP writes from those scores, and the sources the judge was shown), but no
+judge-written text: a first draft served a cleaned ``rationale`` and two
+review rounds kept finding link shapes the cleaning let through, so that
+design was dropped. ``tests/integration/test_quick_verdict_served.py`` pins
+that a sentinel rationale reaches no quick and no panel response. The
+frontend ban below is unchanged by this pull request.
 """
 
 from __future__ import annotations

@@ -1518,10 +1518,30 @@ components:
           - not_supported
           - not_checked
           title: Level
-        reasons:
+        faithfulness:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Faithfulness
+        grounding:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Grounding
+        hallucination_risk:
           anyOf:
           - type: string
-            maxLength: 4000
+            enum:
+            - low
+            - medium
+            - high
+          - type: 'null'
+          title: Hallucination Risk
+        reasons:
+          anyOf:
+          - items:
+              type: string
+            type: array
           - type: 'null'
           title: Reasons
         sources_checked:

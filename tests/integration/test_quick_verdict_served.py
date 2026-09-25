@@ -155,6 +155,7 @@ def test_no_judge_means_not_checked_never_a_level(monkeypatch: pytest.MonkeyPatc
     assert verdict is not None
     assert verdict.level == "not_checked"
     assert verdict.reasons is None
+    assert verdict.faithfulness is None and verdict.grounding is None
     assert verdict.sources_checked == []
 
 
@@ -167,29 +168,6 @@ def test_a_non_conforming_verdict_is_not_checked(monkeypatch: pytest.MonkeyPatch
     assert served.quick_verdict is not None
     assert served.quick_verdict.level == "not_checked"
     assert served.quick_verdict.reasons is None
-
-
-def test_the_reasons_are_served_as_plain_text_with_links_reduced_to_hosts(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Failure mode 1. RED IF a full URL (a clickable destination an
-    injected page could choose) survives into the served reasons. Partner:
-    the rest of the judge's sentence, and the host, are kept."""
-    _judge(
-        monkeypatch,
-        _verdict(
-            rationale=(
-                "Claims track the sources. See https://evil.example.com/login?next=x "
-                "and http://www.other.example/path for details."
-            )
-        ),
-    )
-    reasons = qr._result_response(_run(mode="quick")).quick_verdict.reasons  # type: ignore[union-attr]
-    assert reasons is not None
-    assert "https://" not in reasons and "http://" not in reasons
-    assert "/login" not in reasons and "/path" not in reasons
-    assert reasons.startswith("Claims track the sources. See evil.example.com")
-    assert "www.other.example" in reasons
 
 
 def test_the_sources_listed_are_the_ones_the_judge_saw(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -208,25 +186,43 @@ def test_the_sources_listed_are_the_ones_the_judge_saw(monkeypatch: pytest.Monke
     assert f"page-{JUDGE_MAX_SOURCE_LINES}" not in {s.url.rsplit("/", 1)[-1] for s in checked}
 
 
-def test_a_panel_run_serves_no_quick_verdict_and_no_judge_prose(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Failure mode 4. RED IF the quick verdict, or its reasons, appear on a
-    panel run. Partner: the same judge on a quick run does serve it."""
-    _judge(monkeypatch, _verdict(rationale="PANEL-SENTINEL reasons"))
+def test_no_judge_written_text_reaches_any_response(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Failure modes 1 and 4, decision D-5 whole. The judge's rationale,
+    steerable by a cited page, reaches NO served body: not a quick one, not a
+    panel one. RED IF any field serves the judge's own words. Partner: the
+    quick run does carry a verdict, built from the same judge answer."""
+    _judge(monkeypatch, _verdict(rationale="JUDGE-SENTINEL see https://evil.example/login"))
     panel = qr._result_response(_run(mode="panel"))
     assert panel.quick_verdict is None
-    assert "PANEL-SENTINEL" not in panel.model_dump_json()
+    assert "JUDGE-SENTINEL" not in panel.model_dump_json()
     qr._judge_verdict_memo_clear_for_tests()
     quick = qr._result_response(_run(mode="quick"))
-    assert quick.quick_verdict is not None
-    assert "PANEL-SENTINEL" in (quick.quick_verdict.reasons or "")
-    # D-5, narrowed and no wider: the judge's text reaches the served body at
-    # exactly ONE place, quick_verdict.reasons. RED IF it also lands anywhere
-    # else (a second field, the evaluation, the result projection).
-    body = quick.model_dump(mode="json")
-    body["quick_verdict"]["reasons"] = None
-    assert "PANEL-SENTINEL" not in json.dumps(body)
+    assert quick.quick_verdict is not None and quick.quick_verdict.level == "partly_supported"
+    dumped = quick.model_dump_json()
+    assert "JUDGE-SENTINEL" not in dumped
+    assert "evil.example" not in dumped
+
+
+def test_the_reasons_are_the_apps_sentences_from_the_scores(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The reasons restate the judge's scores in the app's words, and the
+    scores are served as given. RED IF a sentence stops following its score
+    (the numbers are varied here so a hard-coded sentence cannot pass)."""
+    _judge(monkeypatch, _verdict(faithfulness=2, grounding=5, hallucination_risk="medium"))
+    verdict = qr._result_response(_run(mode="quick", n_sources=3)).quick_verdict
+    assert verdict is not None
+    assert (verdict.faithfulness, verdict.grounding, verdict.hallucination_risk) == (
+        2,
+        5,
+        "medium",
+    )
+    assert verdict.reasons == [
+        "The judge scored how closely the answer keeps to its cited sources 2 out of 5.",
+        "It scored how well the answer's citations point at those sources 5 out of 5.",
+        "It rated the risk of claims the sources do not support as medium.",
+        "The judge checked the answer against 3 sources.",
+    ]
 
 
 def test_a_high_stakes_quick_answer_carries_the_safety_notice() -> None:
@@ -322,57 +318,6 @@ def test_a_quick_run_is_stored_as_quick(monkeypatch: pytest.MonkeyPatch) -> None
     assert panel_row is not None and panel_row.mode == "panel"
 
 
-@pytest.mark.parametrize(
-    "rationale",
-    [
-        "seehttps://evil.example/login",
-        "ref_https://evil.example/login?x=1",
-        "https://user:pw@evil.example:8443/p",
-        "[link](https://evil.example/a?t=1)",
-        "h&#116;tps://evil.example/x",
-        "ht​tps://evil.example/x",
-        "//evil.example/x",
-        "www.evil.example/login?x",
-        "evil.example/login?x",
-        "javascript:alert(1)",
-        "data:text/html;base64,PHNjcmlwdD4=",
-        "http://pаypal.com/login",
-    ],
-)
-def test_no_link_shape_survives_into_the_reasons(rationale: str) -> None:
-    """Failure mode 1, the shapes review round 1 got past the first pattern.
-    RED IF any scheme, path, query, credential, port or non-ASCII host is
-    served. The host itself may stay, as plain text."""
-    from product_app.quick_verdict import plain_reasons
-
-    served = plain_reasons(rationale)
-    lowered = served.lower()
-    for leaked in (
-        "://",
-        "/login",
-        "/p",
-        "/a",
-        "/x",
-        "?",
-        "user:pw",
-        ":8443",
-        "javascript:",
-        "data:",
-    ):
-        assert leaked not in lowered, (rationale, served)
-    assert served.isascii(), (rationale, served)
-
-
-def test_ordinary_reasons_are_left_alone() -> None:
-    """Partner of the link test: prose with no link is served unchanged, and
-    a reduced link keeps the punctuation after it."""
-    from product_app.quick_verdict import plain_reasons
-
-    text = "Grounding is 4/5 and faithfulness 5/5; the sources agree."
-    assert plain_reasons(text) == text
-    assert plain_reasons("see https://evil.example/login now.") == "see evil.example now."
-
-
 def test_well_supported_needs_a_source_the_judge_could_check(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -423,17 +368,42 @@ def test_a_migration_race_loser_still_opens_the_store(
         store.close()
 
 
-@pytest.mark.parametrize(
-    "rationale",
-    ["javascript:alert(1)", "data:text/html;base64,PHNjcmlwdD4=", "javascript&#58;alert(1)"],
-)
-def test_a_code_or_data_scheme_is_removed_not_rewritten(rationale: str) -> None:
-    """A ``javascript:`` or ``data:`` link has no host worth keeping; it is
-    replaced by the marker, including when its colon is written as an HTML
-    entity. RED IF the scheme branch or the entity decoding is dropped: the
-    token then survives, or is served as a stray host name."""
-    from product_app.quick_verdict import LINK_REMOVED, plain_reasons
+def test_any_other_migration_error_still_stops_the_store(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Partner of the race test: only "duplicate column name" is tolerated.
+    RED IF the migration swallows every OperationalError."""
+    import sqlite3
 
-    served = plain_reasons(rationale)
-    assert served.startswith(LINK_REMOVED), (rationale, served)
-    assert "&#" not in served
+    from product_app.run_history_store import RunHistoryStore
+
+    real_connect = sqlite3.connect
+
+    class _Conn:
+        def __init__(self, inner: Any) -> None:
+            self._inner = inner
+
+        def execute(self, sql: str, *args: Any) -> Any:
+            if sql.startswith("ALTER TABLE"):
+                raise sqlite3.OperationalError("database is locked")
+            return self._inner.execute(sql, *args)
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self._inner, name)
+
+    monkeypatch.setattr(RunHistoryStore, "_columns", lambda self: set())
+    monkeypatch.setattr(sqlite3, "connect", lambda *a, **k: _Conn(real_connect(*a, **k)))
+    with pytest.raises(sqlite3.OperationalError, match="locked"):
+        RunHistoryStore(str(tmp_path / "runs.sqlite3"))
+
+
+def test_a_running_high_stakes_quick_answer_already_carries_the_notice() -> None:
+    """The caveat does not wait for the verdict. RED IF the safety notice is
+    gated on the run being finished."""
+    run = _run(mode="quick", query=HIGH_STAKES_QUERY)
+    query_run_repository._query_runs[run.query_run_id].status = (  # noqa: SLF001
+        QueryRunStatus.INITIAL_ANSWERS_RUNNING
+    )
+    served = qr._result_response(query_run_repository.get(run.query_run_id))
+    assert served.quick_verdict is None
+    assert served.result.safety_notice == HIGH_STAKES_NOTICE_FRAGMENT

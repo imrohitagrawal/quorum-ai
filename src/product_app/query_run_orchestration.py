@@ -370,10 +370,10 @@ class QueryRunResultResponse(BaseModel):
     #: W5 (ADR-0126): the run's shape, echoed so a client can render a quick
     #: answer as one, never infer it from ``len(model_slots)``.
     mode: Literal["panel", "quick"] = "panel"
-    #: W5 (ADR-0127): the judge's verdict on a QUICK answer: three levels (or
-    #: ``not_checked``), the judge's reasons as plain text, and the sources it
-    #: was shown. ``None`` on every panel run, whose judge prose stays
-    #: unserved (D-5).
+    #: W5 (ADR-0127): the judge's verdict on a QUICK answer, once the run has
+    #: finished: three levels (or ``not_checked``), the judge's scores, reasons
+    #: the APP writes from them, and the sources the judge was shown. No
+    #: judge-written text (D-5). ``None`` on every panel run.
     quick_verdict: QuickVerdict | None = None
     #: ``True`` when any model answer was produced by Quorum's local
     #: simulation helpers (or the fallback search stub) rather than by a
@@ -2784,12 +2784,11 @@ def _result_response(query_run: QueryRun) -> QueryRunResultResponse:
     # this is where a configured judge first dispatches, so its dollar is
     # inside the figure ``_actual_cost`` prices and the ledger books.
     evaluation = _evaluation_projection(query_run, agreement=agreement)
-    # W5 (ADR-0126): a quick answer SERVES no evaluation yet. Its trust shape
-    # (the judge's three-level verdict with reasons and evidence, the owner's
-    # 2026-09-24 decision) is W5's second pull request; until then the panel
-    # composite would score one answer's "1 of 1" agreement as agreement.
-    # Computed and withheld, never skipped: skipping it moved the judge's
-    # first dispatch after the booking (review round 1 of W5's first PR).
+    # W5 (ADR-0126): a quick answer serves no panel evaluation, whose
+    # composite would score one answer's "1 of 1" agreement as agreement; its
+    # trust shape is ``quick_verdict`` (ADR-0127), built below. Computed and
+    # withheld, never skipped: skipping it moved the judge's first dispatch
+    # after the booking (review round 1 of W5's first pull request).
     quick_verdict: QuickVerdict | None = None
     safety_notice: str | None = None
     if query_run.mode == MODE_QUICK:
