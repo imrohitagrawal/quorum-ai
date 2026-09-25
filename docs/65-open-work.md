@@ -100,7 +100,7 @@ caught by any automated check and 10 of 16 by adversarial review
 | W2 | Peer critique: the answer models critique each other, two rounds (built; ships default-off) | DONE | `ABSENT src/product_app/debate.py :: def _build_peer_round(` | #290 | W1 |
 | W3 | Re-set the money constants against a measured bound — ladder moved 2026-09-07 (ADR-0102); token constants remain (W13/#268) | DONE | `PRESENT src/product_app/costs.py :: DAILY_CAP_USD = Decimal("0.20")` | — | W2 |
 | W4 | Variable panel size N ∈ {2,3,4} — shipped in three PRs: the backend (#493), the workspace control with the validator widening (#494), and the copy outside the run path (third PR) (ADR-0120, CHG-010, CHG-011) | DONE | `ABSENT src/product_app/model_slots.py :: Between 2 and 4 model slots are required.` | — | — (W10 done) |
-| W5 | Quick-answer mode (`mode: "quick"`, one model, judge on) — backend in progress, three more PRs (ADR-0126, CHG-016) | PENDING | `ABSENT src/product_app/templates/workspace.html :: Quick answer — one model, no debate` | — | W4 |
+| W5 | Quick-answer mode (`mode: "quick"`, one model, judge on) — backend merged (#506), served verdict in progress, then the UI and the judge prompt (ADR-0126, ADR-0127; CHG-016, CHG-017) | PENDING | `ABSENT src/product_app/templates/workspace.html :: Quick answer — one model, no debate` | — | W4 |
 | W6 | A panel of one reports strong consensus | DONE | `ABSENT src/product_app/synthesis_consensus.py :: if len(stance) == 1:` | #383 | — |
 | W7 | Google sign-in and logout | UNPINNED | `—` | — | — |
 | W9 | Guard the moderator model overlapping a panel slot | DONE | `ABSENT src/product_app/model_slots.py :: debate_model_id` | — | — |
@@ -306,7 +306,7 @@ already reflow (verified 2026-08-28).
 owner's answers of 2026-09-24 evening, recorded in
 `docs/analysis/2026-09-24-w5-parked.md`). Four pull requests: (1) the backend
 request shape, estimate, bound, token shape, run path and receipt (ADR-0126,
-CHG-016); (2) what a quick result serves: the safety-notice carrier, the
+CHG-016; merged, #506); (2) what a quick result serves (ADR-0127, CHG-017): the safety-notice carrier, the
 quick trust shape and the run store's `mode` column; (3) the workspace
 control and result view; (4) the judge prompt, verification only. The needle
 is the composer sentence in the owner's words, which only the THIRD pull

@@ -157,6 +157,9 @@ RISK_TIER_MODULES = (
     # triage at all, which is the "covered by omission" shape this list exists
     # to prevent.
     "credentialed_url.py",
+    # Added 2026-09-25 with ADR-0127 (W5). It decides what level of judge
+    # assurance a quick answer shows and which judge text reaches a client.
+    "quick_verdict.py",
 )
 
 #: A wrong value here is silently harmful and nothing else constrains it.
@@ -257,6 +260,21 @@ BUCKET_A_LITERAL_PIN = (
 #: Pin the BEHAVIOUR, not the literal — these legitimately change, and a literal
 #: pin would teach people to edit the test alongside the code.
 BUCKET_B_PIN_BEHAVIOUR = {
+    # --- Added 2026-09-25 with W5's second pull request (ADR-0127) ---
+    "quick_verdict.WELL_SUPPORTED_MIN_SCORE": (
+        "the lowest judge faithfulness and grounding that read 'well "
+        "supported'. The session's design, not a calibration, so the value "
+        "may move; what must not is the boundary behaviour on both sides: "
+        "tests/integration/test_quick_verdict_served.py::"
+        "test_the_level_follows_the_verdict (4/4/low well, 4/3 and 5/5/medium partly)"
+    ),
+    "quick_verdict._URL": (
+        "the pattern that reduces a URL in the judge's reasons to its host. "
+        "The pattern may widen; what must not change is that no scheme or "
+        "path survives into served reasons: tests/integration/"
+        "test_quick_verdict_served.py::"
+        "test_the_reasons_are_served_as_plain_text_with_links_reduced_to_hosts"
+    ),
     # --- Added 2026-09-25 with W5 (ADR-0126) ---
     "model_slots.QUICK_SLOT_MESSAGE": (
         "the refusal a quick request with other than one model gets. The "

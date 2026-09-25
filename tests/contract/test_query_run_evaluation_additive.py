@@ -98,9 +98,14 @@ def test_no_pre_s2_field_was_changed_or_made_required() -> None:
     # a pre-S2 client that ignores it stays valid; it is on the wire so a
     # client renders a quick answer as one instead of guessing from the slot
     # count.
+    #
+    # ``quick_verdict`` joined in ADR-0127 (W5). Optional with a ``None``
+    # default and ``None`` on every panel run; it carries the judge's verdict
+    # on a quick answer, the owner's decision of 2026-09-24.
     assert set(schema["properties"]) - PRE_S2_PROPERTIES == {
         "evaluation",
         "mode",
+        "quick_verdict",
         "spend_metering_unavailable",
     }, "an unplanned field was added to QueryRunResultResponse"
 
