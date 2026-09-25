@@ -38,7 +38,9 @@ from sentry_sdk.types import Event as SentryEvent
 from product_app.auth import (
     SessionContext,
     SessionMintCapExceeded,
+    VisitorAddressMiddleware,
     attach_session_cookie,
+    client_ip_of,
     get_session_cookie_from_request,
     issue_or_resume_session,
     require_session,
@@ -58,7 +60,6 @@ from product_app.costs import (
 from product_app.evaluation import judge_configured
 from product_app.feedback_store import FeedbackStore, get_store
 from product_app.feedback_store import configure as configure_feedback_store
-from product_app.forwarded_probe import ForwardedProbeMiddleware
 from product_app.google_signin import (
     CALLBACK_PATH,
     log_sign_in_configuration,
@@ -519,16 +520,17 @@ class _NormalizeMethodLabelMiddleware:
 
 app.add_middleware(_NormalizeMethodLabelMiddleware)
 
-# W30 measurement, temporary: logs what Fly forwards, as kinds, for a request
-# that opts in. Removed by the W30 fix (see product_app.forwarded_probe).
-app.add_middleware(ForwardedProbeMiddleware)
-
 # OD-3: per-request ID correlation. Added LAST so it is the outermost
 # add_middleware layer: the contextvar is bound before the instrumentator
 # and every handler run, and every log record emitted inside the request
 # (including middleware logs) carries the id. See product_app.request_id
 # for the echo-vs-regenerate safety rules on the inbound header.
 app.add_middleware(RequestIdMiddleware)
+
+# W30 (ADR-0132): the visitor's address as Fly's proxy reports it, trusted
+# only from Fly's private ranges. Added after RequestIdMiddleware so it is the
+# outermost layer and every handler, limiter and log sees the visitor.
+app.add_middleware(VisitorAddressMiddleware)
 
 # Monotonic start reference for /status uptime. Captured after the
 # app is constructed so the value reflects "when the process began
@@ -1479,7 +1481,7 @@ def browser_session(
     # in-memory ``session_repository``. The ``/health`` and ``/``
     # endpoints are deliberately NOT rate-limited — those are
     # operational checks used by load balancers and the demo banner.
-    client_ip = (request.client.host if request.client else "unknown") or "unknown"
+    client_ip = client_ip_of(request) or "unknown"
     if not _ip_rate_limiter.allow(ip=client_ip, now_epoch=time.time()):
         return JSONResponse(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -1578,7 +1580,7 @@ def browser_ui(request: Request) -> HTMLResponse:
     # (ADR-0131) — passing ``client_ip`` is required, not
     # optional, or an attacker mints unlimited accounts by hitting ``/ui``
     # directly instead of ``/v1/session`` and the cap never fires.
-    client_ip = (request.client.host if request.client else "unknown") or "unknown"
+    client_ip = client_ip_of(request) or "unknown"
     session_id = get_session_cookie_from_request(request)
     try:
         # No CSRF rotation here: the page gets its token from /v1/session,
