@@ -422,3 +422,10 @@ Given the query workflow shows its four default slots, when the user removes a s
 - Test: TEST-FR-004 (`tests/unit/test_panel_of_n_is_priced_and_bounded.py` for the range, the N-relative estimate and the trust cap; the remove/add control and the N=2 band copy are TEST-FR-004's e2e half, delivered with the workspace change that follows CHG-010)
 - Decided by the product owner on 2026-09-22 (CHG-010).
 
+## AC-051 A quick answer is one model with the judge's verdict and no agreement figure
+
+Given the composer, when the user turns on "Quick answer — one model, no debate", then only slot 1 is shown, the add and remove controls and the shape line are hidden, and "four models by default, 2 debates and 1 sourced answer" is shown; turning it off restores the composer exactly. When the user runs a question with it on, the estimate and create requests carry `mode: "quick"`, one model and no `context`; with it off they carry no `mode` and every slot. When the quick answer finishes, the result view shows the answer rendered from Markdown with no raw marker, its sources, the safety notice when present, and "Judge: <level>" with the reasons, the scores and the sources the judge checked as plain text; it shows no verdict ring or band, trust cards, trust score, debate, synthesis or transcript link, and no agreement figure on the page, in Copy or in Export. A later panel run in the same session shows every panel surface again.
+
+- Requirement: FR-018
+- Test: TEST-FR-018 (`e2e/tests/invariants/quick-answer.spec.ts`, each absence with a positive partner on a panel result; `tests/unit/test_quick_answer_ui.py` for the request bodies, the cost-gate line, the one-model banner copy, the judge heading, the Copy summary and the fixture's served shape)
+- Decided by the product owner on 2026-09-24 (CHG-012 D1 and the evening answers); the layout is the session's (ADR-0128, CHG-018).

@@ -93,6 +93,66 @@
       ? `Got your question. Taking you to review your ${word} models and see the itemized cost before anything runs…`
       : `Got your question. Taking you to review your ${word} models, then we'll price it and run once you approve…`;
   }
+  // W5 (ADR-0128). The body of an estimate or create request. A panel body is
+  // byte-identical to the pre-W5 one: no `mode` key, the same key order. A
+  // quick body sends slot 1 alone and `mode: "quick"`, and never `context` (a
+  // quick request with follow-up context is refused, ADR-0126 5a; the browser
+  // sends no context on any run). Self-contained: the unit harness runs it alone.
+  function runRequestBody(queryText, modelIds, quick, extra) {
+    const body = quick
+      ? { query_text: queryText, model_slots: modelIds.slice(0, 1), mode: "quick" }
+      : { query_text: queryText, model_slots: modelIds };
+    return extra ? { ...body, ...extra } : body;
+  }
+
+  // W5 (ADR-0128). The cost gate's meta line. The panel sentence is the one
+  // W4 shipped, verbatim. A quick one names the judge's check only when the
+  // estimate priced one (a stage row besides the answer), because a
+  // deployment with no judge configured runs none.
+  function costGateMetaText(slotCount, quick, checkPriced) {
+    if (quick) {
+      const check = checkPriced ? "judge check" : "no judge configured";
+      return `1 model · no debate · ${check} · sourced answer where search succeeds`;
+    }
+    return `${slotCount} models · 2 debate rounds · synthesis · sourced answers where search succeeds`;
+  }
+
+  // W5 (ADR-0128). The judge's verdict on a quick answer, in the owner's words
+  // ("Judge: well supported/partly supported/not supported", CHG-012). Any
+  // level the page does not know reads "Not checked": never a level the judge
+  // did not give (ADR-0127).
+  function quickVerdictHeading(level) {
+    const words = {
+      well_supported: "Well supported",
+      partly_supported: "Partly supported",
+      not_supported: "Not supported",
+    };
+    const known = typeof level === "string" && Object.prototype.hasOwnProperty.call(words, level);
+    return `Judge: ${known ? words[level] : "Not checked"}`;
+  }
+
+  // W5 (ADR-0128). The Copy summary of a quick answer. It carries no
+  // agreement figure: the owner decided a quick answer shows none.
+  function quickCopySummary({ question, modelLabel, answerText, heading, correlationId }) {
+    const lines = [];
+    if (question) lines.push(question, "");
+    lines.push(`Quick answer (one model, no debate) from ${modelLabel}:`);
+    lines.push(answerText || "No answer was produced for this run.");
+    lines.push("", heading);
+    if (correlationId) lines.push(`Run: ${correlationId}`);
+    return lines.join("\n");
+  }
+
+  // Which finished runs open the result view. A panel run needs its
+  // synthesis, as before; a quick answer has none by design (ADR-0126), so it
+  // opens when its one answer exists.
+  function resultIsShowable(result) {
+    const res = result && result.result;
+    if (!res) return false;
+    if (res.final_synthesis) return true;
+    return result.mode === "quick" && Array.isArray(res.model_answers) && res.model_answers.length > 0;
+  }
+
   // The panel size of a run: the REQUESTED slots the server echoes back, or
   // the default panel while no run exists yet.
   const panelSlotCount = (result) => {
@@ -211,6 +271,8 @@
   // ---------------------------------------------------------------------------
 
   const state = {
+    // W5 (ADR-0128): the composer's quick-answer control.
+    quickMode: false,
     csrfToken: "",
     currentEstimate: null,
     currentRunId: null,
@@ -1870,18 +1932,21 @@
     const stages = (result.progress && result.progress.stages) || [];
     const byKey = new Map(stages.map((s) => [s.stage, s]));
     const slotCount = panelSlotCount(result);
+    // W5 (ADR-0128): a quick answer runs the answer stage only.
+    const stageDefs =
+      result.mode === "quick" ? LIVE_PIPELINE_STAGES.slice(0, 1) : LIVE_PIPELINE_STAGES;
     // Fix 3: skip the rebuild when nothing this strip renders has changed.
     const sig = JSON.stringify({
       answersReceived,
       slotCount,
-      stages: LIVE_PIPELINE_STAGES.map((def) => {
+      stages: stageDefs.map((def) => {
         const s = byKey.get(def.key);
         return s ? [s.state, s.detail || ""] : null;
       }),
     });
     if (sig === state.liveSig.stage) return;
     state.liveSig.stage = sig;
-    const items = LIVE_PIPELINE_STAGES.map((def, index) => {
+    const items = stageDefs.map((def, index) => {
       const stage = byKey.get(def.key);
       const stageState = stage ? stage.state : "pending";
       const item = document.createElement("div");
@@ -2012,6 +2077,13 @@
   function renderLiveDebate(result) {
     const host = el("live-debate");
     if (!host) return;
+    // W5 (ADR-0128): a quick answer has no debate, so neither the rounds nor
+    // their caption are shown while it runs.
+    const quick = result.mode === "quick";
+    host.hidden = quick;
+    const caption = document.querySelector(".live-debate-caption");
+    if (caption) caption.hidden = quick;
+    if (quick) return;
     const debate = (result.result && result.result.debate_outputs) || [];
     const byRound = new Map(debate.map((r) => [r.round_number, r]));
     const stages = (result.progress && result.progress.stages) || [];
@@ -2564,7 +2636,24 @@
   // copy of the logic with different words — so the file a user kept disagreed
   // with the screen they read it from (the same class of defect as #128). Two
   // callers, one description: they cannot drift.
-  function describePanelShortfall({ live, simulated, missing, total }) {
+  function describePanelShortfall({ live, simulated, missing, total, quick }) {
+    // W5 (ADR-0128): a quick answer is one model and no debate, so the panel
+    // sentences below ("None of the 1 models", "the debate, and the
+    // synthesis") are false for it. Its two reachable shortfalls, no answer
+    // and a simulated one, get their own words; the panel strings are unchanged.
+    if (quick) {
+      if (live === 0 && simulated === 0) {
+        return {
+          title: "No result — the model did not answer",
+          message: "The model returned no answer, so there is nothing below to rely on.",
+        };
+      }
+      return {
+        title: "Simulated result — not from a real model",
+        message:
+          "Live execution was unavailable, so this answer comes from Quorum's local simulation, not from a real provider. Treat it as a demo, not a real model's answer.",
+      };
+    }
     const t = total ?? 4;
     const allMissing = live === 0 && simulated === 0;
     const noLive = live === 0;
@@ -2996,6 +3085,7 @@
           simulated: localCount ?? 0,
           missing: failedCount,
           total,
+          quick: result.mode === "quick",
         })
       : describePanelShortfall({ live: 0, simulated: total ?? 4, missing: 0, total });
     if (titleEl) titleEl.textContent = title;
@@ -3062,6 +3152,34 @@
     renderResultDegraded(result);
     renderResultMeta(result, status, durationText);
     renderResultReceipt(result, res);
+
+    // W5 (ADR-0128): a quick answer has its own region and none of the
+    // panel's: no verdict band or ring (the owner: no agreement figure), no
+    // trust cards or trust score (the panel composite would read one answer's
+    // "1 of 1" as agreement), no debate, no transcript and no synthesis.
+    const isQuick = result.mode === "quick";
+    const quickHost = el("result-quick");
+    if (quickHost) quickHost.hidden = !isQuick;
+    if (isQuick) {
+      for (const id of PANEL_RESULT_SURFACES) {
+        const node = el(id);
+        if (!node) continue;
+        node.hidden = true;
+        if (id !== "result-transcript-link") node.replaceChildren();
+      }
+      const band = el("result-verdict");
+      if (band) delete band.dataset.consensus;
+      renderQuickResult(result, res, question);
+      return;
+    }
+    // A panel run after a quick one: show the three surfaces nothing else
+    // un-hides (the other three set their own visibility when they render).
+    // On a page that never showed a quick answer these carry no `hidden`
+    // attribute, so this changes nothing.
+    for (const id of ["result-verdict", "result-trust", "result-transcript-link"]) {
+      const node = el(id);
+      if (node) node.hidden = false;
+    }
     renderVerdictBand(result, fs, {
       isConsensus,
       aligned,
@@ -3114,6 +3232,220 @@
       // band had just dropped — the #128 defect exactly.
       noLiveAnswers,
     });
+  }
+
+  // W5 (ADR-0128). The result surfaces a quick answer hides.
+  const PANEL_RESULT_SURFACES = [
+    "result-verdict",
+    "result-trust",
+    "result-trust-score",
+    "result-debate",
+    "result-transcript-link",
+    "result-synthesis",
+  ];
+
+  // W5 (ADR-0128): the scores the judge gave, as one line, or "" when it gave none.
+  function quickScoresText(qv) {
+    if (!qv || !Number.isInteger(qv.faithfulness) || !Number.isInteger(qv.grounding)) return "";
+    const risk = typeof qv.hallucination_risk === "string" ? qv.hallucination_risk : "";
+    return (
+      `Faithfulness ${qv.faithfulness} out of 5 · Grounding ${qv.grounding} out of 5` +
+      (risk ? ` · Risk of unsupported claims: ${risk}` : "")
+    );
+  }
+
+  // W5 (ADR-0128): what the answer's own citation coverage says, in words.
+  function quickCoverageText(answer, sourceCount) {
+    const cov = answer && answer.citation_coverage;
+    if (!cov) return "";
+    const primary = Number(cov.sourced_answer_count) > 0;
+    if (!primary) return "The answer cites no primary source.";
+    const noun = sourceCount === 1 ? "source" : "sources";
+    return `The answer cites ${sourceCount} ${noun}, including a primary source.`;
+  }
+
+  const QUICK_UNCHECKED_TEXT =
+    "No judge verdict is available for this answer, so nothing on this page has been checked against its sources.";
+  const QUICK_VERDICT_NOTE =
+    "A second model read the answer against the sources it cites. Its scores are not calibrated against human review, so read them as a guide, not a fact-check.";
+
+  // W5 (ADR-0128): the quick answer's region. The answer is provider prose, so
+  // it goes through the Markdown renderer (``setProse``). Everything else here
+  // is written with ``textContent``: the safety notice and the reasons are
+  // app-written, and the sources the judge checked are shown as plain text,
+  // title and address, because the same citations are already the page's
+  // safe links in the Sources row and the judge's copies may be truncated.
+  // Reads ``quick_verdict.level`` and never any judge field (decision D-5).
+  function renderQuickResult(result, res, question) {
+    const host = el("result-quick");
+    if (!host) return;
+    const answers = Array.isArray(res.model_answers) ? res.model_answers : [];
+    const answer = answers.length ? answers[0] : null;
+    const qv = result.quick_verdict || null;
+    const level = qv && typeof qv.level === "string" ? qv.level : "not_checked";
+    const heading = quickVerdictHeading(level);
+    const slot = Array.isArray(result.model_slots) && result.model_slots.length ? result.model_slots[0] : null;
+    const modelId = (answer && answer.model_id) || (slot && slot.model_id) || "";
+    const modelLabel =
+      (answer && answer.display_name) || displayNameForModel(modelId) || modelId || "the model";
+    const sources = collectResultSources(res);
+    const parts = [];
+
+    const notice = res.safety_notice ? String(res.safety_notice).trim() : "";
+    if (notice) {
+      const caveat = mkEl("div", "result-quick-caveat");
+      caveat.setAttribute("role", "note");
+      caveat.appendChild(mkEl("span", "result-quick-caveat-label", "Safety notice"));
+      caveat.appendChild(mkEl("p", "result-quick-safety", notice));
+      parts.push(caveat);
+    }
+
+    const verdict = mkEl("div", "result-quick-verdict");
+    verdict.dataset.level = heading === "Judge: Not checked" ? "not_checked" : level;
+    verdict.appendChild(mkEl("h2", "result-quick-verdict-heading", heading));
+    const scores = quickScoresText(qv);
+    if (scores) verdict.appendChild(mkEl("p", "result-quick-scores", scores));
+    const reasons = qv && Array.isArray(qv.reasons) ? qv.reasons.filter((r) => typeof r === "string" && r) : [];
+    if (reasons.length) {
+      const list = mkEl("ul", "result-quick-reasons");
+      for (const reason of reasons) list.appendChild(mkEl("li", null, reason));
+      verdict.appendChild(list);
+    } else {
+      verdict.appendChild(mkEl("p", "result-quick-unchecked", QUICK_UNCHECKED_TEXT));
+    }
+    const checked = qv && Array.isArray(qv.sources_checked) ? qv.sources_checked.filter(Boolean) : [];
+    if (checked.length) {
+      verdict.appendChild(mkEl("h3", "result-quick-checked-title", "Sources the judge checked"));
+      const list = mkEl("ol", "result-quick-checked");
+      for (const src of checked) {
+        const title = src.title ? String(src.title) : "";
+        const url = src.url ? String(src.url) : "";
+        list.appendChild(mkEl("li", null, title && url ? `${title} — ${url}` : title || url));
+      }
+      verdict.appendChild(list);
+    }
+    if (scores) verdict.appendChild(mkEl("p", "result-quick-note", QUICK_VERDICT_NOTE));
+    parts.push(verdict);
+
+    const card = mkEl("div", "result-quick-card");
+    const head = mkEl("div", "result-quick-head");
+    head.appendChild(mkEl("h2", "result-quick-title", "The answer"));
+    head.appendChild(mkEl("span", "result-quick-attr", `${modelLabel} · one model, no debate`));
+    card.appendChild(head);
+    if (answer && answer.shortened === true) {
+      card.appendChild(
+        mkEl(
+          "p",
+          "result-quick-shortened",
+          "The model stopped before finishing, so this answer ends mid-thought.",
+        ),
+      );
+    }
+    const body = mkEl("div", "result-quick-answer");
+    setProse(body, answer ? String(answer.answer_text || "").trim() : "", "No answer text was returned.");
+    card.appendChild(body);
+    const coverage = quickCoverageText(answer, sources.length);
+    if (sources.length || coverage) {
+      const wrap = mkEl("div", "result-quick-sources");
+      wrap.appendChild(mkEl("span", "result-quick-sources-label", "Sources"));
+      if (sources.length) wrap.appendChild(buildSourceChipRow(sources));
+      if (coverage) wrap.appendChild(mkEl("p", "result-quick-coverage", coverage));
+      card.appendChild(wrap);
+    }
+    parts.push(card);
+    host.replaceChildren(...parts);
+
+    state.lastResultSummary = quickCopySummary({
+      question,
+      modelLabel,
+      answerText: answer ? String(answer.answer_text || "").trim() : "",
+      heading,
+      correlationId: result.correlation_id || "",
+    });
+    state.lastResultRunId = result.query_run_id || result.correlation_id || "run";
+    state.lastResultMarkdown = buildQuickResultMarkdown(result, res, {
+      question,
+      heading,
+      modelLabel,
+      answer,
+      qv,
+    });
+  }
+
+  // W5 (ADR-0128): the Markdown export of a quick answer. The same safety
+  // rules as the panel's export (provenance first, model text sanitised,
+  // sources through the shared lines); no agreement figure anywhere.
+  function buildQuickResultMarkdown(result, res, ctx) {
+    const out = [];
+    const push = (...lines) => out.push(...lines);
+    push("# Quorum quick answer", "");
+    const liveCount = Number(result.live_count);
+    const localCount = Number(result.local_count);
+    if (Number.isFinite(liveCount) && liveCount < 1) {
+      const simulated = Number.isFinite(localCount) && localCount > 0 ? 1 : 0;
+      const { title, message } = describePanelShortfall({
+        live: 0,
+        simulated,
+        missing: 1 - simulated,
+        total: 1,
+        quick: true,
+      });
+      push(`> **${title}.** ${message}`, "");
+    }
+    push("## About this run", "");
+    if (result.correlation_id) push(`- Run: ${result.correlation_id}`);
+    if (result.query_run_id) push(`- Run id: ${result.query_run_id}`);
+    if (result.result_generated_at_utc) push(`- Generated: ${result.result_generated_at_utc}`);
+    if (Number.isFinite(Number(result.elapsed_time_ms))) {
+      push(`- Elapsed: ${formatDuration(result.elapsed_time_ms)}`);
+    }
+    push("- Mode: Quick answer — one model, no debate");
+    if (Number.isFinite(liveCount)) {
+      push(
+        liveCount >= 1
+          ? "- Answer: from a live model"
+          : Number.isFinite(localCount) && localCount > 0
+            ? "- Answer: from Quorum's local simulation (not a model)"
+            : "- Answer: none returned",
+      );
+    }
+    if (ctx.answer && ctx.answer.shortened === true) {
+      push("- Incomplete answer: the model stopped before finishing and the answer ends mid-thought.");
+    }
+    push("");
+    if (ctx.question) push(`**Question:** ${String(ctx.question).replace(/</g, "&lt;")}`, "");
+
+    push(`## ${ctx.heading}`, "");
+    const qv = ctx.qv;
+    const reasons = qv && Array.isArray(qv.reasons) ? qv.reasons.filter((r) => typeof r === "string" && r) : [];
+    if (reasons.length) {
+      for (const reason of reasons) push(`- ${mdUntrustedInline(reason)}`);
+    } else {
+      push(QUICK_UNCHECKED_TEXT);
+    }
+    const scores = quickScoresText(qv);
+    if (scores) push(`- Scores: ${scores}`);
+    push("");
+    const checked = qv && Array.isArray(qv.sources_checked) ? qv.sources_checked.filter(Boolean) : [];
+    if (checked.length) {
+      push("### Sources the judge checked", "");
+      checked.forEach((src, i) => {
+        const title = mdUntrustedInline(src.title || "");
+        const url = mdUntrustedInline(src.url || "");
+        push(`${i + 1}. ${title}${title && url ? " — " : ""}${url}`);
+      });
+      push("");
+    }
+
+    const notice = res.safety_notice ? String(res.safety_notice).trim() : "";
+    if (notice) push("## Safety notice", "", notice, "");
+
+    push("## The answer", "");
+    push(`### ${mdEscapeInline(ctx.modelLabel)}`, "");
+    const text = ctx.answer ? String(ctx.answer.answer_text || "").trim() : "";
+    push(text ? mdUntrustedBlock(text) : "No answer text was returned.", "");
+    push(...sourcesMarkdownLines(res));
+    return out.join("\n");
   }
 
   // Build the full Markdown export for a completed run.
@@ -3355,45 +3687,7 @@
       section("High-stakes notice", fs.high_stakes_notice);
     }
 
-    const sources = collectResultSources(res || {});
-    if (sources.length) {
-      push("## Sources", "");
-      sources.forEach((s, i) => {
-        const url = s && s.url ? String(s.url) : "";
-        const rawTitle = s && s.title ? String(s.title) : sourceHost(url) || "source";
-        const title = mdEscapeInline(rawTitle);
-        // Every cited source, including the ones the view keeps behind
-        // "+N more" — an export that reproduced the collapsed view would drop
-        // provenance the run actually has.
-        //
-        // A Quorum-side stub source points at the IANA-reserved example.test
-        // domain and is NOT evidence. The view already refuses to make those
-        // anchors and badges them (`renderStubSource`); an export that turned
-        // them into numbered citations would launder simulated placeholders
-        // into a decision record.
-        if (isStubSource(s)) {
-          const tag = STUB_SOURCE_TAG_TEXT[s.provider] || (s.isFallback ? "fallback stub" : "simulated");
-          push(`${i + 1}. ${title} — **${tag}, not a real source**`);
-          return;
-        }
-        // Untrusted URL: the same allow-list the chips use, and ABSOLUTE
-        // http(s) only. `safeMarkdownHref` also permits relative URLs, which
-        // are meaningful in a page and meaningless in a downloaded file — a
-        // bare "example.com/article" would export as a dead relative link that
-        // still reads as a citation.
-        const href = safeHttpUrl(url);
-        // U1: same reason as the chip tag — a retrieved page is real, but it is
-        // not the model's own citation and does not count toward the coverage
-        // figure printed elsewhere in this export.
-        const origin = isRetrievedSource(s) ? " — via web search" : "";
-        push(
-          href
-            ? `${i + 1}. [${title}](<${href}>)${origin}`
-            : `${i + 1}. ${title} (link withheld — unsupported URL scheme)${origin}`,
-        );
-      });
-      push("");
-    }
+    push(...sourcesMarkdownLines(res));
 
     // The OPENING each model gave, and only that.
     //
@@ -3469,6 +3763,53 @@
     }
 
     return out.join("\n");
+  }
+
+  // The export's Sources section, shared by the panel and the quick export
+  // (ADR-0128); [] when the run cited nothing.
+  function sourcesMarkdownLines(res) {
+    const out = [];
+    const push = (...lines) => out.push(...lines);
+    const sources = collectResultSources(res || {});
+    if (sources.length) {
+      push("## Sources", "");
+      sources.forEach((s, i) => {
+        const url = s && s.url ? String(s.url) : "";
+        const rawTitle = s && s.title ? String(s.title) : sourceHost(url) || "source";
+        const title = mdEscapeInline(rawTitle);
+        // Every cited source, including the ones the view keeps behind
+        // "+N more" — an export that reproduced the collapsed view would drop
+        // provenance the run actually has.
+        //
+        // A Quorum-side stub source points at the IANA-reserved example.test
+        // domain and is NOT evidence. The view already refuses to make those
+        // anchors and badges them (`renderStubSource`); an export that turned
+        // them into numbered citations would launder simulated placeholders
+        // into a decision record.
+        if (isStubSource(s)) {
+          const tag = STUB_SOURCE_TAG_TEXT[s.provider] || (s.isFallback ? "fallback stub" : "simulated");
+          push(`${i + 1}. ${title} — **${tag}, not a real source**`);
+          return;
+        }
+        // Untrusted URL: the same allow-list the chips use, and ABSOLUTE
+        // http(s) only. `safeMarkdownHref` also permits relative URLs, which
+        // are meaningful in a page and meaningless in a downloaded file — a
+        // bare "example.com/article" would export as a dead relative link that
+        // still reads as a citation.
+        const href = safeHttpUrl(url);
+        // U1: same reason as the chip tag — a retrieved page is real, but it is
+        // not the model's own citation and does not count toward the coverage
+        // figure printed elsewhere in this export.
+        const origin = isRetrievedSource(s) ? " — via web search" : "";
+        push(
+          href
+            ? `${i + 1}. [${title}](<${href}>)${origin}`
+            : `${i + 1}. ${title} (link withheld — unsupported URL scheme)${origin}`,
+        );
+      });
+      push("");
+    }
+    return out;
   }
 
   // Return the normalised URL string only when it is a real http(s) URL;
@@ -3599,6 +3940,87 @@
     return `from ${n} refined and ${total - n} opening ${plural(total - n)}`;
   }
 
+  // The numbered source chips, shared by the synthesis card and the quick
+  // answer (ADR-0128). Moved here unchanged from renderResultSynthesis.
+  function buildSourceChipRow(sources) {
+    const chipRow = mkEl("div", "result-synth-source-chips");
+    // F-19: EVERY cited source is built, not just the first three. The row
+    // stays capped at three by default so it does not dominate the
+    // synthesis, but the rest are real chips carrying their real citation
+    // numbers, revealed by the expander below. Previously they were never
+    // constructed at all: the "+N more" text announced provenance the user
+    // had no way to reach, on a product that asks people to judge answers
+    // by their sources.
+    const COLLAPSED_SOURCE_COUNT = 3;
+    sources.forEach((s, i) => {
+      // SECURITY: source URLs come from external search providers (untrusted).
+      // Only make the chip a link when the URL is http(s) — mirrors the
+      // ``createSafeLink`` scheme allow-list so a ``javascript:`` URL can never
+      // become a clickable anchor. Otherwise render a plain, non-link chip.
+      // A Quorum-side stub points at the IANA-reserved example.test domain,
+      // which never resolves — `renderStubSource` already refuses to make
+      // those anchors elsewhere for exactly that reason. F-19 made every
+      // source reachable, so without this the expander hands the user a
+      // row of dead links dressed as citations.
+      const isStub = isStubSource(s);
+      const safe = isStub ? null : safeHttpUrl(s.url);
+      const chip = safe ? mkEl("a", "result-source-chip") : mkEl("span", "result-source-chip");
+      if (isStub) chip.dataset.stub = "true";
+      if (safe) {
+        chip.href = safe;
+        chip.target = "_blank";
+        chip.rel = "noopener noreferrer";
+      }
+      chip.appendChild(mkEl("span", "result-source-num", String(i + 1)));
+      const host = sourceHost(s.url);
+      const title = s.title && s.title !== host ? String(s.title) : "";
+      // Combine host + title when both are meaningful; otherwise show
+      // whichever exists (no "host · host", no leading " · " when a
+      // non-http URL yields an empty host).
+      const label = host && title ? `${host} · ${title}` : host || title || "source";
+      chip.appendChild(mkEl("span", "result-source-label", label));
+      if (isStub) {
+        chip.appendChild(
+          mkEl(
+            "span",
+            "result-source-stub-tag",
+            STUB_SOURCE_TAG_TEXT[s.provider] || (s.isFallback ? "fallback stub" : "simulated"),
+          ),
+        );
+      }
+      // U1: a retrieved page carries a neutral origin tag — never the
+      // stub badge, which asserts "not a real source".
+      if (!isStub && isRetrievedSource(s)) {
+        chip.dataset.origin = "web_search";
+        chip.appendChild(
+          mkEl("span", "result-source-origin-tag", RETRIEVED_SOURCE_TAG_TEXT),
+        );
+      }
+      if (i >= COLLAPSED_SOURCE_COUNT) chip.hidden = true;
+      chipRow.appendChild(chip);
+    });
+    const overflow = sources.length - COLLAPSED_SOURCE_COUNT;
+    if (overflow > 0) {
+      // A native <button>, so it is focusable and Enter/Space work without
+      // any key handling of our own. The label states the direction of the
+      // action in both states rather than only the count.
+      const more = mkEl("button", "result-source-more", `+ ${overflow} more`);
+      more.type = "button";
+      more.setAttribute("aria-expanded", "false");
+      more.addEventListener("click", () => {
+        const expanding = more.getAttribute("aria-expanded") !== "true";
+        more.setAttribute("aria-expanded", expanding ? "true" : "false");
+        const chips = chipRow.querySelectorAll(".result-source-chip");
+        chips.forEach((chip, i) => {
+          if (i >= COLLAPSED_SOURCE_COUNT) chip.hidden = !expanding;
+        });
+        more.textContent = expanding ? "Show fewer" : `+ ${overflow} more`;
+      });
+      chipRow.appendChild(more);
+    }
+    return chipRow;
+  }
+
   function renderResultSynthesis(fs, res) {
     const host = el("result-synthesis");
     if (!host) return;
@@ -3686,81 +4108,7 @@
     if (sources.length || sourceSupport) {
       const wrap = mkEl("div", "result-synth-sources");
       if (sources.length) {
-        const chipRow = mkEl("div", "result-synth-source-chips");
-        // F-19: EVERY cited source is built, not just the first three. The row
-        // stays capped at three by default so it does not dominate the
-        // synthesis, but the rest are real chips carrying their real citation
-        // numbers, revealed by the expander below. Previously they were never
-        // constructed at all: the "+N more" text announced provenance the user
-        // had no way to reach, on a product that asks people to judge answers
-        // by their sources.
-        const COLLAPSED_SOURCE_COUNT = 3;
-        sources.forEach((s, i) => {
-          // SECURITY: source URLs come from external search providers (untrusted).
-          // Only make the chip a link when the URL is http(s) — mirrors the
-          // ``createSafeLink`` scheme allow-list so a ``javascript:`` URL can never
-          // become a clickable anchor. Otherwise render a plain, non-link chip.
-          // A Quorum-side stub points at the IANA-reserved example.test domain,
-          // which never resolves — `renderStubSource` already refuses to make
-          // those anchors elsewhere for exactly that reason. F-19 made every
-          // source reachable, so without this the expander hands the user a
-          // row of dead links dressed as citations.
-          const isStub = isStubSource(s);
-          const safe = isStub ? null : safeHttpUrl(s.url);
-          const chip = safe ? mkEl("a", "result-source-chip") : mkEl("span", "result-source-chip");
-          if (isStub) chip.dataset.stub = "true";
-          if (safe) {
-            chip.href = safe;
-            chip.target = "_blank";
-            chip.rel = "noopener noreferrer";
-          }
-          chip.appendChild(mkEl("span", "result-source-num", String(i + 1)));
-          const host = sourceHost(s.url);
-          const title = s.title && s.title !== host ? String(s.title) : "";
-          // Combine host + title when both are meaningful; otherwise show
-          // whichever exists (no "host · host", no leading " · " when a
-          // non-http URL yields an empty host).
-          const label = host && title ? `${host} · ${title}` : host || title || "source";
-          chip.appendChild(mkEl("span", "result-source-label", label));
-          if (isStub) {
-            chip.appendChild(
-              mkEl(
-                "span",
-                "result-source-stub-tag",
-                STUB_SOURCE_TAG_TEXT[s.provider] || (s.isFallback ? "fallback stub" : "simulated"),
-              ),
-            );
-          }
-          // U1: a retrieved page carries a neutral origin tag — never the
-          // stub badge, which asserts "not a real source".
-          if (!isStub && isRetrievedSource(s)) {
-            chip.dataset.origin = "web_search";
-            chip.appendChild(
-              mkEl("span", "result-source-origin-tag", RETRIEVED_SOURCE_TAG_TEXT),
-            );
-          }
-          if (i >= COLLAPSED_SOURCE_COUNT) chip.hidden = true;
-          chipRow.appendChild(chip);
-        });
-        const overflow = sources.length - COLLAPSED_SOURCE_COUNT;
-        if (overflow > 0) {
-          // A native <button>, so it is focusable and Enter/Space work without
-          // any key handling of our own. The label states the direction of the
-          // action in both states rather than only the count.
-          const more = mkEl("button", "result-source-more", `+ ${overflow} more`);
-          more.type = "button";
-          more.setAttribute("aria-expanded", "false");
-          more.addEventListener("click", () => {
-            const expanding = more.getAttribute("aria-expanded") !== "true";
-            more.setAttribute("aria-expanded", expanding ? "true" : "false");
-            const chips = chipRow.querySelectorAll(".result-source-chip");
-            chips.forEach((chip, i) => {
-              if (i >= COLLAPSED_SOURCE_COUNT) chip.hidden = !expanding;
-            });
-            more.textContent = expanding ? "Show fewer" : `+ ${overflow} more`;
-          });
-          chipRow.appendChild(more);
-        }
+        const chipRow = buildSourceChipRow(sources);
         wrap.appendChild(chipRow);
       }
       if (sourceSupport) {
@@ -7373,9 +7721,10 @@
   //     unknown stage falls back to its raw key.
   // Both lists re-sum to ``total`` by construction (the reconciliation
   // invariant), so each column's Total row shows the same figure.
-  function costGatePartitions(breakdown) {
+  function costGatePartitions(breakdown, quick) {
     const stageLabels = {
-      initial_answers: "Initial answers × 4",
+      // W5 (ADR-0128): one answer on a quick run.
+      initial_answers: quick ? "The answer" : "Initial answers × 4",
       debate_round_1: "Debate round 1",
       debate_round_2: "Debate round 2",
       synthesis: "Synthesis",
@@ -7514,8 +7863,11 @@
     if (gateQuestion) gateQuestion.textContent = queryTextarea.value.trim();
     // W4: the meta line names the requested panel size, not "4 models".
     const gateMeta = el("cost-gate-question-meta");
+    const quickGate = state.quickMode === true;
     if (gateMeta) {
-      gateMeta.textContent = `${getModelIds().length} models · 2 debate rounds · synthesis · sourced answers where search succeeds`;
+      const stageRows = Array.isArray(breakdown.by_stage) ? breakdown.by_stage : [];
+      const checkPriced = stageRows.some((row) => row && row.stage !== "initial_answers");
+      gateMeta.textContent = costGateMetaText(getModelIds().length, quickGate, checkPriced);
     }
 
     // Big mono total. The estimated range is band-specific and is set only
@@ -7531,7 +7883,7 @@
     if (gateCard) gateCard.dataset.band = action;
 
     // Itemized table — both partitions of the SAME breakdown total.
-    const partitions = costGatePartitions(breakdown);
+    const partitions = costGatePartitions(breakdown, quickGate);
     renderCostRows(gateByModel, partitions.byModel, partitions.total);
     renderCostRows(gateByStage, partitions.byStage, partitions.total);
 
@@ -7738,10 +8090,7 @@
       }
       const estimate = await api("/v1/query-runs/estimate", {
         method: "POST",
-        body: JSON.stringify({
-          query_text: queryText,
-          model_slots: getModelIds(),
-        }),
+        body: JSON.stringify(runRequestBody(queryText, getModelIds(), state.quickMode)),
       });
       state.currentEstimate = estimate;
       // Slice 1: fan the itemized ``by_model`` breakdown out onto the
@@ -8111,12 +8460,12 @@
           : null;
       const created = await api("/v1/query-runs", {
         method: "POST",
-        body: JSON.stringify({
-          query_text: queryText,
-          model_slots: getModelIds(),
-          safety_acknowledgements: warningAcknowledgements(warnings.warnings),
-          cost_confirmation: costConfirmationPayload,
-        }),
+        body: JSON.stringify(
+          runRequestBody(queryText, getModelIds(), state.quickMode, {
+            safety_acknowledgements: warningAcknowledgements(warnings.warnings),
+            cost_confirmation: costConfirmationPayload,
+          }),
+        ),
       });
       state.currentRunId = created.query_run_id;
       // Slice 3 (04 Live run): capture the submitted question so the live-run
@@ -8280,7 +8629,8 @@
       // polling has already stopped) so there is no aria-live spam. If there is
       // NO final_synthesis (failed/timed_out/cancelled/blocked), STAY on the
       // live-run view: its terminal error state + ``#live-notices`` handle that.
-      if (result.result && result.result.final_synthesis) {
+      // W5: a quick answer has no synthesis by design and opens on its answer.
+      if (resultIsShowable(result)) {
         // Slice 5 (06 Transcript): stash the terminal result so the transcript
         // drill-down renders honest per-model openings + round critiques
         // without a re-fetch. Captured only alongside a real synthesis (same
@@ -8302,7 +8652,13 @@
         }
       }
       if (result.status === "completed") {
-        toast({ message: "Run completed. See the synthesis below.", tone: "success" });
+        toast({
+          message:
+            result.mode === "quick"
+              ? "Run completed. See the answer below."
+              : "Run completed. See the synthesis below.",
+          tone: "success",
+        });
       } else if (result.status === "partial") {
         toast({
           message: liveNoticesHaveContent(result)
@@ -9265,6 +9621,30 @@
   // W4: the remove / add controls. Its own init, separate from
   // ``initModelSlotSelection``: tests/integration/test_app_js_fixes.py runs that
   // function under a DOM shim that has no ``el``.
+  // W5 (ADR-0128): the composer's quick-answer control. On: slot 1 alone is
+  // shown and sent, the add/remove controls and the shape line are hidden
+  // (CSS keyed on the fieldset's ``data-quick``), and the owner's info line is
+  // shown. Off: the attribute is removed and the note hidden again, so the
+  // panel composer is exactly what it was.
+  function applyQuickMode(on) {
+    state.quickMode = on === true;
+    const group = modelInputs ? modelInputs.closest("fieldset") : null;
+    if (group) {
+      if (state.quickMode) group.dataset.quick = "true";
+      else delete group.dataset.quick;
+    }
+    const note = el("quick-mode-note");
+    if (note) note.hidden = !state.quickMode;
+  }
+
+  function initQuickMode() {
+    const input = el("quick-mode-input");
+    if (!input) return;
+    // A reload can restore a checked box; the page always starts on the panel.
+    input.checked = false;
+    input.addEventListener("change", () => applyQuickMode(input.checked));
+  }
+
   function initPanelSizeControls() {
     // Remove a slot. The request body is the ordered list of model ids
     // (``getModelIds``) and the server assigns ``slot_number`` by position, so
@@ -9469,6 +9849,7 @@
     initLanding();
     initModelSlotSelection();
     initPanelSizeControls();
+    initQuickMode();
     initQueryValidation();
     initHighStakesGate();
     initKeyboardShortcuts();

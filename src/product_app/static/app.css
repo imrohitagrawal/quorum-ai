@@ -3363,6 +3363,115 @@ html[data-theme="dark"] .landing-preview-caption {
 }
 .result-synth-expand:hover { border-color: var(--info); color: var(--info); }
 .result-synth-expand:focus-visible { outline: 2px solid var(--info); outline-offset: 2px; }
+/* W5 (ADR-0128): a quick answer's region. The verdict's accent is a
+   level marker, never the consensus green (green belongs to agreement,
+   which a quick answer does not show). */
+/* A quick answer hides these panel surfaces with the `hidden` attribute;
+   their own display rules would otherwise beat the user-agent [hidden]. */
+.result-verdict[hidden],
+.result-trust[hidden],
+.result-transcript-link[hidden],
+.result-synthesis[hidden] { display: none; }
+.result-quick {
+  display: grid;
+  gap: var(--space-4);
+}
+.result-quick[hidden] { display: none; }
+.result-quick-caveat {
+  display: grid;
+  gap: var(--space-1);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--danger-border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+}
+.result-quick-caveat-label,
+.result-quick-sources-label,
+.result-quick-checked-title {
+  margin: 0;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.result-quick-caveat-label { color: var(--danger); }
+.result-quick-sources-label { color: var(--info); }
+.result-quick-safety { margin: 0; }
+.result-quick-verdict,
+.result-quick-card {
+  display: grid;
+  gap: var(--space-3);
+  min-width: 0;
+  padding: var(--space-5) var(--space-6);
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+}
+.result-quick-verdict { border-left: 4px solid var(--line-strong); }
+.result-quick-verdict[data-level="well_supported"] { border-left-color: var(--info); }
+.result-quick-verdict[data-level="partly_supported"] { border-left-color: var(--warning); }
+.result-quick-verdict[data-level="not_supported"] { border-left-color: var(--danger); }
+.result-quick-verdict-heading,
+.result-quick-title {
+  margin: 0;
+  font-family: var(--font-serif);
+  font-size: 1.25rem;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+}
+.result-quick-scores,
+.result-quick-coverage,
+.result-quick-note {
+  margin: 0;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  color: var(--muted);
+}
+.result-quick-reasons,
+.result-quick-checked {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0;
+  padding-left: 1.25rem;
+  overflow-wrap: anywhere;
+}
+.result-quick-checked { font-size: 0.85rem; }
+.result-quick-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+  padding-bottom: var(--space-3);
+  border-bottom: 1px solid var(--line-2);
+}
+.result-quick-attr {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+.result-quick-shortened {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--warning);
+}
+.result-quick-answer {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.result-quick-sources {
+  display: grid;
+  gap: var(--space-2);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--line);
+}
+@media (max-width: 600px) {
+  .result-quick-verdict,
+  .result-quick-card {
+    padding: var(--space-4);
+  }
+}
+
 .result-synth-sources {
   display: flex;
   flex-direction: column;
@@ -5454,6 +5563,43 @@ main:focus { outline: none; }
   color: var(--muted);
   max-width: 56ch;
   text-wrap: pretty;
+}
+
+/* W5 (ADR-0128): the quick-answer control. While it is on, the fieldset
+   carries data-quick and shows slot 1 alone: the other slots, the remove and
+   add controls, the "choose two to four" help and the shape line are hidden. */
+.quick-mode {
+  display: grid;
+  gap: var(--space-1);
+}
+.quick-mode-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: fit-content;
+  min-height: 44px;
+  font-weight: 600;
+  color: var(--ink);
+  cursor: pointer;
+}
+.quick-mode-toggle input {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  accent-color: var(--ink);
+}
+.quick-mode-note {
+  margin: 0;
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+.quick-mode-note[hidden] { display: none; }
+.field-group[data-quick="true"] > legend + .muted,
+.field-group[data-quick="true"] .model-slot + .model-slot,
+.field-group[data-quick="true"] .model-slot-remove,
+.field-group[data-quick="true"] #model-slot-add,
+.field-group[data-quick="true"] #panel-shape-line {
+  display: none;
 }
 
 /* CHG-011 D5: the composer's shape line, under the slot grid. */

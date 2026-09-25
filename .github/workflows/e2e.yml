@@ -203,6 +203,7 @@ jobs:
           tests/invariants/critique-cost-rows.spec.ts
           tests/invariants/peer-critique-copy.spec.ts
           tests/invariants/panel-size.spec.ts
+          tests/invariants/quick-answer.spec.ts
           --project=chromium
           --retries=0
 
@@ -347,7 +348,15 @@ jobs:
         # lane reported "297 passed (5.9m)" locally before the fifth was
         # written and 298 is that count plus one; CI's own number is read on
         # the pull request, and the floor is the local count, not a guess.
-        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 298 --lane "invariants lane"
+        # 298 -> 306 (W5 third pull request, ADR-0128): quick-answer.spec.ts
+        # joins this lane with eight tests (the control and its byte-identical
+        # OFF state, the request bodies, the quick result, the absent panel
+        # surfaces with their partners, a panel run after a quick one, Copy and
+        # Export, the simulated answer, the cost gate and live view). MEASURED,
+        # not added: the 19-spec lane run as the step above runs it, plus the
+        # two local overrides, reported "306 passed (5.8m)" on 2026-09-25; the
+        # same 18 specs on 9b0c9da reported "298 passed (5.6m)".
+        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 306 --lane "invariants lane"
 
       - name: Clear the previous lane's JUnit report
         run: rm -f e2e/results.xml

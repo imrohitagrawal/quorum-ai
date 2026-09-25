@@ -297,3 +297,17 @@ answers.
 - Acceptance criteria: AC-047, AC-048.
 - Tests: TEST-FR-017 (`tests/evals/test_golden_set_gate.py`, `tests/evals/golden/loader.py`, `tests/perf/test_eval_batch_baseline.py`).
 - Jira: Not created.
+
+## FR-018 Quick answer: one model, no debate, checked by the judge
+
+- Actor: Browser-session user.
+- Trigger: The user turns on the composer's quick-answer control, labelled "Quick answer — one model, no debate", and runs a question.
+- Behavior: The composer shows slot 1 alone, hides the add and remove controls and the panel's shape line, and shows the note "four models by default, 2 debates and 1 sourced answer" (both strings the product owner's words, CHG-012 D1). The estimate and create requests carry `mode: "quick"` and exactly one model (ADR-0126); with the control off they are byte-identical to a panel request. The cost gate names the quick shape. The result view shows the one answer through the Markdown renderer with its sources, the high-stakes safety notice when the result carries one, and the judge's verdict as "Judge: Well supported", "Partly supported", "Not supported" or "Not checked", with the app-written reasons, the judge's scores and the sources the judge checked (ADR-0127). It shows no agreement figure, verdict ring or band, trust cards, trust score, debate or transcript link. Copy and Export have a quick shape with no agreement figure.
+- Outcome: A user who wants one sourced answer can get it cheaper and faster than a panel, with the judge's check shown plainly and without a figure that would read one answer as agreement.
+- Source: `docs/19-change-control-log.md` (CHG-012 D1, CHG-016, CHG-017, CHG-018); `docs/analysis/2026-09-24-w5-parked.md`.
+- Owner: Product owner.
+- Priority: Should.
+- Rationale: The owner asked for a one-model product alongside the panel (W5); it must not borrow the panel's agreement surfaces, which are meaningless at one answer.
+- Acceptance criteria: AC-051.
+- Tests: TEST-FR-018 (`e2e/tests/invariants/quick-answer.spec.ts`, `tests/unit/test_quick_answer_ui.py`, `tests/integration/test_quick_mode_backend.py`).
+- Jira: Not created.
