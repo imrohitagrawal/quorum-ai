@@ -544,6 +544,21 @@ def test_sign_out_revokes_the_session_server_side_and_deletes_nothing_else(
     assert len(sign_in.account_rows()) == 1
 
 
+def test_sign_out_works_after_the_page_is_fetched_again(sign_in: SignIn) -> None:
+    """Production, 2026-09-25: after sign-in the browser loaded ``/ui``,
+    the page fetched its token, then a second ``GET /ui`` arrived and
+    sign-out got 403 every time. RED IF ``/ui`` rotates the CSRF token."""
+    client = sign_in.client()
+    assert _signed_in(client).headers["location"] == "/ui"
+    assert client.get("/ui").status_code == 200
+    csrf = _boot(client)
+    assert client.get("/ui").status_code == 200  # the extra fetch
+
+    out = client.post("/v1/auth/sign-out", headers={"X-CSRF-Token": csrf})
+
+    assert out.status_code == 200 and out.json() == {"signed_out": True}
+
+
 def test_sign_out_without_the_csrf_token_changes_nothing(sign_in: SignIn) -> None:
     """RED-IF: the sign-out route stops enforcing CSRF."""
     client = sign_in.client()

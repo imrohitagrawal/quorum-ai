@@ -1567,15 +1567,18 @@ def ops_dashboard() -> HTMLResponse:
 
 @app.get("/ui", response_class=HTMLResponse, tags=["browser-ui"])
 def browser_ui(request: Request) -> HTMLResponse:
-    # Issue #100 §2.3: this route mints/resumes a session exactly like
+    # Issue #100 §2.3: this route mints a session exactly like
     # ``/v1/session`` does (a first-time visitor loading the page with no
-    # cookie mints one here) — passing ``client_ip`` is required, not
+    # cookie mints one here), and resumes one without a new CSRF token
+    # (ADR-0131) — passing ``client_ip`` is required, not
     # optional, or an attacker mints unlimited accounts by hitting ``/ui``
     # directly instead of ``/v1/session`` and the cap never fires.
     client_ip = (request.client.host if request.client else "unknown") or "unknown"
     session_id = get_session_cookie_from_request(request)
     try:
-        session = issue_or_resume_session(session_id, client_ip=client_ip)
+        # No CSRF rotation here: the page gets its token from /v1/session,
+        # and a second fetch of /ui must not retire it (2026-09-25).
+        session = issue_or_resume_session(session_id, client_ip=client_ip, rotate_csrf=False)
     except SessionMintCapExceeded as exc:
         # A rendered page, not a bare sentence. This is the only 429 a real
         # visitor ever sees in their address bar, and it is the last thing
