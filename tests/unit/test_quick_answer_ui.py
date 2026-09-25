@@ -156,7 +156,7 @@ def test_a_panel_request_body_is_unchanged_and_a_quick_one_carries_the_mode() ->
     the wire, so the panel body stays byte-identical to the pre-W5 one.
     """
     four = ["a/one", "b/two", "c/three", "d/four"]
-    extra = {"safety_acknowledgements": [], "cost_confirmation": None}
+    extra: dict[str, Any] = {"safety_acknowledgements": [], "cost_confirmation": None}
     got = _run_js(
         "runRequestBody",
         [
@@ -375,7 +375,11 @@ def test_the_quick_verdict_fixtures_validate_against_the_served_model() -> None:
     for name, raw in variants.items():
         verdict = QuickVerdict.model_validate(raw)
         assert verdict.model_dump(mode="json") == raw, name
-        if verdict.faithfulness is None:
+        if (
+            verdict.faithfulness is None
+            or verdict.grounding is None
+            or verdict.hallucination_risk is None
+        ):
             assert verdict.level == "not_checked" and verdict.reasons is None
             continue
         judge = EvalJudgeVerdict(
