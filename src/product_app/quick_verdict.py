@@ -64,9 +64,9 @@ class QuickVerdict(BaseModel):
 
 def verdict_level(verdict: EvalJudgeVerdict | None) -> QuickVerdictLevel:
     """No conforming verdict is ``not_checked``; a verdict the panel's own
-    rule refuses (a zero, or high risk; #267) is ``not_supported``; the top
-    of both scales with low risk is ``well_supported``; anything else is
-    ``partly_supported``."""
+    rule refuses (a zero, or high risk; #267) is ``not_supported``; both
+    scores at ``WELL_SUPPORTED_MIN_SCORE`` or above with low risk is
+    ``well_supported``; anything else is ``partly_supported``."""
     if verdict is None:
         return "not_checked"
     if not verdict_supports_verification(verdict):

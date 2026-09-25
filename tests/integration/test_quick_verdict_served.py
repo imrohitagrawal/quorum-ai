@@ -157,6 +157,7 @@ def test_no_judge_means_not_checked_never_a_level(monkeypatch: pytest.MonkeyPatc
     assert verdict.reasons is None
     assert verdict.faithfulness is None and verdict.grounding is None
     assert verdict.sources_checked == []
+    assert verdict.judge_status is None
 
 
 def test_a_non_conforming_verdict_is_not_checked(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -168,6 +169,9 @@ def test_a_non_conforming_verdict_is_not_checked(monkeypatch: pytest.MonkeyPatch
     assert served.quick_verdict is not None
     assert served.quick_verdict.level == "not_checked"
     assert served.quick_verdict.reasons is None
+    # The status tells "the judge ran and gave no verdict" apart from "no
+    # judge"; RED IF it is dropped (the no-judge test is the partner: None).
+    assert served.quick_verdict.judge_status is not None
 
 
 def test_the_sources_listed_are_the_ones_the_judge_saw(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -217,6 +221,8 @@ def test_the_reasons_are_the_apps_sentences_from_the_scores(
         5,
         "medium",
     )
+    # RED IF the status of a judge that DID return a verdict is dropped.
+    assert verdict.judge_status is not None
     assert verdict.reasons == [
         "The judge scored how closely the answer keeps to its cited sources 2 out of 5.",
         "It scored how well the answer's citations point at those sources 5 out of 5.",

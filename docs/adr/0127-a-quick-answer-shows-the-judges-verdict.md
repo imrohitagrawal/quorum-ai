@@ -38,7 +38,11 @@ Failure modes were listed before the code: `docs/analysis/2026-09-25-w5-quick-ve
    judge dispatches there, ADR-0126), from the per-run judge memo.
 2. **Four levels, not three.** `not_checked` whenever there is no conforming
    verdict (no judge configured, the call failed, a non-conforming answer),
-   so a level is never shown that the judge did not give. Otherwise:
+   so a level is never shown that the judge did not give. (One known limit,
+   shared with the panel's `judge_status` and tracked as #216: the verdict
+   memo is a bounded LRU, so once 512 later runs have evicted a run's entry
+   it reads `not_checked` again; the level degrades to "not checked", never
+   to a level the judge did not give.) Otherwise:
    `not_supported` whenever `verdict_supports_verification` refuses it (a
    zero, or high risk; #267); `well_supported` when faithfulness and
    grounding are both 4 or more (`WELL_SUPPORTED_MIN_SCORE`), risk is low,
@@ -89,8 +93,10 @@ than patch again (AGENTS.md rule 12). The root cause was serving free,
 steerable text at all. The replacement serves only values the app controls:
 an enum, three integers or enums from the judge's strict schema, sentences
 the app writes from them, and citations the answer already carries. The
-owner's "reasons and artifacts" are met by the scores, the app's sentences
-and the sources; the judge's per-claim evidence, pointing into text already
+session judges that the scores, the app's sentences and the sources meet the
+owner's "reasons and artifacts to support why"; the owner has not confirmed
+that the app's sentences, which restate the scores rather than explain them,
+are enough. The judge's per-claim evidence, pointing into text already
 on the page, is W5's fourth pull request.
 
 ## Measurements
@@ -101,7 +107,7 @@ call; the judge seam is stubbed.
 | what | result |
 |---|---|
 | the level table, boundaries on both sides | `test_the_level_follows_the_verdict`: 8 cases pass (4/4/low well; 4/3 and 5/5/medium partly; 1/1/low partly; a zero or high risk not supported) |
-| RED before the change | the 14 tests written first all failed on the pre-change source (no `quick_verdict` field, no `safety_notice`) |
+| RED before the change | the first draft's tests failed on the pre-change source (no `quick_verdict` field, no `safety_notice`): 14 when first run, 16 collected at the first commit; the final file's items all fail against `main` (review measured 21 of 21 on the re-plan) |
 | full suite and mutations on the final head | recorded in the pull request |
 
 ## Rejected alternatives
