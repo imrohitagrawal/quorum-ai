@@ -48,7 +48,9 @@ from product_app.feedback_store import get_store as get_feedback_store
 from product_app.main import _scrub_user_text, app
 from product_app.session_store import SessionStore
 
-REDIRECT_URI = "http://127.0.0.1:8000/v1/auth/google/callback"
+#: The TestClient's host is "testserver", and the page offers sign-in only on
+#: the host the redirect URI names (review round 1, item 6).
+REDIRECT_URI = "https://testserver/v1/auth/google/callback"
 COOKIE = "quorum_session"  # the LOCAL name; the suite runs as local
 
 
@@ -581,10 +583,13 @@ def test_sign_in_is_off_when_any_one_setting_is_missing(
 
     assert client.get("/status").json()["sign_in_enabled"] is False
     assert client.post("/v1/auth/google/start", headers={"X-CSRF-Token": csrf}).status_code == 404
-    assert client.post("/v1/auth/sign-out", headers={"X-CSRF-Token": csrf}).status_code == 404
     assert _callback(client, code="c", state="s").status_code == 404
     page = client.get("/ui").text
     assert "sign-in-google" not in page and "Sign in with Google" not in page
+    # Sign-out is NOT gated on the settings (review round 1, item 3). /ui
+    # rotated the CSRF token, so take the current one.
+    csrf = _boot(client)
+    assert client.post("/v1/auth/sign-out", headers={"X-CSRF-Token": csrf}).status_code == 200
 
 
 @pytest.mark.parametrize(
@@ -1048,3 +1053,165 @@ def test_a_migration_that_fails_part_way_leaves_no_marker_so_the_next_open_retri
         assert healed.accounts_available() is True
     finally:
         healed.close()
+
+
+# --- review round 1 ------------------------------------------------------------
+
+
+def test_the_callback_access_line_formats_through_uvicorns_access_formatter() -> None:
+    """Item 1. uvicorn's AccessFormatter unpacks ``record.args`` into five
+    names; the redaction factory used to set ``args = None`` whenever it
+    redacted, so every callback's access line raised TypeError inside
+    ``logging`` and was lost. RED-IF: the factory drops ``record.args`` again
+    (``handleError`` fires and nothing is written), or stops redacting the
+    code (partner: the redaction marker IS present)."""
+    import io
+
+    from uvicorn.logging import AccessFormatter
+
+    stream = io.StringIO()
+    handler = logging.StreamHandler(stream)
+    handler.setFormatter(AccessFormatter('%(client_addr)s - "%(request_line)s" %(status_code)s'))
+    errors: list[object] = []
+    handler.handleError = errors.append  # type: ignore[method-assign,assignment]
+    access = logging.getLogger("uvicorn.access.w7-review")
+    access.addHandler(handler)
+    access.propagate = False
+    access.setLevel(logging.INFO)
+    try:
+        access.info(
+            '%s - "%s %s HTTP/%s" %d',
+            "203.0.113.5:1",
+            "GET",
+            "/v1/auth/google/callback?state=st4te-secret&code=4/0AbCd-code-secret",
+            "1.1",
+            303,
+        )
+    finally:
+        access.removeHandler(handler)
+    written = stream.getvalue()
+    assert errors == []
+    assert "/v1/auth/google/callback?[REDACTED]" in written
+    assert "4/0AbCd-code-secret" not in written and "st4te-secret" not in written
+    assert "303" in written  # the other args survived as args
+
+
+def test_a_page_showing_a_signed_in_email_is_not_cached(sign_in: SignIn) -> None:
+    """Item 2. RED-IF: /ui with a signed-in account stops sending
+    ``Cache-Control: no-store`` (a shared cache could serve the email to
+    someone else). Partner: the email is on that page, and the anonymous page
+    is not marked (so the header is tied to the account, not blanket)."""
+    client = sign_in.client()
+    assert _signed_in(client).headers["location"] == "/ui"
+    page = client.get("/ui")
+    assert "ada@example.com" in page.text
+    assert page.headers.get("cache-control") == "no-store"
+    anonymous = sign_in.client().get("/ui")
+    assert "no-store" not in (anonymous.headers.get("cache-control") or "")
+
+
+def test_a_browser_signed_in_before_sign_in_was_switched_off_can_still_sign_out(
+    sign_in: SignIn, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Item 3. RED-IF: sign-out is gated on the settings again, or the page
+    hides "Sign out" from a signed-in session once sign-in is off."""
+    client = sign_in.client()
+    signed_in_id = str(_signed_in(client).cookies.get(COOKIE))
+    monkeypatch.setattr(settings, "google_oauth_client_secret", "")
+    page = client.get("/ui").text
+    assert 'id="sign-out"' in page and "ada@example.com" in page
+    assert 'id="sign-in-google"' not in page
+    csrf = _boot(client)
+    out = client.post("/v1/auth/sign-out", headers={"X-CSRF-Token": csrf})
+    assert out.status_code == 200
+    assert auth.session_repository.get(signed_in_id) is None
+
+
+def test_a_take_purges_other_sessions_expired_entries(sign_in: SignIn) -> None:
+    """Item 4. RED-IF: take() stops purging expired entries (an abandoned
+    sign-in would sit in memory until some session STARTS again)."""
+    from datetime import UTC, datetime
+
+    table = google_signin.PendingSignIns()
+    started = datetime.now(UTC)
+    table.begin("abandoned", now=started)
+    table.begin("other", now=started + timedelta(minutes=5))
+    assert table.take("other", now=started + timedelta(minutes=10, seconds=1)) is not None
+    assert len(table) == 0
+
+
+def test_sign_out_drops_the_sessions_pending_sign_in(sign_in: SignIn) -> None:
+    """Item 4. RED-IF: sign-out leaves the session's started sign-in behind."""
+    client = sign_in.client()
+    csrf = _boot(client)
+    _start(client, csrf)
+    assert len(google_signin.pending_sign_ins) == 1
+    assert client.post("/v1/auth/sign-out", headers={"X-CSRF-Token": csrf}).status_code == 200
+    assert len(google_signin.pending_sign_ins) == 0
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"iss": ["https://accounts.google.com"]},
+        {"iss": {"a": 1}},
+        {"aud": {"client": CLIENT_ID}},
+        {"azp": [CLIENT_ID]},
+        {"sub": 12345},
+        {"email": ["ada@example.com"]},
+        {"exp": "9999999999"},
+        {"iat": 1.5},
+    ],
+)
+def test_a_claim_of_an_unexpected_type_fails_the_sign_in_and_never_500s(
+    sign_in: SignIn, changes: dict[str, Any]
+) -> None:
+    """Item 5. RED-IF: a claim of the wrong JSON type raises out of the
+    callback (``iss`` as a list made ``in frozenset`` raise TypeError)."""
+    sign_in.stub.claims = _bad(**changes)
+    client = sign_in.client()
+    response = _callback(client, code="c", state=_start(client, _boot(client))["state"])
+    assert response.status_code == 303
+    assert response.headers["location"] == "/ui?sign_in=failed"
+    assert sign_in.account_rows() == []
+
+
+def test_sign_in_is_offered_only_on_the_redirect_uris_host(sign_in: SignIn) -> None:
+    """Item 6. Google always returns to the redirect URI's host, where this
+    browser has no session, so a sign-in started elsewhere cannot finish.
+    RED-IF: the page offers sign-in on another host, or /start accepts one.
+    Partner: on the redirect URI's host both work."""
+    here = sign_in.client()
+    assert 'id="sign-in-google"' in here.get("/ui").text
+    assert (
+        here.post("/v1/auth/google/start", headers={"X-CSRF-Token": _boot(here)}).status_code == 200
+    )
+
+    elsewhere = TestClient(app, base_url="http://quorum-ai.fly.dev")
+    page = elsewhere.get("/ui").text
+    csrf = _boot(elsewhere)  # after /ui, which rotates the CSRF token
+    assert 'id="sign-in-google"' not in page
+    refused = elsewhere.post("/v1/auth/google/start", headers={"X-CSRF-Token": csrf})
+    assert refused.status_code == 409
+    assert refused.json()["detail"]["code"] == "SIGN_IN_WRONG_HOST"
+    assert "https://testserver/ui" in refused.json()["detail"]["message"]
+
+
+@pytest.mark.parametrize(
+    ("msg", "args"),
+    [
+        ("key %(k)s", {"k": "sk-abcdefghijklmnop"}),  # mapping args, not a tuple
+        ("sk-abcdefghijklmnop in the template %s", ("x",)),  # secret not in an arg
+        ("%c", ("sk-abcdefghijklmnop",)),  # formatting the redacted args fails
+    ],
+)
+def test_args_are_left_alone_when_redacting_them_is_not_enough(msg: str, args: Any) -> None:
+    """Item 1's fallback. RED-IF: the helper claims success (keeps args) when
+    a secret would survive, or raises instead of declining. Partner: a
+    plain string argument IS redacted in place (the access-line test)."""
+    from product_app.logging_config import _redact_args_in_place
+
+    record = logging.LogRecord("x", logging.INFO, __file__, 1, msg, None, None)
+    record.args = args
+    assert _redact_args_in_place(record) is False
+    assert record.args is args

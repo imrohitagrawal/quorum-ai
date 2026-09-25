@@ -61,6 +61,7 @@ from product_app.feedback_store import configure as configure_feedback_store
 from product_app.google_signin import (
     CALLBACK_PATH,
     log_sign_in_configuration,
+    on_sign_in_host,
     sign_in_enabled,
     signed_in_account,
 )
@@ -783,16 +784,23 @@ async def validation_exception_handler(
 SIGN_IN_FAILED_NOTICE = "Sign-in did not complete. Please try again."
 
 
-def _account_controls_html(account_id: UUID | None, *, sign_in_failed: bool) -> str:
-    """The top bar's sign-in control, or nothing at all when sign-in is off.
+def _account_controls_html(
+    account_id: UUID | None, *, sign_in_failed: bool, on_sign_in_host: bool = True
+) -> tuple[str, bool]:
+    """The top bar's account controls, and whether they show an account.
 
-    Off renders the EMPTY string, so the page a deployment without the three
-    settings serves is the page it served before W7. Signed in shows the
-    email Google verified (escaped) and "Sign out"; otherwise "Sign in with
-    Google". ``app.js`` wires both buttons.
+    A session bound to an account gets its email (escaped) and "Sign out"
+    WHATEVER the settings say: a browser signed in before sign-in was
+    switched off must still be able to sign out (review round 1). Otherwise
+    "Sign in with Google" is shown only when sign-in is enabled AND the page
+    was reached on the redirect URI's host, the only host a sign-in can finish
+    on. Off, and anonymous, renders the EMPTY string, so the page a
+    deployment without the three settings serves is the page it served
+    before W7. ``app.js`` wires both buttons.
+
+    The boolean is ``True`` when the markup carries the account's email; the
+    caller then marks the response ``Cache-Control: no-store``.
     """
-    if not sign_in_enabled():
-        return ""
     account = None if account_id is None else signed_in_account(account_id)
     if account is not None:
         return (
@@ -800,7 +808,9 @@ def _account_controls_html(account_id: UUID | None, *, sign_in_failed: bool) -> 
             + escape(account.email)
             + "</span>"
             + '<button id="sign-out" class="topbar-howitworks" type="button">Sign out</button>'
-        )
+        ), True
+    if not sign_in_enabled() or not on_sign_in_host:
+        return "", False
     notice = (
         '<span class="account-notice" id="sign-in-notice" role="status">'
         + SIGN_IN_FAILED_NOTICE
@@ -812,7 +822,7 @@ def _account_controls_html(account_id: UUID | None, *, sign_in_failed: bool) -> 
         notice
         + '<button id="sign-in-google" class="topbar-howitworks" type="button">'
         + "Sign in with Google</button>"
-    )
+    ), False
 
 
 def _render_workspace_html(account_controls: str = "") -> str:
@@ -1577,14 +1587,16 @@ def browser_ui(request: Request) -> HTMLResponse:
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             headers=_retry_after_header(exc.retry_after_seconds),
         )
-    response = HTMLResponse(
-        _render_workspace_html(
-            _account_controls_html(
-                session.account_id,
-                sign_in_failed=request.query_params.get("sign_in") == "failed",
-            )
-        )
+    controls, shows_account = _account_controls_html(
+        session.account_id,
+        sign_in_failed=request.query_params.get("sign_in") == "failed",
+        on_sign_in_host=on_sign_in_host(request),
     )
+    response = HTMLResponse(_render_workspace_html(controls))
+    if shows_account:
+        # The page carries the signed-in email: no cache may keep it
+        # (review round 1).
+        response.headers["Cache-Control"] = "no-store"
     attach_session_cookie(response, session)
     return response
 

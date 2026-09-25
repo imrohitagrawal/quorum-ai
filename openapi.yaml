@@ -182,12 +182,25 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SignInErrorResponse'
+        '409':
+          description: Sign-in was started on a host other than the redirect URI's.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SignInErrorResponse'
   /v1/auth/sign-out:
     post:
       tags:
       - session
       summary: Sign Out
-      description: End this browser's session. Deletes nothing but the session.
+      description: 'End this browser''s session. Deletes nothing but the session.
+
+
+        NOT gated on the sign-in settings (review round 1): a browser that signed
+
+        in before the operator switched sign-in off must still be able to sign
+
+        out, or it stays signed in until the session expires.'
       operationId: sign_out_v1_auth_sign_out_post
       responses:
         '200':
@@ -204,12 +217,6 @@ paths:
                 $ref: '#/components/schemas/SignInErrorResponse'
         '403':
           description: CSRF token missing or wrong.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/SignInErrorResponse'
-        '404':
-          description: Sign-in is not enabled here.
           content:
             application/json:
               schema:

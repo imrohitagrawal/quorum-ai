@@ -573,6 +573,10 @@ BUCKET_B_PIN_BEHAVIOUR = {
 #: No pin. A literal here restates the implementation and catches nothing.
 BUCKET_C_NO_PIN = {
     # --- Added 2026-09-25 with W7's first pull request (ADR-0130) ---
+    "google_signin._SIGN_OUT_ERRORS": (
+        "OpenAPI documentation of sign-out's error shapes (review round 1); "
+        "openapi-check and the schemathesis contract gate fail if it drifts"
+    ),
     "google_signin._DOCUMENTED_ERRORS": (
         "OpenAPI documentation of the two routes' error shapes; openapi-check "
         "and the schemathesis contract gate already fail if it drifts"

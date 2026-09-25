@@ -12,10 +12,14 @@ back to the owner and not contested (CHG-012 D7): keep the last 5 runs per
 account and drop runs older than 30 days; a summary row per run; nothing
 deleted on sign-out; account deletion as a typed-confirmation action; the
 24-hour spend envelope kept on a one-way hash of the Google subject; "Results
-are ephemeral" rewritten for signed-in users; Google sign-in only; store no
-provider key, no password and no Google token beyond the sign-in exchange.
+are ephemeral" rewritten for signed-in users; Google sign-in only.
 
-Those words and that summary are the owner's. **Everything else below is the
+Those words and that summary are the owner's. The hard stop this work also
+honours, *"storing a provider key, a password, or any Google token beyond the
+sign-in exchange"*, is NOT in CHG-012 D7: it is section 2 of the 2026-09-24
+prompt (`CONTINUE-BACKLOG-2026-09-24-ULTRACODE-PROMPT.md`, untracked in the
+main checkout), assistant-drafted and sent by the owner. It is cited as that,
+not as the owner's own words. **Everything else below is the
 session's design**, listed under "Decisions the owner did not make".
 
 This pull request is sign-in and sign-out only. The history, its retention
@@ -89,12 +93,24 @@ the code, see that page).
 8. **Off unless all three settings are set.** `GOOGLE_OAUTH_CLIENT_ID`,
    `GOOGLE_OAUTH_CLIENT_SECRET` and `GOOGLE_OAUTH_REDIRECT_URI`, and the
    redirect URI must be `https` (or `http` to loopback), end in the callback
-   path, and carry no query, fragment or userinfo. Off: the three routes
-   answer 404, the page renders no account markup (the whole `/ui` page is
-   byte-identical to the one before this change), and `/status` reports
-   `sign_in_enabled: false`. Half set: the app still starts, sign-in stays off, and an ERROR at
+   path, and carry no query, fragment or userinfo. Off: the start and
+   callback routes answer 404, the page renders no account markup for an
+   anonymous session (the whole `/ui` page is byte-identical to the one
+   before this change), and `/status` reports `sign_in_enabled: false`.
+   Sign-out is NOT gated (review round 1): a session bound to an account
+   shows its email and "Sign out", and sign-out works, whatever the settings
+   say, so a browser signed in before sign-in was switched off can sign out. Half set: the app still starts, sign-in stays off, and an ERROR at
    startup names the missing settings (never a value). This pull request sets
    no secret anywhere; `fly.toml` is unchanged.
+8a. **Sign-in only on the redirect URI's host** (review round 1). Google
+   always returns the browser to the redirect URI's host, where a browser
+   that started elsewhere (for example `quorum-ai.fly.dev` against a
+   `quorum.stackclimb.com` redirect URI) has no session, so its sign-in could
+   never finish. The page offers "Sign in with Google" only when the request
+   reached that host (host and port compared), and `/start` answers 409
+   `SIGN_IN_WRONG_HOST` elsewhere, naming the page to use.
+8b. **A page showing a signed-in email is `Cache-Control: no-store`**
+   (review round 1); the anonymous page is unchanged.
 9. **Nothing from the exchange is written or logged.** The token response is
    parsed in memory and dropped; failures log a fixed reason code. The
    callback's query (the code and `state`) is redacted from every log line
@@ -120,6 +136,9 @@ call, no call to Google (the token endpoint is a loopback stub,
 | mutation proofs on the final tree | the same 34 plus two more (the sign-in button's id against the DOM-hook contract test; the migration's `except` narrowed so a read-only database raises) re-run on the final commit's `git archive` copy: 36 of 36 killed, baseline 107 passed |
 | the page with sign-in ON, in a browser | a local server with the three settings set (loopback redirect URI): "Sign in with Google" is visible; clicking it made exactly one navigation to Google, intercepted and aborted by the script (host `accounts.google.com`, scope `openid email`, `S256`, no `access_type`); `/ui?sign_in=failed` shows the notice. The first screenshots found the notice cut off at 1440 px and the row overflowing a 390 px phone; the CSS now lets the notice run and wraps the row on phones only when a sign-in control is present. After the fix, at 1440, 390 and 360 px with sign-in on and off: no horizontal overflow, the theme toggle inside the viewport. The signed-in state (email and "Sign out") was not driven in a browser: that needs a token endpoint the local server cannot be pointed at |
 | e2e | the first blocking lane (19 specs) as CI runs it, with the two local overrides: 308 passed |
+| review round 1 | four review lenses, each finding reproduced by a verifier; no critical or required item. Twelve fixes applied (see the fix commit). The RED run of the new tests before the code fixes: 11 failed, 88 passed, including `TypeError: unhashable type: 'list'` (an `iss` claim of the wrong type became a 500), `assert None == 'no-store'`, and the uvicorn access line reaching `handleError` |
+| the uvicorn access line | the redaction record factory set `record.args = None` whenever it redacted, and uvicorn's `AccessFormatter` unpacks `record.args`, so every callback's access line raised `TypeError` inside `logging` and was lost (the reviewer reproduced it with the real `uvicorn` CLI). The factory now redacts each string argument and keeps the tuple when that leaves nothing to redact; a test formats a callback line through `AccessFormatter` |
+| mutation proofs after review round 1 | `scripts/proofs/google_sign_in_mutations.py` (committed, re-runnable): the 36 above plus 11 for the round-1 fixes, 47 of 47 killed, every restore byte-identical, baseline 124 passed, run in a `git archive` copy |
 | full suite and gates | recorded in the pull request |
 
 **Not measured, and stated as such:**
@@ -132,7 +151,10 @@ call, no call to Google (the token endpoint is a loopback stub,
   were not re-fetched in this session (no network). The first real sign-in,
   after the operator creates the OAuth client, is the check.
 - **OpenID Connect Core 3.1.3.7** is cited from the specification as the
-  session knows it; the text was not re-read in this session.
+  session knows it; the text was not re-read in this session. Both this and
+  the issuer spellings are checked by the first real sign-in: a wrong issuer
+  set refuses every sign-in with `id_token_wrong_issuer`, which the log
+  line names.
 
 ## Decisions the owner did not make (the session's)
 
@@ -170,8 +192,14 @@ call, no call to Google (the token endpoint is a loopback stub,
 - The table in the sessions database, not a new file; its columns; the email
   kept for display and updated on each sign-in.
 - The callback is left out of the OpenAPI schema (it is a browser redirect
-  target, not an API); the start and sign-out routes are in it, with their
-  401, 403 and 404 shapes.
+  target, not an API); the start route is in it with its 401, 403, 404 and
+  409 shapes, and sign-out with its 401 and 403 shapes.
+- Sign-out not gated on the settings; the signed-in controls shown whatever
+  the settings say; sign-out also drops the session's pending sign-in.
+- Sign-in offered and started only on the redirect URI's host, compared on
+  host and port, with a 409 elsewhere.
+- `Cache-Control: no-store` on a page showing a signed-in email only.
+- Expired pending sign-ins purged on every take as well as every start.
 - The three routes are registered with `add_api_route`, not decorators, so
   mutmut can mutate their bodies; `tests/unit/test_mutation_test_set_integrity.py`
   caps decorated functions at 55, and `origin/main` already had 55. The
@@ -182,10 +210,13 @@ call, no call to Google (the token endpoint is a loopback stub,
 - The copy: "Sign in with Google", "Sign out", "Sign-in did not complete.
   Please try again.", and the two toasts in `app.js`.
 - The board needle for W7 (`ABSENT src/product_app/config.py ::
-  history_max_runs_per_account`): the setting failure mode 8 names as
-  `HISTORY_MAX_RUNS_PER_ACCOUNT`, which the second pull request adds. If it
-  lands under another name, the row stays PENDING while stale, and the
-  second pull request must move the needle.
+  history_keep_count`): the snake_case field for `HISTORY_KEEP_COUNT`, the
+  name the owner-confirmed decision register gives the keep-the-last-5
+  setting (`docs/analysis/2026-09-22-decision-register.md`, D7), which the
+  second pull request adds. It was `history_max_runs_per_account` (the
+  failure-modes page's name) until review round 1. If the setting lands under
+  another name, the row stays PENDING while stale, and the second pull
+  request must move the needle.
 
 ## Rejected alternatives
 
@@ -208,13 +239,20 @@ call, no call to Google (the token endpoint is a loopback stub,
 
 ## Consequences
 
-- With the three settings unset, which is the shipped state, nothing a user
-  sees changes: the page, the API behaviour and the spend rails are as
-  before, and `/status` gains `sign_in_enabled: false`.
+- With the three settings unset, which is the shipped state, the page an
+  anonymous visitor sees is byte-identical and the spend rails are
+  unchanged. What does change, measured: `/status` gains
+  `sign_in_enabled: false`; `POST /v1/auth/google/start` and
+  `GET /v1/auth/google/callback` answer 404; `POST /v1/auth/sign-out`
+  answers 401 without a session, 403 without the CSRF token and 200 with
+  both (it ends the session, so the next page load mints a new one); other
+  methods on the three paths answer 405.
 - **The owner must create the Google OAuth client** (type "Web
   application", authorised redirect URI
   `https://quorum.stackclimb.com/v1/auth/google/callback`) and set the three
   secrets with `fly secrets set`. Until then sign-in is off in production.
+  Sign-in is then offered only on `quorum.stackclimb.com` (the redirect
+  URI's host); a visitor on `quorum-ai.fly.dev` sees no sign-in control.
 - The second pull request builds on the account id: history rows keyed by
   it, retention, deletion of the row with its history and sessions, and the
   hashed spend key. Its failure modes are rows 5-10 of the page.

@@ -21,7 +21,10 @@ The flow is the OpenID Connect authorization code flow with PKCE:
    the standard library verifies, with a bounded total time. The ID token is
    taken ONLY from that response. OpenID Connect Core 1.0 section 3.1.3.7,
    item 6, allows TLS server validation in place of checking the token's
-   signature for a token received this way; the claims are then checked:
+   signature for a token received this way (cited as the session knows the
+   specification; not re-read in the session that wrote this, which had no
+   network, so the first real sign-in is the check); the claims are then
+   checked:
    ``iss``, ``aud``, ``azp`` when present, ``exp``, ``iat``,
    ``email_verified``, and a non-empty ``sub`` and ``email``.
 4. The account row is found or created by ``sub``; a NEW session bound to it
@@ -29,15 +32,21 @@ The flow is the OpenID Connect authorization code flow with PKCE:
    sent to ``/ui``. Any failure sends it to ``/ui?sign_in=failed`` and
    changes nothing.
 
-The owner's hard stop: store no provider key, no password, and no Google
-token beyond the sign-in exchange. The token response is parsed in this
+The hard stop "storing a provider key, a password, or any Google token
+beyond the sign-in exchange" is NOT in CHG-012 D7: it is section 2 of the
+2026-09-24 prompt (``CONTINUE-BACKLOG-2026-09-24-ULTRACODE-PROMPT.md``),
+assistant-drafted and sent by the owner. The token response is parsed in this
 module's memory, the ID token's ``sub`` and ``email`` are read, and the rest
 is dropped; the response body is never logged and no refresh token is asked
 for (scope ``openid email``, no ``access_type``, no ``prompt``).
 
 Sign-in is off unless all three ``GOOGLE_OAUTH_*`` settings are set and the
-redirect URI is well formed. Off, every route here answers 404, the page
-shows no control, and ``/status`` reports ``sign_in_enabled: false``.
+redirect URI is well formed. Off, the start and callback routes answer 404,
+the page shows no sign-in control, and ``/status`` reports
+``sign_in_enabled: false``. Sign-out is never gated on the settings: a browser
+signed in before sign-in was switched off must still be able to sign out.
+Sign-in is offered, and ``/start`` accepted, only on the redirect URI's host,
+because Google always returns the browser there.
 """
 
 from __future__ import annotations
@@ -78,6 +87,9 @@ GOOGLE_AUTHORIZATION_ENDPOINT: Final = "https://accounts.google.com/o/oauth2/v2/
 GOOGLE_TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token"
 
 #: The two issuer spellings Google's documentation says an ID token may carry.
+#: Written from Google's documentation as the session knows it; not re-fetched
+#: in the session that wrote this (no network). The first real sign-in checks
+#: it: a wrong set refuses every sign-in with ``id_token_wrong_issuer``.
 GOOGLE_ISSUERS: Final = frozenset({"https://accounts.google.com", "accounts.google.com"})
 
 #: What is asked of Google: an identity and an email address, nothing more.
@@ -255,9 +267,18 @@ class PendingSignIns:
         """
         with self._lock:
             pending = self._entries.pop(session_id, None)
+            # Every other session's expired entry goes too, so an abandoned
+            # sign-in does not wait for some session to START one before it
+            # leaves memory (review round 1).
+            self._purge_locked(now)
         if pending is None or now - pending.started_at > SIGN_IN_STATE_TTL:
             return None
         return pending
+
+    def discard(self, session_id: str) -> None:
+        """Drop this session's started sign-in, if any (sign-out)."""
+        with self._lock:
+            self._entries.pop(session_id, None)
 
     def _purge_locked(self, now: datetime) -> None:
         expired = [
@@ -438,11 +459,15 @@ def verify_id_token(id_token: str, *, client_id: str, now: float) -> VerifiedIde
     """Check the claims of an ID token received directly from Google.
 
     Only ever called on the token endpoint's own response (OpenID Connect
-    Core 3.1.3.7 item 6); a token from the browser is never accepted, so the
+    Core 3.1.3.7 item 6, not re-read in the session that wrote this; the
+    first real sign-in is the check); a token from the browser is never accepted, so the
     signature is not checked here. Each check refuses with its own reason.
     """
     claims = _claims_of(id_token)
-    if claims.get("iss") not in GOOGLE_ISSUERS:
+    issuer = claims.get("iss")
+    # ``isinstance`` first: a JSON list or object is unhashable, and ``in`` on
+    # a frozenset would raise TypeError out of the callback (review round 1).
+    if not isinstance(issuer, str) or issuer not in GOOGLE_ISSUERS:
         raise SignInFailed("id_token_wrong_issuer")
     if not client_id or claims.get("aud") != client_id:
         raise SignInFailed("id_token_wrong_audience")
@@ -489,16 +514,43 @@ class SignOutResponse(BaseModel):
     signed_out: bool
 
 
-_DOCUMENTED_ERRORS: dict[int | str, dict[str, object]] = {
+_SIGN_OUT_ERRORS: dict[int | str, dict[str, object]] = {
     401: {"model": SignInErrorResponse, "description": "No usable browser session."},
     403: {"model": SignInErrorResponse, "description": "CSRF token missing or wrong."},
+}
+_DOCUMENTED_ERRORS: dict[int | str, dict[str, object]] = {
+    **_SIGN_OUT_ERRORS,
     404: {"model": SignInErrorResponse, "description": "Sign-in is not enabled here."},
+    409: {
+        "model": SignInErrorResponse,
+        "description": "Sign-in was started on a host other than the redirect URI's.",
+    },
 }
 
 #: The routes are registered with ``add_api_route`` at the end of this module,
 #: not with decorators: mutmut cannot mutate a decorated function, and
 #: ``tests/unit/test_mutation_test_set_integrity.py`` caps how many exist.
 router = APIRouter()
+
+
+def _redirect_parts() -> tuple[str, str]:
+    parts = urlsplit(settings.google_oauth_redirect_uri.strip())
+    return parts.scheme, parts.netloc
+
+
+def sign_in_home() -> str:
+    """The page sign-in works from: ``/ui`` on the redirect URI's host."""
+    scheme, netloc = _redirect_parts()
+    return f"{scheme}://{netloc}/ui"
+
+
+def on_sign_in_host(request: Request) -> bool:
+    """Whether this request reached the host Google will send the browser
+    back to. A sign-in started anywhere else cannot finish: the callback lands
+    on the redirect URI's host, where this browser's session cookie does not
+    exist (for example, quorum-ai.fly.dev against a quorum.stackclimb.com
+    redirect URI). Compared on host and port."""
+    return request.url.netloc == _redirect_parts()[1]
 
 
 def _require_enabled() -> None:
@@ -530,6 +582,16 @@ def start_google_sign_in(request: Request) -> SignInStartResponse:
     """Begin a sign-in: returns the Google URL the browser should open."""
     _require_enabled()
     session = _require_cookie_session(request)
+    if not on_sign_in_host(request):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "SIGN_IN_WRONG_HOST",
+                "message": "Sign-in works only at "
+                + sign_in_home()
+                + ". Open Quorum there to sign in.",
+            },
+        )
     pending = pending_sign_ins.begin(session.session_id, now=datetime.now(UTC))
     return SignInStartResponse(authorization_url=authorization_url(pending))
 
@@ -582,9 +644,14 @@ def google_sign_in_callback(request: Request) -> RedirectResponse:
 
 
 def sign_out(request: Request) -> JSONResponse:
-    """End this browser's session. Deletes nothing but the session."""
-    _require_enabled()
+    """End this browser's session. Deletes nothing but the session.
+
+    NOT gated on the sign-in settings (review round 1): a browser that signed
+    in before the operator switched sign-in off must still be able to sign
+    out, or it stays signed in until the session expires.
+    """
     session = _require_cookie_session(request)
+    pending_sign_ins.discard(session.session_id)
     auth.session_repository.revoke(session.session_id)
     response = JSONResponse(SignOutResponse(signed_out=True).model_dump())
     auth.clear_session_cookie(response)
@@ -608,7 +675,7 @@ router.add_api_route(
     methods=["POST"],
     tags=["session"],
     response_model=SignOutResponse,
-    responses=_DOCUMENTED_ERRORS,
+    responses=_SIGN_OUT_ERRORS,
 )
 
 

@@ -48,12 +48,12 @@ def _sign_in_markup(monkeypatch: pytest.MonkeyPatch) -> str:
     monkeypatch.setattr(
         settings, "google_oauth_redirect_uri", "https://q.example/v1/auth/google/callback"
     )
-    anonymous = main._account_controls_html(None, sign_in_failed=False)
+    anonymous, _ = main._account_controls_html(None, sign_in_failed=False)
     account_id = uuid4()
     monkeypatch.setattr(
         main, "signed_in_account", lambda _id: StoredAccount(account_id=account_id, email="a@b.c")
     )
-    signed_in = main._account_controls_html(account_id, sign_in_failed=False)
+    signed_in, _ = main._account_controls_html(account_id, sign_in_failed=False)
     return anonymous + signed_in
 
 
