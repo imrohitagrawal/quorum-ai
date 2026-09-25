@@ -335,21 +335,33 @@ def test_the_quick_copy_summary_has_the_answer_and_the_verdict_and_no_agreement(
 @needs_node
 def test_a_finished_quick_answer_opens_the_result_view_without_a_synthesis() -> None:
     """RED IF: a completed quick run (no synthesis, by design) stays on the
-    live view, a quick run with no answer opens an empty result view, or a
-    panel run's rule changes (it opens only with a synthesis).
+    live view; a quick run whose one answer FAILED opens the result view (the
+    server keeps a failed slot in ``model_answers`` with status "failed" and
+    empty text, measured in review round 1, so its notices would be hidden);
+    or a panel run's rule changes (it opens only with a synthesis).
     """
-    answer = {"slot_number": 1, "answer_text": "x"}
+    answer = {"slot_number": 1, "status": "completed", "answer_text": "x"}
+    failed = {"slot_number": 1, "status": "failed", "answer_text": ""}
+    blank = {"slot_number": 1, "status": "completed", "answer_text": "   "}
+
+    def quick(*answers: dict[str, Any]) -> list[dict[str, Any]]:
+        return [
+            {"mode": "quick", "result": {"final_synthesis": None, "model_answers": list(answers)}}
+        ]
+
     got = _run_js(
         "resultIsShowable",
         [
-            [{"mode": "quick", "result": {"final_synthesis": None, "model_answers": [answer]}}],
-            [{"mode": "quick", "result": {"final_synthesis": None, "model_answers": []}}],
+            quick(answer),
+            quick(failed),
+            quick(blank),
+            quick(),
             [{"mode": "panel", "result": {"final_synthesis": None, "model_answers": [answer]}}],
             [{"result": {"final_synthesis": {"status": "completed"}, "model_answers": []}}],
             [{}],
         ],
     )
-    assert got == [True, False, False, True, False]
+    assert got == [True, False, False, False, False, True, False]
 
 
 # --- the e2e quick-verdict fixture is a shape the server can serve -------------
@@ -393,3 +405,58 @@ def test_the_quick_verdict_fixtures_validate_against_the_served_model() -> None:
         assert verdict.level == verdict_level(judge)
         assert verdict.reasons == reasons_for(judge, source_count=len(verdict.sources_checked))
     assert variants["WELL_SUPPORTED"]["reasons"]
+
+
+def test_the_quick_export_quotes_the_safety_notice_as_untrusted_text() -> None:
+    """The quick Markdown export writes the safety notice through the same
+    untrusted-block wrapper the panel export uses (``mdUntrustedBlock``), so
+    text in it cannot open a top-level heading or raw HTML in the exported
+    file; the wrapper's own guarantees, no more. RED IF the notice is pushed
+    raw (review round 1 of this pull request). Partner: the notice's words
+    are still in the file."""
+    source = APP_JS.read_text(encoding="utf-8")
+    helpers = [
+        "mdEscapeInline",
+        "mdUntrustedInline",
+        "mdUntrustedBlock",
+        "sourcesMarkdownLines",
+        "quickScoresText",
+        "formatDuration",
+        "describePanelShortfall",
+        "buildQuickResultMarkdown",
+    ]
+    notice = "Decision support only.\n## Injected heading\n<img src=x onerror=alert(1)>"
+    result = {"mode": "quick", "model_slots": [{"model_id": "m/x"}], "live_count": 1}
+    res = {
+        "safety_notice": notice,
+        "model_answers": [
+            {"slot_number": 1, "status": "completed", "answer_text": "An answer.", "sources": []}
+        ],
+    }
+    ctx = {"modelLabel": "Model X", "answer": res["model_answers"][0]}
+    # Module-level names the extracted functions read, stubbed: this test is
+    # about the notice line, not the sources or the elapsed time.
+    stubs = (
+        "const collectResultSources = () => [];\n"
+        "const QUICK_UNCHECKED_TEXT = 'not checked';\n"
+        "const formatElapsed = () => '';\n"
+    )
+    script = (
+        stubs
+        + "\n\n".join(_extract_function(source, name) for name in helpers)
+        + "\n\nconsole.log(JSON.stringify(buildQuickResultMarkdown("
+        + json.dumps(result)
+        + ", "
+        + json.dumps(res)
+        + ", "
+        + json.dumps(ctx)
+        + ")));\n"
+    )
+    out = subprocess.run(
+        ["node", "-e", script], capture_output=True, text=True, timeout=10, check=True
+    )
+    markdown = json.loads(out.stdout)
+    assert "Decision support only." in markdown
+    lines = markdown.splitlines()
+    assert "## Injected heading" not in lines
+    assert "<img" not in markdown

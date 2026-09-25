@@ -8,9 +8,16 @@ decided on 2026-09-24 (CHG-012 D1, their words): *"Guard: separate mode:
 "four models by default, 2 debates and 1 sourced answer" which we have been
 using in this product as a feature available, Price posture: judge on, cost
 gate kept"*; and that evening (`docs/analysis/2026-09-24-w5-parked.md`):
-*"Judge: well supported/partly supported/not supported along with reasons and
-artifacts to support why well supported/partly supported/not supported."* and
-*"I agree that we show no agreement figure on quick answers."*
+*"how the judge's verdict should display for single-model answers: Judge:
+well supported/partly supported/not supported along with reasons and
+artifacts to support why well supported/partly supported/not supported."*
+and *"I agree that we show no agreement figure on quick answers."*
+
+Carried forward from ADR-0127: the sources the judge checked and the reasons
+the app writes from the judge's scores are the session's stand-in for the
+owner's "reasons and artifacts to support why"; the owner has not confirmed
+they are enough, and the judge's per-claim evidence is W5's fourth pull
+request.
 
 Those words are the owner's. **Every other choice below is the session's
 design**, listed as such under "Decisions the owner did not make".
@@ -95,7 +102,7 @@ call.
 | what | result |
 |---|---|
 | RED before the change | `tests/unit/test_quick_answer_ui.py`: 9 failed, 1 passed (the landing check, a negative with its partner, passes either way); `quick-answer.spec.ts`: 8 of 8 failed |
-| panel views byte-identical | outerHTML of the composer, the result view (before and after Copy/Export), the transcript and the cost gate, the Copy text, the Export file and both request bodies, dumped on `goldenCompletedResp()` before and after: the bodies, Copy, Export, transcript and cost gate are byte-identical; the composer and result view are identical once the two new, hidden nodes (`#quick-mode`, `#result-quick`) and their HTML comments are removed and whitespace between tags is collapsed |
+| panel views byte-identical | outerHTML of the composer, the result view (before and after Copy/Export), the transcript and the cost gate, the Copy text, the Export file and both request bodies, dumped on `goldenCompletedResp()` before and after: the bodies, Copy, Export, transcript and cost gate are byte-identical; the composer and result view are identical once the two new nodes and their HTML comments are removed and whitespace between tags is collapsed: `#result-quick` is hidden on a panel result, while `#quick-mode` is a VISIBLE new control on the panel composer (the one visible change there) |
 | the first blocking e2e lane | 298 passed on `9b0c9da`; recorded with this change in the pull request |
 | a real quick run | the local server (simulation) served `mode: "quick"`, five progress stages with debate and synthesis `skipped`, `agreement: null`, `final_synthesis: null`, `quick_verdict.level: "not_checked"`, `safety_notice: null` for a non-high-stakes question; the e2e fixture follows that shape |
 

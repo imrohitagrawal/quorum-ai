@@ -145,12 +145,20 @@
 
   // Which finished runs open the result view. A panel run needs its
   // synthesis, as before; a quick answer has none by design (ADR-0126), so it
-  // opens when its one answer exists.
+  // opens when its one answer COMPLETED with text. A failed slot is still in
+  // ``model_answers`` (status "failed", empty text); such a run stays on the
+  // live view, where its notices are shown, as a panel with no synthesis does.
   function resultIsShowable(result) {
     const res = result && result.result;
     if (!res) return false;
     if (res.final_synthesis) return true;
-    return result.mode === "quick" && Array.isArray(res.model_answers) && res.model_answers.length > 0;
+    return (
+      result.mode === "quick" &&
+      Array.isArray(res.model_answers) &&
+      res.model_answers.some(
+        (a) => a && a.status === "completed" && String(a.answer_text || "").trim() !== "",
+      )
+    );
   }
 
   // The panel size of a run: the REQUESTED slots the server echoes back, or
@@ -3438,7 +3446,7 @@
     }
 
     const notice = res.safety_notice ? String(res.safety_notice).trim() : "";
-    if (notice) push("## Safety notice", "", notice, "");
+    if (notice) push("## Safety notice", "", mdUntrustedBlock(notice), "");
 
     push("## The answer", "");
     push(`### ${mdEscapeInline(ctx.modelLabel)}`, "");
