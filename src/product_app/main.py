@@ -1575,7 +1575,9 @@ def browser_ui(request: Request) -> HTMLResponse:
     client_ip = (request.client.host if request.client else "unknown") or "unknown"
     session_id = get_session_cookie_from_request(request)
     try:
-        session = issue_or_resume_session(session_id, client_ip=client_ip)
+        # No CSRF rotation here: the page gets its token from /v1/session,
+        # and a second fetch of /ui must not retire it (2026-09-25).
+        session = issue_or_resume_session(session_id, client_ip=client_ip, rotate_csrf=False)
     except SessionMintCapExceeded as exc:
         # A rendered page, not a bare sentence. This is the only 429 a real
         # visitor ever sees in their address bar, and it is the last thing

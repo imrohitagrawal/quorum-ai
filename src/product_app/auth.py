@@ -780,7 +780,10 @@ def attach_session_cookie(response: object, session: SessionIssueResponse) -> No
 
 
 def issue_or_resume_session(
-    presented_session_id: str | None, *, client_ip: str | None = None
+    presented_session_id: str | None,
+    *,
+    client_ip: str | None = None,
+    rotate_csrf: bool = True,
 ) -> SessionIssueResponse:
     """Return the active session or create a new one.
 
@@ -799,11 +802,29 @@ def issue_or_resume_session(
     ``client_ip`` is passed straight through to :func:`issue_session` on
     every path that actually mints (both below) — a RESUME never touches
     it, since resuming never consumes a mint-cap slot (issue #100 §2.3).
+
+    ``rotate_csrf=False`` resumes WITHOUT a new token. ``/ui`` passes it:
+    the page never receives the token from ``/ui`` (it asks
+    ``/v1/session``), so rotating there retired the token the open page
+    held and protected nothing. Measured in production on 2026-09-25: a
+    second ``GET /ui`` that ran no page code arrived after the page had
+    fetched its token, and every protected request then got 403.
     """
     _enforce_production_guards(require_legacy_disabled=True)
     if presented_session_id:
         existing = session_repository.get(presented_session_id)
         if existing is not None and not existing.is_expired(now=datetime.now(UTC)):
+            if not rotate_csrf:
+                resumed = session_repository.touch(presented_session_id)
+                if resumed is None:
+                    return issue_session(client_ip=client_ip)
+                return SessionIssueResponse(
+                    account_id=resumed.account_id,
+                    session_id=resumed.session_id,
+                    csrf_token=resumed.csrf_token,
+                    expires_at=resumed.last_used_at + SESSION_TTL,
+                    session_expires_in_seconds=int(SESSION_TTL.total_seconds()),
+                )
             # C10: rotate CSRF on resume. The fresh token replaces
             # the one previously issued for this session. See
             # ``SessionRepository.rotate_csrf``.
