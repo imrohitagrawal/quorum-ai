@@ -100,7 +100,7 @@ caught by any automated check and 10 of 16 by adversarial review
 | W2 | Peer critique: the answer models critique each other, two rounds (built; ships default-off) | DONE | `ABSENT src/product_app/debate.py :: def _build_peer_round(` | #290 | W1 |
 | W3 | Re-set the money constants against a measured bound — ladder moved 2026-09-07 (ADR-0102); token constants remain (W13/#268) | DONE | `PRESENT src/product_app/costs.py :: DAILY_CAP_USD = Decimal("0.20")` | — | W2 |
 | W4 | Variable panel size N ∈ {2,3,4} — shipped in three PRs: the backend (#493), the workspace control with the validator widening (#494), and the copy outside the run path (third PR) (ADR-0120, CHG-010, CHG-011) | DONE | `ABSENT src/product_app/model_slots.py :: Between 2 and 4 model slots are required.` | — | — (W10 done) |
-| W5 | Quick-answer mode (`mode: "quick"`, one model, judge on) — backend (#506), served verdict (#507) and workspace UI (third PR) built; the fourth PR, the verification-only judge prompt, remains (ADR-0126, ADR-0127, ADR-0128; CHG-016, CHG-017, CHG-018) | PENDING | `ABSENT src/product_app/evaluation.py :: JUDGE_QUICK_PROMPT_ID` | — | W4 |
+| W5 | Quick-answer mode (`mode: "quick"`, one model, judge on) — complete in four PRs: backend (#506), served verdict (#507), workspace UI (#508) and the verification-only judge prompt with per-claim evidence (fourth PR) (ADR-0126, ADR-0127, ADR-0128, ADR-0129; CHG-016, CHG-017, CHG-018, CHG-019) | DONE | `ABSENT src/product_app/evaluation.py :: JUDGE_QUICK_PROMPT_ID` | — | W4 |
 | W6 | A panel of one reports strong consensus | DONE | `ABSENT src/product_app/synthesis_consensus.py :: if len(stance) == 1:` | #383 | — |
 | W7 | Google sign-in and logout | UNPINNED | `—` | — | — |
 | W9 | Guard the moderator model overlapping a panel slot | DONE | `ABSENT src/product_app/model_slots.py :: debate_model_id` | — | — |
@@ -308,13 +308,16 @@ owner's answers of 2026-09-24 evening, recorded in
 request shape, estimate, bound, token shape, run path and receipt (ADR-0126,
 CHG-016; merged, #506); (2) what a quick result serves (ADR-0127, CHG-017; merged, #507): the safety-notice carrier, the
 quick trust shape and the run store's `mode` column; (3) the workspace
-control and result view (ADR-0128, CHG-018);
+control and result view (ADR-0128, CHG-018; merged, #508);
 (4) the judge prompt, verification only, with the judge's per-claim
-evidence. The needle is `JUDGE_QUICK_PROMPT_ID`, a name the fourth pull
-request adds to `evaluation.py`, so the row reads PENDING until the last W5
-pull request lands. It was pinned on the composer sentence until review of
-the third pull request pointed out that the row then read DONE while W5
-still had work open.
+evidence (ADR-0129, CHG-019). **W5 is complete with the fourth pull
+request:** its needle, `JUDGE_QUICK_PROMPT_ID`, is the name that pull request
+adds to `evaluation.py`, so the row derives DONE from the tree. It was pinned
+on the composer sentence until review of the third pull request pointed out
+that the row then read DONE while W5 still had work open. Two things stay
+open and are not W5 rows: the quick judge prompt's quality on real answers is
+unmeasured (no live window has run it), and the owner has not confirmed that
+the per-claim evidence is what they meant by "artifacts to support why".
 
 **W6 — #383. DONE** (ADR-0083). The stance branch of `compute_consensus_strength`
 called a panel of exactly ONE scored answer "strong" — `len(sizes) == 1` is

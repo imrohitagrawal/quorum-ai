@@ -1,5 +1,59 @@
 {
-  "_comment": "W5 (ADR-0128): the quick_verdict shapes the e2e quick-answer spec renders. Generated from build_quick_verdict and validated against QuickVerdict by tests/unit/test_quick_answer_ui.py, so a shape the server cannot serve fails in Python.",
+  "_comment": "W5 (ADR-0128, ADR-0129): the quick_verdict shapes the e2e quick-answer spec renders. Generated from build_quick_verdict and validated against QuickVerdict by tests/unit/test_quick_answer_ui.py, so a shape the server cannot serve fails in Python.",
+  "_generated_from": {
+    "answer_text": "## GPT-4o-mini — analysis\n\n**Summary:** measuring SaaS customer retention well means separating *logo* retention from *net-revenue* retention, and instrumenting the events that drive each before you try to move them.\n\n### Why the distinction matters\n\nLogo retention counts whether an account still exists; net-revenue retention (NRR) counts whether the dollars stayed or grew. A business can lose small accounts while expanding large ones, posting > 100% NRR alongside falling logo retention. Reporting only one number hides that. The panel recommends tracking **both**, on the same cohort definition, so the two curves are comparable.\n\n### The events to instrument first\n\n1. **Activation** — the first time an account reaches the value milestone you believe predicts retention.\n2. **Habit** — recurring usage at whatever cadence is natural for the product (daily, weekly, monthly).\n3. **Expansion / contraction** — seat, usage, or tier changes, timestamped and attributable to a cohort.\n4. **Churn signal** — the leading indicators (support escalations, usage decay) that precede a cancellation.\n\nWithout those events, every retention metric is a lagging autopsy. With them, you can build cohorted curves and, more importantly, intervene while a save is still possible. See https://example.com/retention/instrumentation for a reference event schema.\n\nReference build: `quorum_retention_instrumentation_reference_schema_v4_20260727_a1b2c3d4e5f6a7b8c9d0.json` — see https://example.com/retention/instrumentation/reference/schema/v4/quorum-retention-instrumentation-reference-schema-20260727.json for the canonical copy.\n\n### Cohorting and the common trap\n\nCohort by **signup month** for acquisition-quality questions, but cohort by **activation month** for product questions — mixing the two is the single most common source of misleading retention charts. Always state the cohort definition on the chart itself; a curve without a stated denominator is not interpretable.\n\n### What good looks like\n\nA mature setup reports monthly logo retention and NRR side by side, per activation cohort, with the raw event counts one click away so anyone can audit the number. The **worst** anti-pattern is a single blended percentage with no cohort, no denominator, and no link to the underlying events — it looks authoritative and means almost nothing.\n\nConfidence for GPT-4o-mini: moderate-to-high, contingent on the events above actually being instrumented.",
+    "sources": [
+      {
+        "title": "Smith et al. (2024) — Retention benchmarks for SaaS (working paper, v2)",
+        "url": "https://example.com/a"
+      },
+      {
+        "title": "Jones & Lee — Cohort export patterns [preprint]",
+        "url": "https://example.com/b"
+      }
+    ],
+    "judge": {
+      "WELL_SUPPORTED": {
+        "faithfulness": 5,
+        "grounding": 4,
+        "hallucination_risk": "low",
+        "claims": [
+          {
+            "quote": "**Summary:** measuring SaaS customer retention well means separating *logo* retention from *net-revenue* retention, and instrumenting the events that drive each before you try to move them.",
+            "source": 1,
+            "support": "supported"
+          },
+          {
+            "quote": "A business can lose small accounts while expanding large ones, posting > 100% NRR alongside falling logo retention.",
+            "source": 2,
+            "support": "supported"
+          },
+          {
+            "quote": "Always state the cohort definition on the chart itself; a curve without a stated denominator is not interpretable.",
+            "source": null,
+            "support": "unsourced"
+          },
+          {
+            "quote": "Healthy SaaS businesses always keep logo retention above 90%.",
+            "source": 1,
+            "support": "supported"
+          }
+        ]
+      },
+      "CONTRADICTED": {
+        "faithfulness": 5,
+        "grounding": 5,
+        "hallucination_risk": "low",
+        "claims": [
+          {
+            "quote": "Cohort by **signup month** for acquisition-quality questions, but cohort by **activation month** for product questions",
+            "source": 2,
+            "support": "contradicted"
+          }
+        ]
+      }
+    }
+  },
   "WELL_SUPPORTED": {
     "level": "well_supported",
     "faithfulness": 5,
@@ -21,7 +75,56 @@
         "url": "https://example.com/b"
       }
     ],
-    "judge_status": "verdict"
+    "judge_status": "verdict",
+    "claims": [
+      {
+        "quote": "Summary: measuring SaaS customer retention well means separating logo retention from net-revenue retention, and instrumenting the events that drive each before you try to move them.",
+        "source": 1,
+        "support": "supported"
+      },
+      {
+        "quote": "A business can lose small accounts while expanding large ones, posting > 100% NRR alongside falling logo retention.",
+        "source": 2,
+        "support": "supported"
+      },
+      {
+        "quote": "Always state the cohort definition on the chart itself; a curve without a stated denominator is not interpretable.",
+        "source": null,
+        "support": "unsourced"
+      }
+    ],
+    "claims_dropped": 1
+  },
+  "CONTRADICTED": {
+    "level": "partly_supported",
+    "faithfulness": 5,
+    "grounding": 5,
+    "hallucination_risk": "low",
+    "reasons": [
+      "The judge scored how closely the answer keeps to its cited sources 5 out of 5.",
+      "It scored how well the answer's citations point at those sources 5 out of 5.",
+      "It rated the risk of claims the sources do not support as low.",
+      "The judge checked the answer against 2 sources."
+    ],
+    "sources_checked": [
+      {
+        "title": "Smith et al. (2024) — Retention benchmarks for SaaS (working paper, v2)",
+        "url": "https://example.com/a"
+      },
+      {
+        "title": "Jones & Lee — Cohort export patterns [preprint]",
+        "url": "https://example.com/b"
+      }
+    ],
+    "judge_status": "verdict",
+    "claims": [
+      {
+        "quote": "Cohort by signup month for acquisition-quality questions, but cohort by activation month for product questions",
+        "source": 2,
+        "support": "contradicted"
+      }
+    ],
+    "claims_dropped": 0
   },
   "NOT_CHECKED": {
     "level": "not_checked",
@@ -30,6 +133,8 @@
     "hallucination_risk": null,
     "reasons": null,
     "sources_checked": [],
-    "judge_status": null
+    "judge_status": null,
+    "claims": [],
+    "claims_dropped": 0
   }
 }

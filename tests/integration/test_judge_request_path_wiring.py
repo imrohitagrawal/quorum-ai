@@ -40,6 +40,7 @@ from product_app.debate import AgreementSummary, debate_event_recorder
 from product_app.evaluation import (
     EvalJudgeService,
     EvalJudgeVerdict,
+    JudgeCallOutcome,
     StubEvalJudge,
     evaluate_run,
 )
@@ -548,6 +549,15 @@ def _measured_run(account_id: Any, *, mode: str = "panel") -> Any:
     return run
 
 
+#: ADR-0129: the verdict a quick run's judge returns (the quick schema).
+_QUICK_VERDICT_JSON = json.dumps(
+    {
+        **{k: v for k, v in VALID_VERDICT.items() if k != "disagreement_preserved"},
+        "claims": [],
+    }
+)
+
+
 @pytest.mark.parametrize("mode", ["panel", "quick"])
 def test_the_judge_dollar_is_inside_the_figure_the_ledger_books(
     monkeypatch: pytest.MonkeyPatch, mode: str
@@ -598,12 +608,21 @@ def test_the_judge_dollar_is_inside_the_figure_the_ledger_books(
             mp.setattr(settings, "openrouter_live_execution_enabled", True)
             if enable:
                 _enable_judge(mp)
-            judge_calls = _judge_seam(mp, usage=usage)
+            # ADR-0129: a quick run's judge answers the quick schema.
+            judge_calls = _judge_seam(
+                mp, usage=usage, verdict_json=_QUICK_VERDICT_JSON if mode == "quick" else None
+            )
             observed = _reconcile_spy(mp, judge_calls)
             account_id = uuid4()
             run = _measured_run(account_id, mode=mode)
             with run_history_store.configure_for_tests():
                 qr._persist_terminal_run(run.query_run_id)
+            if enable:
+                # The verdict PARSED in both modes, so the booked judge is a
+                # judge that answered its own prompt. RED IF a quick run is
+                # parsed with the panel schema (it would read dispatched).
+                outcome = qr._judge_verdict_memo[str(run.query_run_id)]
+                assert outcome.status is JudgeCallOutcome.VERDICT, outcome.status
             assert observed.get("spy_completed"), f"spy did not complete: {observed}"
             assert observed["cost_source"] == "measured", (
                 f"the run was not measured, so nothing was booked: {observed}"

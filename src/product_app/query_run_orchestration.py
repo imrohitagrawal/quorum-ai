@@ -72,6 +72,7 @@ from product_app.debate import (
     debate_stub_service,
 )
 from product_app.evaluation import (
+    EvalJudgeQuickVerdict,
     EvalJudgeService,
     EvalJudgeVerdict,
     FaithfulnessLabel,
@@ -2027,7 +2028,9 @@ class _JudgeOutcome:
     cost real complexity for a benefit no real traffic pattern can reach today.
     """
 
-    verdict: EvalJudgeVerdict | None
+    #: A quick run's judge memoises its own shape (W5, ADR-0129); a run's
+    #: mode never changes, so an entry's type always matches its run.
+    verdict: EvalJudgeVerdict | EvalJudgeQuickVerdict | None
     usage: TokenUsage | None
     model_id: str
     #: WHAT the call did (issue #258). ``usage`` cannot answer this: it is
@@ -2161,8 +2164,12 @@ class _MemoisedRunJudge:
     def verifies_support(self) -> bool:
         return EvalJudgeService.verifies_support
 
-    def __init__(self, query_run_id: str, account_id: UUID) -> None:
+    def __init__(self, query_run_id: str, account_id: UUID, *, quick: bool = False) -> None:
         self._query_run_id = query_run_id
+        #: W5 (ADR-0129): a quick run's judge is asked the verification-only
+        #: prompt and parsed with the quick schema; a panel run's is not
+        #: touched. Fixed per instance because a run's mode never changes.
+        self._quick = quick
         #: Whose per-account spend rail applies to a PAID dispatch from this
         #: instance (#216). Read only in :meth:`evaluate`, and only on the
         #: branch that would actually pay.
@@ -2198,6 +2205,20 @@ class _MemoisedRunJudge:
     def evaluate(
         self, evidence: JudgeEvidence, *, query_run_id: str | None = None
     ) -> EvalJudgeVerdict | None:
+        """The memoised verdict for the evaluation engine.
+
+        A quick run's verdict (``EvalJudgeQuickVerdict``) is memoised and
+        billed like any other, but never handed to the panel evaluation
+        engine: a quick answer serves no panel evaluation (ADR-0126) and its
+        verdict has no ``disagreement_preserved`` for the engine's record.
+        ``build_quick_verdict`` reads it from the memo instead (ADR-0129).
+        """
+        verdict = self._memoised_verdict(evidence, query_run_id=query_run_id)
+        return verdict if isinstance(verdict, EvalJudgeVerdict) else None
+
+    def _memoised_verdict(
+        self, evidence: JudgeEvidence, *, query_run_id: str | None
+    ) -> EvalJudgeVerdict | EvalJudgeQuickVerdict | None:
         run_id = self._query_run_id
         # THE MONEY SEAM (#216, ADR-0051). Three ways this method can answer,
         # and only ONE of them spends:
@@ -2261,12 +2282,15 @@ class _MemoisedRunJudge:
                 self.suppression_reason = JudgeSuppressionReason.INFLIGHT_TIMEOUT
                 return None
         service = EvalJudgeService()
-        verdict: EvalJudgeVerdict | None = None
+        verdict: EvalJudgeVerdict | EvalJudgeQuickVerdict | None = None
         try:
             # ``EvalJudgeService.evaluate`` is contractually non-raising (the
             # judge is advisory), but the finally block guarantees the future
             # resolves and the in-flight claim clears even if that ever breaks.
-            verdict = service.evaluate(evidence, query_run_id=query_run_id)
+            if self._quick:
+                verdict = service.evaluate_quick(evidence, query_run_id=query_run_id)
+            else:
+                verdict = service.evaluate(evidence, query_run_id=query_run_id)
         finally:
             outcome = _JudgeOutcome(
                 verdict=verdict,
@@ -2453,7 +2477,9 @@ def _request_path_judge(query_run: QueryRun) -> _MemoisedRunJudge | None:
         return None
     # Zero I/O to here. The money rails are read inside ``evaluate``, and only
     # when it is about to pay — never to decide whether a memo hit is served.
-    return _MemoisedRunJudge(str(query_run.query_run_id), query_run.account_id)
+    return _MemoisedRunJudge(
+        str(query_run.query_run_id), query_run.account_id, quick=query_run.mode == MODE_QUICK
+    )
 
 
 #: Per-run memo of the whole terminal evaluation (issue #284). Every result
