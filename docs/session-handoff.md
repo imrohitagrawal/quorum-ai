@@ -1,7 +1,7 @@
 # Session Handoff
 
 ## Date/time
-2026-09-24T02:18:18+05:30
+2026-09-25T19:25:49+05:30
 
 ## Open work
 `docs/65-open-work.md` — the source of truth for what is open, what blocks what,
@@ -11,31 +11,33 @@ line further down this file is the factory router's view of the lifecycle, not a
 work status.
 
 ## Latest narrative handoff
-`docs/analysis/2026-09-24-session-handoff.md` — read this for full context before editing. (today)
+`docs/analysis/2026-09-25-session-handoff.md` — read this for full context before editing. (today)
 
 This file is a mechanical snapshot (branch/git-status/skill-route/live state) —
 regenerated fresh every `make handoff`. The narrative above (what happened,
 what's next, the traps) lives in the dated doc it points to, not here.
 
 ## Current branch/worktree
-docs/handoff-2026-09-24
+docs/handoff-2026-09-25
 
 ## Live state (measured fresh by this run, not hand-carried)
 Run `make handoff` again for current numbers instead of trusting this file
 once it ages -- every value below is read from git/gh/`/status` at
 generation time, per #134.
 
-- **`origin/main` tip:** `2cbb9c1307b3`
-- **Last commit touching `src/`:** `53d0a117df3b`
-- **Production vs. last `src/` commit:** production build_sha 2cbb9c1 does NOT match last src/ commit 53d0a11 -- a deploy may be in flight or overdue
-- **pytest collected (no execution):** 4620
-- **e2e lane spec counts:** invariants: 21, ops: 2, degraded: 1
+- **`origin/main` tip:** `709ccfe012e0`
+- **Last commit touching `src/`:** `709ccfe012e0`
+- **Production vs. last `src/` commit:** production build_sha 709ccfe is in sync with last src/ commit
+- **pytest collected (no execution):** 5024
+- **e2e lane spec counts:** invariants: 22, ops: 2, degraded: 1
 - **Open issues:** 8
 - **Changed-lines coverage:** not computed here -- `make diff-cover` shares
   coverage data with every pytest-invoking target and races with them if run
   concurrently (AGENTS.md rule 15), so this file does not run it. Run
   `make quality && make diff-cover DIFF_BASE=origin/main` for a current number.
 - **Remote branches not merged into `origin/main`:**
+- `docs/w5-parked-2026-09-24`
+- `fix/e2e-visual-wait-for-fonts`
 - `proposal/268-web-search-context-tokens`
 
 ## Current phase
@@ -93,13 +95,16 @@ Operate, learn, and improve
 
 ## Git status
 ```text
-?? docs/analysis/2026-09-24-session-handoff.md
-?? docs/analysis/2026-09-24-w5-scoping.md
+M docs/19-change-control-log.md
+ M docs/65-open-work.md
+?? docs/analysis/2026-09-25-session-handoff.md
 ```
 
 ## Diff stat
 ```text
-no unstaged diff
+docs/19-change-control-log.md | 2 ++
+ docs/65-open-work.md          | 3 +++
+ 2 files changed, 5 insertions(+)
 ```
 
 ## Completed in this session
