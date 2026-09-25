@@ -380,6 +380,21 @@ def test_both_issuer_spellings_google_documents_are_accepted() -> None:
         assert identity.google_sub == "108000000000000000001"
 
 
+def test_a_token_expiring_at_this_very_second_is_expired() -> None:
+    """The exp boundary, pinned on both sides. RED-IF: ``exp <= now`` becomes
+    ``exp < now`` (a token at its expiry instant would be accepted)."""
+    now = float(int(time.time()))
+    with pytest.raises(google_signin.SignInFailed) as caught:
+        google_signin.verify_id_token(
+            make_id_token(_bad(exp=int(now), iat=int(now) - 10)), client_id=CLIENT_ID, now=now
+        )
+    assert caught.value.reason == "id_token_expired"
+    identity = google_signin.verify_id_token(
+        make_id_token(_bad(exp=int(now) + 1, iat=int(now) - 10)), client_id=CLIENT_ID, now=now
+    )
+    assert identity.email == "ada@example.com"
+
+
 def test_an_issue_time_inside_the_clock_skew_is_accepted() -> None:
     """The partner of ``iat_in_future``: 299 s ahead passes, 301 s fails.
     RED-IF: ID_TOKEN_CLOCK_SKEW_S changes, or the comparison flips."""
@@ -658,6 +673,27 @@ def test_a_slow_token_endpoint_cannot_hold_the_callback(
     assertion is a literal 2.0 s, not the constant (rule 7a)."""
     monkeypatch.setattr(google_signin, "TOKEN_EXCHANGE_TIMEOUT_S", 0.5)
     sign_in.stub.delay_s = 5.0
+    client = sign_in.client()
+    query = _start(client, _boot(client))
+    started = time.monotonic()
+    response = _callback(client, code="c", state=query["state"])
+    elapsed = time.monotonic() - started
+    assert response.headers["location"] == "/ui?sign_in=failed"
+    assert elapsed < 2.0, elapsed
+    assert sign_in.account_rows() == []
+
+
+def test_a_token_endpoint_that_dribbles_cannot_hold_the_callback(
+    sign_in: SignIn, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A per-read socket timeout does not bound a server that keeps sending a
+    byte at a time; only the total bound does (ADR-0124's lesson). The stub
+    sends 25 bytes at 0.2 s each, 5 s in all, every read well inside the 0.5 s
+    socket timeout. RED-IF: the worker join loses its timeout (the callback
+    would take the full 5 s)."""
+    monkeypatch.setattr(google_signin, "TOKEN_EXCHANGE_TIMEOUT_S", 0.5)
+    sign_in.stub.drip_bytes = 25
+    sign_in.stub.drip_interval_s = 0.2
     client = sign_in.client()
     query = _start(client, _boot(client))
     started = time.monotonic()

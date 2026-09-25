@@ -311,3 +311,17 @@ answers.
 - Acceptance criteria: AC-051.
 - Tests: TEST-FR-018 (`e2e/tests/invariants/quick-answer.spec.ts`, `tests/unit/test_quick_answer_ui.py`, `tests/integration/test_quick_mode_backend.py`, `tests/unit/test_quick_judge.py`, `tests/unit/test_quick_verdict_claims.py`).
 - Jira: Not created.
+
+## FR-019 Sign in with Google, and sign out
+
+- Actor: Browser-session user.
+- Trigger: The user chooses "Sign in with Google" in the workspace's top bar, completes Google's consent page, and later may choose "Sign out".
+- Behavior: Available only when the operator has set `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET` and `GOOGLE_OAUTH_REDIRECT_URI`; otherwise no control is shown, the sign-in routes answer 404 and `/status` reports `sign_in_enabled: false`. Sign-in uses the OpenID Connect authorization code flow with PKCE and a single-use `state` bound to the browser's current session; the code is exchanged server-side and the ID token's claims are checked (ADR-0130). A first sign-in creates an account row keyed by the Google subject (the subject, the email for display and two dates; no token); a later one finds the same account from any browser. Sign-in replaces the browser's session with a new one bound to the account and the page shows the signed-in email and "Sign out". A failed or cancelled sign-in returns to the workspace with "Sign-in did not complete. Please try again." and changes nothing. Sign-out ends the session on the server and deletes nothing else.
+- Outcome: A person has an account that outlives the browser, which is what the owner's purpose, keeping the history of their searches, needs; the history itself is the second W7 pull request.
+- Source: `docs/19-change-control-log.md` (CHG-012 D7, CHG-020); `docs/analysis/2026-09-25-w7-google-sign-in-failure-modes.md`.
+- Owner: Product owner.
+- Priority: Should.
+- Rationale: The owner: *"the purpose of sig-in is to preserve the history of the searches from a account."*
+- Acceptance criteria: AC-052.
+- Tests: TEST-FR-019 (`tests/integration/test_google_sign_in.py`, `tests/unit/test_google_signin_units.py`).
+- Jira: Not created.

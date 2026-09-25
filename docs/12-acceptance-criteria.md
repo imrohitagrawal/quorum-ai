@@ -429,3 +429,11 @@ Given the composer, when the user turns on "Quick answer — one model, no debat
 - Requirement: FR-018
 - Test: TEST-FR-018 (`e2e/tests/invariants/quick-answer.spec.ts`, each absence with a positive partner on a panel result; `tests/unit/test_quick_answer_ui.py` for the request bodies, the cost-gate line, the one-model banner copy, the judge heading, the Copy summary and the fixture's served shape; `tests/unit/test_quick_verdict_claims.py` for which claims are served)
 - Decided by the product owner on 2026-09-24 (CHG-012 D1 and the evening answers); the layout is the session's (ADR-0128, CHG-018), and so is the per-claim evidence (ADR-0129, CHG-019).
+
+## AC-052 A person can sign in with Google and sign out, and nothing else changes
+
+Given a deployment with the three `GOOGLE_OAUTH_*` settings set, when a visitor chooses "Sign in with Google" and Google returns them with a valid code and this session's unexpired, unused `state`, then the server exchanges the code with PKCE, accepts the ID token only if its issuer, audience, authorised party, expiry, issue time, verified email, subject and email pass, records one account row per Google subject holding no token, replaces the session with a new one (the old id no longer works), and the page shows the email and "Sign out". A callback with a missing, wrong, expired, reused or another session's `state`, a failing claim, an error from Google, or a token endpoint slower than 10 s returns to `/ui?sign_in=failed` with a fixed notice and changes no session and no row. "Sign out" ends the session on the server and keeps the account row. With any of the three settings unset, the page is byte-identical to the page without sign-in, the routes answer 404 and `/status` reports `sign_in_enabled: false`.
+
+- Requirement: FR-019
+- Test: TEST-FR-019 (`tests/integration/test_google_sign_in.py`; `tests/unit/test_google_signin_units.py`)
+- Decided by the product owner on 2026-09-24 (CHG-012 D7); the flow, bounds and copy are the session's (ADR-0130, CHG-020).

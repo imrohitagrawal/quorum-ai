@@ -57,6 +57,11 @@ class StubConfig:
     status: int = 200
     claims: dict[str, Any] = field(default_factory=good_claims)
     delay_s: float = 0.0
+    #: Send the first ``drip_bytes`` of the body one byte every
+    #: ``drip_interval_s`` seconds: each read is quick, so only a bound on the
+    #: TOTAL time stops the wait (a per-read socket timeout never fires).
+    drip_bytes: int = 0
+    drip_interval_s: float = 0.0
     requests: list[dict[str, Any]] = field(default_factory=list)
 
     def body(self) -> bytes:
@@ -95,7 +100,11 @@ def token_stub() -> Iterator[tuple[str, StubConfig]]:
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
-                self.wfile.write(body)
+                for index in range(min(config.drip_bytes, len(body))):
+                    self.wfile.write(body[index : index + 1])
+                    self.wfile.flush()
+                    time.sleep(config.drip_interval_s)
+                self.wfile.write(body[config.drip_bytes :])
             except OSError:
                 return
 
