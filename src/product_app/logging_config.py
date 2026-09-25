@@ -569,6 +569,12 @@ def _redact_args_in_place(record: logging.LogRecord) -> bool:
     args = record.args
     if not isinstance(args, tuple) or not args:
         return False
+    # Only plain values: an object's text is decided by its own ``__str__`` /
+    # ``__repr__``, which this helper cannot see, and Sentry reads the args
+    # themselves (round-2 review measured an object's repr reaching
+    # ``logentry.params``). Anything else falls back to the old path.
+    if not all(isinstance(a, (str, int, float, bool)) or a is None for a in args):
+        return False
     redacted_args = tuple(_redact_secrets(a) if isinstance(a, str) else a for a in args)
     try:
         rendered = str(record.msg) % redacted_args

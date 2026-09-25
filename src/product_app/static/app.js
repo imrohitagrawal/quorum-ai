@@ -9865,8 +9865,10 @@
   }
 
   // W7 (ADR-0130): the top bar's "Sign in with Google" and "Sign out"
-  // buttons. The server renders them only when sign-in is enabled, so on a
-  // deployment without it neither element exists and this does nothing.
+  // buttons. The server renders "Sign in" only when sign-in is enabled and
+  // this is its host, and "Sign out" for any signed-in session (so a session
+  // signed in before sign-in was switched off can still end); on a page with
+  // neither, this does nothing.
   // Sign-in asks the server to start (POST, CSRF) and then navigates to the
   // Google URL it returns, but only if that URL really is Google's consent
   // page. Sign-out asks the server to end the session, then reloads /ui.

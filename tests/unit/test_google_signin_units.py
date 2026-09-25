@@ -68,3 +68,82 @@ def test_an_expired_entry_is_purged_when_another_session_starts() -> None:
     table.begin("fresh", now=started + timedelta(minutes=10, seconds=1))
     assert len(table) == 1
     assert table.take("fresh", now=started + timedelta(minutes=10, seconds=2)) is not None
+
+
+@pytest.mark.parametrize(
+    ("redirect_uri", "request_url", "expected"),
+    [
+        ("https://q.example.com/v1/auth/google/callback", "https://q.example.com/ui", True),
+        ("https://q.example.com:443/v1/auth/google/callback", "https://q.example.com/ui", True),
+        ("https://Q.Example.com/v1/auth/google/callback", "https://q.example.com/ui", True),
+        ("https://q.example.com/v1/auth/google/callback", "https://Q.EXAMPLE.COM:443/ui", True),
+        ("https://q.example.com/v1/auth/google/callback", "https://q.example.com:8443/ui", False),
+        ("https://q.example.com/v1/auth/google/callback", "https://other.example.com/ui", False),
+    ],
+)
+def test_the_host_rule_compares_as_a_browser_does(
+    monkeypatch: pytest.MonkeyPatch, redirect_uri: str, request_url: str, expected: bool
+) -> None:
+    """Round-2 review: a redirect URI written with ``:443`` or an upper-case
+    host left sign-in reported on and impossible to start, because a browser
+    drops the default port from ``Host``. RED IF the comparison is exact
+    string equality again. Partners: another port and another host are still
+    refused."""
+    from starlette.requests import Request
+
+    monkeypatch.setattr(google_signin.settings, "google_oauth_redirect_uri", redirect_uri)
+    from urllib.parse import urlsplit
+
+    parts = urlsplit(request_url)
+    host = parts.netloc.encode()
+    request = Request(
+        {
+            "type": "http",
+            "scheme": parts.scheme,
+            "server": (parts.hostname, parts.port or 443),
+            "path": parts.path,
+            "query_string": b"",
+            "headers": [(b"host", host)],
+        }
+    )
+    assert google_signin.on_sign_in_host(request) is expected
+    assert google_signin.sign_in_home() == "https://q.example.com/ui"
+
+
+def test_in_place_redaction_declines_objects_and_mappings() -> None:
+    """Round-2 review: with an object among the args, the args-in-place path
+    handed Sentry the object's repr (``logentry.params``); with a dict inside
+    a tuple it rewrote the message. Only plain values are redacted in place;
+    anything else falls back to the pre-rendered, always-safe path. RED IF
+    the plain-values check is removed. Partner: plain string args are still
+    redacted in place and stay a tuple."""
+    import logging
+
+    from product_app.logging_config import _redact_args_in_place
+
+    class Obj:
+        def __str__(self) -> str:
+            return "clean"
+
+        def __repr__(self) -> str:
+            return "Obj(api_key=OBJSECRET123456)"
+
+    obj_record = logging.LogRecord(
+        "x", logging.ERROR, __file__, 1, "key %s and %s", ("a", Obj()), None
+    )
+    assert _redact_args_in_place(obj_record) is False
+    map_record = logging.LogRecord(
+        "x", logging.ERROR, __file__, 1, "payload %s", ({"api_key": "abcdefgh123456"},), None
+    )
+    assert _redact_args_in_place(map_record) is False
+    plain = logging.LogRecord(
+        "x",
+        logging.ERROR,
+        __file__,
+        1,
+        "GET %s done",
+        ("/v1/auth/google/callback?code=SECRETCODE12",),
+        None,
+    )
+    assert _redact_args_in_place(plain) is True
+    assert isinstance(plain.args, tuple) and "SECRETCODE12" not in str(plain.args)

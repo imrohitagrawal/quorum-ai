@@ -533,9 +533,23 @@ _DOCUMENTED_ERRORS: dict[int | str, dict[str, object]] = {
 router = APIRouter()
 
 
+_DEFAULT_PORTS = {"http": 80, "https": 443}
+
+
+def _origin(scheme: str, hostname: str | None, port: int | None) -> tuple[str, int | None]:
+    """Host and port as a browser compares them: the host lower-cased and a
+    port equal to the scheme's default treated as absent (a browser drops
+    ``:443`` from ``Host``). Round-2 review found a redirect URI written with
+    ``:443`` or an upper-case host left sign-in reported on and never usable."""
+    effective = None if port == _DEFAULT_PORTS.get(scheme.lower()) else port
+    return (hostname or "").lower(), effective
+
+
 def _redirect_parts() -> tuple[str, str]:
     parts = urlsplit(settings.google_oauth_redirect_uri.strip())
-    return parts.scheme, parts.netloc
+    host, port = _origin(parts.scheme, parts.hostname, parts.port)
+    shown = f"[{host}]" if ":" in host else host
+    return parts.scheme, shown if port is None else f"{shown}:{port}"
 
 
 def sign_in_home() -> str:
@@ -549,8 +563,12 @@ def on_sign_in_host(request: Request) -> bool:
     back to. A sign-in started anywhere else cannot finish: the callback lands
     on the redirect URI's host, where this browser's session cookie does not
     exist (for example, quorum-ai.fly.dev against a quorum.stackclimb.com
-    redirect URI). Compared on host and port."""
-    return request.url.netloc == _redirect_parts()[1]
+    redirect URI). Compared on host and port, case and default port
+    normalised (:func:`_origin`)."""
+    parts = urlsplit(settings.google_oauth_redirect_uri.strip())
+    want = _origin(parts.scheme, parts.hostname, parts.port)
+    got = _origin(request.url.scheme, request.url.hostname, request.url.port)
+    return got == want
 
 
 def _require_enabled() -> None:

@@ -349,7 +349,7 @@ sessions database, the OpenID Connect flow in `google_signin.py`, and the
 session rotation in `auth.py`. It is off in production until the operator
 creates the Google OAuth client and sets the three `GOOGLE_OAUTH_*` secrets.
 The row is pinned on `history_keep_count`, the snake_case settings field for
-`HISTORY_KEEP_COUNT`, the name the owner-confirmed decision register gives the
+`HISTORY_KEEP_COUNT`, the name the decision register gives (the session's wording in its 2026-09-24 section, accepted by the owner; that section is not among the ones the owner confirmed verbatim) the
 keep-the-last-5 setting (`docs/analysis/2026-09-22-decision-register.md`, D7).
 Only the second pull request adds it, so the row reads PENDING until the
 history lands. (It was pinned on `history_max_runs_per_account`, the
