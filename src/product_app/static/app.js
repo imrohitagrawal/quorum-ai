@@ -3299,8 +3299,8 @@
     const n = qv && Number.isInteger(qv.claims_dropped) ? qv.claims_dropped : 0;
     if (n < 1) return "";
     return n === 1
-      ? "1 claim the judge named is not shown, because its words are not the answer's or it points at no source the judge was shown."
-      : `${n} claims the judge named are not shown, because their words are not the answer's or they point at no source the judge was shown.`;
+      ? "1 claim the judge named is not shown, because it did not pass the app's checks (its words must be the answer's own, and its source one the judge was shown)."
+      : `${n} claims the judge named are not shown, because they did not pass the app's checks (their words must be the answer's own, and their source one the judge was shown).`;
   }
   const QUICK_CLAIMS_NOTE =
     "The judge saw each source's title and address, not the page itself.";

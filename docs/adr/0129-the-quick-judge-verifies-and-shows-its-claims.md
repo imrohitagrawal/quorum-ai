@@ -68,19 +68,28 @@ Failure modes were listed before the code:
    `_request_path_judge` and calls `evaluate_quick` for `mode: "quick"`
    only. The memo, the money rails and the billing path are unchanged.
 5. **Only the answer's own words are served.** A claim is served only if its
-   quote, reduced to the text a reader sees (Markdown rendered to plain text
-   by the workspace's own parser configuration, `displayed_text_blocks`;
-   whitespace collapsed), is non-empty, at most 300 characters, and part of
-   ONE block of the answer's displayed text; its `source` is null or one of
+   quote, reduced to the text a reader sees (Markdown rendered to plain
+   text, `displayed_text_blocks`; whitespace collapsed), is non-empty, at
+   most 300 characters, part of ONE block of the answer's displayed text
+   starting and ending on word boundaries, AND part of the answer's raw text
+   read with only its emphasis and code markers removed (`_raw_reading`), and
+   carries no `<br`. The server's Markdown reading is NOT the page's: the
+   page keeps an intra-word star literally ("3*40") and turns `<br>` into a
+   line break, and review measured the first draft serving "340 and 212"
+   under "Supported" for an answer that says "3*40 and 2*12". The raw-text
+   rule makes any such difference drop the claim instead of showing it
+   wrongly; its `source` is null or one of
    `sources_checked` (1-based, the same list that numbers the prompt's
    SOURCES block); and "unsourced" goes with a null source and the other two
    words with a number. Only the first 8 claims are read. The served quote is
    the displayed text, never the raw Markdown. `QuickVerdict` gains `claims`
    and `claims_dropped` (how many the judge gave that are not served). The
    `rationale` is still never served.
-6. **A served "contradicted" claim caps the level at partly supported**, so
-   the page never reads "Well supported" above a claim it shows as
-   contradicted. The level otherwise follows `verdict_level` and
+6. **Any "contradicted" claim the judge gave caps the level at partly
+   supported**, served or not: whether a quote may be shown and whether the
+   judge found a contradiction are separate questions (the first draft
+   counted only served claims, and review found a dropped contradiction left
+   the level at "Well supported"). The level otherwise follows `verdict_level` and
    `verdict_supports_verification` exactly as for ADR-0127.
 7. **The page.** Under the reasons: "Claims the judge checked", each the
    quote as text (`textContent`, never markup) and a line "Supported ·
@@ -101,7 +110,7 @@ paid call; the judge seam is stubbed in every test.
 
 | what | result |
 |---|---|
-| RED before the change | the two new unit files failed to import (`cannot import name 'JUDGE_QUICK_MAX_CLAIMS'`, `'EvalJudgeQuickClaim'`); the integration files: 18 failed, 9 passed (a quick-shaped verdict read `not_checked`; `'QuickVerdict' object has no attribute 'claims'`; `'PR-EVAL-JUDGE-QUICK-v1' in '...PR-EVAL-JUDGE-v1...'` false; the quick ledger case); `quick-answer.spec.ts` against the ADR-0128 `app.js`: 3 failed, 7 passed |
+| RED before the change | the two new unit files failed to import (`cannot import name 'JUDGE_QUICK_MAX_CLAIMS'`, `'EvalJudgeQuickClaim'`); the integration files: 18 failed, 9 passed (measured on the first draft of those tests; the committed files hold more) (a quick-shaped verdict read `not_checked`; `'QuickVerdict' object has no attribute 'claims'`; `'PR-EVAL-JUDGE-QUICK-v1' in '...PR-EVAL-JUDGE-v1...'` false; the quick ledger case); `quick-answer.spec.ts` against the ADR-0128 `app.js`: 3 failed, 7 passed |
 | the panel is unchanged | a dump of the panel system prompt, three user prompts, eight parse results, the prompt id, the provider-call arguments and the service's verdict, usage and outcome, taken on `1fc3b45` before any edit and again on the final tree: identical, 15 of 15 lines. The panel prompt's SHA-256 (`4df96bff…479e`) is pinned in `tests/unit/test_quick_judge.py` |
 | mutation proofs | 26 Python mutations, each killed by the test named for it (cp aside, mutate, `__pycache__` cleared, run, restore, `cmp`), plus 3 JavaScript mutations killed by the Node-run unit tests; baseline of the same files green (97 passed). One UI mutation is NOT caught: writing a quote with `innerHTML` instead of `textContent` survives the e2e spec, because the fixture's quotes carry no markup; the server's plain-text rule is what stands behind that line |
 | the bound covers the quick judge | quick run, one slot, judge priced at $0.001/$0.005 per 1k: the bound's judge reserve is $0.0273; the largest quick judge call (the 2,197-character quick system prompt, an 8,000-character answer, 32 source lines at their caps, 29,832 characters in all, and 1,024 output tokens) costs $0.0126. The reserve still counts five synthesis sections a quick run never sends. Pinned by `test_the_quick_bound_covers_the_quick_judges_worst_case_call` |
@@ -132,14 +141,19 @@ paid call; the judge seam is stubbed in every test.
   for "unsourced"; a breach being no verdict rather than a trimmed one.
 - Dropping `disagreement_preserved` for quick and keeping the quick verdict
   out of the panel engine.
-- The serving rule: displayed text, one block, the first 8 claims; serving
-  the displayed text rather than the raw Markdown; serving a drop count.
-- A served contradicted claim capping the level at partly supported.
+- The serving rule: displayed text, one block, word boundaries, the raw-text
+  check, no `<br`, the first 8 claims; serving the displayed text rather
+  than the raw Markdown; serving a drop count.
+- Any contradicted claim the judge gave capping the level at partly
+  supported.
 - The page copy: "Claims the judge checked", "Supported · source N",
   "Contradicted · source N", "No source cited", the titles-and-addresses
   sentence, the dropped-claims sentence, and the order (claims above the
   sources they number).
-- No minimum quote length (failure mode 13 stays open).
+- No minimum quote length and no whole-sentence rule (failure mode 13 stays
+  open): a whole-word fragment is served, including one that drops a
+  negation ("vaccines cause autism" out of "It is false that vaccines cause
+  autism"); the support label is the judge's either way.
 
 ## Rejected alternatives
 

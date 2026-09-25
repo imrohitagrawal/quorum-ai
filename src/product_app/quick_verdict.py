@@ -135,6 +135,41 @@ def reasons_for(
     return reasons
 
 
+def _raw_reading(text: str) -> str:
+    """The answer's raw text with spaces collapsed and only its emphasis and
+    code markers removed: every backtick, ``**`` and ``__``, and a single
+    ``*`` or ``_`` unless it sits between two letters or digits. The page
+    shows an intra-word star literally (``3*40``), so it is kept here; a
+    quote whose displayed form exists only because this module's Markdown
+    reading differs from the page's therefore matches nothing."""
+    text = " ".join(text.split())
+    text = text.replace("`", "").replace("**", "").replace("__", "")
+    out = []
+    for i, ch in enumerate(text):
+        if ch in "*_":
+            before = text[i - 1] if i > 0 else ""
+            after = text[i + 1] if i + 1 < len(text) else ""
+            if not (before.isalnum() and after.isalnum()):
+                continue
+        out.append(ch)
+    return "".join(out)
+
+
+def _bounded_in(quote: str, block: str) -> bool:
+    """``quote`` occurs in ``block`` starting and ending on word boundaries:
+    the character before and after it is not a letter or digit, so a quote
+    cannot be cut from the middle of a word."""
+    start = block.find(quote)
+    while start != -1:
+        end = start + len(quote)
+        before_ok = start == 0 or not block[start - 1].isalnum()
+        after_ok = end == len(block) or not block[end].isalnum()
+        if before_ok and after_ok:
+            return True
+        start = block.find(quote, start + 1)
+    return False
+
+
 def served_claims(
     claims: list[EvalJudgeQuickClaim],
     *,
@@ -148,15 +183,23 @@ def served_claims(
     them is served only if ALL hold:
 
     * its quote, reduced to displayed text, is non-empty, at most
-      ``JUDGE_QUICK_MAX_QUOTE_LEN`` characters, and part of ONE block of the answer's
-      displayed text (:func:`displayed_text_blocks`), so what is shown is
-      text already on the page and never the judge's own;
+      ``JUDGE_QUICK_MAX_QUOTE_LEN`` characters, part of ONE block of the answer's
+      displayed text (:func:`displayed_text_blocks`) with a non-word
+      character (or the block's edge) on each side, AND part of the answer's
+      RAW text read with only its emphasis and code markers removed
+      (:func:`_raw_reading`), and not containing ``<br``, which the page
+      shows as a line break. The last rule keeps out any
+      text that exists only because this module's Markdown reading differs
+      from the page's (review of W5's fourth pull request: "3*40" read here as emphasis became
+      "340", a number the answer does not contain); so what is shown is
+      text the answer itself contains and never the judge's own;
     * ``source`` is ``None`` or between 1 and ``source_count``;
     * ``support`` is "unsourced" exactly when ``source`` is ``None``.
 
     The served quote is the displayed text, never the raw Markdown.
     """
     answer_blocks = displayed_text_blocks(answer_text)
+    raw_answer = _raw_reading(answer_text)
     kept: list[QuickVerdictClaim] = []
     for claim in claims[:JUDGE_QUICK_MAX_CLAIMS]:
         # Bounded work: at most 8 quotes, and ``displayed_text_blocks`` parses
@@ -164,7 +207,9 @@ def served_claims(
         quote = " ".join(displayed_text_blocks(claim.quote))
         if not quote or len(quote) > JUDGE_QUICK_MAX_QUOTE_LEN:
             continue
-        if not any(quote in block for block in answer_blocks):
+        if not any(_bounded_in(quote, block) for block in answer_blocks):
+            continue
+        if quote not in raw_answer or "<br" in quote.lower():
             continue
         if claim.source is not None and not 1 <= claim.source <= source_count:
             continue
@@ -196,9 +241,15 @@ def build_quick_verdict(
         claims, dropped = served_claims(
             verdict.claims, answer_text=answer_text, source_count=len(sources)
         )
-    # The page must not read "well supported" above a claim it shows as
-    # contradicted (ADR-0129, the session's rule). Only a SERVED claim counts.
-    if level == "well_supported" and any(c.support == "contradicted" for c in claims):
+    # The page must not read "well supported" when the judge found a
+    # contradiction (ADR-0129, the session's rule). ANY contradicted claim the
+    # judge gave counts, served or not: whether a quote may be SHOWN and
+    # whether the judge found a contradiction are separate questions (review
+    # found a dropped contradiction left the level at "well supported").
+    judge_claims = verdict.claims if isinstance(verdict, EvalJudgeQuickVerdict) else []
+    if level == "well_supported" and any(
+        c.support == "contradicted" for c in judge_claims[:JUDGE_QUICK_MAX_CLAIMS]
+    ):
         level = "partly_supported"
     return QuickVerdict(
         level=level,

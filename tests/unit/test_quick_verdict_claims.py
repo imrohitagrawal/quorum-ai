@@ -246,8 +246,9 @@ def test_only_the_first_eight_claims_are_considered() -> None:
 def test_an_over_long_quote_is_dropped_even_past_the_schema() -> None:
     """Failure mode 3. A 301-character quote that IS the answer's text is
     still not served. RED IF the serving filter drops its own length cap.
-    Partner: the 300-character quote from the same answer is served."""
-    long_answer = _answer(text="x" * 400)
+    Partner: the 300-character quote from the same answer is served. Each
+    quote is a whole block, so the word-boundary rule passes both."""
+    long_answer = _answer(text="x" * 301 + "\n\n" + "z" * 300)
     verdict = EvalJudgeQuickVerdict.model_construct(
         faithfulness=5,
         grounding=5,
@@ -256,7 +257,7 @@ def test_an_over_long_quote_is_dropped_even_past_the_schema() -> None:
         model_id="m",
         claims=[
             EvalJudgeQuickClaim.model_construct(quote="x" * 301, source=None, support="unsourced"),
-            EvalJudgeQuickClaim.model_construct(quote="x" * 300, source=None, support="unsourced"),
+            EvalJudgeQuickClaim.model_construct(quote="z" * 300, source=None, support="unsourced"),
         ],
     )
     served = _served(verdict, long_answer)
@@ -301,12 +302,14 @@ def test_a_contradicted_claim_caps_the_level_at_partly_supported() -> None:
     assert supported.level == "well_supported"
 
 
-def test_a_dropped_contradicted_claim_does_not_cap_the_level() -> None:
-    """Only a SERVED claim can cap: a contradicted claim whose quote the
-    judge invented is not on the page. RED IF the cap reads unfiltered
-    claims."""
+def test_a_dropped_contradicted_claim_still_caps_the_level() -> None:
+    """ANY contradiction the judge found caps the level, served or not:
+    whether a quote may be shown and whether the judge found a contradiction
+    are separate questions (review of W5's fourth pull request found a
+    dropped contradiction left the page reading "Well supported"). RED IF
+    the cap reads only the served claims."""
     served = _served(_verdict(_claim("Not in the answer at all.", 1, "contradicted")))
-    assert served.level == "well_supported" and served.claims_dropped == 1
+    assert served.level == "partly_supported" and served.claims_dropped == 1
 
 
 def test_no_verdict_serves_no_claims() -> None:
@@ -320,4 +323,42 @@ def test_an_answer_with_no_text_serves_no_claims() -> None:
     """Nothing is on the page, so nothing can be quoted. RED IF an empty
     answer lets a claim through."""
     served = _served(_verdict(_claim("anything", None, "unsourced")), _answer(text=""))
+    assert served.claims == [] and served.claims_dropped == 1
+
+
+def test_a_quote_only_the_server_reading_produces_is_dropped() -> None:
+    """The page keeps an intra-word star literally ("3*40"); this module's
+    Markdown reading turns it into emphasis ("340"). A quote may be served
+    only if the answer's raw text (emphasis and code markers removed) also
+    contains it, so neither the judge's "340" nor an honest "3*40" is shown
+    wrongly. RED IF the raw-text rule is removed (review of W5's fourth pull
+    request served "340 and 212" under Supported). Partner: an ordinary
+    sentence of the same answer is served."""
+    answer = _answer(text="The plan costs 3*40 and 2*12 per year [1].\n\nThe price is fixed [1].")
+    served = _served(
+        _verdict(
+            _claim("The plan costs 340 and 212 per year", 1),
+            _claim("The price is fixed", 1),
+        ),
+        answer,
+    )
+    assert [c.quote for c in served.claims] == ["The price is fixed"]
+    assert served.claims_dropped == 1
+
+
+def test_a_quote_cut_from_the_middle_of_a_word_is_dropped() -> None:
+    """RED IF a quote may start or end inside a word. Partner: the same
+    words on word boundaries are served."""
+    answer = _answer(text="It is false that vaccines cause autism [1].")
+    cut = _served(_verdict(_claim("accines cause", 1)), answer)
+    whole = _served(_verdict(_claim("vaccines cause", 1)), answer)
+    assert cut.claims == [] and cut.claims_dropped == 1
+    assert [c.quote for c in whole.claims] == ["vaccines cause"]
+
+
+def test_a_quote_carrying_a_line_break_tag_is_dropped() -> None:
+    """The page shows ``<br>`` as a line break, so a quote carrying it would
+    read differently from the page. RED IF it is served."""
+    answer = _answer(text="Line one<br>line two [1].")
+    served = _served(_verdict(_claim("Line one<br>line two", 1)), answer)
     assert served.claims == [] and served.claims_dropped == 1
