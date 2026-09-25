@@ -56,6 +56,7 @@ def test_classify_names_each_kind_without_the_address() -> None:
     assert classify("8.8.8.8", PROBE) == "other-public"
     assert classify("not-an-address", PROBE) == "unparseable"
     assert classify(" 171.76.82.80 ", PROBE) == "probe"
+    assert classify("[2001:db8::1]", "2001:db8::1") == "probe"
 
 
 def test_an_opted_in_request_logs_kinds_and_no_address(
@@ -74,8 +75,10 @@ def test_an_opted_in_request_logs_kinds_and_no_address(
     records = _probe_records(caplog)
     assert len(records) == 1
     rec = records[0]
-    assert rec["forwarded_for"] == ["documentation", "probe", "app-ingress"]
-    assert rec["fly_client_ip"] == "probe"
+    assert rec["forwarded_for"] == [{"parts": 3, "last": ["documentation", "probe", "app-ingress"]}]
+    assert rec["forwarded_for_headers"] == 1
+    assert rec["fly_client_ip"] == ["probe"]
+    assert rec["header_count"] == 4
     assert rec["resolved_client"] == "app-ingress"
     assert rec["header_names"] == [
         "cookie",
@@ -111,7 +114,7 @@ def test_missing_headers_and_client_are_reported_as_absent(
     _run([(b"x-quorum-forwarded-probe", PROBE.encode())], None)
     rec = _probe_records(caplog)[0]
     assert rec["forwarded_for"] == []
-    assert rec["fly_client_ip"] is None
+    assert rec["fly_client_ip"] == []
     assert rec["resolved_client"] is None
 
 
@@ -136,4 +139,49 @@ def test_the_app_installs_the_probe() -> None:
     """Turns red if the middleware is written but never added to the app."""
     from product_app.main import app
 
-    assert any(m.cls is ForwardedProbeMiddleware for m in app.user_middleware)
+    installed: list[object] = [m.cls for m in app.user_middleware]
+    assert ForwardedProbeMiddleware in installed
+
+
+def test_separate_headers_stay_separate(caplog: pytest.LogCaptureFixture) -> None:
+    """Turns red if two X-Forwarded-For headers (or two Fly-Client-IP headers)
+    are merged, which would hide whether the proxy appends or adds a header."""
+    caplog.set_level(logging.INFO, logger="product_app.forwarded_probe")
+    headers = [
+        (b"x-quorum-forwarded-probe", PROBE.encode()),
+        (b"x-forwarded-for", b"198.51.100.2"),
+        (b"x-forwarded-for", b"171.76.82.80, 66.241.125.57"),
+        (b"fly-client-ip", b"198.51.100.7"),
+        (b"fly-client-ip", PROBE.encode()),
+    ]
+    _run(headers, ("66.241.125.57", 0))
+    rec = _probe_records(caplog)[0]
+    assert rec["forwarded_for"] == [
+        {"parts": 1, "last": ["documentation"]},
+        {"parts": 2, "last": ["probe", "app-ingress"]},
+    ]
+    assert rec["fly_client_ip"] == ["documentation", "probe"]
+
+
+def test_a_huge_request_still_writes_a_small_line(caplog: pytest.LogCaptureFixture) -> None:
+    """The probe header is public. Turns red if any cap is removed: one request
+    with 100,000 commas, 50 repeated headers and 2,000 long header names wrote
+    a 1.5 MB line before the caps."""
+    caplog.set_level(logging.INFO, logger="product_app.forwarded_probe")
+    headers = [(b"x-quorum-forwarded-probe", b"203.0.113.7")]
+    headers += [(b"x-forwarded-for", b"," * 100_000)] * 50
+    headers += [(b"fly-client-ip", b"1.1.1.1")] * 50
+    headers += [(b"x-%d-" % i + b"n" * 200, b"v") for i in range(2_000)]
+    _run(headers, ("1.2.3.4", 0))
+    records = [r for r in caplog.records if r.getMessage().startswith("forwarded_probe ")]
+    assert len(records) == 1
+    rec = _probe_records(caplog)[0]
+    assert rec["header_count"] == 2_101
+    assert rec["forwarded_for_headers"] == 50
+    assert len(rec["forwarded_for"]) == 4
+    assert rec["forwarded_for"][0]["parts"] == 100_001
+    assert len(rec["forwarded_for"][0]["last"]) == 6
+    assert len(rec["fly_client_ip"]) == 4
+    assert len(rec["header_names"]) == 40
+    assert max(len(n) for n in rec["header_names"]) == 40
+    assert len(records[0].getMessage()) < 4_000
