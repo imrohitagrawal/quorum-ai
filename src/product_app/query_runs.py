@@ -494,7 +494,7 @@ class _InMemoryIpRateLimiter:
 # at 10. The override is applied ONLY in LOCAL — belt-and-suspenders behind
 # ``validate_production_environment()``, which additionally REFUSES TO START
 # if the override is set in any non-LOCAL environment. So even if that
-# startup guard were bypassed, a deployed limiter stays at 30/min.
+# startup guard were bypassed, a deployed limiter stays at 10/min.
 _session_limit = (
     settings.session_rate_limit_per_minute
     if settings.runtime_environment is RuntimeEnvironment.LOCAL

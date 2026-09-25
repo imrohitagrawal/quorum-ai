@@ -50,8 +50,8 @@ address. That is the fault.
    bucket per proxy address, which is today's behaviour: the failure is back to too strict,
    never to open. Health checks carry no header and never call the session
    routes.
-5. **An IPv6 visitor rotates addresses.** A home IPv6 connection usually
-   commonly holds at least a /64 (2^64 addresses), and privacy extensions rotate the
+5. **An IPv6 visitor rotates addresses.** A home IPv6 connection commonly
+   holds at least a /64 (2^64 addresses), and privacy extensions rotate the
    address on their own. Counting single IPv6 addresses would let one
    visitor mint sessions without limit. An IPv6 visitor is therefore counted
    by their /64 network. An IPv4-mapped IPv6 address counts as the IPv4

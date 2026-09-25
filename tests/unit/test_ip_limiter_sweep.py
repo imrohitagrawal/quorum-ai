@@ -1,11 +1,12 @@
 """The per-minute session limiter forgets idle visitors (W30, ADR-0132).
 
-Before W30 every production request had one key, the app's ingress address,
-so the limiter's table held about one entry. W30 counts each visitor (an IPv6
-visitor by /64), and a stale entry was dropped only when the SAME key came
-back: review measured a /48 sweep leaving 65,536 entries, about 11.5 MB,
-still held an hour later. The limiter now sweeps stale entries at most once
-per ``SWEEP_INTERVAL_SECONDS``.
+Before W30 every production request was keyed on the app's own ingress
+address, one per address family, so the limiter's table held about two
+entries. W30 counts each visitor (an IPv6 visitor by /64), and a stale
+entry was dropped only when the SAME key came back: review measured a /48
+sweep leaving 65,536 entries, about 11.5 MB, still held an hour later. The
+limiter now sweeps stale entries at most once per
+``SWEEP_INTERVAL_SECONDS``.
 """
 
 from __future__ import annotations
