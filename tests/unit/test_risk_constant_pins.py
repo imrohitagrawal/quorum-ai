@@ -1292,7 +1292,7 @@ def test_the_google_sign_in_constants_are_pinned() -> None:
     assert google_signin.AFTER_SIGN_IN_PATH == "/ui"
     assert google_signin.SIGN_IN_FAILED_PATH == "/ui?sign_in=failed"
     assert google_signin.CALLBACK_PATH == "/v1/auth/google/callback"
-    assert {"http": 80, "https": 443} == google_signin._DEFAULT_PORTS
+    assert google_signin._DEFAULT_PORTS == {"http": 80, "https": 443}
     assert session_store.SessionStore._ACCOUNTS_MIGRATION == "w7_accounts"
 
 
