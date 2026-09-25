@@ -246,6 +246,16 @@
             <fieldset class="field-group">
               <legend>Model slots</legend>
               <div class="muted">Choose two to four different models. Swap any slot from the live catalog; duplicates are allowed but flagged.</div>
+              <!-- W5 (ADR-0128): the quick answer. The label and the note are the
+                   owner's words (CHG-012 D1). Off by default; applyQuickMode
+                   (app.js) shows slot 1 alone and the note while it is on. -->
+              <div id="quick-mode" class="quick-mode">
+                <label class="quick-mode-toggle" for="quick-mode-input">
+                  <input type="checkbox" id="quick-mode-input" autocomplete="off" aria-describedby="quick-mode-note">
+                  <span>Quick answer — one model, no debate</span>
+                </label>
+                <p id="quick-mode-note" class="muted quick-mode-note" hidden>four models by default, 2 debates and 1 sourced answer</p>
+              </div>
               <div id="model-inputs" class="model-slot-grid">
                 <label class="inline" data-model-slot="1">
                   <span>Slot 1</span>
@@ -577,6 +587,18 @@
                 aria-label="Run receipt and cost reconciliation"
                 hidden
               ></div>
+
+              <!-- W5 (ADR-0128): a quick answer's own region: the safety notice,
+                   the judge's verdict with its reasons and the sources it
+                   checked, and the one answer with its sources. Populated by
+                   renderQuickResult; hidden on every panel run. -->
+              <section
+                id="result-quick"
+                class="result-quick"
+                data-mode="quick"
+                aria-label="The quick answer"
+                hidden
+              ></section>
 
               <div id="result-verdict" class="result-verdict" role="region" aria-label="Panel result"></div>
 

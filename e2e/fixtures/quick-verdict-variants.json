@@ -1,0 +1,35 @@
+{
+  "_comment": "W5 (ADR-0128): the quick_verdict shapes the e2e quick-answer spec renders. Generated from build_quick_verdict and validated against QuickVerdict by tests/unit/test_quick_answer_ui.py, so a shape the server cannot serve fails in Python.",
+  "WELL_SUPPORTED": {
+    "level": "well_supported",
+    "faithfulness": 5,
+    "grounding": 4,
+    "hallucination_risk": "low",
+    "reasons": [
+      "The judge scored how closely the answer keeps to its cited sources 5 out of 5.",
+      "It scored how well the answer's citations point at those sources 4 out of 5.",
+      "It rated the risk of claims the sources do not support as low.",
+      "The judge checked the answer against 2 sources."
+    ],
+    "sources_checked": [
+      {
+        "title": "Smith et al. (2024) — Retention benchmarks for SaaS (working paper, v2)",
+        "url": "https://example.com/a"
+      },
+      {
+        "title": "Jones & Lee — Cohort export patterns [preprint]",
+        "url": "https://example.com/b"
+      }
+    ],
+    "judge_status": "verdict"
+  },
+  "NOT_CHECKED": {
+    "level": "not_checked",
+    "faithfulness": null,
+    "grounding": null,
+    "hallucination_risk": null,
+    "reasons": null,
+    "sources_checked": [],
+    "judge_status": null
+  }
+}
