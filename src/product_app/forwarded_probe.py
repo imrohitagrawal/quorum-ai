@@ -68,6 +68,39 @@ def classify(value: str, probe: str) -> str:
     return "other-public"
 
 
+def _maybe_log(scope: Any) -> None:
+    headers = [(k.lower(), v.decode("latin-1")) for k, v in scope.get("headers") or ()]
+    probe = next((v for k, v in headers if k == _PROBE_HEADER), None)
+    if probe is None:
+        return
+    try:
+        _parse(probe)
+    except ValueError:
+        return
+    # Every list below is capped: the probe header is public, and an
+    # uncapped line let one request write megabytes of log (review, W30).
+    forwarded_values = [v for k, v in headers if k == b"x-forwarded-for"]
+    fly_values = [v for k, v in headers if k == b"fly-client-ip"]
+    client = scope.get("client")
+    record = {
+        "header_count": len(headers),
+        "header_names": sorted({k.decode("latin-1")[:_MAX_NAME] for k, _ in headers})[:_MAX_NAMES],
+        "forwarded_for_headers": len(forwarded_values),
+        # One inner list per header, so appending to the client's header
+        # and adding a separate one read differently; the last parts only.
+        "forwarded_for": [
+            {
+                "parts": value.count(",") + 1,
+                "last": [classify(part, probe) for part in value.split(",")[-_MAX_PARTS:]],
+            }
+            for value in forwarded_values[:_MAX_HEADERS]
+        ],
+        "fly_client_ip": [classify(value, probe) for value in fly_values[:_MAX_HEADERS]],
+        "resolved_client": None if not client else classify(str(client[0]), probe),
+    }
+    logger.info("forwarded_probe %s", json.dumps(record, sort_keys=True))
+
+
 class ForwardedProbeMiddleware:
     """Log the kinds of forwarded addresses on an opted-in request."""
 
@@ -75,40 +108,5 @@ class ForwardedProbeMiddleware:
         self._app = app
 
     async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
-        self._maybe_log(scope)
+        _maybe_log(scope)
         await self._app(scope, receive, send)
-
-    @staticmethod
-    def _maybe_log(scope: Any) -> None:
-        headers = [(k.lower(), v.decode("latin-1")) for k, v in scope.get("headers") or ()]
-        probe = next((v for k, v in headers if k == _PROBE_HEADER), None)
-        if probe is None:
-            return
-        try:
-            _parse(probe)
-        except ValueError:
-            return
-        # Every list below is capped: the probe header is public, and an
-        # uncapped line let one request write megabytes of log (review, W30).
-        forwarded_values = [v for k, v in headers if k == b"x-forwarded-for"]
-        fly_values = [v for k, v in headers if k == b"fly-client-ip"]
-        client = scope.get("client")
-        record = {
-            "header_count": len(headers),
-            "header_names": sorted({k.decode("latin-1")[:_MAX_NAME] for k, _ in headers})[
-                :_MAX_NAMES
-            ],
-            "forwarded_for_headers": len(forwarded_values),
-            # One inner list per header, so appending to the client's header
-            # and adding a separate one read differently; the last parts only.
-            "forwarded_for": [
-                {
-                    "parts": value.count(",") + 1,
-                    "last": [classify(part, probe) for part in value.split(",")[-_MAX_PARTS:]],
-                }
-                for value in forwarded_values[:_MAX_HEADERS]
-            ],
-            "fly_client_ip": [classify(value, probe) for value in fly_values[:_MAX_HEADERS]],
-            "resolved_client": None if not client else classify(str(client[0]), probe),
-        }
-        logger.info("forwarded_probe %s", json.dumps(record, sort_keys=True))
