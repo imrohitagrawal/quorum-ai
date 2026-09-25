@@ -3387,6 +3387,7 @@ html[data-theme="dark"] .landing-preview-caption {
 }
 .result-quick-caveat-label,
 .result-quick-sources-label,
+.result-quick-claims-title,
 .result-quick-checked-title {
   margin: 0;
   font-size: 0.72rem;
@@ -3422,6 +3423,8 @@ html[data-theme="dark"] .landing-preview-caption {
 }
 .result-quick-scores,
 .result-quick-coverage,
+.result-quick-claims-note,
+.result-quick-claims-dropped,
 .result-quick-note {
   margin: 0;
   font-size: 0.85rem;
@@ -3437,6 +3440,23 @@ html[data-theme="dark"] .landing-preview-caption {
   overflow-wrap: anywhere;
 }
 .result-quick-checked { font-size: 0.85rem; }
+/* W5 (ADR-0129): the judge's per-claim evidence. The quote is the answer's
+   own text, set as text; the support line sits under it. */
+.result-quick-claims {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding-left: 1.25rem;
+  overflow-wrap: anywhere;
+}
+.result-quick-claim { display: grid; gap: 2px; }
+.result-quick-claim-support {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+.result-quick-claim[data-support="supported"] .result-quick-claim-support { color: var(--info); }
+.result-quick-claim[data-support="contradicted"] .result-quick-claim-support { color: var(--danger); }
 .result-quick-head {
   display: flex;
   align-items: baseline;

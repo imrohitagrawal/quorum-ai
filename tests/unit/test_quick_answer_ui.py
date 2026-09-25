@@ -27,9 +27,8 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from product_app.evaluation import EvalJudgeVerdict
 from product_app.main import app
-from product_app.quick_verdict import QuickVerdict, reasons_for, verdict_level
+from product_app.quick_verdict import QuickVerdict
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 APP_JS = REPO_ROOT / "src" / "product_app" / "static" / "app.js"
@@ -329,6 +328,73 @@ def test_the_quick_copy_summary_has_the_answer_and_the_verdict_and_no_agreement(
     assert "Opening positions" not in got[0] and "aligned" not in got[0]
 
 
+@needs_node
+def test_the_quick_copy_summary_lists_the_claim_lines_after_the_heading() -> None:
+    """ADR-0129. RED IF: the claim lines are dropped from the Copy summary or
+    land anywhere but between the heading and the run id. Partner: the case
+    with no ``claimLines`` is byte-identical to the summary before claims."""
+    base = {
+        "question": "Why?",
+        "modelLabel": "GPT-4o mini",
+        "answerText": "Because.",
+        "heading": "Judge: Well supported",
+        "correlationId": "qr_1",
+    }
+    got = _run_js(
+        "quickCopySummary",
+        [[{**base, "claimLines": ['- "Because." — Supported · source 1']}], [base]],
+    )
+    assert got[0] == (
+        "Why?\n\nQuick answer (one model, no debate) from GPT-4o mini:\nBecause.\n\n"
+        'Judge: Well supported\n- "Because." — Supported · source 1\nRun: qr_1'
+    )
+    assert got[1] == (
+        "Why?\n\nQuick answer (one model, no debate) from GPT-4o mini:\nBecause.\n\n"
+        "Judge: Well supported\nRun: qr_1"
+    )
+
+
+@needs_node
+def test_a_claims_support_line_names_its_word_and_source_and_nothing_unknown() -> None:
+    """ADR-0129. RED IF: a support word is reworded, the source number is
+    dropped, or a support value the server never sends (or a missing one)
+    gets a line: the page never shows a finding the server did not give."""
+    got = _run_js(
+        "quickClaimSupportText",
+        [
+            [{"support": "supported", "source": 2}],
+            [{"support": "contradicted", "source": 1}],
+            [{"support": "unsourced", "source": None}],
+            [{"support": "partly", "source": 1}],
+            [{"support": "toString", "source": 1}],
+            [{"source": 1}],
+            [None],
+        ],
+    )
+    assert got == [
+        "Supported · source 2",
+        "Contradicted · source 1",
+        "No source cited",
+        "",
+        "",
+        "",
+        "",
+    ]
+
+
+@needs_node
+def test_the_dropped_claims_line_counts_and_is_absent_at_zero() -> None:
+    """ADR-0129. RED IF: the count of claims the page does not show is
+    misstated, pluralised wrongly, or a line appears when none was dropped."""
+    got = _run_js(
+        "quickClaimsDroppedText",
+        [[{"claims_dropped": 0}], [{"claims_dropped": 1}], [{"claims_dropped": 3}], [None], [{}]],
+    )
+    assert got[0] == "" and got[3] == "" and got[4] == ""
+    assert got[1].startswith("1 claim the judge named is not shown")
+    assert got[2].startswith("3 claims the judge named are not shown")
+
+
 # --- which terminal runs open the result view ----------------------------------
 
 
@@ -377,39 +443,79 @@ def _variants() -> dict[str, dict[str, Any]]:
     return {k: v for k, v in data.items() if not k.startswith("_")}
 
 
-def test_the_quick_verdict_fixtures_validate_against_the_served_model() -> None:
-    """RED IF: a hand-written ``quick_verdict`` in the e2e fixture drifts from
-    ``QuickVerdict`` (a key the server never emits, a level outside the enum),
-    or its reasons stop being exactly the sentences ``reasons_for`` writes for
-    its scores, so the browser gate would pass on a payload production cannot
-    produce.
+def _fixture_answer(generated: dict[str, Any]) -> Any:
+    from decimal import Decimal
 
-    Positive partner: both named variants are present and one of them carries
-    reasons, so the loop below is not over nothing.
+    from product_app.providers import (
+        CitationCoverage,
+        InitialAnswerStatus,
+        InitialModelAnswer,
+        ProviderPath,
+        SourceReference,
+    )
+
+    return InitialModelAnswer(
+        slot_number=1,
+        model_id="openai/gpt-4o-mini",
+        display_name="GPT-4o mini",
+        answer_text=generated["answer_text"],
+        sources=[
+            SourceReference(title=s["title"], url=s["url"], provider=ProviderPath.OPENROUTER_SEARCH)
+            for s in generated["sources"]
+        ],
+        provider_attempt_order=[ProviderPath.OPENROUTER_SEARCH],
+        provider_path=ProviderPath.OPENROUTER_SEARCH,
+        fallback_used=False,
+        status=InitialAnswerStatus.COMPLETED,
+        latency_ms=1,
+        citation_coverage=CitationCoverage(
+            answer_count=1,
+            sourced_answer_count=1,
+            sourced_answer_ratio=Decimal(1),
+            target_met=True,
+        ),
+    )
+
+
+def test_the_quick_verdict_fixtures_are_what_build_quick_verdict_serves() -> None:
+    """RED IF: a ``quick_verdict`` in the e2e fixture is not exactly what
+    ``build_quick_verdict`` serves for the judge answer recorded beside it in
+    ``_generated_from`` (a key the server never emits, a level outside the
+    enum, reasons that are not ``reasons_for``'s sentences, a claim the filter
+    would drop, or a quote that is not the answer's displayed text), so the
+    browser gate would pass on a payload production cannot produce.
+
+    ADR-0129: each variant is REBUILT here from its inputs, not only
+    validated, so the claims and ``claims_dropped`` are the filter's own.
+
+    Positive partners: the three named variants are present, one carries
+    reasons, one carries a served claim of each support word between them,
+    and one had a claim dropped, so no loop below runs over nothing.
     """
+    from product_app.evaluation import EvalJudgeQuickVerdict, JudgeCallOutcome
+    from product_app.quick_verdict import build_quick_verdict
+
+    data = json.loads(QUICK_VARIANTS_JSON.read_text(encoding="utf-8"))
+    generated = data["_generated_from"]
     variants = _variants()
-    assert set(variants) == {"WELL_SUPPORTED", "NOT_CHECKED"}
-    for name, raw in variants.items():
-        verdict = QuickVerdict.model_validate(raw)
-        assert verdict.model_dump(mode="json") == raw, name
-        if (
-            verdict.faithfulness is None
-            or verdict.grounding is None
-            or verdict.hallucination_risk is None
-        ):
-            assert verdict.level == "not_checked" and verdict.reasons is None
-            continue
-        judge = EvalJudgeVerdict(
-            faithfulness=verdict.faithfulness,
-            grounding=verdict.grounding,
-            disagreement_preserved=True,
-            hallucination_risk=verdict.hallucination_risk,
-            rationale="(not served)",
-            model_id="fixture/judge",
+    assert set(variants) == {"WELL_SUPPORTED", "CONTRADICTED", "NOT_CHECKED"}
+    answer = _fixture_answer(generated)
+    for name, scores in generated["judge"].items():
+        verdict = EvalJudgeQuickVerdict.model_validate(
+            {**scores, "rationale": "(not served)", "model_id": "fixture/judge"}
         )
-        assert verdict.level == verdict_level(judge)
-        assert verdict.reasons == reasons_for(judge, source_count=len(verdict.sources_checked))
+        built = build_quick_verdict(
+            verdict=verdict, judge_status=JudgeCallOutcome.VERDICT, initial_answers=[answer]
+        )
+        assert built.model_dump(mode="json") == variants[name], name
+        assert QuickVerdict.model_validate(variants[name]).model_dump(mode="json") == variants[name]
+    unchecked = build_quick_verdict(verdict=None, judge_status=None, initial_answers=[answer])
+    assert unchecked.model_dump(mode="json") == variants["NOT_CHECKED"]
     assert variants["WELL_SUPPORTED"]["reasons"]
+    supports = {c["support"] for v in variants.values() for c in v["claims"]}
+    assert supports == {"supported", "contradicted", "unsourced"}
+    assert variants["WELL_SUPPORTED"]["claims_dropped"] >= 1
+    assert variants["CONTRADICTED"]["level"] == "partly_supported"
 
 
 @needs_node
@@ -427,6 +533,9 @@ def test_the_quick_export_quotes_the_safety_notice_as_untrusted_text() -> None:
         "mdUntrustedBlock",
         "sourcesMarkdownLines",
         "quickScoresText",
+        "quickClaimSupportText",
+        "quickClaims",
+        "quickClaimsDroppedText",
         "formatDuration",
         "describePanelShortfall",
         "buildQuickResultMarkdown",
@@ -445,6 +554,7 @@ def test_the_quick_export_quotes_the_safety_notice_as_untrusted_text() -> None:
     stubs = (
         "const collectResultSources = () => [];\n"
         "const QUICK_UNCHECKED_TEXT = 'not checked';\n"
+        "const QUICK_CLAIMS_NOTE = 'claims note';\n"
         "const formatElapsed = () => '';\n"
     )
     script = (
@@ -466,3 +576,92 @@ def test_the_quick_export_quotes_the_safety_notice_as_untrusted_text() -> None:
     lines = markdown.splitlines()
     assert "## Injected heading" not in lines
     assert "<img" not in markdown
+
+
+@needs_node
+def test_the_quick_export_lists_the_claims_as_escaped_inline_text() -> None:
+    """ADR-0129. The export lists each served claim's quote through
+    ``mdUntrustedInline`` with its support line, and the dropped count. RED
+    IF a quote is pushed raw (a quote the answer carried as text, such as
+    ``<img ...>`` or ``**x**``, would become markup in the file), or the
+    claims section or the dropped line is missing. Partner: a verdict with
+    no claims has no claims section."""
+    source = APP_JS.read_text(encoding="utf-8")
+    helpers = [
+        "mdEscapeInline",
+        "mdUntrustedInline",
+        "mdUntrustedBlock",
+        "sourcesMarkdownLines",
+        "quickScoresText",
+        "quickClaimSupportText",
+        "quickClaims",
+        "quickClaimsDroppedText",
+        "formatDuration",
+        "describePanelShortfall",
+        "buildQuickResultMarkdown",
+    ]
+    stubs = (
+        "const collectResultSources = () => [];\n"
+        "const QUICK_UNCHECKED_TEXT = 'not checked';\n"
+        "const QUICK_CLAIMS_NOTE = 'claims note';\n"
+        "const formatElapsed = () => '';\n"
+    )
+    result = {"mode": "quick", "model_slots": [{"model_id": "m/x"}], "live_count": 1}
+    res = {
+        "model_answers": [
+            {"slot_number": 1, "status": "completed", "answer_text": "A.", "sources": []}
+        ]
+    }
+    with_claims = {
+        "claims": [
+            {
+                "quote": "Plain <img src=x onerror=alert(1)> and **bold**",
+                "source": 1,
+                "support": "supported",
+            },
+            {"quote": "Second claim.", "source": None, "support": "unsourced"},
+        ],
+        "claims_dropped": 2,
+        "sources_checked": [],
+    }
+    calls = []
+    for qv in (with_claims, {"claims": [], "claims_dropped": 0, "sources_checked": []}):
+        ctx = {
+            "modelLabel": "Model X",
+            "answer": res["model_answers"][0],
+            "heading": "Judge: X",
+            "qv": qv,
+        }
+        calls.append(
+            "buildQuickResultMarkdown("
+            + json.dumps(result)
+            + ", "
+            + json.dumps(res)
+            + ", "
+            + json.dumps(ctx)
+            + ")"
+        )
+    script = (
+        stubs
+        + "\n\n".join(_extract_function(source, name) for name in helpers)
+        + "\n\nconsole.log(JSON.stringify(["
+        + ", ".join(calls)
+        + "]));\n"
+    )
+    out = subprocess.run(
+        ["node", "-e", script], capture_output=True, text=True, timeout=10, check=True
+    )
+    listed, empty = json.loads(out.stdout)
+    lines = listed.splitlines()
+    assert "### Claims the judge checked" in lines
+    claim_lines = [line for line in lines if line.startswith('- "')]
+    assert len(claim_lines) == 2
+    assert claim_lines[0].endswith("— Supported · source 1")
+    assert claim_lines[1] == '- "Second claim." — No source cited'
+    # Every markup character is backslash-escaped: no bare "<img", no bare "**".
+    assert re.search(r"(?<!\\)<img", listed) is None
+    assert re.search(r"(?<!\\)\*\*", listed) is None
+    assert "\\<img" in listed and "\\*\\*bold\\*\\*" in listed
+    assert any(line.startswith("2 claims the judge named are not shown") for line in lines)
+    assert "### Claims the judge checked" not in empty.splitlines()
+    assert "claims the judge named" not in empty

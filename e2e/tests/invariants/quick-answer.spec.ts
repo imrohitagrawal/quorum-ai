@@ -24,6 +24,7 @@ import {
   EVAL_CLEAN,
   QUICK_SAFETY_NOTICE,
   QUICK_VERDICT_WELL_SUPPORTED,
+  QUICK_VERDICT_CONTRADICTED,
   RAW_MARKDOWN_PATTERNS,
   SLOTS,
 } from "../../fixtures/golden-run";
@@ -255,6 +256,11 @@ test.describe("W5 quick answer (ADR-0128)", () => {
     expect(exported).toContain("## Judge: Well supported");
     expect(exported).toContain("## The answer");
     expect(exported).toContain(QUICK_SAFETY_NOTICE);
+    // ADR-0129: the claims the judge checked travel with the verdict.
+    const firstClaim = QUICK_VERDICT_WELL_SUPPORTED.claims[0];
+    expect(copied).toContain(`- "${firstClaim.quote}" — Supported · source 1`);
+    expect(exported).toContain("### Claims the judge checked");
+    expect(exported).toContain("1 claim the judge named is not shown");
     for (const reason of QUICK_VERDICT_WELL_SUPPORTED.reasons as string[]) {
       expect(exported).toContain(reason);
     }
@@ -265,6 +271,60 @@ test.describe("W5 quick answer (ADR-0128)", () => {
     }
   });
 
+  test("the judge's claims show the answer's own sentences as text, each with its support and source", async ({ page }) => {
+    // W5, fourth pull request (ADR-0129). The fixture is what
+    // build_quick_verdict serves for a judge answer with three real quotes and
+    // one it wrote itself (dropped), rebuilt in tests/unit/test_quick_answer_ui.py.
+    await driveToQuickResult(page);
+    const verdict = page.locator("#result-quick .result-quick-verdict");
+    const claims = verdict.locator(".result-quick-claim");
+    const expected = QUICK_VERDICT_WELL_SUPPORTED.claims;
+    expect(expected.length).toBe(3);
+    await expect(claims).toHaveCount(expected.length);
+    await expect(verdict.locator(".result-quick-claims-title")).toHaveText("Claims the judge checked");
+    await expect(verdict.locator(".result-quick-claim-quote")).toHaveText(expected.map((c) => c.quote));
+    await expect(verdict.locator(".result-quick-claim-support")).toHaveText([
+      "Supported · source 1",
+      "Supported · source 2",
+      "No source cited",
+    ]);
+    await expect(claims.nth(0)).toHaveAttribute("data-support", "supported");
+    await expect(claims.nth(2)).toHaveAttribute("data-support", "unsourced");
+    // RED IF a quote becomes markup: the quote nodes hold text only.
+    await expect(verdict.locator(".result-quick-claim-quote *")).toHaveCount(0);
+    // The text shown is text already on the page: every quote is in the
+    // rendered answer (whitespace collapsed on both sides).
+    const answerText = (await page.locator("#result-quick .result-quick-answer").innerText()).replace(/\s+/g, " ");
+    for (const claim of expected) {
+      expect(answerText, claim.quote).toContain(claim.quote.replace(/\s+/g, " "));
+    }
+    // "source N" names a line of the numbered list of sources the judge checked.
+    const checkedCount = await verdict.locator(".result-quick-checked li").count();
+    for (const claim of expected) {
+      if (claim.source !== null) expect(claim.source).toBeLessThanOrEqual(checkedCount);
+    }
+    await expect(verdict.locator(".result-quick-claims-dropped")).toHaveText(
+      "1 claim the judge named is not shown, because it did not pass the app's checks for showing a quote exactly as the answer shows it.",
+    );
+    await expect(verdict.locator(".result-quick-claims-note")).toHaveText(
+      "The judge saw each source's title and address, not the page itself.",
+    );
+    const { offenders, walked } = await rawMarkdownIn(page, "#main-content");
+    expect(walked).toBeGreaterThan(0);
+    expect(offenders).toEqual([]);
+  });
+
+  test("a served contradicted claim reads 'Contradicted' and caps the verdict at partly supported", async ({ page }) => {
+    await driveToQuickResult(page, { ...goldenQuickResp(), quick_verdict: QUICK_VERDICT_CONTRADICTED });
+    const verdict = page.locator("#result-quick .result-quick-verdict");
+    await expect(verdict.locator(".result-quick-verdict-heading")).toHaveText("Judge: Partly supported");
+    await expect(verdict.locator(".result-quick-claim")).toHaveCount(1);
+    await expect(verdict.locator(".result-quick-claim")).toHaveAttribute("data-support", "contradicted");
+    await expect(verdict.locator(".result-quick-claim-support")).toHaveText("Contradicted · source 2");
+    // Nothing was dropped, so no dropped line (its partner is the test above).
+    await expect(verdict.locator(".result-quick-claims-dropped")).toHaveCount(0);
+  });
+
   test("a simulated quick answer reads 'Not checked' and a one-model degraded banner", async ({ page }) => {
     await driveToQuickResult(page, goldenQuickRespSimulated());
     const verdict = page.locator("#result-quick .result-quick-verdict");
@@ -273,6 +333,11 @@ test.describe("W5 quick answer (ADR-0128)", () => {
       "No judge verdict is available for this answer, so nothing on this page has been checked against its sources.",
     );
     await expect(verdict.locator(".result-quick-reasons li")).toHaveCount(0);
+    // ADR-0129: no verdict, no claims and no claim lines (partner: the
+    // claims test above renders them on a checked answer).
+    await expect(verdict.locator(".result-quick-claims")).toHaveCount(0);
+    await expect(verdict.locator(".result-quick-claims-dropped")).toHaveCount(0);
+    await expect(verdict.locator(".result-quick-claims-note")).toHaveCount(0);
     await expect(page.locator("#result-quick .result-quick-safety")).toBeHidden();
     await expect(page.locator("#result-degraded")).toBeVisible();
     await expect(page.locator("#result-degraded-title")).toHaveText("Simulated result — not from a real model");

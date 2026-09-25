@@ -116,8 +116,16 @@ def _run(*, mode: str, query: str = QUERY, n_sources: int = 3) -> Any:
     return query_run_repository.get(run.query_run_id)
 
 
+#: W5's fourth pull request (ADR-0129): a quick run's judge answers the quick
+#: schema, which has no ``disagreement_preserved`` and a ``claims`` list.
+QUICK_BASE: dict[str, Any] = {
+    **{k: v for k, v in VALID_VERDICT.items() if k != "disagreement_preserved"},
+    "claims": [],
+}
+
+
 def _verdict(**overrides: Any) -> dict[str, Any]:
-    return {**VALID_VERDICT, **overrides}
+    return {**QUICK_BASE, **overrides}
 
 
 @pytest.mark.parametrize(
@@ -195,11 +203,15 @@ def test_no_judge_written_text_reaches_any_response(monkeypatch: pytest.MonkeyPa
     steerable by a cited page, reaches NO served body: not a quick one, not a
     panel one. RED IF any field serves the judge's own words. Partner: the
     quick run does carry a verdict, built from the same judge answer."""
-    _judge(monkeypatch, _verdict(rationale="JUDGE-SENTINEL see https://evil.example/login"))
+    sentinel = "JUDGE-SENTINEL see https://evil.example/login"
+    # The panel run's judge answers the panel schema, the quick run's the
+    # quick schema (ADR-0129), so each half carries a verdict that parses.
+    _judge(monkeypatch, {**VALID_VERDICT, "rationale": sentinel})
     panel = qr._result_response(_run(mode="panel"))
     assert panel.quick_verdict is None
     assert "JUDGE-SENTINEL" not in panel.model_dump_json()
     qr._judge_verdict_memo_clear_for_tests()
+    _judge(monkeypatch, _verdict(rationale=sentinel))
     quick = qr._result_response(_run(mode="quick"))
     assert quick.quick_verdict is not None and quick.quick_verdict.level == "partly_supported"
     dumped = quick.model_dump_json()
@@ -413,3 +425,123 @@ def test_a_running_high_stakes_quick_answer_already_carries_the_notice() -> None
     served = qr._result_response(query_run_repository.get(run.query_run_id))
     assert served.quick_verdict is None
     assert served.result.safety_notice == HIGH_STAKES_NOTICE_FRAGMENT
+
+
+# --- W5's fourth pull request (ADR-0129): the verification-only judge ------
+
+
+def test_a_quick_run_asks_the_quick_prompt_and_a_panel_run_the_panel_prompt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The request path picks the prompt by the run's mode. RED IF a quick
+    run is judged with the panel prompt (it would be asked about a synthesis
+    it does not have) or a panel run with the quick prompt (every production
+    panel run's judge would change). Both ids are literals here."""
+    calls = _judge(monkeypatch, _verdict())
+    qr._result_response(_run(mode="quick"))
+    qr._judge_verdict_memo_clear_for_tests()
+    qr._result_response(_run(mode="panel"))
+    assert len(calls) == 2
+    assert "PR-EVAL-JUDGE-QUICK-v1" in calls[0]["system_prompt"]
+    assert "PR-EVAL-JUDGE-v1" not in calls[0]["system_prompt"]
+    assert "PR-EVAL-JUDGE-v1" in calls[1]["system_prompt"]
+    assert "PR-EVAL-JUDGE-QUICK-v1" not in calls[1]["system_prompt"]
+
+
+def test_a_panel_shaped_answer_to_a_quick_run_is_not_checked(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The quick run parses the quick schema only. A panel-shaped verdict is
+    non-conforming there: the call is billed as dispatched and the page reads
+    "not checked". RED IF the quick path accepts the panel shape."""
+    calls = _judge(monkeypatch, dict(VALID_VERDICT))
+    served = qr._result_response(_run(mode="quick"))
+    assert len(calls) == 1
+    assert served.quick_verdict is not None
+    assert served.quick_verdict.level == "not_checked"
+    assert served.quick_verdict.judge_status == "no_verdict_dispatched"
+
+
+#: The whole of ``_answer``'s text, which the judge quotes exactly.
+_REAL_QUOTE = "Canberra was chosen as a compromise between Sydney and Melbourne [1]."
+
+
+def test_the_judges_claims_are_served_when_their_words_are_the_answers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """End to end through the request path. RED IF a claim quoting the
+    answer is not served, or a claim the judge wrote is. The count of
+    dropped claims is served."""
+    _judge(
+        monkeypatch,
+        _verdict(
+            claims=[
+                {"quote": _REAL_QUOTE, "source": 1, "support": "supported"},
+                {"quote": "Canberra is the largest city.", "source": 2, "support": "contradicted"},
+            ]
+        ),
+    )
+    verdict = qr._result_response(_run(mode="quick")).quick_verdict
+    assert verdict is not None
+    assert [(c.quote, c.source, c.support) for c in verdict.claims] == [
+        (_REAL_QUOTE, 1, "supported")
+    ]
+    assert verdict.claims_dropped == 1
+
+
+def test_no_judge_written_claim_text_reaches_any_response(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Failure mode 1 and decision D-5, extended to claims. A sentinel the
+    judge wrote into a claim (not the answer's text) and into the rationale
+    reaches no quick and no panel body. Partner: the same quick verdict does
+    serve its real claim, so the claim path is live."""
+    _judge(
+        monkeypatch,
+        _verdict(
+            rationale="JUDGE-SENTINEL-RATIONALE",
+            claims=[
+                {
+                    "quote": "JUDGE-SENTINEL-CLAIM visit https://evil.example/login",
+                    "source": 1,
+                    "support": "supported",
+                },
+                {
+                    "quote": "Canberra was chosen as a compromise",
+                    "source": 1,
+                    "support": "supported",
+                },
+            ],
+        ),
+    )
+    quick = qr._result_response(_run(mode="quick"))
+    assert quick.quick_verdict is not None
+    assert [c.quote for c in quick.quick_verdict.claims] == ["Canberra was chosen as a compromise"]
+    dumped = quick.model_dump_json()
+    assert "JUDGE-SENTINEL" not in dumped and "evil.example" not in dumped
+    qr._judge_verdict_memo_clear_for_tests()
+    panel = qr._result_response(_run(mode="panel"))
+    assert "JUDGE-SENTINEL" not in panel.model_dump_json()
+
+
+def test_a_quick_verdict_never_reaches_the_panel_evaluation_engine(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The quick verdict is memoised and billed, but the panel engine is
+    handed no judge for a quick run (its record needs
+    ``disagreement_preserved``, which a quick verdict does not have; failure
+    mode 11). RED IF the memo judge hands the quick verdict to the engine:
+    the evaluation then fails to build. Partner: the quick verdict IS in the
+    memo and IS served."""
+    from product_app.synthesis import build_agreement_and_positions
+
+    _judge(monkeypatch, _verdict(faithfulness=5, grounding=5))
+    run = _run(mode="quick")
+    agreement, _ = build_agreement_and_positions(
+        initial_answers=run.initial_answers, debate_outputs=[], final_synthesis=None
+    )
+    result = qr._evaluate_terminal_run(run, agreement=agreement)
+    assert result is not None
+    assert result.evaluation.judge is None
+    outcome = qr._judge_verdict_memo[str(run.query_run_id)]
+    assert type(outcome.verdict).__name__ == "EvalJudgeQuickVerdict"
+    served = qr._result_response(run).quick_verdict
+    assert served is not None and served.level == "well_supported"

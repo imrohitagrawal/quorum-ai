@@ -131,6 +131,7 @@ ways, so the record shows what was believed on a date and what replaced it.
 | [ADR-0126](adr/0126-the-quick-answer-is-a-separate-request-shape.md) | The quick answer is a separate request shape, priced and run as one answer plus the judge | Architecture | Accepted — 2026-09-25, first of four pull requests |
 | [ADR-0127](adr/0127-a-quick-answer-shows-the-judges-verdict.md) | A quick answer shows the judge's verdict, its reasons and the sources it checked | Architecture | Accepted — 2026-09-25, W5's second of four pull requests |
 | [ADR-0128](adr/0128-the-workspace-shows-a-quick-answer-as-its-own-view.md) | The workspace shows a quick answer as its own view | Architecture | Accepted — 2026-09-25, W5's third of four pull requests |
+| [ADR-0129](adr/0129-the-quick-judge-verifies-and-shows-its-claims.md) | The quick answer's judge verifies, and shows the claims it checked | Architecture | Accepted — 2026-09-25, W5's fourth and last pull request |
 
 **This index was itself stale** until 2026-07-30: ADR-0002 had existed since
 2026-07-19 and was never listed here. A hand-maintained index is a derived fact

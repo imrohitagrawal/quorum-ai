@@ -356,7 +356,13 @@ jobs:
         # not added: the 19-spec lane run as the step above runs it, plus the
         # two local overrides, reported "306 passed (5.8m)" on 2026-09-25; the
         # same 18 specs on 9b0c9da reported "298 passed (5.6m)".
-        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 306 --lane "invariants lane"
+        # 306 -> 308 (W5 fourth pull request, ADR-0129): quick-answer.spec.ts
+        # adds two tests (the judge's claims as the answer's own text with
+        # their support and source; a contradicted claim capping the verdict).
+        # MEASURED, not added: the 19-spec lane run as the step above runs it,
+        # plus the two local overrides, reported "308 passed (6.2m)" on
+        # 2026-09-25.
+        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 308 --lane "invariants lane"
 
       - name: Clear the previous lane's JUnit report
         run: rm -f e2e/results.xml

@@ -978,6 +978,8 @@ import QUICK_VARIANTS from "./quick-verdict-variants.json";
 
 export const QUICK_VERDICT_WELL_SUPPORTED = QUICK_VARIANTS.WELL_SUPPORTED;
 export const QUICK_VERDICT_NOT_CHECKED = QUICK_VARIANTS.NOT_CHECKED;
+/** W5 (ADR-0129): scores that read well supported, capped at partly by a served contradicted claim. */
+export const QUICK_VERDICT_CONTRADICTED = QUICK_VARIANTS.CONTRADICTED;
 /** `HIGH_STAKES_NOTICE_FRAGMENT` (synthesis.py), which `result.safety_notice` carries. */
 export const QUICK_SAFETY_NOTICE =
   "This summary is decision support only and is not medical, legal, financial, safety, or regulated professional advice.";

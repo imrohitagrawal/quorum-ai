@@ -1553,12 +1553,56 @@ components:
           anyOf:
           - $ref: '#/components/schemas/JudgeCallOutcome'
           - type: 'null'
+        claims:
+          items:
+            $ref: '#/components/schemas/QuickVerdictClaim'
+          type: array
+          title: Claims
+        claims_dropped:
+          type: integer
+          title: Claims Dropped
+          default: 0
       type: object
       required:
       - level
       - sources_checked
       title: QuickVerdict
       description: The judge's verdict on a quick answer. ``null`` on every panel run.
+    QuickVerdictClaim:
+      properties:
+        quote:
+          type: string
+          title: Quote
+        source:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Source
+        support:
+          type: string
+          enum:
+          - supported
+          - contradicted
+          - unsourced
+          title: Support
+      type: object
+      required:
+      - quote
+      - source
+      - support
+      title: QuickVerdictClaim
+      description: 'One claim the judge checked, as served (ADR-0129).
+
+
+        ``quote`` is text the answer itself shows (see :func:`served_claims`),
+
+        at most ``JUDGE_QUICK_MAX_QUOTE_LEN`` characters; ``source`` is ``None``
+
+        or a 1-based index into ``QuickVerdict.sources_checked``. No limit here
+
+        that :func:`served_claims` does not enforce first, so building the
+
+        response can never fail on a claim (failure mode 4).'
     QuickVerdictSource:
       properties:
         title:

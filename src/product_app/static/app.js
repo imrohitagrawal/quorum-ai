@@ -133,12 +133,14 @@
 
   // W5 (ADR-0128). The Copy summary of a quick answer. It carries no
   // agreement figure: the owner decided a quick answer shows none.
-  function quickCopySummary({ question, modelLabel, answerText, heading, correlationId }) {
+  function quickCopySummary({ question, modelLabel, answerText, heading, correlationId, claimLines }) {
     const lines = [];
     if (question) lines.push(question, "");
     lines.push(`Quick answer (one model, no debate) from ${modelLabel}:`);
     lines.push(answerText || "No answer was produced for this run.");
     lines.push("", heading);
+    // W5 (ADR-0129): the claims the judge checked, one line each.
+    if (Array.isArray(claimLines)) for (const line of claimLines) lines.push(line);
     if (correlationId) lines.push(`Run: ${correlationId}`);
     return lines.join("\n");
   }
@@ -3272,6 +3274,37 @@
     return `The answer cites ${sourceCount} ${noun}, including a primary source.`;
   }
 
+  // W5 (ADR-0129): the judge's per-claim evidence. Each served claim's quote
+  // is text the answer itself shows (the server drops any other), so it is
+  // written as text, never markup. A support word the page does not know is
+  // not shown: never a finding the server did not give.
+  function quickClaimSupportText(claim) {
+    const words = {
+      supported: "Supported",
+      contradicted: "Contradicted",
+      unsourced: "No source cited",
+    };
+    if (!claim || typeof claim.support !== "string") return "";
+    if (!Object.prototype.hasOwnProperty.call(words, claim.support)) return "";
+    const word = words[claim.support];
+    return Number.isInteger(claim.source) ? `${word} · source ${claim.source}` : word;
+  }
+  function quickClaims(qv) {
+    const claims = qv && Array.isArray(qv.claims) ? qv.claims : [];
+    return claims.filter(
+      (c) => c && typeof c.quote === "string" && c.quote.trim() !== "" && quickClaimSupportText(c) !== "",
+    );
+  }
+  function quickClaimsDroppedText(qv) {
+    const n = qv && Number.isInteger(qv.claims_dropped) ? qv.claims_dropped : 0;
+    if (n < 1) return "";
+    return n === 1
+      ? "1 claim the judge named is not shown, because it did not pass the app's checks for showing a quote exactly as the answer shows it."
+      : `${n} claims the judge named are not shown, because they did not pass the app's checks for showing a quote exactly as the answer shows it.`;
+  }
+  const QUICK_CLAIMS_NOTE =
+    "The judge saw each source's title and address, not the page itself.";
+
   const QUICK_UNCHECKED_TEXT =
     "No judge verdict is available for this answer, so nothing on this page has been checked against its sources.";
   const QUICK_VERDICT_NOTE =
@@ -3321,6 +3354,22 @@
     } else {
       verdict.appendChild(mkEl("p", "result-quick-unchecked", QUICK_UNCHECKED_TEXT));
     }
+    const claims = quickClaims(qv);
+    if (claims.length) {
+      verdict.appendChild(mkEl("h3", "result-quick-claims-title", "Claims the judge checked"));
+      const list = mkEl("ul", "result-quick-claims");
+      for (const claim of claims) {
+        const item = mkEl("li", "result-quick-claim");
+        item.dataset.support = claim.support;
+        item.appendChild(mkEl("q", "result-quick-claim-quote", claim.quote));
+        item.appendChild(mkEl("span", "result-quick-claim-support", quickClaimSupportText(claim)));
+        list.appendChild(item);
+      }
+      verdict.appendChild(list);
+      verdict.appendChild(mkEl("p", "result-quick-claims-note", QUICK_CLAIMS_NOTE));
+    }
+    const dropped = quickClaimsDroppedText(qv);
+    if (dropped) verdict.appendChild(mkEl("p", "result-quick-claims-dropped", dropped));
     const checked = qv && Array.isArray(qv.sources_checked) ? qv.sources_checked.filter(Boolean) : [];
     if (checked.length) {
       verdict.appendChild(mkEl("h3", "result-quick-checked-title", "Sources the judge checked"));
@@ -3369,6 +3418,7 @@
       answerText: answer ? String(answer.answer_text || "").trim() : "",
       heading,
       correlationId: result.correlation_id || "",
+      claimLines: claims.map((c) => `- "${c.quote}" — ${quickClaimSupportText(c)}`),
     });
     state.lastResultRunId = result.query_run_id || result.correlation_id || "run";
     state.lastResultMarkdown = buildQuickResultMarkdown(result, res, {
@@ -3434,6 +3484,16 @@
     const scores = quickScoresText(qv);
     if (scores) push(`- Scores: ${scores}`);
     push("");
+    const claims = quickClaims(qv);
+    if (claims.length) {
+      push("### Claims the judge checked", "");
+      for (const claim of claims) {
+        push(`- "${mdUntrustedInline(claim.quote)}" — ${quickClaimSupportText(claim)}`);
+      }
+      push("", QUICK_CLAIMS_NOTE, "");
+    }
+    const dropped = quickClaimsDroppedText(qv);
+    if (dropped) push(dropped, "");
     const checked = qv && Array.isArray(qv.sources_checked) ? qv.sources_checked.filter(Boolean) : [];
     if (checked.length) {
       push("### Sources the judge checked", "");
