@@ -51,9 +51,15 @@ the owner's.
 
 ## 2. Not finished — in the order the next session takes them
 
-The order below is the session's reading of two owner orders: the 2026-09-24
-package order (#447 before W7) and the 2026-09-25 approval of the session's
-proposal "address fix → allow-list → invite link → W7's second pull request".
+**The order below is partly the session's.** The owner approved (13:47:58Z,
+*"Everything is approved here"*) the session's proposal of 13:42:33Z, whose
+order was: the address fix, the allow-list, then W7's second pull request.
+That proposal put the invite link "later, only if needed"; the owner's
+13:48:26Z message brings it into the plan without placing it. W29 (#447's
+second half) was in neither message; the 2026-09-24 order put #447 before W7
+(CHG-012 D6). So placing the invite link third and W29 fourth is the
+session's reading, put to the owner at the close of this session; the next
+session uses the owner's answer if there is one.
 
 1. **W30 — the per-network session limit counts the app's own address.**
    Found 2026-09-25 when the owner could not retest #511 ("This network has
@@ -83,11 +89,19 @@ proposal "address fix → allow-list → invite link → W7's second pull reques
    24-hour spend envelope on a one-way hash of the Google subject, "Results
    are ephemeral" rewritten for signed-in users) plus CHG-021 (a) carry-over
    of the same browser session's runs at sign-in and (f) a reminder and a
-   re-confirmation before deletion.
+   re-confirmation before deletion. Failure modes first, including two races
+   the session promised the owner (11:30:42Z), each with a test: deleting an
+   account while it is signed in on another device, and carrying runs over
+   while one of them is still running. Already measured on #510's code (chat
+   only, not re-run): 200 rounds of 8 simultaneous first sign-ins for one
+   Google account gave 1 account row each time; a copy with the database lock
+   weakened failed on round 1.
 6. **W7, 3 of 3 — session safety.** CHG-021 (b) idle expiry with a
    keep-active reminder, (c) sign out everywhere, (d) sign-in events (time
    and outcome, never tokens), (e) a rate-limited sign-in start. The idle
    length and the rate-limit value are the session's proposals, as settings.
+   The third promised race gets a test here: "sign out everywhere" while
+   other requests of that account are in flight.
 7. **Package 8 — BYOK.** Last (CHG-012 D8). First PR as a DRAFT and stop;
    ADR-0121 stays `PROPOSED — AWAITING OWNER`.
 
@@ -96,25 +110,45 @@ proposal "address fix → allow-list → invite link → W7's second pull reques
 - **Retest #511** (sign-out and a query after sign-in). Blocked by W30 until
   it is live.
 - **Google Auth Platform → Audience.** An account not on the test-user list
-  signed in. The app has no allow-list of accounts; Google enforces the
-  test-user list only while the app is in "Testing". Which state it is in is
-  UNVERIFIED.
+  signed in (owner, 2026-09-25). The app has no allow-list of accounts;
+  Google enforces the test-user list only while the app is in "Testing".
+  **Likely cause, the session's own error:** its first setup steps
+  (08:58:29Z) said *"click "Publish app" so it is **In production**"*; its
+  later steps (§6 below) said to leave it on Testing. If the first were
+  followed, any Google account can sign in. UNVERIFIED until the owner reads
+  the publishing status. To restrict sign-in, set it back to Testing (only
+  listed users) or accept the allowed-emails offer below.
 - **Visual-flake tolerance.** `e2e/tests/invariants/trust-score-visual.spec.ts`
-  allows `maxDiffPixels: 120`; the trust-score card (dark, 1440) has differed
-  by about 589 pixels on pull requests that changed no UI (seen on #504,
-  2026-09-24) and passed on re-run. The session's advice: measure the flake
+  allows `maxDiffPixels: 120`; the trust-score card (dark, 1440) differed by
+  589 pixels on #499 (twice, 2026-09-24 morning; that PR changed
+  `workspace.html`) and on #504 (2026-09-24 evening; no UI change), where it
+  passed on re-run (run 36059793718, attempt 2). The session's advice: measure the flake
   rate and read the failing run's trace before any tolerance change.
 - **The peer drift alert.** ADR-0122 decision 5: the watchdog names a true
   `PEER_CRITIQUE_ENABLED` with live execution off as DRIFT but only reports
   it. Escalating it to an alert is `PROPOSED — AWAITING OWNER`. The session's
-  advice: yes, since it is the only check that sees a flag set by a Fly
-  secret.
+  advice: yes. A flag set by a Fly secret is invisible to every tracked file
+  and pre-merge gate; today only the watchdog's report and a manual `/status`
+  read see it, and neither alerts.
 - **Close or keep** draft PR #491 (superseded by #505) and draft PR #501
   (W5 parked; W5 has since shipped), and the issues whose work merged under
   `Refs`: #458, #459, #268 (and #447 after W29).
 - **Whether the quick answer's app-written reasons and quoted claims** are
   enough (W5, ADR-0127 and ADR-0129).
 - **ADR-0121 (BYOK) acceptance.**
+- **Two unanswered offers** (`PROPOSED — AWAITING OWNER`; default if
+  unanswered: neither is built): (i) build W7's spend limit as a per-account
+  lookup that returns today's value, so paid tiers later change only where
+  the number comes from (11:34:12Z); (ii) an allowed-emails setting limiting
+  who may sign in, independent of Google's test-user list (13:30:33Z).
+- **Paid tiers** (the owner's question, 11:33:40Z): no decision. The
+  session's advice: a separate package, failure modes first (duplicate and
+  out-of-order payment notices, failed renewals, refunds, a wrong
+  downgrade), and ADR-0002's single-writer SQLite decision re-measured
+  before any payment record is stored.
+- Answered in chat from existing records, no new decision: duplicate-email
+  sign-up and password reset (accounts key on Google's subject; no password
+  exists; ADR-0130), and BYOK's $5 ceiling (ADR-0121).
 
 ## 4. Traps measured this session
 
@@ -143,14 +177,21 @@ proposal "address fix → allow-list → invite link → W7's second pull reques
   (`/v1/session` answered 429 from here at 12:00Z, and with W30 that
   allowance is shared with every visitor); production browser checks need the owner
   until W30 is live.
+- **Background wait loops outlived their purpose**: at the owner's question
+  (09:17:51Z) the session found 8 of its own polling shells, up to 1 day
+  1 hour old. Every wait loop needs a wall-clock limit.
 - **The `scriptPath` + `script` trap** (memory
   `workflow-scriptpath-wins-over-script`) re-ran an old review; pass `script`
   only for a new round.
 
 ## 5. Practices this session followed (pointers, not copies)
 
-The rules live in `AGENTS.md` and the owner's global instructions; they are
-not restated here so they cannot drift. The ones that decided outcomes today:
+The owner asked for an exhaustive handoff (13:49:03Z). This file POINTS to
+the practices rather than copying them, and says so here, because a second
+copy drifts from the first. Most live in `AGENTS.md` and the owner's global
+instructions; the rest were only in the 2026-09-24 prompt, and
+`CONTINUE-2026-09-25-ULTRACODE-PROMPT.md` §2, §3, §6 and §7 carry them
+forward in full. The ones that decided outcomes today:
 rule 1 (execute, including where things are), 6/6a (mutation, verbatim red),
 7 (a positive partner), 8c (measure the upstream first — W30), 9/9a/12b
 (read-only reviewers in their own `git archive` copies, never move the tree
@@ -158,3 +199,30 @@ under a gate), 11a (the prose lens caught the ADR-0131 overstatements), 12
 (two rounds), 13f (exit codes read directly), 16d/16e (an ADR per decision,
 failure modes first), 17c (explicit squash message, close-guard), 18/18a
 (deploy JOB, `build_sha`, `/ready`, then clean up).
+
+## 6. Google sign-in setup — the operator runbook (corrected)
+
+The owner has already done this once. Kept here because chat is not a
+record, and because the first version (08:58:29Z) was wrong about step 4.
+
+1. Google Cloud Console → Google Auth Platform (menu names may differ).
+2. **Branding:** app name, support email, authorised domain `stackclimb.com`.
+3. **Audience:** External. **Leave it on "Testing"** and add each tester's
+   Gmail under "Test users"; only they can sign in. "Publish app" lets any
+   Google account sign in; do it only when that is wanted.
+4. **Data access:** only `openid` and `.../auth/userinfo.email`.
+5. **Clients → Create client → Web application;** authorised redirect URI
+   exactly `https://quorum.stackclimb.com/v1/auth/google/callback`; no
+   JavaScript origins.
+6. Set the three secrets without echoing the secret or saving it in history:
+   ```bash
+   read -rs SECRET
+   printf 'GOOGLE_OAUTH_CLIENT_ID=%s\nGOOGLE_OAUTH_CLIENT_SECRET=%s\nGOOGLE_OAUTH_REDIRECT_URI=%s\n' \
+     "PASTE_CLIENT_ID" "$SECRET" "https://quorum.stackclimb.com/v1/auth/google/callback" \
+     | fly secrets import -a quorum-ai
+   unset SECRET
+   ```
+7. Check: `/status` shows `"sign_in_enabled": true`; `fly logs` shows
+   `google sign-in is on` (or `google sign-in is OFF: ...` with the reason).
+   Sign-in is offered only on `quorum.stackclimb.com`, not `quorum-ai.fly.dev`.
+8. Off again: `fly secrets unset GOOGLE_OAUTH_CLIENT_SECRET -a quorum-ai`.

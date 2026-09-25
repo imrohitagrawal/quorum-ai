@@ -250,7 +250,7 @@ call, no call to Google (the token endpoint is a loopback stub,
 - **The owner must create the Google OAuth client** (type "Web
   application", authorised redirect URI
   `https://quorum.stackclimb.com/v1/auth/google/callback`) and set the three
-  secrets with `fly secrets set`. Until then sign-in is off in production.
+  secrets (`read -rs` then `fly secrets import`, so the secret stays out of shell history; runbook in `docs/analysis/2026-09-25-session-handoff.md` §6). Until then sign-in is off in production.
   Sign-in is then offered only on `quorum.stackclimb.com` (the redirect
   URI's host); a visitor on `quorum-ai.fly.dev` sees no sign-in control.
 - The second pull request builds on the account id: history rows keyed by

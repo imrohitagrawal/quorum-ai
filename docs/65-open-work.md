@@ -6,7 +6,7 @@ original, because a gate and an offline agent can read it and cannot read `gh`.
 
 Verified at: `b1209b5a785e95fb208c55c4303ada85065aeb54`
 
-The board holds **28** rows, **2** of them unpinned.
+The board holds **31** rows, **2** of them unpinned.
 
 `scripts/check_open_work.py --check` reads every row's evidence off disk and
 refuses if a claim is false. It runs inside `make validate`, and
@@ -126,7 +126,7 @@ caught by any automated check and 10 of 16 by adversarial review
 | W29 | The judge reads the cited pages (#447, Route B): the fetcher is built behind a default-off setting (ADR-0124); the judge wiring — page text in the judge's evidence, the input reserve, the receipt row, the posture-keyed copy — is the next pull request | PENDING | `ABSENT src/product_app/evaluation.py :: source_pages` | #447 | the wiring pull request |
 | W30 | The per-network session limits count every visitor as the app's own address (CHG-022): take the visitor's address from what Fly's proxy forwards, measured first; the cap value stays 2 | PENDING | `ABSENT src/product_app/auth.py :: def client_ip_of(` | — | — |
 | W31 | An allow-list of named, dated addresses or ranges (at most /24 IPv4, /48 IPv6) exempt from the per-network session limits only, never the spend limits (CHG-022) | PENDING | `ABSENT src/product_app/config.py :: session_cap_exempt_networks` | — | W30 |
-| W32 | An invite link that lifts the session limit for whoever opens it, from any network, until an end date (CHG-022; planned now, not deferred) | PENDING | `ABSENT src/product_app/config.py :: invite_link` | — | W30 |
+| W32 | An invite link that lifts the session limit for whoever opens it, from any network, until an end date (CHG-022; planned now, not deferred) | PENDING | `ABSENT src/product_app/config.py :: invite_link_signing_key` | — | W30 |
 
 **STOP** marks a row that cannot be finished without a human decision — a money,
 cost or safety guardrail value that only real measurement could justify. Do not
