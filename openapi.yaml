@@ -1481,6 +1481,13 @@ components:
             type: object
           - type: 'null'
           title: Context
+        mode:
+          type: string
+          enum:
+          - panel
+          - quick
+          title: Mode
+          default: panel
       type: object
       required:
       - query_text
