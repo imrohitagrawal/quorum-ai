@@ -789,8 +789,8 @@ class Settings(BaseSettings):
 
     #: W32 (ADR-0134, CHG-022 item 4): the invite-link signing key. Empty (the
     #: shipped state) turns invite links off. At least 32 characters (the
-    #: session's PROPOSED bound, ADR-0134), or the app stops at startup. Set as a Fly secret from stdin; never logged.
-    #: Rotating it revokes every link.
+    #: session's PROPOSED bound, ADR-0134), or the app stops at startup. Set as
+    #: a Fly secret from stdin; never logged. Rotating it revokes every link.
     invite_link_signing_key: str = Field(default="", repr=False)
     #: W32: comma-separated ids of revoked invite links (each 12 lower-case
     #: hex digits, printed when the link is minted). A malformed id stops the

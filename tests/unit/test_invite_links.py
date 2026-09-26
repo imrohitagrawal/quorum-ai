@@ -145,11 +145,11 @@ def test_an_upper_case_revoked_id_is_read_as_lower_case() -> None:
     assert parse_revoked_ids("0123456789AB") == frozenset({"0123456789ab"})
 
 
-def test_one_leaked_link_cannot_use_up_the_sites_daily_ceiling() -> None:
+def test_one_days_new_sessions_from_a_link_stay_under_the_ceiling() -> None:
     """Each new session is a new account that may spend DAILY_CAP_USD. Turns
-    red if a link's daily sessions times that cap reaches the site-wide
-    ceiling, so that one leaked link could shut every other visitor out
-    (review measured 50 x 0.40 = 20.00 against 5.00)."""
+    red if one day's new sessions from a link, at that cap, reach the
+    site-wide ceiling (50 did: 50 x 0.40 = 20.00 against 5.00). It does not
+    bound a link over several days: accounts kept alive add up (ADR-0134)."""
     from product_app.costs import DAILY_CAP_USD, GLOBAL_DAILY_CEILING_USD
 
     assert DAILY_SESSIONS_PER_LINK * DAILY_CAP_USD < GLOBAL_DAILY_CEILING_USD

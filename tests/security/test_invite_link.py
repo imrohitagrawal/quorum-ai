@@ -329,3 +329,17 @@ def test_accepting_is_behind_the_per_minute_limit(
         for _ in range(3)
     ]
     assert codes == [400, 400, 429]
+
+
+def test_an_address_over_its_own_cap_still_gets_the_network_page(invites: None) -> None:
+    """The partner of the test above. Turns red if the invite page is shown
+    to a visitor with no invite who is over their address's cap."""
+    with configure_for_tests():
+        client = TestClient(app, client=FLY_PEER)
+        codes = []
+        for _ in range(SESSION_MINT_CAP_PER_IP + 1):
+            client.cookies.clear()
+            codes.append(client.get("/ui", headers={"Fly-Client-IP": "81.2.69.60"}))
+    assert [r.status_code for r in codes] == [200] * SESSION_MINT_CAP_PER_IP + [429]
+    assert "This network has reached its session limit" in codes[-1].text
+    assert "This invite link has reached its daily limit" not in codes[-1].text

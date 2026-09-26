@@ -27,13 +27,15 @@ default.
    browser, first removes the fragment from the address bar, then POSTs
    the token in a request body, then offers a link to `/ui`. The server logs `POST /v1/invite`
    with no token. The token is never logged by the app.
-2. **A leaked link.** Anyone holding it skips the per-network session
-   limits. Bounded three ways: it expires on its end date; it can be
+2. **A leaked link.** Anyone holding it skips the per-address daily
+   session cap (not the per-minute limit, item 9). Bounded three ways: it expires on its end date; it can be
    revoked; and each link has its own daily cap on new sessions
-   (PROPOSED: 12 a day, per link, durable; 12 x `DAILY_CAP_USD` 0.40 = 4.80
-   stays under the 5.00 site-wide ceiling, where the 50 first proposed let
-   one leaked link use up the site's whole day), so a leaked link cannot mint
-   without limit. A spend limit is never lifted.
+   (PROPOSED: 12 a day, per link, durable; one day's new accounts from a
+   link can spend at most 12 x 0.40 = 4.80 in their first 24 hours, but
+   accounts kept in use add up across days, so over several days a leaked
+   link could reach the 5.00 site-wide ceiling, at which every run degrades
+   to local simulation), so a leaked link cannot mint more than 12 new
+   sessions a day. A spend limit is never lifted.
 3. **Revocation.** Each link has an id, printed when it is minted. Listing
    the id in the `INVITE_LINK_REVOKED_IDS` setting revokes that link
    (PROPOSED); a malformed id there stops the app at startup, like a

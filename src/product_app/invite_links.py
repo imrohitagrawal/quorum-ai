@@ -44,10 +44,11 @@ from pydantic import BaseModel, ConfigDict, StrictStr
 #: characters.
 MAX_VALID_DAYS = 90
 #: 12, not the 50 first proposed: each new session is a new account that may
-#: spend DAILY_CAP_USD (0.40), and 12 x 0.40 = 4.80 stays under the site-wide
-#: GLOBAL_DAILY_CEILING_USD (5.00), so one leaked link cannot use up the whole
-#: site's day on its own (review measured 50 x 0.40 = 20.00). Pinned as a
-#: relationship in tests/unit/test_invite_links.py.
+#: spend DAILY_CAP_USD (0.40), so one day's new sessions from a link can spend
+#: at most 12 x 0.40 = 4.80 in their first 24 hours, under the site-wide
+#: GLOBAL_DAILY_CEILING_USD (5.00). Accounts kept alive add up across days, so
+#: this is not a bound on a leaked link over time (ADR-0134): its end date and
+#: revocation are. Pinned as a relationship in tests/unit/test_invite_links.py.
 DAILY_SESSIONS_PER_LINK = 12
 MIN_KEY_LENGTH = 32
 

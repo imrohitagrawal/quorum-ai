@@ -16,10 +16,15 @@ So everything below beyond item (4) is the session's design, and these
 choices are **PROPOSED — AWAITING OWNER**, built at their safe default:
 
 - a link works at most **90 days** ahead;
-- each link opens at most **12 new sessions** in a rolling 24 hours (so
-  12 x `DAILY_CAP_USD` 0.40 = 4.80 stays under the site-wide 5.00 ceiling;
-  the 50 first proposed let one leaked link use up the whole site's day,
-  measured in review: 50 x 0.40 = 20.00);
+- each link opens at most **12 new sessions** in a rolling 24 hours. Each
+  session is a new account that may spend `DAILY_CAP_USD` (0.40), so one
+  day's new sessions from a link can spend at most 12 x 0.40 = 4.80 in
+  their first 24 hours, under the site-wide 5.00 ceiling (50, first
+  proposed, allowed 20.00). This does NOT bound a leaked link over several
+  days: a session kept in use stays alive, and each day adds 12 more. A
+  round-2 reviewer simulated 48 hours and counted 24 live accounts (9.60).
+  The bounds on a leaked link are its end date and revocation; 12 lowers the
+  rate at which it adds accounts;
 - a link lifts the **daily** new-session cap only, not the 10-a-minute limit;
 - only the operator mints links, with a local command; there is no web
   endpoint that makes one;
@@ -93,10 +98,13 @@ local run). A token in a query string would reach `fly logs`.
 
 - A tester with the link opens sessions beyond their address's 2 a day, up
   to the link's 12 across everyone using it.
-- A leaked link is bounded by its end date, its revocation and its 12 a day,
-  which cannot use up the site-wide daily ceiling on its own (pinned by
-  `test_one_leaked_link_cannot_use_up_the_sites_daily_ceiling`).
-  The spend limits, per account and site-wide, still apply to every run.
+- A leaked link is bounded by its end date and its revocation. Its 12 a day
+  keeps one day's new accounts under the site-wide ceiling
+  (`test_one_days_new_sessions_from_a_link_stay_under_the_ceiling`), but
+  accounts kept alive add up across days, so over several days a leaked
+  link could reach the 5.00 ceiling. The ceiling degrades, never blocks: at
+  it, every run is answered by local simulation until the 24-hour window
+  rolls. The per-account cap still applies to every run.
 - The operator keeps the signing key (a Fly secret) and must have it locally
   to mint. Losing it means rotating it, which revokes every link.
 - The cookie outlives a session. Signing out does not remove the invite.
