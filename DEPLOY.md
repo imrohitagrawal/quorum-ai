@@ -249,7 +249,10 @@ unset VALUE
 
 3. Confirm: `curl -s https://quorum.stackclimb.com/status | jq .session_limit_allow_list`
    shows the active entry count you expect, and `fly logs` shows
-   `session-limit allow-list: N entries: ...`.
+   `session-limit allow-list: N entries: ...`. This step matters: that
+   `fly secrets import` stores a JSON value byte for byte is UNVERIFIED, and
+   its parser cuts a value at a `#` in some cases. Keep `#` and `"` out of
+   entry names.
 
 **If the app does not start after setting it**, remove the setting and it
 starts with no list: `fly secrets unset SESSION_CAP_EXEMPT_NETWORKS -a quorum-ai`.

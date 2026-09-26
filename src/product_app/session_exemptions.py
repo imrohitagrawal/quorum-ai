@@ -108,7 +108,8 @@ def parse_exemptions(raw: str, *, today: date) -> tuple[Exemption, ...]:
         if any(q in raw for q in "\u201c\u201d\u2018\u2019"):
             hint = "; it contains curly quotes, use straight double quotes"
         raise ValueError(
-            f"SESSION_CAP_EXEMPT_NETWORKS is not JSON ({exc.msg} at column {exc.colno}){hint}"
+            "SESSION_CAP_EXEMPT_NETWORKS is not JSON "
+            f"({exc.msg.removesuffix(' at')}, column {exc.colno}){hint}"
         ) from None
     if not isinstance(data, list):
         raise ValueError("SESSION_CAP_EXEMPT_NETWORKS must be a JSON list")
@@ -190,10 +191,9 @@ def configured() -> tuple[Exemption, ...]:
 
 
 def is_exempt(address: str | None) -> bool:
-    """Whether the visitor at ``address`` is on the active allow-list."""
-    if address is None:
-        return False
-    return exemption_for(address, configured(), today=_today()) is not None
+    """Whether the visitor at ``address`` is on the active allow-list. No
+    address (``None``) is never on it: ``ipaddress`` refuses it."""
+    return exemption_for(address or "", configured(), today=_today()) is not None
 
 
 def record_exempted_request() -> None:
@@ -226,7 +226,10 @@ def log_configuration(entries: tuple[Exemption, ...], *, today: date) -> None:
 def main(argv: list[str], *, today: date | None = None) -> int:
     """``--check``: parse standard input and print the summary, or the error."""
     if argv != ["--check"]:
-        print("usage: python -m product_app.session_exemptions --check < value", file=sys.stderr)
+        print(
+            "usage: PYTHONPATH=src python -m product_app.session_exemptions --check < value",
+            file=sys.stderr,
+        )
         return 2
     day = today or _today()
     try:

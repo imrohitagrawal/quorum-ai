@@ -79,7 +79,8 @@ sessions the rest are refused. The failure modes were listed first:
   Fly's proxy range would match every request that reaches the app without
   a usable `Fly-Client-IP` (W30 falls back to the proxy's address), which are
   exactly the requests the limits must still hold. (A first draft said it
-  would exempt every visitor; review measured it does not, because W30 puts
+  would exempt every visitor; a round-1 reviewer measured that it does not
+  (a visitor through Fly's proxy got 200, 200, 429, 429), because W30 puts
   the visitor's address in place.)
 - **No end-date bound.** An entry with an end date years ahead is the
   "never ends" failure with extra steps; 366 days is PROPOSED.
@@ -92,10 +93,13 @@ sessions the rest are refused. The failure modes were listed first:
   which read accounts and the site, never an address
   (`test_the_allow_list_never_lifts_a_spend_limit` shows an allow-listed
   visitor's over-limit query still refused).
-- ADR-0004 bounds the exposure while the spend ledger is faulted (the caps
-  fail open) partly by the daily session cap. On a listed network that cap
-  is lifted, so during such a fault that network's exposure is bounded by
-  how many sessions its testers open, not by 2 a day.
+- A faulted spend ledger does not widen this. ADR-0004 once bounded the
+  exposure during such a fault partly by the daily session cap, but ADR-0016
+  replaced that posture: on a ledger that cannot be metered, runs degrade to
+  local simulation and spend $0. So lifting the session cap for a listed
+  network adds no spend during such a fault. (Round 1 of review added a
+  sentence saying the caps fail open here; round 2 found it described the
+  retired ADR-0004 posture.)
 - Testers at home or on mobile data are not covered (CHG-022 item 3).
 - The exempted-request count is per process and resets on restart, like the
   other process counters on `/ui/ops`.

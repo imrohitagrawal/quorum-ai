@@ -783,7 +783,8 @@ class Settings(BaseSettings):
     #: held to the two per-network session limits (never a spend limit). Set
     #: as one Fly secret; empty means no one is exempt. A malformed value
     #: stops the app at startup (``session_exemptions.configured``); check a
-    #: value first with ``python -m product_app.session_exemptions --check``.
+    #: value first, from the repository root, with ``PYTHONPATH=src uv run
+    #: python -m product_app.session_exemptions --check`` (DEPLOY.md).
     session_cap_exempt_networks: str = Field(default="", repr=False)
 
     # --- Catalog fetcher -------------------------------------------------

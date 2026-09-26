@@ -379,3 +379,35 @@ def test_the_documented_command_runs_from_the_repository_root() -> None:
     )
     assert done.returncode == 0, done.stderr[-1500:]
     assert done.stdout.startswith("would load 1 entries")
+
+
+def test_a_network_that_is_not_text_is_refused() -> None:
+    """Turns red if a number or null in ``network`` crashes the parser
+    instead of being refused with the entry's position."""
+    with pytest.raises(ValueError, match="entry 1: network is not an address"):
+        parse_exemptions(json.dumps([{**_entry(), "network": 81}]), today=TODAY)
+
+
+def test_no_client_address_is_never_exempt() -> None:
+    """Turns red if a request with no client address is treated as exempt
+    (ipaddress refuses None, and exemption_for returns no match)."""
+    assert session_exemptions.is_exempt(None) is False
+
+
+def test_an_entry_ending_today_draws_no_warning(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The boundary of the --check warning: an entry ending today still
+    applies today. Turns red if it is warned about as already ended."""
+    import io
+
+    monkeypatch.setattr("sys.stdin", io.StringIO(_raw(_entry(until="2026-09-26"))))
+    assert session_exemptions.main(["--check"], today=TODAY) == 0
+    assert "warning" not in capsys.readouterr().err
+
+
+def test_a_json_error_reads_cleanly() -> None:
+    """Turns red if the parser's dangling 'at' is left in ('... at, column')."""
+    with pytest.raises(ValueError) as caught:
+        parse_exemptions('["\x01"]', today=TODAY)
+    assert "(Invalid control character, column 3)" in str(caught.value)
