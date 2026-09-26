@@ -1,9 +1,10 @@
 """The source-fetch test server records every connection, even binary ones.
 
-``tests/source_fetch_server.py`` decoded header lines as UTF-8. A TLS hello
-sent to it (``test_https_to_a_server_that_does_not_speak_tls_fails_closed``)
-carries random bytes, and when those held a ``:`` next to a byte that is not
-UTF-8 the server thread raised ``UnicodeDecodeError`` before recording the
+``tests/source_fetch_server.py`` decoded header names and values as strict
+UTF-8. A TLS hello sent to it
+(``test_https_to_a_server_that_does_not_speak_tls_fails_closed``) carries
+random bytes, and when a line held a ``:`` and a byte that is not valid
+UTF-8 in its name or value, the server thread raised ``UnicodeDecodeError`` before recording the
 connection: that test failed 2 times in 150 runs on unchanged main
 (2026-09-26), and failed a blocking CI job on PR #514. This pins the bytes
 that trigger it, so the case fails every time instead of 1 run in 75.
@@ -28,8 +29,10 @@ def _send(port: int, payload: bytes) -> None:
 
 
 def test_a_header_line_that_is_not_utf8_is_still_recorded() -> None:
-    """Turns red if the request line, a header name or a header value is
-    decoded as UTF-8 again: the thread dies and ``received`` stays empty."""
+    """Turns red if a header name or value is decoded as strict UTF-8 again
+    (the cause on main), or the request line is (it used ``errors="replace"``
+    before, and latin-1 now only for consistency): the thread dies and
+    ``received`` stays empty."""
     with serve(_ignore) as (port, received):
         _send(port, b"\x16\x03\xc0 \xc1\r\n\xc0key: \xff\xfe\r\n\r\n")
     assert len(received) == 1
