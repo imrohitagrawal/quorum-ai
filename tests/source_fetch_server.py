@@ -92,15 +92,21 @@ def serve(responder: Responder) -> Iterator[tuple[int, list[dict[str, str]]]]:
                         break
                     buf += part
                 head = buf.partition(b"\r\n\r\n")[0].split(b"\r\n")
+                # latin-1, not strict UTF-8: every byte decodes, so a TLS hello
+                # (random bytes) is recorded instead of killing this thread.
+                # Strict UTF-8 on header names and values failed 2 in 150 runs
+                # of the TLS test on main (2026-09-26).
                 request = {
-                    ":path": head[0].decode(errors="replace").split(" ")[1]
+                    ":path": head[0].decode("latin-1").split(" ")[1]
                     if head and b" " in head[0]
                     else ""
                 }
                 for line in head[1:]:
                     if b":" in line:
                         key, _, value = line.partition(b":")
-                        request[key.decode().strip().lower()] = value.decode().strip()
+                        request[key.decode("latin-1").strip().lower()] = value.decode(
+                            "latin-1"
+                        ).strip()
                 received.append(request)
                 responder(conn, request)
             except OSError:
