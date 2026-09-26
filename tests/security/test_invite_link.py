@@ -65,7 +65,24 @@ def test_opening_a_link_sets_the_cookie(invites: None) -> None:
     assert "HttpOnly" in cookie
     assert "SameSite=lax" in cookie
     assert "Path=/" in cookie
-    assert "Max-Age=" in cookie
+    # It lasts to the end of the link's last day (UTC), not a day more or less.
+    import re
+    from datetime import UTC, datetime
+
+    max_age = int(re.search(r"Max-Age=(\d+)", cookie).group(1))  # type: ignore[union-attr]
+    end = datetime(2098, 7, 2, tzinfo=UTC)  # the day after 2098-07-01
+    expected = int((end - datetime.now(UTC)).total_seconds())
+    assert abs(max_age - expected) <= 5
+
+
+def test_the_cookie_is_secure_where_session_cookies_are(
+    invites: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Turns red if the invite cookie drops Secure in production posture."""
+    monkeypatch.setattr(settings, "session_cookie_secure", True)
+    response = TestClient(app, client=FLY_PEER).post("/v1/invite", json={"token": _token()})
+    assert response.status_code == 204
+    assert "Secure" in response.headers["set-cookie"]
 
 
 def _expired_token() -> str:
@@ -133,7 +150,10 @@ def test_links_are_off_without_a_key(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "invite_link_signing_key", "")
     response = TestClient(app).post("/v1/invite", json={"token": "anything"})
     assert response.status_code == 404
-    assert response.json()["detail"]["code"] == "INVITE_LINKS_DISABLED"
+    assert response.json()["detail"] == {
+        "code": "INVITE_LINKS_DISABLED",
+        "message": "Invite links are not enabled.",
+    }
 
 
 def test_the_token_never_reaches_a_log(invites: None, caplog: pytest.LogCaptureFixture) -> None:
@@ -329,6 +349,16 @@ def test_accepting_is_behind_the_per_minute_limit(
         for _ in range(3)
     ]
     assert codes == [400, 400, 429]
+    refused = client.post(
+        "/v1/invite", json={"token": "x"}, headers={"Fly-Client-IP": "81.2.69.77"}
+    )
+    assert refused.json()["detail"] == {
+        "code": "RATE_LIMITED",
+        "message": "Too many requests. Retry later.",
+    }
+    # Keyed on the visitor: another address still has its own allowance.
+    other = client.post("/v1/invite", json={"token": "x"}, headers={"Fly-Client-IP": "81.2.69.78"})
+    assert other.status_code == 400
 
 
 def test_an_address_over_its_own_cap_still_gets_the_network_page(invites: None) -> None:

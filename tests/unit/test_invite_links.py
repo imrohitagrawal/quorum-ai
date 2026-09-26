@@ -171,18 +171,23 @@ def test_the_mint_command_reads_the_key_from_stdin(
     monkeypatch.setattr("sys.stdin", io.StringIO(KEY + "\n"))
     # A different key in the environment must be ignored.
     monkeypatch.setenv("INVITE_LINK_SIGNING_KEY", "e" * 40)
+    # The day given is years from the real one, so a command that ignored it
+    # (and used the real date) would refuse this end date as too far ahead.
+    far = date(2031, 1, 10)
     code = invite_links.main(
-        ["mint", "--until", "2026-10-31", "--base-url", "https://quorum.stackclimb.com"],
-        today=TODAY,
+        ["mint", "--until", "2031-03-01", "--base-url", "https://quorum.stackclimb.com/"],
+        today=far,
     )
     assert code == 0
     out = capsys.readouterr().out.splitlines()
     link = next(line for line in out if line.startswith("link: "))[len("link: ") :]
     link_id = next(line for line in out if line.startswith("id: "))[len("id: ") :]
+    # The trailing slash of --base-url is dropped, not doubled.
     assert link.startswith("https://quorum.stackclimb.com/ui/invite#v1.")
     token = link.split("#", 1)[1]
-    assert verify_token(token, key=KEY, revoked=frozenset(), today=TODAY) == link_id
-    assert verify_token(token, key="e" * 40, revoked=frozenset(), today=TODAY) is None
+    assert verify_token(token, key=KEY, revoked=frozenset(), today=far) == link_id
+    assert verify_token(token, key="e" * 40, revoked=frozenset(), today=far) is None
+    assert f"revoke with INVITE_LINK_REVOKED_IDS={link_id}" in "\n".join(out)
     assert KEY not in "\n".join(out)
 
 
@@ -209,16 +214,25 @@ def test_two_minted_links_have_different_ids(monkeypatch: pytest.MonkeyPatch) ->
         ["mint", "--until", "31/10/2026", "--base-url", "https://x.test"],
         ["mint", "--until", "20261031", "--base-url", "https://x.test"],
         ["mint", "--until", "2026-10-31", "--base-url", "http://x.test"],
+        ["make", "--until", "2026-10-31", "--base-url", "https://x.test"],
+        ["mint", "--until", "2026-10-31", "--other", "https://x.test"],
+        ["mint", "--until", "2026-10-31", "--base-url", "https://x.test", "extra"],
     ],
 )
 def test_the_mint_command_refuses_bad_arguments(
     argv: list[str], capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Turns red if the command mints with a missing or malformed end date,
-    or a base URL that is not https."""
+    a base URL that is not https, another verb, or an unknown or extra
+    argument, or if its refusal is not written to stderr."""
     monkeypatch.setattr("sys.stdin", io.StringIO(KEY))
     assert invite_links.main(argv, today=TODAY) == 2
-    assert "link:" not in capsys.readouterr().out
+    captured = capsys.readouterr()
+    assert "link:" not in captured.out
+    assert captured.out == ""
+    assert captured.err.startswith(
+        ("usage: PYTHONPATH=src python -m product_app.invite_links mint", "refused: ")
+    )
 
 
 def test_the_mint_command_refuses_a_short_key(
@@ -310,3 +324,13 @@ def test_today_is_the_utc_date() -> None:
     from datetime import UTC, datetime
 
     assert invite_links._today() == datetime.now(UTC).date()
+
+
+def test_a_link_ending_today_can_be_minted_and_one_ending_in_exactly_90_days_verifies() -> None:
+    """Both boundaries of the end date, with literals. Turns red if a link
+    ending today is refused, or one ending exactly 90 days ahead fails to
+    verify."""
+    today_link = mint_token(key=KEY, link_id=LINK_ID, until=TODAY, today=TODAY)
+    assert verify_token(today_link, key=KEY, revoked=frozenset(), today=TODAY) == LINK_ID
+    edge = mint_token(key=KEY, link_id=LINK_ID, until=date(2026, 12, 25), today=TODAY)
+    assert verify_token(edge, key=KEY, revoked=frozenset(), today=TODAY) == LINK_ID
