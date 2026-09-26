@@ -1611,11 +1611,14 @@ def _describe_retry_wait(seconds: int | None) -> str:
     return f"A slot frees up in about {hours} hours, and you can start again then."
 
 
-def _render_session_capped_html(retry_after_seconds: int | None) -> str:
+def _render_session_capped_html(retry_after_seconds: int | None, *, invite: bool = False) -> str:
     """Render the 429 page. One substitution, so no escaping is needed: the
     only interpolated value is a sentence this module built from an integer.
+    ``invite``: the refusal was an invite link's own cap (W32), not the
+    visitor's address, so the page must not blame their network.
     """
-    template = (TEMPLATES_DIR / "session-capped.html").read_text(encoding="utf-8")
+    name = "invite-capped.html" if invite else "session-capped.html"
+    template = (TEMPLATES_DIR / name).read_text(encoding="utf-8")
     return template.replace("__RETRY_SENTENCE__", _describe_retry_wait(retry_after_seconds))
 
 
@@ -1643,7 +1646,7 @@ def browser_ui(request: Request) -> HTMLResponse:
     client_ip = client_ip_of(request) or "unknown"
     # W31 (ADR-0133): an allow-listed visitor is not held to the daily cap.
     exempt = session_exemptions.is_exempt(request.client.host if request.client else None)
-    mint_key, mint_cap, _invite = _daily_cap_key(request, client_ip, exempt)
+    mint_key, mint_cap, invite = _daily_cap_key(request, client_ip, exempt)
     if exempt:
         session_exemptions.record_exempted_request()
     session_id = get_session_cookie_from_request(request)
@@ -1660,7 +1663,7 @@ def browser_ui(request: Request) -> HTMLResponse:
         # existing session still works, and names a wait it can actually
         # derive. See ADR-0073.
         return HTMLResponse(
-            _render_session_capped_html(exc.retry_after_seconds),
+            _render_session_capped_html(exc.retry_after_seconds, invite=invite is not None),
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             headers=_retry_after_header(exc.retry_after_seconds),
         )

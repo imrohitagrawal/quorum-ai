@@ -265,7 +265,8 @@ applying after its `until` day (UTC) on its own.
 
 An invite link lets whoever opens it past the 2-a-day session cap on their
 address, from any network, until an end date (ADR-0134). Each link opens at
-most 50 new sessions a day and works at most 90 days. Spend limits still apply.
+most 12 new sessions a day and works at most 90 days (the session's PROPOSED
+bounds, awaiting the owner; ADR-0134). Spend limits still apply.
 
 **Once:** make a signing key, keep it in your password manager, and set it
 from stdin so it never lands in shell history:

@@ -16,7 +16,10 @@ So everything below beyond item (4) is the session's design, and these
 choices are **PROPOSED — AWAITING OWNER**, built at their safe default:
 
 - a link works at most **90 days** ahead;
-- each link opens at most **50 new sessions** in a rolling 24 hours;
+- each link opens at most **12 new sessions** in a rolling 24 hours (so
+  12 x `DAILY_CAP_USD` 0.40 = 4.80 stays under the site-wide 5.00 ceiling;
+  the 50 first proposed let one leaked link use up the whole site's day,
+  measured in review: 50 x 0.40 = 20.00);
 - a link lifts the **daily** new-session cap only, not the 10-a-minute limit;
 - only the operator mints links, with a local command; there is no web
   endpoint that makes one;
@@ -44,18 +47,22 @@ local run). A token in a query string would reach `fly logs`.
    `v1.<id>.<until>` under `INVITE_LINK_SIGNING_KEY`, compared in constant
    time.
 2. **Accepting it:** `/ui/invite` is a static page (no-store). Its script
-   (`static/invite.js`) removes the fragment from the address bar and POSTs
-   the token as JSON to `/v1/invite`, behind the per-minute limiter. A valid
+   (`static/invite.js`) first removes the fragment from the address bar,
+   then POSTs the token as JSON to `/v1/invite` (behind the per-minute
+   limiter), then says what happened and offers a link to `/ui`. A valid
    token becomes an HttpOnly, SameSite=Lax cookie (Secure wherever session
    cookies are), lasting to the end of `until`. Forged, expired, revoked and
-   malformed tokens get one identical 400. With no key set, the endpoint
+   malformed tokens get one identical 400. With no key set, a well-formed POST
    answers 404 and the page says links are not enabled.
 3. **What it lifts:** on `/v1/session` and `/ui`, a valid invite cookie moves
    the daily new-session cap from the visitor's address to the link: the
-   session is recorded under `invite:<id>` with a cap of 50, using the same
+   session is recorded under `invite:<id>` with a cap of 12, using the same
    atomic durable counter as the address cap (`try_record_session_mint`).
-   The per-minute limit still applies per address. A link over its cap
-   answers 429 `INVITE_DAILY_LIMIT`. An allow-listed visitor (W31) is exempt
+   The per-minute limit still applies per address on `/v1/session` and
+   `/v1/invite`; `/ui` has no per-minute limiter, so a link's `/ui` mints
+   are bounded by its daily cap alone. A link over its cap answers 429
+   `INVITE_DAILY_LIMIT` on `/v1/session`, and `/ui` renders a page that
+   names the link, not the visitor's network. An allow-listed visitor (W31) is exempt
    from both limits and does not use the link's cap. Spend limits are
    untouched: they count accounts and the site.
 4. **Minting:** `pbpaste | PYTHONPATH=src uv run python -m
@@ -65,14 +72,15 @@ local run). A token in a query string would reach `fly logs`.
    the cookie is checked on every request, so a revoked link stops at once.
    A malformed id or a short key stops the app at startup.
 6. **Counting:** `/status.invite_links` reports whether links are on, the
-   number of revoked ids, and requests that carried a valid invite since
+   number of revoked ids, and session requests (`/v1/session`, `/ui`) that
+   carried a valid invite since
    start. Never an id or a token.
 
 ## Rejected alternatives
 
 - **The token in a query string** (`/ui?invite=...`): measured to reach the
   access log.
-- **Unlimited uses per link:** a leaked link would mint without bound; 50 a
+- **Unlimited uses per link:** a leaked link would mint without bound; 12 a
   day is PROPOSED.
 - **Lifting the per-minute limit too:** it was not what refused the owner's
   testers, and it bounds a leaked link's request rate.
@@ -84,8 +92,10 @@ local run). A token in a query string would reach `fly logs`.
 ## Consequences
 
 - A tester with the link opens sessions beyond their address's 2 a day, up
-  to the link's 50 across everyone using it.
-- A leaked link is bounded by its end date, its revocation and its 50 a day.
+  to the link's 12 across everyone using it.
+- A leaked link is bounded by its end date, its revocation and its 12 a day,
+  which cannot use up the site-wide daily ceiling on its own (pinned by
+  `test_one_leaked_link_cannot_use_up_the_sites_daily_ceiling`).
   The spend limits, per account and site-wide, still apply to every run.
 - The operator keeps the signing key (a Fly secret) and must have it locally
   to mint. Losing it means rotating it, which revokes every link.

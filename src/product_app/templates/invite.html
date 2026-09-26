@@ -8,6 +8,9 @@
     <link rel="stylesheet" href="/static/tokens.css">
     <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32.png">
     <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+    <!-- Not deferred: it sets the theme before first paint, then waits for
+         the page to accept the invite. -->
+    <script src="/static/invite.js"></script>
     <style>
       /* W32 (ADR-0134). Every colour is a token from tokens.css. */
       * { box-sizing: border-box; }
@@ -33,7 +36,10 @@
       }
       h1 { font-size: 1.35rem; margin: 0 0 0.75rem; }
       p { margin: 0 0 1rem; }
-      a { color: var(--accent-ink, #1F4FD1); }
+      /* inherit, as session-capped.html does: --accent-ink is the white text
+         colour for dark chips, and on this card it made the link invisible. */
+      a { color: inherit; text-decoration: underline; }
+      a:focus-visible { outline: 3px solid var(--focus-ring, #14171C); outline-offset: 3px; }
     </style>
   </head>
   <body>
@@ -43,6 +49,5 @@
       <p><a id="invite-continue" href="/ui">Continue to Quorum-AI</a></p>
       <noscript><p>This page needs JavaScript to accept the invite.</p></noscript>
     </main>
-    <script src="/static/invite.js" defer></script>
   </body>
 </html>

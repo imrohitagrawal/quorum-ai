@@ -68,27 +68,56 @@ def test_opening_a_link_sets_the_cookie(invites: None) -> None:
     assert "Max-Age=" in cookie
 
 
+def _expired_token() -> str:
+    return invite_links.mint_token(
+        key=KEY, link_id="cccccccccccc", until=date(2098, 5, 31), today=date(2098, 5, 1)
+    )
+
+
 @pytest.mark.parametrize(
-    "body",
-    [
-        {"token": "v1.0123456789ab.2098-07-01." + "0" * 64},
-        {"token": ""},
-        {"token": 7},
-        {},
-    ],
-    ids=["forged", "empty", "number", "missing"],
+    "kind",
+    ["forged", "empty", "expired", "revoked", "other-key"],
 )
-def test_a_bad_token_is_refused_without_saying_why(invites: None, body: dict[str, object]) -> None:
-    """Turns red if a bad token sets a cookie, or the refusal says whether it
-    was forged, expired or revoked."""
-    response = TestClient(app, client=FLY_PEER).post("/v1/invite", json=body)
-    assert response.status_code in (400, 422)
+def test_a_bad_token_is_refused_without_saying_why(
+    invites: None, kind: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every refusal is the same 400. Turns red if a bad token sets a cookie,
+    or the refusal tells forged, expired and revoked apart."""
+    token = {
+        "forged": "v1.0123456789ab.2098-07-01." + "0" * 64,
+        "empty": "",
+        "expired": _expired_token(),
+        "revoked": _token("dddddddddddd"),
+        "other-key": invite_links.mint_token(
+            key="o" * 40, link_id="eeeeeeeeeeee", until=date(2098, 7, 1), today=TODAY
+        ),
+    }[kind]
+    if kind == "revoked":
+        monkeypatch.setattr(settings, "invite_link_revoked_ids", "dddddddddddd")
+    response = TestClient(app, client=FLY_PEER).post("/v1/invite", json={"token": token})
+    assert response.status_code == 400
     assert "set-cookie" not in response.headers
-    if response.status_code == 400:
-        assert response.json()["detail"] == {
-            "code": "INVITE_INVALID",
-            "message": "This invite link is not valid. Ask for a new one.",
-        }
+    assert response.json()["detail"] == {
+        "code": "INVITE_INVALID",
+        "message": "This invite link is not valid. Ask for a new one.",
+    }
+
+
+@pytest.mark.parametrize("body", [{"token": 7}, {}], ids=["number", "missing"])
+def test_a_malformed_body_is_refused(invites: None, body: dict[str, object]) -> None:
+    """Turns red if a body without a string token sets a cookie."""
+    response = TestClient(app, client=FLY_PEER).post("/v1/invite", json=body)
+    assert response.status_code == 422
+    assert "set-cookie" not in response.headers
+
+
+def test_a_key_set_with_a_trailing_newline_still_works(
+    invites: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The mint command trims the key it reads; the server must too. Turns
+    red if a key set with a trailing newline refuses every link."""
+    monkeypatch.setattr(settings, "invite_link_signing_key", KEY + "\n")
+    assert _accept(TestClient(app, client=FLY_PEER), _token()) == 204
 
 
 def test_a_form_post_is_refused(invites: None) -> None:
@@ -216,7 +245,9 @@ def test_an_invite_never_lifts_a_spend_limit(invites: None) -> None:
     from tests.integration.test_query_run_cost_guardrails import _pinned_static_catalog
 
     client = TestClient(app, client=FLY_PEER)
-    _accept(client, _token())
+    # Positive partner: this browser really holds a valid invite.
+    assert _accept(client, _token()) == 204
+    assert client.cookies.get(invite_links.COOKIE_NAME) == _token()
     with _pinned_static_catalog():
         response = client.post(
             "/v1/query-runs",
@@ -242,15 +273,46 @@ def test_an_invite_never_lifts_a_spend_limit(invites: None) -> None:
     assert response.json()["detail"]["code"] == "COST_LIMIT_EXCEEDED"
 
 
-def test_the_invite_page_has_no_token_and_no_inline_script() -> None:
-    """The page the link opens. Turns red if it inlines a script (the CSP
-    forbids it) or stops loading the invite script."""
+def test_the_invite_page_loads_only_its_script_file() -> None:
+    """The page the link opens. Turns red if a script is inlined (every
+    script tag must name a src; the CSP would allow inline, so this is the
+    page's own rule) or the invite script stops being loaded, or the page
+    becomes cacheable."""
+    from html.parser import HTMLParser
+
+    class Scripts(HTMLParser):
+        def __init__(self) -> None:
+            super().__init__()
+            self.srcs: list[str | None] = []
+
+        def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+            if tag == "script":
+                self.srcs.append(dict(attrs).get("src"))
+
     response = TestClient(app).get("/ui/invite")
     assert response.status_code == 200
-    html = response.text
-    assert '<script src="/static/invite.js' in html
-    assert "<script>" not in html
+    parser = Scripts()
+    parser.feed(response.text)
+    assert parser.srcs == ["/static/invite.js"]
     assert response.headers["cache-control"] == "no-store"
+
+
+def test_ui_past_a_links_cap_blames_the_link_not_the_network(
+    invites: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Turns red if an invited visitor over the link's cap is told their IP
+    address used its sessions."""
+    monkeypatch.setattr(invite_links, "DAILY_SESSIONS_PER_LINK", 1)
+    with configure_for_tests():
+        client = TestClient(app, client=FLY_PEER)
+        _accept(client, _token("ffffffffffff"))
+        first = client.get("/ui", headers={"Fly-Client-IP": "81.2.69.50"})
+        _new_session_only(client)
+        second = client.get("/ui", headers={"Fly-Client-IP": "81.2.69.51"})
+    assert first.status_code == 200
+    assert second.status_code == 429
+    assert "This invite link has reached its daily limit" in second.text
+    assert "IP address" not in second.text
 
 
 def test_accepting_is_behind_the_per_minute_limit(

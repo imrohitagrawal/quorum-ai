@@ -24,13 +24,15 @@ default.
 
 1. **The secret reaches a log or a `Referer`.** The link is
    `https://<host>/ui/invite#<token>`. The page reads the fragment in the
-   browser, POSTs the token in a request body, removes the fragment from the
-   address bar, and moves on to `/ui`. The server logs `POST /v1/invite`
+   browser, first removes the fragment from the address bar, then POSTs
+   the token in a request body, then offers a link to `/ui`. The server logs `POST /v1/invite`
    with no token. The token is never logged by the app.
 2. **A leaked link.** Anyone holding it skips the per-network session
    limits. Bounded three ways: it expires on its end date; it can be
    revoked; and each link has its own daily cap on new sessions
-   (PROPOSED: 50 a day, per link, durable), so a leaked link cannot mint
+   (PROPOSED: 12 a day, per link, durable; 12 x `DAILY_CAP_USD` 0.40 = 4.80
+   stays under the 5.00 site-wide ceiling, where the 50 first proposed let
+   one leaked link use up the site's whole day), so a leaked link cannot mint
    without limit. A spend limit is never lifted.
 3. **Revocation.** Each link has an id, printed when it is minted. Listing
    the id in the `INVITE_LINK_REVOKED_IDS` setting revokes that link
@@ -61,7 +63,9 @@ default.
    token. On `/v1/session` and `/ui`, a valid cookie moves the daily
    new-session cap from the visitor's address to the link: the session
    counts against the link's own daily cap instead of the address's 2.
-   The per-minute limit (10 a minute per address) still applies
+   The per-minute limit (10 a minute per address) still applies on
+   `/v1/session` and `/v1/invite` (`/ui` has none, so there the link's
+   daily cap is the bound)
    (PROPOSED): it was not what refused the owner's testers, and it bounds
    a leaked link's request rate. Nothing else reads the cookie;
    `DAILY_CAP_USD` and `GLOBAL_DAILY_CEILING_USD` count accounts and the
@@ -71,7 +75,7 @@ default.
     state change is the page's POST (ADR-0131: a GET must survive being
     fetched twice by something that runs no page code).
 11. **Off by default.** With no signing key set, the invite page says links
-    are not enabled and the POST answers 404.
+    are not enabled and a well-formed POST answers 404.
 12. **Counting.** `/status` shows whether invite links are enabled, the
     number of revoked ids and the session requests that carried a valid
     invite since start, never an id or a token.

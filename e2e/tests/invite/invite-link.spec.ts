@@ -66,7 +66,32 @@ test.describe("invite link page", () => {
       .analyze();
     const bad = results.violations.filter((v) => v.impact === "critical" || v.impact === "serious");
     expect(bad.map((v) => v.id)).toEqual([]);
+    // axe files a 1:1 contrast under "incomplete", not "violations": the
+    // first version of this page had an invisible Continue link and passed.
+    const unsure = results.incomplete.filter((v) => v.id === "color-contrast");
+    expect(unsure.map((v) => v.nodes.map((n) => n.target.join(" ")))).toEqual([]);
     // Positive partner: axe actually checked rules on this page.
     expect(results.passes.length).toBeGreaterThan(0);
+  });
+
+  test("the Continue link is readable on its card", async ({ page }) => {
+    await page.goto(`/ui/invite#${TOKEN}`);
+    const colours = await page.evaluate(() => {
+      const link = document.getElementById("invite-continue")!;
+      const card = document.querySelector("main")!;
+      return [getComputedStyle(link).color, getComputedStyle(card).backgroundColor];
+    });
+    expect(colours[0]).not.toBe(colours[1]);
+    // Positive partner: both colours were actually read.
+    expect(colours[0]).toMatch(/^rgb/);
+    expect(colours[1]).toMatch(/^rgb/);
+  });
+
+  test("follows the system dark theme", async ({ browser }) => {
+    const context = await browser.newContext({ colorScheme: "dark" });
+    const page = await context.newPage();
+    await page.goto("http://127.0.0.1:18085/ui/invite");
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+    await context.close();
   });
 });

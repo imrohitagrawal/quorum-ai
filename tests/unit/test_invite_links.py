@@ -32,10 +32,10 @@ def _token(until: str = "2026-10-31", link_id: str = LINK_ID, key: str = KEY) ->
 
 
 def test_the_bounds_are_pinned() -> None:
-    """Bucket A. All three are the session's PROPOSED defaults (ADR-0134).
+    """Bucket A. All are the session's PROPOSED defaults (ADR-0134).
     Turns red if one moves."""
     assert MAX_VALID_DAYS == 90
-    assert DAILY_SESSIONS_PER_LINK == 50
+    assert DAILY_SESSIONS_PER_LINK == 12
     assert MIN_KEY_LENGTH == 32
     assert invite_links.COOKIE_NAME == "quorum_invite"
 
@@ -139,7 +139,23 @@ def test_revoked_ids_parse(raw: str, expected: frozenset[str]) -> None:
     assert parse_revoked_ids(raw) == expected
 
 
-@pytest.mark.parametrize("raw", ["xyz", "0123456789", "0123456789ab,", "0123456789AB"])
+def test_an_upper_case_revoked_id_is_read_as_lower_case() -> None:
+    """The likely typo. Turns red if it is refused (stopping the app over a
+    routine revocation) or kept upper-case (revoking nothing)."""
+    assert parse_revoked_ids("0123456789AB") == frozenset({"0123456789ab"})
+
+
+def test_one_leaked_link_cannot_use_up_the_sites_daily_ceiling() -> None:
+    """Each new session is a new account that may spend DAILY_CAP_USD. Turns
+    red if a link's daily sessions times that cap reaches the site-wide
+    ceiling, so that one leaked link could shut every other visitor out
+    (review measured 50 x 0.40 = 20.00 against 5.00)."""
+    from product_app.costs import DAILY_CAP_USD, GLOBAL_DAILY_CEILING_USD
+
+    assert DAILY_SESSIONS_PER_LINK * DAILY_CAP_USD < GLOBAL_DAILY_CEILING_USD
+
+
+@pytest.mark.parametrize("raw", ["xyz", "0123456789", "0123456789ab,", "0123456789abz"])
 def test_a_malformed_revoked_id_is_refused(raw: str) -> None:
     """A typo here would leave a link live that the operator meant to
     revoke. Turns red if a malformed id is accepted silently."""
@@ -153,6 +169,8 @@ def test_the_mint_command_reads_the_key_from_stdin(
     """The operator's only way to make a link. Turns red if the key is taken
     from anywhere but stdin, or the printed link does not verify."""
     monkeypatch.setattr("sys.stdin", io.StringIO(KEY + "\n"))
+    # A different key in the environment must be ignored.
+    monkeypatch.setenv("INVITE_LINK_SIGNING_KEY", "e" * 40)
     code = invite_links.main(
         ["mint", "--until", "2026-10-31", "--base-url", "https://quorum.stackclimb.com"],
         today=TODAY,
@@ -164,6 +182,7 @@ def test_the_mint_command_reads_the_key_from_stdin(
     assert link.startswith("https://quorum.stackclimb.com/ui/invite#v1.")
     token = link.split("#", 1)[1]
     assert verify_token(token, key=KEY, revoked=frozenset(), today=TODAY) == link_id
+    assert verify_token(token, key="e" * 40, revoked=frozenset(), today=TODAY) is None
     assert KEY not in "\n".join(out)
 
 

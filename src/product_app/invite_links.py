@@ -43,7 +43,12 @@ from pydantic import BaseModel, ConfigDict, StrictStr
 #: sessions in a rolling 24 hours; a signing key has at least this many
 #: characters.
 MAX_VALID_DAYS = 90
-DAILY_SESSIONS_PER_LINK = 50
+#: 12, not the 50 first proposed: each new session is a new account that may
+#: spend DAILY_CAP_USD (0.40), and 12 x 0.40 = 4.80 stays under the site-wide
+#: GLOBAL_DAILY_CEILING_USD (5.00), so one leaked link cannot use up the whole
+#: site's day on its own (review measured 50 x 0.40 = 20.00). Pinned as a
+#: relationship in tests/unit/test_invite_links.py.
+DAILY_SESSIONS_PER_LINK = 12
 MIN_KEY_LENGTH = 32
 
 COOKIE_NAME = "quorum_invite"
@@ -110,12 +115,13 @@ def parse_revoked_ids(raw: str) -> frozenset[str]:
     """``INVITE_LINK_REVOKED_IDS``: comma-separated link ids, or empty."""
     if not raw.strip():
         return frozenset()
-    ids = [part.strip() for part in raw.split(",")]
+    # Lower-cased: an upper-case id is the likely typo, and refusing it would
+    # stop the app over a routine revocation.
+    ids = [part.strip().lower() for part in raw.split(",")]
     for position, link_id in enumerate(ids, start=1):
         if not _LINK_ID.fullmatch(link_id):
             raise ValueError(
-                f"INVITE_LINK_REVOKED_IDS item {position} is not a link id "
-                "(12 lower-case hex digits)"
+                f"INVITE_LINK_REVOKED_IDS item {position} is not a link id (12 hex digits)"
             )
     return frozenset(ids)
 
@@ -123,7 +129,9 @@ def parse_revoked_ids(raw: str) -> frozenset[str]:
 def _key() -> str:
     from product_app.config import settings  # late: tests patch the settings
 
-    return settings.invite_link_signing_key
+    # Trimmed, as the mint command trims what it reads: a key set with a
+    # trailing newline would otherwise refuse every link it signed.
+    return settings.invite_link_signing_key.strip()
 
 
 def _revoked() -> frozenset[str]:
