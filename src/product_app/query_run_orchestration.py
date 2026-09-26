@@ -653,6 +653,16 @@ class InMemoryQueryRunRepository:
                 return None
             return query_run
 
+    def terminal_runs_for_account(self, account_id: UUID) -> list[QueryRun]:
+        """The account's finished runs still held here (W7 carry-over)."""
+        with self._lock:
+            self._purge_expired_locked()
+            return [
+                query_run
+                for query_run in self._query_runs.values()
+                if query_run.account_id == account_id and query_run.is_terminal
+            ]
+
     def get_active_for_account(self, account_id: UUID) -> QueryRun | None:
         with self._lock:
             self._purge_expired_locked()
@@ -1794,6 +1804,11 @@ def _persist_terminal_run(query_run_id: UUID) -> None:
             mode=query_run.mode,
         )
         _record_run_history(row)
+        # W7 (ADR-0135): a signed-in account's history. Local import: the
+        # module imports this one.
+        from product_app import account_history
+
+        account_history.record_finished_run(query_run)
         # Ordered AFTER the metrics row: ``update_evaluation`` is an UPDATE
         # that does not check ``rowcount``, so attaching an evaluation to a
         # row that does not exist yet would be a silent no-op.

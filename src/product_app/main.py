@@ -21,6 +21,7 @@ import os
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import UTC
 from html import escape
 from pathlib import Path
 from typing import Annotated, Any
@@ -35,7 +36,7 @@ from fastapi.staticfiles import StaticFiles
 from prometheus_fastapi_instrumentator import Instrumentator
 from sentry_sdk.types import Event as SentryEvent
 
-from product_app import invite_links, session_exemptions
+from product_app import account_history, invite_links, session_exemptions
 from product_app.auth import (
     SessionContext,
     SessionMintCapExceeded,
@@ -830,6 +831,7 @@ def _account_controls_html(
             '<span class="account-email" id="account-email">'
             + escape(account.email)
             + "</span>"
+            + _history_html(account.account_id)
             + '<button id="sign-out" class="topbar-howitworks" type="button">Sign out</button>'
         ), True
     if not sign_in_enabled() or not on_sign_in_host:
@@ -848,7 +850,62 @@ def _account_controls_html(
     ), False
 
 
-def _render_workspace_html(account_controls: str = "") -> str:
+#: The composer lede an anonymous visitor sees, and the one a signed-in
+#: visitor sees instead (W7, ADR-0135): their questions are kept, the answers
+#: are not. The anonymous page stays byte-identical.
+_ANONYMOUS_LEDE = (
+    "Results are ephemeral. Cost is shown before each run; nothing executes "
+    "without your confirmation."
+)
+
+
+def _signed_in_lede() -> str:
+    return (
+        f"Your last {settings.history_keep_count} questions stay in your history for "
+        f"{settings.history_keep_days} days; answers are not kept, so export one to "
+        "keep it. Cost is shown before each run; nothing executes without your "
+        "confirmation."
+    )
+
+
+def _history_html(account_id: UUID) -> str:
+    """The signed-in account's history, as a disclosure in the top bar (W7,
+    ADR-0135). Every stored value is escaped; the question is the visitor's
+    own text."""
+    entries = account_history.history_for(account_id)
+    if entries:
+        items = "".join(
+            '<li class="history-item"><span class="history-question">'
+            + escape(entry.question)
+            + '</span><span class="history-meta">'
+            + escape(
+                f"{entry.completed_at.astimezone(UTC):%Y-%m-%d %H:%M} UTC · "
+                f"{entry.status.replace('_', ' ')} · "
+                f"{'quick answer' if entry.mode == 'quick' else f'{entry.model_count} models'}"
+                f" · estimated ${entry.cost_usd}"
+            )
+            + "</span></li>"
+            for entry in entries
+        )
+        body = '<ol class="history-list" id="account-history-list">' + items + "</ol>"
+    else:
+        body = '<p class="history-empty" id="account-history-empty">No questions yet.</p>'
+    return (
+        '<details class="account-history" id="account-history">'
+        '<summary class="topbar-howitworks">History</summary>'
+        '<div class="account-history-panel">'
+        '<p class="history-note">'
+        + escape(
+            f"Your last {settings.history_keep_count} questions, kept "
+            f"{settings.history_keep_days} days. Answers are not kept."
+        )
+        + "</p>"
+        + body
+        + "</div></details>"
+    )
+
+
+def _render_workspace_html(account_controls: str = "", *, signed_in: bool = False) -> str:
     """Render the workspace page with the catalog and default model ids.
 
     Both JSON data islands must be ``</``-escaped before being inserted
@@ -954,6 +1011,8 @@ def _render_workspace_html(account_controls: str = "") -> str:
     # LAST, and the first occurrence only (the top bar comes before every data
     # island in the template): the email is the one value here a person chose,
     # so no later substitution may run over it.
+    if signed_in:
+        rendered = rendered.replace(_ANONYMOUS_LEDE, escape(_signed_in_lede()), 1)
     return rendered.replace("{{ account_controls }}", account_controls, 1)
 
 
@@ -1672,7 +1731,7 @@ def browser_ui(request: Request) -> HTMLResponse:
         sign_in_failed=request.query_params.get("sign_in") == "failed",
         on_sign_in_host=on_sign_in_host(request),
     )
-    response = HTMLResponse(_render_workspace_html(controls))
+    response = HTMLResponse(_render_workspace_html(controls, signed_in=shows_account))
     if shows_account:
         # The page carries the signed-in email: no cache may keep it
         # (review round 1).

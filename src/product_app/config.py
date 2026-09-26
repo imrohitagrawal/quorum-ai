@@ -787,6 +787,13 @@ class Settings(BaseSettings):
     #: python -m product_app.session_exemptions --check`` (DEPLOY.md).
     session_cap_exempt_networks: str = Field(default="", repr=False)
 
+    #: W7 (ADR-0135, CHG-012 D7): a signed-in account keeps the summaries of
+    #: its newest ``history_keep_count`` finished runs (the owner's "last 5
+    #: searches"), and none completed more than ``history_keep_days`` ago (the
+    #: session's 30, summarised back to the owner and not contested).
+    history_keep_count: int = Field(default=5, ge=1, le=50)
+    history_keep_days: int = Field(default=30, ge=1, le=365)
+
     #: W32 (ADR-0134, CHG-022 item 4): the invite-link signing key. Empty (the
     #: shipped state) turns invite links off. At least 32 characters (the
     #: session's PROPOSED bound, ADR-0134), or the app stops at startup. Set as

@@ -325,6 +325,75 @@ a { color: var(--accent); text-underline-offset: 2px; }
   white-space: nowrap;
 }
 
+/* W7 (ADR-0135): a signed-in account's history, a disclosure in the top bar.
+   The summary reuses the ghost-button look; the panel drops below it and
+   stays inside the viewport on a phone. */
+.account-history {
+  position: relative;
+  flex-shrink: 0;
+}
+.account-history > summary {
+  display: inline-flex;
+  align-items: center;
+  list-style: none;
+}
+.account-history > summary::-webkit-details-marker {
+  display: none;
+}
+.account-history-panel {
+  position: absolute;
+  right: 0;
+  top: calc(100% + var(--space-2));
+  z-index: 30;
+  width: min(26rem, calc(100vw - 2 * var(--space-4)));
+  max-height: 60vh;
+  overflow-y: auto;
+  padding: var(--space-4);
+  background: var(--surface);
+  color: var(--ink);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+}
+.history-note,
+.history-empty {
+  margin: 0 0 var(--space-3);
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+.history-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.history-item {
+  display: grid;
+  gap: var(--space-1);
+  padding: var(--space-3) 0;
+  border-top: 1px solid var(--line);
+}
+.history-question {
+  overflow-wrap: anywhere;
+}
+.history-meta {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+/* A phone: the History button sits mid-row, so a panel anchored to it runs
+   off the screen's left edge (measured at 390px), and a panel centred over
+   the page covers the button that closes it. So the open disclosure takes a
+   full row of the (wrapping) top bar and the panel flows under its button. */
+@media (max-width: 40rem) {
+  .account-history[open] {
+    flex-basis: 100%;
+  }
+  .account-history-panel {
+    position: static;
+    width: auto;
+    margin-top: var(--space-2);
+  }
+}
+
 /* ----- Status banner (errors, warnings, success) ----------------------- */
 
 .status-banner {

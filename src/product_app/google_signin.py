@@ -653,7 +653,14 @@ def google_sign_in_callback(request: Request) -> RedirectResponse:
     )
     if account_id is None:
         return _failed("account_not_recorded")
+    # W7 (ADR-0135): read the signing-in session's anonymous id BEFORE the
+    # rotation revokes it, so its runs can join the account's history.
+    previous = auth.session_repository.get(session_id)
     session = auth.issue_signed_in_session(session_id, account_id=account_id)
+    if previous is not None and previous.account_id != account_id:
+        from product_app import account_history
+
+        account_history.carry_over(anonymous_account_id=previous.account_id, account_id=account_id)
     response = RedirectResponse(AFTER_SIGN_IN_PATH, status_code=status.HTTP_303_SEE_OTHER)
     response.headers["Cache-Control"] = "no-store"
     auth.attach_session_cookie(response, session)

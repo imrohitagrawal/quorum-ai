@@ -137,6 +137,7 @@ ways, so the record shows what was believed on a date and what replaced it.
 | [ADR-0132](adr/0132-the-session-limits-count-the-visitor.md) | The session limits count the visitor, not the app | Architecture | Accepted — 2026-09-25, board row W30 |
 | [ADR-0133](adr/0133-a-session-limit-allow-list.md) | A session-limit allow-list for named, dated networks | Architecture | Accepted — 2026-09-26, board row W31 |
 | [ADR-0134](adr/0134-an-invite-link-that-lifts-the-daily-session-cap.md) | An invite link that lifts the daily session cap | Architecture | Accepted — 2026-09-26, board row W32 |
+| [ADR-0135](adr/0135-signed-in-history.md) | Signed-in history keeps the last 5 questions for 30 days | Architecture | Accepted — 2026-09-26, board row W7, the second of W7's pull requests, part |
 
 **This index was itself stale** until 2026-07-30: ADR-0002 had existed since
 2026-07-19 and was never listed here. A hand-maintained index is a derived fact
