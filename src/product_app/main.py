@@ -35,6 +35,7 @@ from fastapi.staticfiles import StaticFiles
 from prometheus_fastapi_instrumentator import Instrumentator
 from sentry_sdk.types import Event as SentryEvent
 
+from product_app import session_exemptions
 from product_app.auth import (
     SessionContext,
     SessionMintCapExceeded,
@@ -549,6 +550,13 @@ validate_production_environment()
 # the app: it runs with sign-in off and says so at ERROR, naming the missing
 # settings (never their values).
 log_sign_in_configuration()
+
+# W31 (ADR-0133). A malformed allow-list stops the app here, as the owner
+# approved ("refused at startup"): ValueError names the entry's position,
+# never its address. The log line is counts and end dates only.
+session_exemptions.log_configuration(
+    session_exemptions.configured(), today=session_exemptions._today()
+)
 
 # Smoke-probe: log a WARNING at startup if the app is running in
 # offline mode without the operator realizing it (no API key, or
@@ -1381,6 +1389,9 @@ def status_snapshot() -> dict[str, object]:
         # GOOGLE_OAUTH_* settings set and the redirect URI well formed. A
         # boolean only; the client id, secret and redirect URI never appear.
         "sign_in_enabled": sign_in_enabled(),
+        # W31 (ADR-0133): the allow-list's active and expired entry counts and
+        # the requests it exempted since start. Counts only; no name, no address.
+        "session_limit_allow_list": session_exemptions.status(),
         # ADR-0116, #458. The FLAG above says what is configured; this says
         # whether a critic call can actually be dispatched. They differed in
         # production from 2026-09-12 to 2026-09-24 — flag true, live execution
@@ -1484,7 +1495,11 @@ def browser_session(
     # endpoints are deliberately NOT rate-limited — those are
     # operational checks used by load balancers and the demo banner.
     client_ip = client_ip_of(request) or "unknown"
-    if not _ip_rate_limiter.allow(ip=client_ip, now_epoch=time.time()):
+    # W31 (ADR-0133): an allow-listed visitor is held to neither session limit.
+    exempt = session_exemptions.is_exempt(request.client.host if request.client else None)
+    if exempt:
+        session_exemptions.record_exempted_request()
+    elif not _ip_rate_limiter.allow(ip=client_ip, now_epoch=time.time()):
         return JSONResponse(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             content={
@@ -1496,7 +1511,8 @@ def browser_session(
         )
     session_id = get_session_cookie_from_request(request)
     try:
-        session = issue_or_resume_session(session_id, client_ip=client_ip)
+        # No client_ip skips the daily cap (auth.issue_session) for them.
+        session = issue_or_resume_session(session_id, client_ip=None if exempt else client_ip)
     except SessionMintCapExceeded as exc:
         # Issue #100 §2.3: this IP has already minted
         # ``auth.SESSION_MINT_CAP_PER_IP`` new sessions in the last 24h.
@@ -1583,11 +1599,17 @@ def browser_ui(request: Request) -> HTMLResponse:
     # optional, or an attacker mints unlimited accounts by hitting ``/ui``
     # directly instead of ``/v1/session`` and the cap never fires.
     client_ip = client_ip_of(request) or "unknown"
+    # W31 (ADR-0133): an allow-listed visitor is not held to the daily cap.
+    exempt = session_exemptions.is_exempt(request.client.host if request.client else None)
+    if exempt:
+        session_exemptions.record_exempted_request()
     session_id = get_session_cookie_from_request(request)
     try:
         # No CSRF rotation here: the page gets its token from /v1/session,
         # and a second fetch of /ui must not retire it (2026-09-25).
-        session = issue_or_resume_session(session_id, client_ip=client_ip, rotate_csrf=False)
+        session = issue_or_resume_session(
+            session_id, client_ip=None if exempt else client_ip, rotate_csrf=False
+        )
     except SessionMintCapExceeded as exc:
         # A rendered page, not a bare sentence. This is the only 429 a real
         # visitor ever sees in their address bar, and it is the last thing
