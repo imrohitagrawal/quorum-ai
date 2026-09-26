@@ -261,6 +261,38 @@ Then fix the value with the check command above.
 To remove one firm, set the list again without its entry. An entry stops
 applying after its `until` day (UTC) on its own.
 
+### Send a firm an invite link (W32)
+
+An invite link lets whoever opens it past the 2-a-day session cap on their
+address, from any network, until an end date (ADR-0134). Each link opens at
+most 50 new sessions a day and works at most 90 days. Spend limits still apply.
+
+**Once:** make a signing key, keep it in your password manager, and set it
+from stdin so it never lands in shell history:
+
+```bash
+KEY="$(openssl rand -hex 32)"
+printf '%s' "$KEY" | pbcopy        # then save it in your password manager
+printf 'INVITE_LINK_SIGNING_KEY=%s\n' "$KEY" | fly secrets import -a quorum-ai
+unset KEY
+```
+
+**Each firm:** with the key on the clipboard, from the repository root:
+
+```bash
+pbpaste | PYTHONPATH=src uv run python -m product_app.invite_links mint \
+  --until 2026-10-31 --base-url https://quorum.stackclimb.com
+```
+
+It prints the link and its id. Send the link; keep the id. Confirm with
+`curl -s https://quorum.stackclimb.com/status | jq .invite_links`
+(`"enabled": true`).
+
+**Revoke one link:** `fly secrets set INVITE_LINK_REVOKED_IDS=<id>[,<id>...] -a quorum-ai`
+(ids are not secret). **Revoke all:** set a new signing key.
+**If the app does not start** after changing either: `fly secrets unset
+INVITE_LINK_SIGNING_KEY INVITE_LINK_REVOKED_IDS -a quorum-ai` turns links off.
+
 ### Rollback to a previous version
 
 ```bash

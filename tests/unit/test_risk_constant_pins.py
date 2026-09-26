@@ -147,6 +147,8 @@ RISK_TIER_MODULES = (
     # Added 2026-09-26 with W31 (ADR-0133): the bounds on who may skip the
     # per-network session limits.
     "session_exemptions.py",
+    # Added 2026-09-26 with W32 (ADR-0134): the invite link's bounds and key.
+    "invite_links.py",
     "readiness.py",
     "query_runs.py",
     # #303: the run state machine, repository and pipeline constants that used
@@ -250,6 +252,11 @@ BUCKET_A_LITERAL_PIN = (
     "session_exemptions.MAX_VALID_DAYS",
     "session_exemptions.MAX_ENTRIES",
     "session_exemptions.MAX_NAME_LENGTH",
+    # W32 (ADR-0134): the session's PROPOSED invite bounds.
+    "invite_links.MAX_VALID_DAYS",
+    "invite_links.DAILY_SESSIONS_PER_LINK",
+    "invite_links.MIN_KEY_LENGTH",
+    "invite_links.COOKIE_NAME",
     # The rolling window the cap is counted over. A LITERAL pin for the same
     # reason the cap itself is one: cap and window are one control, and
     # widening the window silently tightens the cap while narrowing it
@@ -592,6 +599,15 @@ BUCKET_B_PIN_BEHAVIOUR = {
 
 #: No pin. A literal here restates the implementation and catches nothing.
 BUCKET_C_NO_PIN = {
+    "invite_links._TOKEN": (
+        "the token shape; its behaviour is pinned by "
+        "test_a_changed_token_is_refused and test_a_minted_token_verifies_and_names_its_link"
+    ),
+    "invite_links._LINK_ID": ("a link id shape; pinned by test_a_malformed_revoked_id_is_refused"),
+    "invite_links._TEMPLATES": "the templates folder; a wrong path fails the invite page test",
+    "invite_links._INVALID": (
+        "the refusal body; pinned exactly by test_a_bad_token_is_refused_without_saying_why"
+    ),
     "session_exemptions._DATE": (
         "the YYYY-MM-DD shape of an end date; its behaviour is pinned by "
         "test_a_malformed_list_is_refused (20261031 and 2026-W44-5 refused)"

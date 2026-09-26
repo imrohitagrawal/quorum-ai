@@ -145,6 +145,10 @@ os.environ["GOOGLE_OAUTH_CLIENT_ID"] = ""
 # W31 (ADR-0133). The allow-list holds firms' addresses (``repr=False``); a
 # developer's .env must never exempt the suite from the session limits.
 os.environ["SESSION_CAP_EXEMPT_NETWORKS"] = ""
+# W32 (ADR-0134). The invite signing key is a credential (``repr=False``);
+# tests that exercise invites set it for themselves.
+os.environ["INVITE_LINK_SIGNING_KEY"] = ""
+os.environ["INVITE_LINK_REVOKED_IDS"] = ""
 os.environ["GOOGLE_OAUTH_REDIRECT_URI"] = ""
 # Not a credential, but the OTHER half of the two-value judge gate. Leaving it
 # set makes the local config differ from CI's, and since #269 priced the judge

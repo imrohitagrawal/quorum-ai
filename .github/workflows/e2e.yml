@@ -384,6 +384,7 @@ jobs:
           tests/degraded/degraded-banner.spec.ts
           tests/ops/ops-dashboard.spec.ts
           tests/ops/ops-navigation.spec.ts
+          tests/invite/invite-link.spec.ts
           --project=chromium
           --retries=0
 

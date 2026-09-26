@@ -585,7 +585,10 @@ def _enforce_production_guards(*, require_legacy_disabled: bool) -> None:
 
 
 def issue_session(
-    *, account_id: UUID | None = None, client_ip: str | None = None
+    *,
+    account_id: UUID | None = None,
+    client_ip: str | None = None,
+    mint_cap: int | None = None,
 ) -> SessionIssueResponse:
     """Mint a brand-new session (and account id).
 
@@ -618,18 +621,21 @@ def issue_session(
     if client_ip is not None:
         from product_app.feedback_store import get_store  # local import to avoid cycles
 
+        # W32 (ADR-0134): an invite link counts under its own key and cap.
+        cap = _effective_session_mint_cap() if mint_cap is None else mint_cap
+
         store = get_store()
         if store is not None:
             allowed = store.try_record_session_mint(
                 ip=client_ip,
                 account_id=account_id,
-                cap=_effective_session_mint_cap(),
+                cap=cap,
             )
             if not allowed:
                 raise SessionMintCapExceeded(
                     client_ip,
                     retry_after_seconds=store.seconds_until_a_session_mint_frees(
-                        ip=client_ip, cap=_effective_session_mint_cap()
+                        ip=client_ip, cap=cap
                     ),
                 )
     session = session_repository.create(account_id=account_id)
@@ -865,6 +871,7 @@ def issue_or_resume_session(
     *,
     client_ip: str | None = None,
     rotate_csrf: bool = True,
+    mint_cap: int | None = None,
 ) -> SessionIssueResponse:
     """Return the active session or create a new one.
 
@@ -899,7 +906,7 @@ def issue_or_resume_session(
             if not rotate_csrf:
                 resumed = session_repository.touch(presented_session_id)
                 if resumed is None:
-                    return issue_session(client_ip=client_ip)
+                    return issue_session(client_ip=client_ip, mint_cap=mint_cap)
                 return SessionIssueResponse(
                     account_id=resumed.account_id,
                     session_id=resumed.session_id,
@@ -915,7 +922,7 @@ def issue_or_resume_session(
                 # Race: the session expired between ``get`` and
                 # ``rotate_csrf``. Fall through to issuing a new
                 # session.
-                return issue_session(client_ip=client_ip)
+                return issue_session(client_ip=client_ip, mint_cap=mint_cap)
             return SessionIssueResponse(
                 account_id=rotated.account_id,
                 session_id=rotated.session_id,
@@ -923,4 +930,4 @@ def issue_or_resume_session(
                 expires_at=rotated.last_used_at + SESSION_TTL,
                 session_expires_in_seconds=int(SESSION_TTL.total_seconds()),
             )
-    return issue_session(client_ip=client_ip)
+    return issue_session(client_ip=client_ip, mint_cap=mint_cap)
