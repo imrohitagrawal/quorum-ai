@@ -9919,6 +9919,54 @@
         if (history.open && !history.contains(event.target)) history.open = false;
       });
     }
+    // W7 (ADR-0136): delete the account in three steps (CHG-021 f): a
+    // reminder, the typed email, a last "Delete permanently".
+    const deleteStart = el("account-delete-start");
+    if (deleteStart) {
+      const reminder = el("account-delete-reminder");
+      const final = el("account-delete-final");
+      const email = el("account-delete-email");
+      const error = el("account-delete-error");
+      const show = (step) => {
+        deleteStart.hidden = step !== "start";
+        reminder.hidden = step !== "reminder";
+        final.hidden = step !== "final";
+        if (step !== "final") error.hidden = true;
+      };
+      deleteStart.addEventListener("click", () => {
+        show("reminder");
+        email.focus();
+      });
+      el("account-delete-cancel").addEventListener("click", () => show("start"));
+      el("account-delete-back").addEventListener("click", () => show("start"));
+      el("account-delete-continue").addEventListener("click", () => {
+        if (!email.value.trim()) {
+          email.focus();
+          return;
+        }
+        show("final");
+        el("account-delete-confirm").focus();
+      });
+      const confirm = el("account-delete-confirm");
+      confirm.addEventListener("click", async () => {
+        confirm.disabled = true;
+        try {
+          await api("/v1/account/delete", {
+            method: "POST",
+            body: JSON.stringify({ confirm_email: email.value }),
+          });
+          window.location.assign("/ui");
+        } catch (err) {
+          confirm.disabled = false;
+          show("reminder");
+          error.textContent =
+            err && err.code === "CONFIRMATION_MISMATCH"
+              ? "That is not the email address you signed in with."
+              : "Your account could not be deleted just now. Please try again.";
+          error.hidden = false;
+        }
+      });
+    }
   }
 
   function initWorkflowKeyboard() {

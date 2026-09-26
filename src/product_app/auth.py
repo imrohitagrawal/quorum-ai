@@ -317,6 +317,11 @@ class SessionRepository:
 
     def __init__(self) -> None:
         self._sessions: dict[str, _Session] = {}
+        #: W7 (ADR-0136): accounts deleted in this process, and until when to
+        #: refuse their sessions. A session read from disk a moment before the
+        #: delete is checked against this before it is cached, so it cannot
+        #: be put back (the race the review map measured on main).
+        self._deleted_accounts: dict[UUID, datetime] = {}
         self._lock = RLock()
 
     def create(self, *, account_id: UUID) -> _Session:
@@ -373,6 +378,29 @@ class SessionRepository:
         self._persist(session)
         return session
 
+    def revoke_account(self, account_id: UUID) -> None:
+        """Refuse every session of ``account_id`` from now on, and drop the
+        cached ones (W7 account deletion). The durable rows are deleted by
+        ``SessionStore.delete_account``, in the same transaction as the
+        account; this call must come FIRST, so a restore racing the delete
+        sees the account already refused."""
+        with self._lock:
+            self._deleted_accounts[account_id] = datetime.now(UTC) + SESSION_TTL
+            for session_id in [
+                sid for sid, session in self._sessions.items() if session.account_id == account_id
+            ]:
+                self._sessions.pop(session_id, None)
+
+    def account_was_deleted(self, account_id: UUID) -> bool:
+        with self._lock:
+            until = self._deleted_accounts.get(account_id)
+            return until is not None and until > datetime.now(UTC)
+
+    def forget_deleted_accounts(self) -> None:
+        """Tests: forget every deleted-account mark."""
+        with self._lock:
+            self._deleted_accounts.clear()
+
     def revoke(self, session_id: str) -> None:
         """Drop the session from both halves.
 
@@ -418,6 +446,10 @@ class SessionRepository:
             persisted_last_used_at=stored.last_used_at,
         )
         with self._lock:
+            # W7 (ADR-0136): re-checked under the lock, after the disk read,
+            # so an account deleted while this read was in flight stays out.
+            if self.account_was_deleted(session.account_id):
+                return None
             # ``setdefault``, not assignment: two requests arriving together on
             # a cold process both restore, and the loser must return the SAME
             # object the winner cached or one of them mutates a copy nobody

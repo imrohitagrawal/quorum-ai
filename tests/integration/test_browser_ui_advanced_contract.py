@@ -34,7 +34,23 @@ def _fetch_ui() -> str:
 #: ``initAccountControls`` in app.js checks each for null, so their absence on
 #: the shipped (sign-in off) page is correct; they are checked instead against
 #: the markup the enabled page renders, below.
-_RENDERED_ONLY_WITH_SIGN_IN = frozenset({"sign-in-google", "sign-out", "account-history"})
+_RENDERED_ONLY_WITH_SIGN_IN = frozenset(
+    {
+        "sign-in-google",
+        "sign-out",
+        "account-history",
+        # W7 (ADR-0136): the delete-account steps inside the history panel.
+        "account-delete-start",
+        "account-delete-reminder",
+        "account-delete-email",
+        "account-delete-continue",
+        "account-delete-cancel",
+        "account-delete-final",
+        "account-delete-confirm",
+        "account-delete-back",
+        "account-delete-error",
+    }
+)
 
 
 def _sign_in_markup(monkeypatch: pytest.MonkeyPatch) -> str:

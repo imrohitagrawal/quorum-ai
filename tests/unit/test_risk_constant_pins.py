@@ -600,6 +600,10 @@ BUCKET_B_PIN_BEHAVIOUR = {
 
 #: No pin. A literal here restates the implementation and catches nothing.
 BUCKET_C_NO_PIN = {
+    "session_store._PROCESS_ACCOUNT_KEY": (
+        "a random per-process key used only when QUORUM_TOKEN_SECRET is unset (local); "
+        "its use is pinned by test_a_new_accounts_id_is_a_keyed_hash_of_its_google_subject"
+    ),
     "main._ANONYMOUS_LEDE": (
         "the anonymous composer lede, pinned exactly by "
         "tests/integration/test_workspace_html_copy.py (EXPECTED_WORKSPACE_LEDE) "

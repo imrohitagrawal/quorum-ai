@@ -36,7 +36,7 @@ from fastapi.staticfiles import StaticFiles
 from prometheus_fastapi_instrumentator import Instrumentator
 from sentry_sdk.types import Event as SentryEvent
 
-from product_app import account_history, invite_links, session_exemptions
+from product_app import account_deletion, account_history, invite_links, session_exemptions
 from product_app.auth import (
     SessionContext,
     SessionMintCapExceeded,
@@ -475,6 +475,7 @@ _register_docs_routes(app, settings)
 app.include_router(query_runs_router)
 app.include_router(google_signin_router)
 app.include_router(invite_links.router)
+app.include_router(account_deletion.router)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 # OD-1 observability: Prometheus exposition at /metrics. Routes are grouped
@@ -910,7 +911,40 @@ def _history_html(account_id: UUID) -> str:
         )
         + "</p>"
         + body
+        + _account_delete_html()
         + "</div></details>"
+    )
+
+
+def _account_delete_html() -> str:
+    """W7 (ADR-0136): deleting the account, in three steps the owner asked
+    for (CHG-021 f): a reminder of what goes, typing the email address to
+    confirm, and a last "Delete permanently". ``app.js`` moves between them;
+    the server checks the typed email and the CSRF token."""
+    return (
+        '<div class="account-delete" id="account-delete">'
+        '<p class="history-note account-delete-heading">Your account</p>'
+        '<button type="button" id="account-delete-start" class="account-delete-link">'
+        "Delete my account…</button>"
+        '<div id="account-delete-reminder" hidden>'
+        "<p>Deleting your account removes your question history and signs you out on "
+        "every device. It cannot be undone.</p>"
+        '<label for="account-delete-email">Type the email address you signed in with</label>'
+        '<input id="account-delete-email" type="email" autocomplete="off" spellcheck="false">'
+        '<div class="account-delete-actions">'
+        '<button type="button" id="account-delete-continue">Continue</button>'
+        '<button type="button" id="account-delete-cancel">Keep my account</button>'
+        "</div></div>"
+        '<div id="account-delete-final" hidden>'
+        "<p><strong>Last check:</strong> this permanently deletes your account. "
+        "There is no undo.</p>"
+        '<div class="account-delete-actions">'
+        '<button type="button" id="account-delete-confirm" class="account-delete-danger">'
+        "Delete permanently</button>"
+        '<button type="button" id="account-delete-back">Keep my account</button>'
+        "</div></div>"
+        '<p id="account-delete-error" class="account-delete-error" role="alert" hidden></p>'
+        "</div>"
     )
 
 

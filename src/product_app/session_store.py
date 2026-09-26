@@ -38,8 +38,10 @@ from __future__ import annotations
 
 import atexit
 import hashlib
+import hmac
 import logging
 import os
+import secrets
 import sqlite3
 import threading
 import weakref
@@ -48,7 +50,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
-from uuid import UUID, uuid4
+from uuid import UUID
 
 _log = logging.getLogger(__name__)
 
@@ -130,6 +132,27 @@ class HistoryEntry:
     #: answer's level ("well supported", ..., "not checked"). ``None`` when the
     #: run did not complete (no final answer to speak of).
     verdict: str | None = None
+
+
+#: A per-process key used only when ``QUORUM_TOKEN_SECRET`` is unset (local
+#: development; production refuses to start without it). Account ids derived
+#: under it are stable only for the life of the process.
+_PROCESS_ACCOUNT_KEY = secrets.token_bytes(32)
+
+
+def _account_key() -> bytes:
+    secret = os.environ.get("QUORUM_TOKEN_SECRET", "")
+    return secret.encode() if secret else _PROCESS_ACCOUNT_KEY
+
+
+def account_id_for(google_sub: str, *, key: bytes) -> UUID:
+    """A new account's id: a keyed one-way hash of its Google subject (W7,
+    ADR-0136). The same subject gets the same id after its account is deleted
+    and signed in again, so the 24-hour spend recorded under the id still
+    counts (CHG-012 D7); without the key the id says nothing about the
+    subject."""
+    digest = hmac.new(key, b"w7-account:" + google_sub.encode(), hashlib.sha256).digest()
+    return UUID(bytes=digest[:16], version=4)
 
 
 def _to_utc(value: datetime) -> datetime:
@@ -664,7 +687,9 @@ class SessionStore:
                         "SELECT account_id FROM accounts WHERE google_sub = ?", (google_sub,)
                     ).fetchone()
                     if row is None:
-                        account_id = uuid4()
+                        # W7 (ADR-0136): derived, not random, so a deleted and
+                        # re-created account keeps its 24-hour spend envelope.
+                        account_id = account_id_for(google_sub, key=_account_key())
                         self._conn.execute(
                             "INSERT INTO accounts "
                             "(account_id, google_sub, email, created_at, last_sign_in_at) "
@@ -686,6 +711,32 @@ class SessionStore:
                 self._warn("record a signed-in account", exc)
                 return None
         return account_id
+
+    def delete_account(self, account_id: UUID) -> bool:
+        """Remove the account, its history and its sessions, in one
+        transaction (W7, ADR-0136). ``True`` when it ran; ``False`` on any
+        failure, when nothing was removed."""
+        if not self._accounts_ready:
+            return False
+        key = str(account_id)
+        with self._lock:
+            if self._closed:
+                return False
+            try:
+                self._conn.execute("BEGIN IMMEDIATE")
+                try:
+                    if self._history_ready:
+                        self._conn.execute("DELETE FROM history WHERE account_id = ?", (key,))
+                    self._conn.execute("DELETE FROM sessions WHERE account_id = ?", (key,))
+                    self._conn.execute("DELETE FROM accounts WHERE account_id = ?", (key,))
+                    self._conn.execute("COMMIT")
+                except BaseException:
+                    self._conn.execute("ROLLBACK")
+                    raise
+            except sqlite3.Error as exc:
+                self._warn("delete an account", exc)
+                return False
+        return True
 
     def is_anonymous(self, account_id: UUID) -> bool | None:
         """``True`` only when ``account_id`` is certainly in no accounts row;

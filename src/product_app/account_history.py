@@ -140,6 +140,13 @@ def history_for(account_id: UUID) -> list[HistoryEntry] | None:
     )
 
 
+def forget_account(account_id: UUID) -> None:
+    """Account deletion: drop every carry-over link that points at it."""
+    with _lock:
+        for anonymous in [a for a, (target, _) in _carried.items() if target == account_id]:
+            del _carried[anonymous]
+
+
 def clear_carried() -> None:
     """Tests: forget every sign-in link."""
     with _lock:

@@ -1797,9 +1797,17 @@ def _persist_terminal_run(query_run_id: UUID) -> None:
         final_synthesis = query_run.final_synthesis
         if final_synthesis is not None and final_synthesis.citation_coverage is not None:
             citation_ratio = final_synthesis.citation_coverage.sourced_answer_ratio
+        # W7 (ADR-0136): a run of an account deleted while it ran is written
+        # without the account, as the deletion left the account's other rows.
+        from product_app.auth import session_repository
+
         row = RunHistoryRow(
             query_run_id=str(query_run.query_run_id),
-            account_id=str(query_run.account_id),
+            account_id=(
+                None
+                if session_repository.account_was_deleted(query_run.account_id)
+                else str(query_run.account_id)
+            ),
             correlation_id=query_run.correlation_id,
             status=query_run.status.value,
             created_at=query_run.created_at,
