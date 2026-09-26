@@ -24,14 +24,18 @@ not someone at home or on mobile data. The invite link (W32) is for them.
    per-account cap.
 2. **An entry too wide** (a typo like `/8`, or `0.0.0.0/0`). Refused at
    startup, as approved: wider than /24 (IPv4) or /48 (IPv6). Also refused:
-   a host part set (`203.0.113.7/24`, ambiguous), a private, loopback,
-   link-local or reserved range (no real visitor comes from one; the Fly
-   proxy's own range would exempt everyone), and IPv4-mapped IPv6.
+   a host part set (`81.2.69.7/24`, ambiguous), and (**PROPOSED — the
+   session's bound**) any range that is not public: private, loopback,
+   link-local, reserved, documentation or IPv4-mapped. No real visitor comes
+   from one, and an entry inside Fly's proxy range would match every request
+   that reaches the app without a usable `Fly-Client-IP`.
 3. **A refusal takes production down.** A bad secret stops the app from
    starting. The mitigation: the owner checks the value first with a local
    command that runs the same parser and prints what it would load (counts
    and end dates only), and only then sets the secret. The value is read
-   from standard input, so it never lands in shell history.
+   from standard input, so it never lands in shell history; `DEPLOY.md` sets
+   the secret from standard input too, and gives the recovery step
+   (`fly secrets unset SESSION_CAP_EXEMPT_NETWORKS`).
 4. **An entry that never ends.** Every entry needs an end date. After that
    date it no longer applies (checked on every request, not only at
    startup, so a long-running machine stops honouring it on time); an entry

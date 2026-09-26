@@ -41,8 +41,8 @@ def _entry(
 
 def test_the_bounds_are_pinned() -> None:
     """Bucket A. Turns red if a bound moves. /24 and /48 are the owner's
-    (CHG-022 item 2); 366 days and 50 entries are the session's PROPOSED
-    defaults (ADR-0133)."""
+    (CHG-022 item 2); 366 days, 50 entries and 80 characters are the session's
+    PROPOSED defaults, awaiting the owner (ADR-0133)."""
     assert MAX_IPV4_PREFIX == 24
     assert MAX_IPV6_PREFIX == 48
     assert MAX_VALID_DAYS == 366
@@ -87,14 +87,15 @@ def test_a_good_list_parses() -> None:
         ("fdaa:87::/48", "not a public"),
         ("192.0.2.0/24", "not a public"),
         ("2001:db8:aa::/48", "not a public"),
-        ("::ffff:81.2.69.7", "IPv4-mapped"),
+        ("::ffff:81.2.69.7", "not a public"),
         ("not-a-network", "not an address"),
     ],
 )
 def test_a_bad_network_is_refused(network: str, why: str) -> None:
-    """Turns red if a too-wide, ambiguous, private or malformed entry loads.
-    A private range is refused because the Fly proxy's own range would exempt
-    every visitor."""
+    """Turns red if a too-wide, ambiguous, non-public or malformed entry loads.
+    Refusing non-public ranges is the session's PROPOSED bound: no real
+    visitor comes from one, and an entry inside Fly's proxy range would match
+    every request that arrives without a usable Fly-Client-IP."""
     with pytest.raises(ValueError, match=why):
         parse_exemptions(_raw(_entry(network=network)), today=TODAY)
 
@@ -122,6 +123,8 @@ def test_the_width_bound_is_exact() -> None:
         (_raw(_entry(name="x" * 81)), "80 characters"),
         (_raw(_entry(until="31/10/2026")), "YYYY-MM-DD"),
         (json.dumps([{**_entry(), "until": 20261031}]), "YYYY-MM-DD"),
+        (_raw(_entry(until="20261031")), "YYYY-MM-DD"),
+        (_raw(_entry(until="2026-W44-5")), "YYYY-MM-DD"),
         (_raw(_entry(until="2027-09-28")), "366 days"),
         (_raw(_entry(), _entry(network="89.160.20.0/24")), "used twice"),
     ],
@@ -183,8 +186,9 @@ def _one(network: str, until: str = "2026-10-31") -> tuple[Exemption, ...]:
     ],
 )
 def test_matching_uses_the_visitors_full_address(address: str, network: str, hit: bool) -> None:
-    """Turns red if matching uses W30's /64 key (a /128 entry would then match
-    a whole /64) or misses an IPv4-mapped visitor."""
+    """At the matcher. Turns red if exemption_for stops matching the full
+    address or misses an IPv4-mapped visitor. The routes' use of the full
+    address is pinned by the security test for an IPv6 visitor."""
     assert (exemption_for(address, _one(network), today=TODAY) is not None) is hit
 
 
@@ -323,3 +327,55 @@ def test_the_check_command_refuses_other_arguments(capsys: pytest.CaptureFixture
     history) instead of printing its usage."""
     assert session_exemptions.main(["[]"], today=TODAY) == 2
     assert "usage:" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("raw", "shown"),
+    [
+        ('[{"name": "a", "network": "81.2.69.0/24", "until": "2026-10-31"},]', "column"),
+        ("[{\u201cname\u201d: \u201ca\u201d}]", "curly quotes"),
+    ],
+    ids=["trailing-comma", "curly-quotes"],
+)
+def test_a_json_error_says_where(raw: str, shown: str) -> None:
+    """The owner pastes this by hand. Turns red if a JSON error stops saying
+    where it is, or a chat app's curly quotes stop being named."""
+    with pytest.raises(ValueError, match=shown) as caught:
+        parse_exemptions(raw, today=TODAY)
+    assert "81.2.69" not in str(caught.value)
+
+
+def test_the_check_command_warns_about_an_entry_that_already_ended(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A wrong year is an easy typo. Turns red if an already-ended entry
+    passes the check with no warning."""
+    import io
+
+    monkeypatch.setattr("sys.stdin", io.StringIO(_raw(_entry(until="2025-10-31"))))
+    assert session_exemptions.main(["--check"], today=TODAY) == 0
+    assert "warning: 1 of them already ended" in capsys.readouterr().err
+
+
+def test_the_documented_command_runs_from_the_repository_root() -> None:
+    """The documented check is ``PYTHONPATH=src ... python -m
+    product_app.session_exemptions --check``. Turns red if the module stops
+    running that way from the repository root (review found the command
+    without PYTHONPATH fails: the package is not installed)."""
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2]
+    done = subprocess.run(
+        [sys.executable, "-m", "product_app.session_exemptions", "--check"],
+        input=_raw(_entry()),
+        env={**os.environ, "PYTHONPATH": "src"},
+        cwd=root,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert done.returncode == 0, done.stderr[-1500:]
+    assert done.stdout.startswith("would load 1 entries")

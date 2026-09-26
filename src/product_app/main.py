@@ -551,9 +551,10 @@ validate_production_environment()
 # settings (never their values).
 log_sign_in_configuration()
 
-# W31 (ADR-0133). A malformed allow-list stops the app here, as the owner
-# approved ("refused at startup"): ValueError names the entry's position,
-# never its address. The log line is counts and end dates only.
+# W31 (ADR-0133). A malformed allow-list stops the app here. The owner approved
+# refusing an entry wider than /24 or /48 at startup (CHG-022); stopping on any
+# other malformed value is the session's choice. ValueError names the entry's
+# position, never its address. The log line is counts and end dates only.
 session_exemptions.log_configuration(
     session_exemptions.configured(), today=session_exemptions._today()
 )

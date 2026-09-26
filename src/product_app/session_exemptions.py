@@ -8,15 +8,17 @@ addresses.
 
 The list is one setting, ``SESSION_CAP_EXEMPT_NETWORKS``, a JSON list::
 
-    [{"name": "Acme hiring", "network": "203.0.113.0/24", "until": "2026-10-31"}]
+    [{"name": "Acme hiring", "network": "81.2.69.0/24", "until": "2026-10-31"}]
 
 An entry applies through the end of its ``until`` day in UTC. A malformed
-list stops the app at startup; check a value first with::
+list stops the app at startup; check a value first, from the repository
+root, with::
 
-    pbpaste | uv run python -m product_app.session_exemptions --check
+    pbpaste | PYTHONPATH=src uv run python -m product_app.session_exemptions --check
 
 which reads the value from standard input (never shell history) and prints
-only counts and end dates. Failure modes:
+only counts and end dates, or the refusal. The package is not installed into
+the virtual environment, so ``PYTHONPATH=src`` is required. Failure modes:
 ``docs/analysis/2026-09-26-w31-session-limit-allow-list-failure-modes.md``.
 """
 
@@ -25,6 +27,7 @@ from __future__ import annotations
 import ipaddress
 import json
 import logging
+import re
 import sys
 import threading
 from dataclasses import dataclass
@@ -35,14 +38,16 @@ logger = logging.getLogger(__name__)
 #: The owner's bounds (CHG-022 item 2): no entry wider than these.
 MAX_IPV4_PREFIX = 24
 MAX_IPV6_PREFIX = 48
-#: The session's PROPOSED bounds (ADR-0133), the safe default until the
-#: owner decides otherwise: an end date at most this far ahead, and at most
-#: this many entries.
+#: PROPOSED — AWAITING OWNER: the session's bounds (ADR-0133), built at the
+#: safe default until the owner decides otherwise: an end date at most this
+#: far ahead, at most this many entries, names at most this long. Refusing
+#: non-public ranges (``_network``) is the fourth.
 MAX_VALID_DAYS = 366
 MAX_ENTRIES = 50
 MAX_NAME_LENGTH = 80
 
 _KEYS = frozenset({"name", "network", "until"})
+_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
 
 
 @dataclass(frozen=True)
@@ -67,8 +72,6 @@ def _network(value: object, where: str) -> ipaddress.IPv4Network | ipaddress.IPv
                 f"{where}: network has host bits set; give the range's start"
             ) from None
         raise ValueError(f"{where}: network is not an address or range") from None
-    if isinstance(network, ipaddress.IPv6Network) and network.network_address.ipv4_mapped:
-        raise ValueError(f"{where}: network is IPv4-mapped; write the IPv4 range")
     limit = MAX_IPV4_PREFIX if network.version == 4 else MAX_IPV6_PREFIX
     if network.prefixlen < limit:
         raise ValueError(f"{where}: network is wider than /{limit}")
@@ -79,7 +82,8 @@ def _network(value: object, where: str) -> ipaddress.IPv4Network | ipaddress.IPv
 
 def _until(value: object, where: str, today: date) -> date:
     try:
-        if not isinstance(value, str):
+        # fullmatch first: fromisoformat also takes 20261031 and 2026-W44-5.
+        if not isinstance(value, str) or not _DATE.fullmatch(value):
             raise ValueError
         until = date.fromisoformat(value)
     except ValueError:
@@ -98,8 +102,14 @@ def parse_exemptions(raw: str, *, today: date) -> tuple[Exemption, ...]:
         return ()
     try:
         data = json.loads(raw)
-    except json.JSONDecodeError:
-        raise ValueError("SESSION_CAP_EXEMPT_NETWORKS is not JSON") from None
+    except json.JSONDecodeError as exc:
+        # exc.msg is the parser's generic message; it never quotes the input.
+        hint = ""
+        if any(q in raw for q in "\u201c\u201d\u2018\u2019"):
+            hint = "; it contains curly quotes, use straight double quotes"
+        raise ValueError(
+            f"SESSION_CAP_EXEMPT_NETWORKS is not JSON ({exc.msg} at column {exc.colno}){hint}"
+        ) from None
     if not isinstance(data, list):
         raise ValueError("SESSION_CAP_EXEMPT_NETWORKS must be a JSON list")
     if len(data) > MAX_ENTRIES:
@@ -225,6 +235,9 @@ def main(argv: list[str], *, today: date | None = None) -> int:
         print(f"refused: {exc}", file=sys.stderr)
         return 2
     print(f"would load {summarise(entries, today=day)}")
+    ended = sum(1 for e in entries if e.until < day)
+    if ended:
+        print(f"warning: {ended} of them already ended and will not apply", file=sys.stderr)
     return 0
 
 

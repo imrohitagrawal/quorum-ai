@@ -108,8 +108,10 @@ def test_exempted_requests_are_counted_on_status(allow_list: None) -> None:
 
 
 def test_the_allow_list_never_lifts_a_spend_limit(allow_list: None) -> None:
-    """An over-limit query from an allow-listed visitor is refused exactly as
-    from anyone else. Turns red if the cost gate ever consults the list.
+    """An over-limit query from an allow-listed visitor is still refused.
+    Turns red if every spend check before the run is skipped for an
+    allow-listed visitor (the per-call band and the per-account daily cap
+    both refuse this query; the test cannot tell which one did).
     The catalog price is pinned the way the cost-guardrail suite pins it, so
     the band does not depend on which modules were collected first."""
     from tests.integration.test_query_run_cost_guardrails import _pinned_static_catalog
@@ -138,3 +140,26 @@ def test_the_allow_list_never_lifts_a_spend_limit(allow_list: None) -> None:
         )
     assert response.status_code == 402
     assert response.json()["detail"]["code"] == "COST_LIMIT_EXCEEDED"
+
+
+def test_an_ipv6_visitor_is_matched_by_their_full_address(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The routes match the visitor's full address, not W30's /64 key.
+    Turns red if a route passes the /64 key: no IPv6 visitor would then be
+    exempt. The positive partner is the visitor outside the listed /48."""
+    raw = json.dumps([{"name": "v6 firm", "network": "2a02:26f0:aa::/48", "until": "2099-01-01"}])
+    monkeypatch.setattr(settings, "session_cap_exempt_networks", raw)
+    monkeypatch.setattr(session_exemptions, "_today", lambda: date(2098, 6, 1))
+    session_exemptions.reset_cache()
+    try:
+        with configure_for_tests():
+            client = TestClient(app, client=("fdaa:87:4c93:a7b:f9:e8c4:d114:2", 443))
+            inside = [_mint(client, "2a02:26f0:aa:1::5") for _ in range(3)]
+            outside = [_mint(client, "2a02:26f0:ab:1::5") for _ in range(3)]
+            inside_ui = [_mint(client, "2a02:26f0:aa:1::5", "/ui") for _ in range(3)]
+    finally:
+        session_exemptions.reset_cache()
+    assert inside == [200, 200, 200]
+    assert inside_ui == [200, 200, 200]
+    assert outside == [200, 200, 429]

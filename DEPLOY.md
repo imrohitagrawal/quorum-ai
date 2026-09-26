@@ -229,6 +229,35 @@ fly secrets set QUORUM_TOKEN_SECRET="$NEW_SECRET"
 fly logs
 ```
 
+### Let a firm's testers past the session limits (the allow-list, W31)
+
+Each network gets 2 new sessions a day and 10 session requests a minute. To
+lift those two limits (never a spend limit) for a firm's office network, set
+`SESSION_CAP_EXEMPT_NETWORKS` (ADR-0133). Copy the JSON list to the clipboard,
+for example
+`[{"name": "Acme hiring", "network": "81.2.69.0/24", "until": "2026-10-31"}]`,
+then, from the repository root:
+
+```bash
+VALUE="$(pbpaste | tr -d '\n')"
+# 1. Check it first: a bad value stops the app. Prints counts and end dates only.
+printf '%s' "$VALUE" | PYTHONPATH=src uv run python -m product_app.session_exemptions --check
+# 2. Set it from stdin, so the addresses never land in shell history.
+printf 'SESSION_CAP_EXEMPT_NETWORKS=%s\n' "$VALUE" | fly secrets import -a quorum-ai
+unset VALUE
+```
+
+3. Confirm: `curl -s https://quorum.stackclimb.com/status | jq .session_limit_allow_list`
+   shows the active entry count you expect, and `fly logs` shows
+   `session-limit allow-list: N entries: ...`.
+
+**If the app does not start after setting it**, remove the setting and it
+starts with no list: `fly secrets unset SESSION_CAP_EXEMPT_NETWORKS -a quorum-ai`.
+Then fix the value with the check command above.
+
+To remove one firm, set the list again without its entry. An entry stops
+applying after its `until` day (UTC) on its own.
+
 ### Rollback to a previous version
 
 ```bash

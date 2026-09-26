@@ -22,7 +22,9 @@ link, is for them).
 Everything else here is the session's design. Four bounds are **PROPOSED —
 AWAITING OWNER**, built at their safe default: an end date at most 366 days
 ahead; at most 50 entries; names of at most 80 characters; public ranges
-only.
+only. So is stopping the app on a malformed value other than a too-wide
+range: the owner approved refusing an entry wider than /24 or /48 at
+startup; extending that to every malformed value is the session's choice.
 
 ## Context
 
@@ -38,16 +40,20 @@ sessions the rest are refused. The failure modes were listed first:
    `{"name", "network", "until"}`, set as one Fly secret. Empty (the shipped
    state): no one is exempt.
 2. `session_exemptions.parse_exemptions` refuses, naming the entry's
-   position and never its address: not JSON or not a list; an entry without
-   exactly those three keys; an empty, repeated or over-long name; a network
-   wider than /24 or /48, with host bits set, IPv4-mapped, or not public; an
-   end date not written `YYYY-MM-DD` or more than 366 days ahead; more than
-   50 entries. `main.py` parses it at import, so a malformed value stops the
-   app at startup, as approved.
-3. Before setting it, the owner checks a value with
-   `pbpaste | uv run python -m product_app.session_exemptions --check`,
-   which reads standard input (not shell history) and prints only counts and
-   end dates, or the refusal.
+   position and never its address: not JSON (with the parser's message and
+   column, and a hint when curly quotes were pasted) or not a list; an entry
+   without exactly those three keys; an empty, repeated or over-long name
+   (over 80 characters, PROPOSED); a network wider than /24 or /48 (the
+   owner's), with host bits set, or not public (PROPOSED); an end date not
+   written exactly `YYYY-MM-DD` or more than 366 days ahead (PROPOSED); more
+   than 50 entries (PROPOSED). `main.py` parses it at import, so a malformed
+   value stops the app at startup.
+3. Before setting it, the owner checks a value, from the repository root,
+   with `pbpaste | PYTHONPATH=src uv run python -m
+   product_app.session_exemptions --check`, which reads standard input (not
+   shell history) and prints only counts and end dates, or the refusal, and
+   warns about an entry that has already ended. `DEPLOY.md` has the steps to
+   set it from standard input and to recover if the app does not start.
 4. An entry applies through the end of its `until` day in UTC, checked on
    every request. An expired entry does not stop the app; it is counted.
 5. The two session routes (`/v1/session`, `/ui`) check the visitor's full
@@ -69,8 +75,12 @@ sessions the rest are refused. The failure modes were listed first:
   it in production.
 - **Lift the limits by /64 key.** A single-address entry would then cover a
   whole /64. Matching the full address makes an entry cover what it says.
-- **Allow private ranges.** Fly's proxy connects from `172.16.0.0/12`; such
-  an entry would exempt every visitor.
+- **Allow private ranges.** No real visitor comes from one. An entry inside
+  Fly's proxy range would match every request that reaches the app without
+  a usable `Fly-Client-IP` (W30 falls back to the proxy's address), which are
+  exactly the requests the limits must still hold. (A first draft said it
+  would exempt every visitor; review measured it does not, because W30 puts
+  the visitor's address in place.)
 - **No end-date bound.** An entry with an end date years ahead is the
   "never ends" failure with extra steps; 366 days is PROPOSED.
 
@@ -78,10 +88,17 @@ sessions the rest are refused. The failure modes were listed first:
 
 - A firm's testers on the listed network open sessions without the daily
   cap of 2 or the 10-a-minute limit. Their runs are still bounded by
-  `DAILY_CAP_USD` per account and `GLOBAL_DAILY_CEILING_USD` for the site
-  (`test_the_allow_list_never_lifts_a_spend_limit`).
+  `DAILY_CAP_USD` per account and `GLOBAL_DAILY_CEILING_USD` for the site,
+  which read accounts and the site, never an address
+  (`test_the_allow_list_never_lifts_a_spend_limit` shows an allow-listed
+  visitor's over-limit query still refused).
+- ADR-0004 bounds the exposure while the spend ledger is faulted (the caps
+  fail open) partly by the daily session cap. On a listed network that cap
+  is lifted, so during such a fault that network's exposure is bounded by
+  how many sessions its testers open, not by 2 a day.
 - Testers at home or on mobile data are not covered (CHG-022 item 3).
 - The exempted-request count is per process and resets on restart, like the
   other process counters on `/ui/ops`.
-- A typo in the secret stops the app. The check command is the mitigation;
-  the ADR does not add a softer failure.
+- A typo in the secret stops the app. The check command is the mitigation,
+  and `fly secrets unset SESSION_CAP_EXEMPT_NETWORKS -a quorum-ai` the
+  recovery (`DEPLOY.md`); the ADR does not add a softer failure.

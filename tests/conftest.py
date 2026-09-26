@@ -142,6 +142,9 @@ os.environ["GOOGLE_OAUTH_CLIENT_SECRET"] = (
     else ""
 )
 os.environ["GOOGLE_OAUTH_CLIENT_ID"] = ""
+# W31 (ADR-0133). The allow-list holds firms' addresses (``repr=False``); a
+# developer's .env must never exempt the suite from the session limits.
+os.environ["SESSION_CAP_EXEMPT_NETWORKS"] = ""
 os.environ["GOOGLE_OAUTH_REDIRECT_URI"] = ""
 # Not a credential, but the OTHER half of the two-value judge gate. Leaving it
 # set makes the local config differ from CI's, and since #269 priced the judge

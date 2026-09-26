@@ -592,6 +592,10 @@ BUCKET_B_PIN_BEHAVIOUR = {
 
 #: No pin. A literal here restates the implementation and catches nothing.
 BUCKET_C_NO_PIN = {
+    "session_exemptions._DATE": (
+        "the YYYY-MM-DD shape of an end date; its behaviour is pinned by "
+        "test_a_malformed_list_is_refused (20261031 and 2026-W44-5 refused)"
+    ),
     "session_exemptions._KEYS": (
         "the three required entry keys; a wrong set refuses every list at startup, "
         "which test_a_good_list_parses catches, so a literal pin adds nothing"
