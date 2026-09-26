@@ -35,7 +35,7 @@ from fastapi.staticfiles import StaticFiles
 from prometheus_fastapi_instrumentator import Instrumentator
 from sentry_sdk.types import Event as SentryEvent
 
-from product_app import session_exemptions
+from product_app import invite_links, session_exemptions
 from product_app.auth import (
     SessionContext,
     SessionMintCapExceeded,
@@ -473,6 +473,7 @@ app = _build_fastapi(settings)
 _register_docs_routes(app, settings)
 app.include_router(query_runs_router)
 app.include_router(google_signin_router)
+app.include_router(invite_links.router)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 # OD-1 observability: Prometheus exposition at /metrics. Routes are grouped
@@ -558,6 +559,10 @@ log_sign_in_configuration()
 session_exemptions.log_configuration(
     session_exemptions.configured(), today=session_exemptions._today()
 )
+
+# W32 (ADR-0134): a signing key shorter than the minimum, or a malformed
+# revoked list, stops the app. Neither value is quoted.
+invite_links.check_configuration()
 
 # Smoke-probe: log a WARNING at startup if the app is running in
 # offline mode without the operator realizing it (no API key, or
@@ -1393,6 +1398,9 @@ def status_snapshot() -> dict[str, object]:
         # W31 (ADR-0133): the allow-list's active and expired entry counts and
         # the requests it exempted since start. Counts only; no name, no address.
         "session_limit_allow_list": session_exemptions.status(),
+        # W32 (ADR-0134): whether invite links are on, how many are revoked,
+        # and session requests that carried a valid one. Never an id or token.
+        "invite_links": invite_links.status_snapshot(),
         # ADR-0116, #458. The FLAG above says what is configured; this says
         # whether a critic call can actually be dispatched. They differed in
         # production from 2026-09-12 to 2026-09-24 — flag true, live execution
@@ -1486,6 +1494,21 @@ def _retry_after_header(seconds: int | None) -> dict[str, str]:
     return {"Retry-After": str(math.ceil(seconds / 3600) * 3600)}
 
 
+def _daily_cap_key(
+    request: Request, client_ip: str, exempt: bool
+) -> tuple[str | None, int | None, str | None]:
+    """Who the daily new-session cap counts: nobody for an allow-listed
+    visitor (W31), the invite link for a browser holding a valid one (W32),
+    else the visitor's address (W30). Returns (key, cap, invite link id)."""
+    if exempt:
+        return None, None, None
+    invite = invite_links.invite_link_id(request)
+    if invite is None:
+        return client_ip, None, None
+    invite_links.record_invite_request()
+    return f"invite:{invite}", invite_links.DAILY_SESSIONS_PER_LINK, invite
+
+
 @app.get("/v1/session", tags=["session"])
 def browser_session(
     request: Request,
@@ -1498,6 +1521,9 @@ def browser_session(
     client_ip = client_ip_of(request) or "unknown"
     # W31 (ADR-0133): an allow-listed visitor is held to neither session limit.
     exempt = session_exemptions.is_exempt(request.client.host if request.client else None)
+    # W32 (ADR-0134): a valid invite moves the daily cap from the address to
+    # the link. The per-minute limit below still applies to it.
+    mint_key, mint_cap, invite = _daily_cap_key(request, client_ip, exempt)
     if exempt:
         session_exemptions.record_exempted_request()
     elif not _ip_rate_limiter.allow(ip=client_ip, now_epoch=time.time()):
@@ -1513,8 +1539,23 @@ def browser_session(
     session_id = get_session_cookie_from_request(request)
     try:
         # No client_ip skips the daily cap (auth.issue_session) for them.
-        session = issue_or_resume_session(session_id, client_ip=None if exempt else client_ip)
+        session = issue_or_resume_session(session_id, client_ip=mint_key, mint_cap=mint_cap)
     except SessionMintCapExceeded as exc:
+        if invite:
+            return JSONResponse(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                content={
+                    "detail": {
+                        "code": "INVITE_DAILY_LIMIT",
+                        "message": (
+                            "This invite link has opened its allowance of new "
+                            "sessions for the last 24 hours. An already-open "
+                            "session still works."
+                        ),
+                    },
+                },
+                headers=_retry_after_header(exc.retry_after_seconds),
+            )
         # Issue #100 §2.3: this IP has already minted
         # ``auth.SESSION_MINT_CAP_PER_IP`` new sessions in the last 24h.
         # A DIFFERENT 429 code from the burst limiter above — that one is
@@ -1570,11 +1611,14 @@ def _describe_retry_wait(seconds: int | None) -> str:
     return f"A slot frees up in about {hours} hours, and you can start again then."
 
 
-def _render_session_capped_html(retry_after_seconds: int | None) -> str:
+def _render_session_capped_html(retry_after_seconds: int | None, *, invite: bool = False) -> str:
     """Render the 429 page. One substitution, so no escaping is needed: the
     only interpolated value is a sentence this module built from an integer.
+    ``invite``: the refusal was an invite link's own cap (W32), not the
+    visitor's address, so the page must not blame their network.
     """
-    template = (TEMPLATES_DIR / "session-capped.html").read_text(encoding="utf-8")
+    name = "invite-capped.html" if invite else "session-capped.html"
+    template = (TEMPLATES_DIR / name).read_text(encoding="utf-8")
     return template.replace("__RETRY_SENTENCE__", _describe_retry_wait(retry_after_seconds))
 
 
@@ -1602,6 +1646,7 @@ def browser_ui(request: Request) -> HTMLResponse:
     client_ip = client_ip_of(request) or "unknown"
     # W31 (ADR-0133): an allow-listed visitor is not held to the daily cap.
     exempt = session_exemptions.is_exempt(request.client.host if request.client else None)
+    mint_key, mint_cap, invite = _daily_cap_key(request, client_ip, exempt)
     if exempt:
         session_exemptions.record_exempted_request()
     session_id = get_session_cookie_from_request(request)
@@ -1609,7 +1654,7 @@ def browser_ui(request: Request) -> HTMLResponse:
         # No CSRF rotation here: the page gets its token from /v1/session,
         # and a second fetch of /ui must not retire it (2026-09-25).
         session = issue_or_resume_session(
-            session_id, client_ip=None if exempt else client_ip, rotate_csrf=False
+            session_id, client_ip=mint_key, mint_cap=mint_cap, rotate_csrf=False
         )
     except SessionMintCapExceeded as exc:
         # A rendered page, not a bare sentence. This is the only 429 a real
@@ -1618,7 +1663,7 @@ def browser_ui(request: Request) -> HTMLResponse:
         # existing session still works, and names a wait it can actually
         # derive. See ADR-0073.
         return HTMLResponse(
-            _render_session_capped_html(exc.retry_after_seconds),
+            _render_session_capped_html(exc.retry_after_seconds, invite=invite is not None),
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             headers=_retry_after_header(exc.retry_after_seconds),
         )

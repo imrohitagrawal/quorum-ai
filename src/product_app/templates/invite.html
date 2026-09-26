@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="referrer" content="no-referrer">
+    <title>Quorum-AI — invite</title>
+    <link rel="stylesheet" href="/static/tokens.css">
+    <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32.png">
+    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+    <!-- Not deferred: it sets the theme before first paint, then waits for
+         the page to accept the invite. -->
+    <script src="/static/invite.js"></script>
+    <style>
+      /* W32 (ADR-0134). Every colour is a token from tokens.css. */
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 2rem 1.25rem;
+        background: var(--bg, #FFFFFF);
+        color: var(--ink, #14171C);
+        font-family: Geist, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+        line-height: 1.6;
+      }
+      main {
+        width: 100%;
+        max-width: 34rem;
+        background: var(--surface, #FFFFFF);
+        border: 1px solid var(--line, rgba(20, 23, 28, 0.14));
+        border-radius: 14px;
+        padding: 2rem;
+      }
+      h1 { font-size: 1.35rem; margin: 0 0 0.75rem; }
+      p { margin: 0 0 1rem; }
+      /* inherit, as session-capped.html does: --accent-ink is the white text
+         colour for dark chips, and on this card it made the link invisible. */
+      a { color: inherit; text-decoration: underline; }
+      a:focus-visible { outline: 3px solid var(--focus-ring, #14171C); outline-offset: 3px; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Your invite to Quorum-AI</h1>
+      <p id="invite-status" role="status" aria-live="polite" data-state="pending">Checking your invite…</p>
+      <p><a id="invite-continue" href="/ui">Continue to Quorum-AI</a></p>
+      <noscript><p>This page needs JavaScript to accept the invite.</p></noscript>
+    </main>
+  </body>
+</html>

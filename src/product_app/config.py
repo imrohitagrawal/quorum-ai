@@ -787,6 +787,16 @@ class Settings(BaseSettings):
     #: python -m product_app.session_exemptions --check`` (DEPLOY.md).
     session_cap_exempt_networks: str = Field(default="", repr=False)
 
+    #: W32 (ADR-0134, CHG-022 item 4): the invite-link signing key. Empty (the
+    #: shipped state) turns invite links off. At least 32 characters (the
+    #: session's PROPOSED bound, ADR-0134), or the app stops at startup. Set as
+    #: a Fly secret from stdin; never logged. Rotating it revokes every link.
+    invite_link_signing_key: str = Field(default="", repr=False)
+    #: W32: comma-separated ids of revoked invite links (each 12 lower-case
+    #: hex digits, printed when the link is minted). A malformed id stops the
+    #: app at startup, so a revocation cannot fail silently.
+    invite_link_revoked_ids: str = ""
+
     # --- Catalog fetcher -------------------------------------------------
     # The  model catalog is fetched from a public, unauthenticated
     # endpoint and cached in process memory. Six hours is the
