@@ -322,6 +322,19 @@
           setVerdict("spend", ceilingUsd != null ? spendUsd < parseFloat(ceilingUsd) : null);
         }
 
+        /* W31: the session-limit allow-list, counts only, from /status. */
+        var allow = statusJson.session_limit_allow_list;
+        if (allow && typeof allow.exempted_requests === "number") {
+          setCurrent("allow-list-exempted", String(allow.exempted_requests));
+          setCurrent(
+            "allow-list-entries",
+            String(allow.active_entries) + " active, " + String(allow.expired_entries) + " expired entries"
+          );
+        } else {
+          setCurrent("allow-list-exempted", "no data");
+          setCurrent("allow-list-entries", "no data");
+        }
+
         /* Uptime + version from /status. */
         if (typeof statusJson.uptime_seconds === "number") {
           setCurrent("uptime", fmtUptime(statusJson.uptime_seconds));

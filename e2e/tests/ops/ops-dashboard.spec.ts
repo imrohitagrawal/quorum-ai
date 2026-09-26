@@ -59,6 +59,18 @@ test.describe("ops dashboard", () => {
       String(statusJson.environment),
     );
 
+    // W31: the allow-list tile shows the same counts as /status. No allow-list
+    // is configured in the e2e server, so the counts are 0 active, 0 expired;
+    // the exempted count must still be a number, not "no data" or "—".
+    const allow = statusJson.session_limit_allow_list;
+    expect(allow.active_entries).toBe(0);
+    await expect(page.locator('[data-current="allow-list-exempted"]')).toHaveText(
+      String(allow.exempted_requests),
+    );
+    await expect(page.locator('[data-current="allow-list-entries"]')).toHaveText(
+      "0 active, 0 expired entries",
+    );
+
     // Readiness tile must match a direct /ready fetch.
     const readyJson = await (await request.get("/ready")).json();
     await expect(page.locator('[data-current="ready"]')).toHaveText(

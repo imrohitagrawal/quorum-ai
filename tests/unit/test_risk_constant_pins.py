@@ -144,6 +144,9 @@ RISK_TIER_MODULES = (
     # so none of its constants was triaged -- exactly the "covered by
     # omission" shape the RISK_TIER_MODULES comment above warns about.
     "session_store.py",
+    # Added 2026-09-26 with W31 (ADR-0133): the bounds on who may skip the
+    # per-network session limits.
+    "session_exemptions.py",
     "readiness.py",
     "query_runs.py",
     # #303: the run state machine, repository and pipeline constants that used
@@ -240,6 +243,13 @@ BUCKET_A_LITERAL_PIN = (
     # counted. Widening either lets one visitor mint more sessions.
     "auth.TRUSTED_PROXY_NETWORKS",
     "auth.IPV6_LIMIT_PREFIX",
+    # W31 (ADR-0133): the allow-list's bounds. /24 and /48 are the owner's
+    # (CHG-022 item 2); the rest are the session's PROPOSED defaults.
+    "session_exemptions.MAX_IPV4_PREFIX",
+    "session_exemptions.MAX_IPV6_PREFIX",
+    "session_exemptions.MAX_VALID_DAYS",
+    "session_exemptions.MAX_ENTRIES",
+    "session_exemptions.MAX_NAME_LENGTH",
     # The rolling window the cap is counted over. A LITERAL pin for the same
     # reason the cap itself is one: cap and window are one control, and
     # widening the window silently tightens the cap while narrowing it
@@ -582,6 +592,14 @@ BUCKET_B_PIN_BEHAVIOUR = {
 
 #: No pin. A literal here restates the implementation and catches nothing.
 BUCKET_C_NO_PIN = {
+    "session_exemptions._DATE": (
+        "the YYYY-MM-DD shape of an end date; its behaviour is pinned by "
+        "test_a_malformed_list_is_refused (20261031 and 2026-W44-5 refused)"
+    ),
+    "session_exemptions._KEYS": (
+        "the three required entry keys; a wrong set refuses every list at startup, "
+        "which test_a_good_list_parses catches, so a literal pin adds nothing"
+    ),
     # --- Added 2026-09-25 with W7's first pull request (ADR-0130) ---
     "google_signin._SIGN_OUT_ERRORS": (
         "OpenAPI documentation of sign-out's error shapes (review round 1); "

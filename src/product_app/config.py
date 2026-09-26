@@ -778,6 +778,15 @@ class Settings(BaseSettings):
     #: treated as a misconfiguration and sign-in stays off.
     google_oauth_redirect_uri: str = ""
 
+    #: W31 (ADR-0133, CHG-022 item 2): the session-limit allow-list, a JSON
+    #: list of ``{"name", "network", "until"}`` entries whose visitors are not
+    #: held to the two per-network session limits (never a spend limit). Set
+    #: as one Fly secret; empty means no one is exempt. A malformed value
+    #: stops the app at startup (``session_exemptions.configured``); check a
+    #: value first, from the repository root, with ``PYTHONPATH=src uv run
+    #: python -m product_app.session_exemptions --check`` (DEPLOY.md).
+    session_cap_exempt_networks: str = Field(default="", repr=False)
+
     # --- Catalog fetcher -------------------------------------------------
     # The  model catalog is fetched from a public, unauthenticated
     # endpoint and cached in process memory. Six hours is the
