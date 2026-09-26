@@ -207,3 +207,59 @@ def test_is_anonymous_is_none_on_an_sqlite_error(store: SessionStore, tmp_path: 
     finally:
         connection.close()
     assert store.is_anonymous(uuid4()) is None
+
+
+def test_a_history_table_that_cannot_be_created_leaves_history_off(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The guarded migration fails closed: a name already taken by a view
+    makes the index step fail, the transaction rolls back, and history is
+    unavailable (a write is refused, a read is None) with a warning. Turns red
+    if a failed migration is reported as ready."""
+    import logging
+
+    path = tmp_path / "sessions.sqlite3"
+    connection = sqlite3.connect(str(path))
+    try:
+        connection.execute("CREATE VIEW history AS SELECT 1 AS x")
+        connection.commit()
+    finally:
+        connection.close()
+    caplog.set_level(logging.WARNING, logger="product_app.session_store")
+    store = SessionStore(str(path))
+    try:
+        assert store.accounts_available() is True
+        assert store.record_history(_entry(1), keep_count=5, keep_days=30, now=NOW) is False
+        assert store.history_for("acct-a", keep_count=5, keep_days=30, now=NOW) is None
+        assert "the history table could not be created" in caplog.text
+    finally:
+        store.close()
+    connection = sqlite3.connect(str(path))
+    try:
+        names = {r[0] for r in connection.execute("SELECT name FROM schema_migrations")}
+    finally:
+        connection.close()
+    assert names == {"w7_accounts"}
+
+
+def test_a_write_that_fails_inside_its_transaction_rolls_back(
+    store: SessionStore, tmp_path: Path
+) -> None:
+    """Turns red if a failed write leaves a partial change or reports
+    success."""
+    _record(store, _entry(1))
+    connection = sqlite3.connect(str(tmp_path / "sessions.sqlite3"))
+    try:
+        connection.execute("ALTER TABLE history RENAME TO history_gone")
+        connection.commit()
+    finally:
+        connection.close()
+    assert store.record_history(_entry(2), keep_count=5, keep_days=30, now=NOW) is False
+
+
+def test_is_anonymous_is_none_before_the_accounts_table_is_ready(store: SessionStore) -> None:
+    """Turns red if an unready store answers "anonymous"."""
+    from uuid import uuid4
+
+    store._accounts_ready = False
+    assert store.is_anonymous(uuid4()) is None
