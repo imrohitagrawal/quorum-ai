@@ -326,7 +326,9 @@ def test_the_check_command_refuses_other_arguments(capsys: pytest.CaptureFixture
     """Turns red if the command accepts a value as an argument (shell
     history) instead of printing its usage."""
     assert session_exemptions.main(["[]"], today=TODAY) == 2
-    assert "usage:" in capsys.readouterr().err
+    assert capsys.readouterr().err == (
+        "usage: PYTHONPATH=src python -m product_app.session_exemptions --check < value\n"
+    )
 
 
 @pytest.mark.parametrize(
@@ -411,3 +413,32 @@ def test_a_json_error_reads_cleanly() -> None:
     with pytest.raises(ValueError) as caught:
         parse_exemptions('["\x01"]', today=TODAY)
     assert "(Invalid control character, column 3)" in str(caught.value)
+
+
+def test_the_check_command_uses_the_day_it_is_given(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Turns red if main() ignores its ``today`` (for example uses the real
+    date): the day given here is years from the real one, so an entry that
+    ended the day before must be warned about."""
+    import io
+
+    later = date(2031, 1, 2)
+    monkeypatch.setattr("sys.stdin", io.StringIO(_raw(_entry(until="2031-01-01"))))
+    assert session_exemptions.main(["--check"], today=later) == 0
+    assert "warning: 1 of them already ended" in capsys.readouterr().err
+
+
+def test_status_counts_an_entry_ending_today_as_active(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The boundary of /status's expired count. Turns red if an entry is
+    counted as expired on its last day."""
+    from product_app.config import settings
+
+    monkeypatch.setattr(settings, "session_cap_exempt_networks", _raw(_entry(until="2026-09-26")))
+    monkeypatch.setattr(session_exemptions, "_today", lambda: TODAY)
+    session_exemptions.reset_cache()
+    try:
+        got = session_exemptions.status()
+    finally:
+        session_exemptions.reset_cache()
+    assert (got["active_entries"], got["expired_entries"]) == (1, 0)
