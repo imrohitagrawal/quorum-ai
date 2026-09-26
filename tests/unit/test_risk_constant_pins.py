@@ -200,6 +200,7 @@ BUCKET_A_LITERAL_PIN = (
     # The marker name is how an existing database knows the table exists;
     # renaming it re-runs the migration on every database.
     "session_store.SessionStore._ACCOUNTS_MIGRATION",
+    "session_store.SessionStore._HISTORY_MIGRATION",
     # A wrong value is silently harmful in both directions: dropping "https"
     # breaks every production catalog fetch, and adding "file" turns an
     # operator's typo into an arbitrary local-file read served as live prices.
@@ -599,6 +600,11 @@ BUCKET_B_PIN_BEHAVIOUR = {
 
 #: No pin. A literal here restates the implementation and catches nothing.
 BUCKET_C_NO_PIN = {
+    "main._ANONYMOUS_LEDE": (
+        "the anonymous composer lede, pinned exactly by "
+        "tests/integration/test_workspace_html_copy.py (EXPECTED_WORKSPACE_LEDE) "
+        "and replaced only on a signed-in page"
+    ),
     "invite_links._TOKEN": (
         "the token shape; its behaviour is pinned by "
         "test_a_changed_token_is_refused and test_a_minted_token_verifies_and_names_its_link"
@@ -628,6 +634,14 @@ BUCKET_C_NO_PIN = {
     "session_store.SessionStore._MIGRATIONS_DDL": (
         "SQL DDL, not a value; malformed SQL fails loudly at open, exercised "
         "by every test in tests/integration/test_google_sign_in.py"
+    ),
+    "session_store.SessionStore._HISTORY_DDL": (
+        "the history table's DDL; its columns are pinned exactly by "
+        "test_the_table_holds_no_answer, which a literal here would only restate"
+    ),
+    "session_store.SessionStore._HISTORY_INDEX_DDL": (
+        "an index for the per-account newest-first read; it changes no result, "
+        "only speed, so a literal pin would catch nothing that matters"
     ),
     "session_store.SessionStore._ACCOUNTS_DDL": (
         "SQL DDL, not a value; the migration tests in tests/integration/"
@@ -1334,6 +1348,7 @@ def test_the_google_sign_in_constants_are_pinned() -> None:
     assert google_signin.CALLBACK_PATH == "/v1/auth/google/callback"
     assert google_signin._DEFAULT_PORTS == {"http": 80, "https": 443}
     assert session_store.SessionStore._ACCOUNTS_MIGRATION == "w7_accounts"
+    assert session_store.SessionStore._HISTORY_MIGRATION == "w7_history"
 
 
 def test_the_session_mint_window_is_pinned() -> None:

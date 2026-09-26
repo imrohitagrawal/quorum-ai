@@ -46,6 +46,7 @@ import weakref
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -105,6 +106,36 @@ class StoredAccount:
 
     account_id: UUID
     email: str
+
+
+@dataclass(frozen=True)
+class HistoryEntry:
+    """One finished run in a signed-in account's history (W7, ADR-0135).
+
+    A summary, never the run: the question the owner approved storing
+    (2026-09-26, 15:05:11Z), and when, how and at what cost it ran. No answer,
+    no source, no judge rationale.
+    """
+
+    query_run_id: str
+    account_id: str
+    question: str
+    status: str
+    mode: str
+    model_count: int
+    cost_usd: Decimal
+    completed_at: datetime
+    #: The verdict as the result showed it when the run finished: "3 of 4
+    #: opening positions carried into the final answer" (panel) or the quick
+    #: answer's level ("well supported", ..., "not checked"). ``None`` when the
+    #: run did not complete (no final answer to speak of).
+    verdict: str | None = None
+
+
+def _to_utc(value: datetime) -> datetime:
+    """UTC, so the history table's ISO text orders and compares correctly. A
+    naive value is taken as UTC already (the app only makes aware ones)."""
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
 
 
 def _digest(session_id: str) -> str:
@@ -256,6 +287,28 @@ class SessionStore:
         "last_sign_in_at TEXT NOT NULL)"
     )
 
+    #: Name of the W7 history migration in ``schema_migrations``.
+    _HISTORY_MIGRATION = "w7_history"
+
+    #: One summary row per finished run of a signed-in account (ADR-0135). The
+    #: columns are the whole contract: a test fails if one is added.
+    _HISTORY_DDL = (
+        "CREATE TABLE IF NOT EXISTS history ("
+        "query_run_id TEXT PRIMARY KEY, "
+        "account_id TEXT NOT NULL, "
+        "question TEXT NOT NULL, "
+        "status TEXT NOT NULL, "
+        "mode TEXT NOT NULL, "
+        "model_count INTEGER NOT NULL, "
+        "cost_usd TEXT NOT NULL, "
+        "completed_at TEXT NOT NULL, "
+        "verdict TEXT)"
+    )
+    _HISTORY_INDEX_DDL = (
+        "CREATE INDEX IF NOT EXISTS history_account_completed_idx "
+        "ON history (account_id, completed_at)"
+    )
+
     def __init__(self, db_path: str) -> None:
         self._db_path = db_path
         self._lock = threading.RLock()
@@ -269,6 +322,7 @@ class SessionStore:
         with self._lock:
             self._conn.executescript(self._SCHEMA)
         self._accounts_ready = self._migrate_accounts()
+        self._history_ready = self._accounts_ready and self._migrate_history()
         _open_stores.add(self)
 
     def _migrate_accounts(self) -> bool:
@@ -310,6 +364,131 @@ class SessionStore:
                 exc,
             )
             return False
+
+    def _migrate_history(self) -> bool:
+        """Create the history table once, guarded like the accounts table."""
+        try:
+            with self._lock:
+                applied = self._conn.execute(
+                    "SELECT 1 FROM schema_migrations WHERE name = ?",
+                    (self._HISTORY_MIGRATION,),
+                ).fetchone()
+                if applied is not None:
+                    return True
+                self._conn.execute("BEGIN IMMEDIATE")
+                try:
+                    self._conn.execute(self._HISTORY_DDL)
+                    self._conn.execute(self._HISTORY_INDEX_DDL)
+                    self._conn.execute(
+                        "INSERT INTO schema_migrations (name, applied_at) VALUES (?, ?)",
+                        (self._HISTORY_MIGRATION, datetime.now(UTC).isoformat()),
+                    )
+                    self._conn.execute("COMMIT")
+                except BaseException:
+                    self._conn.execute("ROLLBACK")
+                    raise
+                return True
+        except sqlite3.Error as exc:
+            _log.warning(
+                "session_store: the history table could not be created, so signed-in "
+                "history is unavailable until a restart on a writable volume: %s",
+                exc,
+            )
+            return False
+
+    def record_history(
+        self, entry: HistoryEntry, *, keep_count: int, keep_days: int, now: datetime
+    ) -> bool:
+        """Write ``entry`` and apply the keep rules to its account, in one
+        transaction: only the newest ``keep_count`` rows, none completed more
+        than ``keep_days`` ago. The same run replaces its row. ``False`` if it
+        could not be written (best effort, like run history)."""
+        if not self._history_ready:
+            return False
+        cutoff = _to_utc(now) - timedelta(days=keep_days)
+        with self._lock:
+            if self._closed:
+                return False
+            try:
+                self._conn.execute("BEGIN IMMEDIATE")
+                try:
+                    # A run already in another account's history is never moved:
+                    # the update applies only when the account matches.
+                    self._conn.execute(
+                        "INSERT INTO history (query_run_id, account_id, question, status, "
+                        "mode, model_count, cost_usd, completed_at, verdict) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                        "ON CONFLICT(query_run_id) DO UPDATE SET question = excluded.question, "
+                        "status = excluded.status, mode = excluded.mode, "
+                        "model_count = excluded.model_count, cost_usd = excluded.cost_usd, "
+                        "completed_at = excluded.completed_at, verdict = excluded.verdict "
+                        "WHERE history.account_id = excluded.account_id",
+                        (
+                            entry.query_run_id,
+                            entry.account_id,
+                            entry.question,
+                            entry.status,
+                            entry.mode,
+                            entry.model_count,
+                            str(entry.cost_usd),
+                            _to_utc(entry.completed_at).isoformat(),
+                            entry.verdict,
+                        ),
+                    )
+                    self._conn.execute(
+                        "DELETE FROM history WHERE account_id = ? AND completed_at < ?",
+                        (entry.account_id, cutoff.isoformat()),
+                    )
+                    self._conn.execute(
+                        "DELETE FROM history WHERE account_id = ? AND query_run_id NOT IN ("
+                        "SELECT query_run_id FROM history WHERE account_id = ? "
+                        "ORDER BY completed_at DESC LIMIT ?)",
+                        (entry.account_id, entry.account_id, keep_count),
+                    )
+                    self._conn.execute("COMMIT")
+                except BaseException:
+                    self._conn.execute("ROLLBACK")
+                    raise
+            except sqlite3.Error as exc:
+                self._warn("record a history entry", exc)
+                return False
+        return True
+
+    def history_for(
+        self, account_id: str, *, keep_count: int, keep_days: int, now: datetime
+    ) -> list[HistoryEntry] | None:
+        """The account's history, newest first, within the keep rules even if
+        no write has pruned it yet. ``None`` when it could not be read, so the
+        page can say so instead of "No questions yet"."""
+        if not self._history_ready:
+            return None
+        cutoff = _to_utc(now) - timedelta(days=keep_days)
+        with self._lock:
+            if self._closed:
+                return None
+            try:
+                rows = self._conn.execute(
+                    "SELECT * FROM history WHERE account_id = ? AND completed_at >= ? "
+                    "ORDER BY completed_at DESC LIMIT ?",
+                    (account_id, cutoff.isoformat(), keep_count),
+                ).fetchall()
+            except sqlite3.Error as exc:
+                self._warn("read history", exc)
+                return None
+        return [
+            HistoryEntry(
+                query_run_id=row["query_run_id"],
+                account_id=row["account_id"],
+                question=row["question"],
+                status=row["status"],
+                mode=row["mode"],
+                model_count=int(row["model_count"]),
+                cost_usd=Decimal(row["cost_usd"]),
+                completed_at=datetime.fromisoformat(row["completed_at"]),
+                verdict=row["verdict"],
+            )
+            for row in rows
+        ]
 
     def accounts_available(self) -> bool:
         """Whether the accounts table exists. ``False`` means sign-in refuses."""
@@ -507,6 +686,25 @@ class SessionStore:
                 self._warn("record a signed-in account", exc)
                 return None
         return account_id
+
+    def is_anonymous(self, account_id: UUID) -> bool | None:
+        """``True`` only when ``account_id`` is certainly in no accounts row;
+        ``None`` when that cannot be read. W7 carry-over moves runs only on
+        ``True``, so a read error fails closed (review round 2: ``account_for``
+        returning ``None`` on an error read as "anonymous")."""
+        if not self._accounts_ready:
+            return None
+        with self._lock:
+            if self._closed:
+                return None
+            try:
+                row = self._conn.execute(
+                    "SELECT 1 FROM accounts WHERE account_id = ?", (str(account_id),)
+                ).fetchone()
+            except sqlite3.Error as exc:
+                self._warn("check whether a session is anonymous", exc)
+                return None
+        return row is None
 
     def account_for(self, account_id: UUID) -> StoredAccount | None:
         """The signed-in account behind ``account_id``, or ``None``.

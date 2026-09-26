@@ -513,6 +513,11 @@ class QueryRun:
     #: once at create and never re-derived from the slot count: a panel that
     #: lost answers is still a panel.
     mode: RunMode = MODE_PANEL
+    #: W7 (ADR-0135): the verdict the result showed when the run finished,
+    #: captured by ``_persist_terminal_run`` from the response it already
+    #: builds (no extra judge call), so a run carried into a history later
+    #: still has it. ``None`` until then, and for a run with no verdict.
+    history_verdict: str | None = None
     #: E2: how far each billable stage got in the usage-recording handshake.
     #: Read by ``_actual_cost`` to tell an honestly-empty usage list (nothing
     #: was billable) from a silently-empty one (billed, never recorded). Both
@@ -652,6 +657,16 @@ class InMemoryQueryRunRepository:
             if query_run is None or query_run.account_id != account_id:
                 return None
             return query_run
+
+    def terminal_runs_for_account(self, account_id: UUID) -> list[QueryRun]:
+        """The account's finished runs still held here (W7 carry-over)."""
+        with self._lock:
+            self._purge_expired_locked()
+            return [
+                query_run
+                for query_run in self._query_runs.values()
+                if query_run.account_id == account_id and query_run.is_terminal
+            ]
 
     def get_active_for_account(self, account_id: UUID) -> QueryRun | None:
         with self._lock:
@@ -1692,6 +1707,24 @@ def _reconcile_run_billing(*, query_run: QueryRun, response: QueryRunResultRespo
         )
 
 
+def _history_verdict(response: QueryRunResultResponse) -> str | None:
+    """The verdict a history row shows, in the result's own words: the
+    agreement caption for a panel ("3 of 4 opening positions carried into the
+    final answer") and the judge's level for a quick answer ("well
+    supported"). ``None`` for a run that did not complete or partly complete:
+    there is no final answer for a caption to describe."""
+    if response.status not in (QueryRunStatus.COMPLETED, QueryRunStatus.PARTIAL):
+        return None
+    if response.quick_verdict is not None:
+        return response.quick_verdict.level.replace("_", " ")
+    agreement = response.result.agreement
+    if agreement is None or agreement.total == 0:
+        return None
+    return (
+        f"{agreement.aligned} of {agreement.total} opening positions carried into the final answer"
+    )
+
+
 def _persist_terminal_run(query_run_id: UUID) -> None:
     """Write a durable, PII-minimised row for a terminal run (S1 / FR-014).
 
@@ -1794,6 +1827,14 @@ def _persist_terminal_run(query_run_id: UUID) -> None:
             mode=query_run.mode,
         )
         _record_run_history(row)
+        # W7 (ADR-0135): a signed-in account's history. The verdict is read
+        # from the response built above, which has already paid for any judge
+        # call, and kept on the run for a later carry-over. Local import: the
+        # module imports this one.
+        query_run.history_verdict = _history_verdict(response)
+        from product_app import account_history
+
+        account_history.record_finished_run(query_run)
         # Ordered AFTER the metrics row: ``update_evaluation`` is an UPDATE
         # that does not check ``rowcount``, so attaching an evaluation to a
         # row that does not exist yet would be a silent no-op.

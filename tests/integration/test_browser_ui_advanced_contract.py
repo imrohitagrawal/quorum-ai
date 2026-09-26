@@ -28,12 +28,13 @@ def _fetch_ui() -> str:
     return response.text
 
 
-#: W7 (ADR-0130). Ids the server renders only when Google sign-in is enabled:
-#: "sign-in-google" for an anonymous visitor, "sign-out" for a signed-in one.
+#: W7 (ADR-0130, ADR-0135). Ids the server renders only when Google sign-in is
+#: enabled: "sign-in-google" for an anonymous visitor, "sign-out" and
+#: "account-history" for a signed-in one.
 #: ``initAccountControls`` in app.js checks each for null, so their absence on
 #: the shipped (sign-in off) page is correct; they are checked instead against
 #: the markup the enabled page renders, below.
-_RENDERED_ONLY_WITH_SIGN_IN = frozenset({"sign-in-google", "sign-out"})
+_RENDERED_ONLY_WITH_SIGN_IN = frozenset({"sign-in-google", "sign-out", "account-history"})
 
 
 def _sign_in_markup(monkeypatch: pytest.MonkeyPatch) -> str:

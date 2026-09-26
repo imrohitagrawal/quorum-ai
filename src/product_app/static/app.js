@@ -9905,6 +9905,20 @@
         }
       });
     }
+    // W7 (ADR-0135): the History disclosure closes on Escape (focus returns to
+    // its button) and on a click outside it, as a menu does.
+    const history = el("account-history");
+    if (history) {
+      history.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && history.open) {
+          history.open = false;
+          history.querySelector("summary").focus();
+        }
+      });
+      document.addEventListener("click", (event) => {
+        if (history.open && !history.contains(event.target)) history.open = false;
+      });
+    }
   }
 
   function initWorkflowKeyboard() {
