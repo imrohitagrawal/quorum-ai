@@ -873,7 +873,12 @@ def _history_html(account_id: UUID) -> str:
     ADR-0135). Every stored value is escaped; the question is the visitor's
     own text."""
     entries = account_history.history_for(account_id)
-    if entries:
+    if entries is None:
+        body = (
+            '<p class="history-empty" id="account-history-unavailable">'
+            "Your history could not be loaded just now.</p>"
+        )
+    elif entries:
         items = "".join(
             '<li class="history-item"><span class="history-question">'
             + escape(entry.question)
@@ -882,7 +887,8 @@ def _history_html(account_id: UUID) -> str:
                 f"{entry.completed_at.astimezone(UTC):%Y-%m-%d %H:%M} UTC · "
                 f"{entry.status.replace('_', ' ')} · "
                 f"{'quick answer' if entry.mode == 'quick' else f'{entry.model_count} models'}"
-                f" · estimated ${entry.cost_usd}"
+                + (f" · {entry.verdict}" if entry.verdict else "")
+                + f" · estimated ${entry.cost_usd}"
             )
             + "</span></li>"
             for entry in entries
@@ -893,7 +899,10 @@ def _history_html(account_id: UUID) -> str:
     return (
         '<details class="account-history" id="account-history">'
         '<summary class="topbar-howitworks">History</summary>'
-        '<div class="account-history-panel">'
+        # Focusable and named: the panel scrolls, and a scroll box a keyboard
+        # cannot reach fails axe's scrollable-region-focusable (review).
+        '<div class="account-history-panel" tabindex="0" role="region" '
+        'aria-label="Your question history">'
         '<p class="history-note">'
         + escape(
             f"Your last {settings.history_keep_count} questions, kept "

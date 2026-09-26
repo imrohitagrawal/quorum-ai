@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import logging
 import threading
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from product_app import session_store
@@ -70,6 +70,7 @@ def _entry(query_run: QueryRun, owner: UUID) -> HistoryEntry:
         model_count=len(query_run.model_slots),
         cost_usd=query_run.cost_estimate.estimated_cost_usd,
         completed_at=query_run.updated_at,
+        verdict=query_run.history_verdict,
     )
 
 
@@ -100,24 +101,37 @@ def record_finished_run(query_run: QueryRun) -> None:
         _log.exception("account history: recording a finished run failed")
 
 
+def _link_lifetime() -> timedelta:
+    """How long a sign-in link waits for a run still running: as long as one
+    can run, the longer of the repository's active lifetime and the run
+    deadline (which a setting can raise to an hour)."""
+    return max(QUERY_RUN_ACTIVE_TTL, timedelta(seconds=settings.quorum_run_deadline_seconds))
+
+
 def carry_over(*, anonymous_account_id: UUID, account_id: UUID) -> None:
     """At sign-in: the signing-in session's finished runs join the account's
     history now, and any run of it still running joins when it finishes. Only
-    that one session's runs; the keep rules then apply as for any write."""
+    an ANONYMOUS session's runs: a session already signed in as another
+    account carries nothing (review found a switch moved one account's
+    questions into another's). The keep rules then apply as for any write."""
     try:
+        store = session_store.get_store()
+        if store is None or store.account_for(anonymous_account_id) is not None:
+            return
         now = _now()
         with _lock:
-            _carried[anonymous_account_id] = (account_id, now + QUERY_RUN_ACTIVE_TTL)
+            _carried[anonymous_account_id] = (account_id, now + _link_lifetime())
         for query_run in query_run_repository.terminal_runs_for_account(anonymous_account_id):
             _write(_entry(query_run, account_id), now)
     except Exception:
         _log.exception("account history: carrying runs over at sign-in failed")
 
 
-def history_for(account_id: UUID) -> list[HistoryEntry]:
+def history_for(account_id: UUID) -> list[HistoryEntry] | None:
+    """The account's history, or ``None`` if it could not be read."""
     store = session_store.get_store()
     if store is None:
-        return []
+        return None
     return store.history_for(
         str(account_id),
         keep_count=settings.history_keep_count,

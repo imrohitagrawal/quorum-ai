@@ -38,6 +38,12 @@ def store(tmp_path: Path) -> SessionStore:
     return SessionStore(str(tmp_path / "sessions.sqlite3"))
 
 
+def _rows(store: SessionStore, account: str = "acct-a", now: datetime = NOW) -> list[HistoryEntry]:
+    rows = store.history_for(account, keep_count=5, keep_days=30, now=now)
+    assert rows is not None
+    return rows
+
+
 def _record(store: SessionStore, entry: HistoryEntry) -> None:
     assert store.record_history(entry, keep_count=5, keep_days=30, now=NOW)
 
@@ -66,6 +72,7 @@ def test_the_table_holds_no_answer(store: SessionStore, tmp_path: Path) -> None:
         "model_count",
         "cost_usd",
         "completed_at",
+        "verdict",
     }
 
 
@@ -74,7 +81,7 @@ def test_rows_come_back_newest_first(store: SessionStore) -> None:
     written."""
     for n in (3, 1, 2):
         _record(store, _entry(n))
-    rows = store.history_for("acct-a", keep_count=5, keep_days=30, now=NOW)
+    rows = _rows(store)
     assert [r.question for r in rows] == ["question 1", "question 2", "question 3"]
     assert rows[0] == _entry(1)
 
@@ -90,7 +97,7 @@ def test_only_the_newest_five_are_kept(store: SessionStore, tmp_path: Path) -> N
     finally:
         connection.close()
     assert stored == 5
-    rows = store.history_for("acct-a", keep_count=5, keep_days=30, now=NOW)
+    rows = _rows(store)
     assert [r.question for r in rows] == [f"question {n}" for n in range(1, 6)]
 
 
@@ -108,11 +115,11 @@ def test_rows_older_than_30_days_are_dropped_and_never_shown(
     finally:
         connection.close()
     assert stored == 1
-    rows = store.history_for("acct-a", keep_count=5, keep_days=30, now=NOW)
+    rows = _rows(store)
     assert [r.question for r in rows] == ["question 1"]
     # Read-side filter: a row that aged past 30 days after its write is hidden.
     later = NOW + timedelta(days=1)
-    assert store.history_for("acct-a", keep_count=5, keep_days=30, now=later) == []
+    assert _rows(store, now=later) == []
 
 
 def test_the_same_run_is_never_listed_twice(store: SessionStore) -> None:
@@ -120,7 +127,7 @@ def test_the_same_run_is_never_listed_twice(store: SessionStore) -> None:
     row. Turns red if a run can appear twice."""
     _record(store, _entry(1))
     _record(store, _entry(1))
-    assert len(store.history_for("acct-a", keep_count=5, keep_days=30, now=NOW)) == 1
+    assert len(_rows(store)) == 1
 
 
 def test_pruning_one_account_leaves_another_alone(store: SessionStore) -> None:
@@ -129,12 +136,47 @@ def test_pruning_one_account_leaves_another_alone(store: SessionStore) -> None:
         _record(store, _entry(n, account="acct-b"))
     for n in range(1, 8):
         _record(store, _entry(n))
-    assert len(store.history_for("acct-b", keep_count=5, keep_days=30, now=NOW)) == 3
-    assert len(store.history_for("acct-a", keep_count=5, keep_days=30, now=NOW)) == 5
+    assert len(_rows(store, "acct-b")) == 3
+    assert len(_rows(store)) == 5
 
 
 def test_a_failed_write_says_so(store: SessionStore) -> None:
     """Best effort: a closed store reports failure instead of raising."""
     store.close()
     assert store.record_history(_entry(1), keep_count=5, keep_days=30, now=NOW) is False
-    assert store.history_for("acct-a", keep_count=5, keep_days=30, now=NOW) == []
+    # A failed read is None, not [], so the page can say it could not load.
+    assert store.history_for("acct-a", keep_count=5, keep_days=30, now=NOW) is None
+
+
+def test_a_run_is_never_moved_to_another_account(store: SessionStore) -> None:
+    """Turns red if writing the same run under another account re-keys it:
+    review showed a sign-in switch moving one account's question into
+    another's history."""
+    _record(store, _entry(1))
+    moved = HistoryEntry(**{**_entry(1).__dict__, "account_id": "acct-b"})
+    _record(store, moved)
+    assert [r.question for r in _rows(store)] == ["question 1"]
+    assert _rows(store, "acct-b") == []
+
+
+def test_the_verdict_is_kept(store: SessionStore) -> None:
+    """Turns red if the verdict column is not written or read back."""
+    entry = HistoryEntry(
+        **{**_entry(1).__dict__, "verdict": "3 of 4 carried into the final answer"}
+    )
+    _record(store, entry)
+    (row,) = _rows(store)
+    assert row.verdict == "3 of 4 carried into the final answer"
+
+
+def test_a_read_that_fails_in_sqlite_is_none(store: SessionStore, tmp_path: Path) -> None:
+    """Turns red if an SQLite error on read is reported as an empty history
+    (the page would then say "No questions yet")."""
+    _record(store, _entry(1))
+    connection = sqlite3.connect(str(tmp_path / "sessions.sqlite3"))
+    try:
+        connection.execute("ALTER TABLE history RENAME TO history_gone")
+        connection.commit()
+    finally:
+        connection.close()
+    assert store.history_for("acct-a", keep_count=5, keep_days=30, now=NOW) is None

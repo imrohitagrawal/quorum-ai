@@ -125,6 +125,11 @@ class HistoryEntry:
     model_count: int
     cost_usd: Decimal
     completed_at: datetime
+    #: The verdict as the result showed it when the run finished: "3 of 4
+    #: carried into the final answer" (panel) or "well supported" (quick).
+    #: ``None`` when the run had none (a failed run, a quick answer the judge
+    #: did not check).
+    verdict: str | None = None
 
 
 def _to_utc(value: datetime) -> datetime:
@@ -296,7 +301,8 @@ class SessionStore:
         "mode TEXT NOT NULL, "
         "model_count INTEGER NOT NULL, "
         "cost_usd TEXT NOT NULL, "
-        "completed_at TEXT NOT NULL)"
+        "completed_at TEXT NOT NULL, "
+        "verdict TEXT)"
     )
     _HISTORY_INDEX_DDL = (
         "CREATE INDEX IF NOT EXISTS history_account_completed_idx "
@@ -406,10 +412,17 @@ class SessionStore:
             try:
                 self._conn.execute("BEGIN IMMEDIATE")
                 try:
+                    # A run already in another account's history is never moved:
+                    # the update applies only when the account matches.
                     self._conn.execute(
-                        "INSERT OR REPLACE INTO history (query_run_id, account_id, question, "
-                        "status, mode, model_count, cost_usd, completed_at) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                        "INSERT INTO history (query_run_id, account_id, question, status, "
+                        "mode, model_count, cost_usd, completed_at, verdict) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                        "ON CONFLICT(query_run_id) DO UPDATE SET question = excluded.question, "
+                        "status = excluded.status, mode = excluded.mode, "
+                        "model_count = excluded.model_count, cost_usd = excluded.cost_usd, "
+                        "completed_at = excluded.completed_at, verdict = excluded.verdict "
+                        "WHERE history.account_id = excluded.account_id",
                         (
                             entry.query_run_id,
                             entry.account_id,
@@ -419,6 +432,7 @@ class SessionStore:
                             entry.model_count,
                             str(entry.cost_usd),
                             _to_utc(entry.completed_at).isoformat(),
+                            entry.verdict,
                         ),
                     )
                     self._conn.execute(
@@ -442,15 +456,16 @@ class SessionStore:
 
     def history_for(
         self, account_id: str, *, keep_count: int, keep_days: int, now: datetime
-    ) -> list[HistoryEntry]:
+    ) -> list[HistoryEntry] | None:
         """The account's history, newest first, within the keep rules even if
-        no write has pruned it yet. Empty on any read failure."""
+        no write has pruned it yet. ``None`` when it could not be read, so the
+        page can say so instead of "No questions yet"."""
         if not self._history_ready:
-            return []
+            return None
         cutoff = _to_utc(now) - timedelta(days=keep_days)
         with self._lock:
             if self._closed:
-                return []
+                return None
             try:
                 rows = self._conn.execute(
                     "SELECT * FROM history WHERE account_id = ? AND completed_at >= ? "
@@ -459,7 +474,7 @@ class SessionStore:
                 ).fetchall()
             except sqlite3.Error as exc:
                 self._warn("read history", exc)
-                return []
+                return None
         return [
             HistoryEntry(
                 query_run_id=row["query_run_id"],
@@ -470,6 +485,7 @@ class SessionStore:
                 model_count=int(row["model_count"]),
                 cost_usd=Decimal(row["cost_usd"]),
                 completed_at=datetime.fromisoformat(row["completed_at"]),
+                verdict=row["verdict"],
             )
             for row in rows
         ]

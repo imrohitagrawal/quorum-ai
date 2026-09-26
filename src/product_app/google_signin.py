@@ -653,8 +653,9 @@ def google_sign_in_callback(request: Request) -> RedirectResponse:
     )
     if account_id is None:
         return _failed("account_not_recorded")
-    # W7 (ADR-0135): read the signing-in session's anonymous id BEFORE the
-    # rotation revokes it, so its runs can join the account's history.
+    # W7 (ADR-0135): read the signing-in session's id BEFORE the rotation
+    # revokes it, so an ANONYMOUS session's runs can join the account's
+    # history (carry_over refuses a session already signed in).
     previous = auth.session_repository.get(session_id)
     session = auth.issue_signed_in_session(session_id, account_id=account_id)
     if previous is not None and previous.account_id != account_id:

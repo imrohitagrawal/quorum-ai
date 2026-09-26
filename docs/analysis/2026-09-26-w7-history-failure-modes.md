@@ -20,12 +20,13 @@ revocation are 2b.
   runs from the same browser session, at the moment of sign-in, capped by
   the same keep-the-last-5 rule"*.
 - 2026-09-26, 15:05:11Z (transcript `949ac7cb`, `type: user` record answering the session's
-  question tool): may history store the text of each question? Answer:
-  *"Yes, store the question"* — kept only for signed-in accounts, at most the
-  last 5, none older than 30 days, removed with the account; the answer text
-  is not stored. This settles `docs/48`'s "pending approval" for this case.
+  question tool): may history store the text of each question? The owner
+  selected the session-drafted option *"Yes, store the question
+  (Recommended)"* — kept only for signed-in accounts, at most the last 5,
+  none older than 30 days, removed with the account; the answer text is not
+  stored. This settles `docs/48`'s "pending approval" for this case.
 
-## Measured on main (62c5a4d), by the read-only map
+## Measured on main, by the read-only map (run at 62c5a4d, before W32 merged)
 
 - No store holds question text durably: the run-history `runs` table is
   metrics-only by contract, and the in-memory run repository forgets a
@@ -42,10 +43,9 @@ revocation are 2b.
 ## Failure modes, and the design's answer to each
 
 1. **Answer prose leaks into history.** The row holds the question, when it
-   ran, its status and mode, the number of models, and its estimated cost.
-   Never an answer, a source or a judge rationale. A test pins the table's
-   columns. No verdict either: working it out for a carried run can dispatch
-   the paid judge (CHG-023; adding one is PROPOSED).
+   ran, its status and mode, the number of models, the verdict caption and
+   its estimated cost. Never an answer, a source or a judge rationale. A
+   test pins the table's columns.
 2. **An anonymous visitor's questions are kept.** A history row is written
    only when the run's account is a signed-in account (an accounts row
    exists). Anonymous runs write nothing new.
@@ -54,8 +54,11 @@ revocation are 2b.
    are deleted, in the same transaction. Reading also filters by age, so a
    row past 30 days is never shown even if no write has pruned it.
 4. **Carry-over takes someone else's runs.** Only the runs of the session
-   that is signing in (its anonymous account id, read before the revoke)
-   join the history, and only finished ones at that moment.
+   that is signing in join, and only if that session is anonymous: a
+   session already signed in as account A that signs in as B carries
+   nothing (review round 1 reproduced A's question moving into B's history
+   through a direct API call). The store also refuses to move a run from one
+   account's history to another's.
 5. **The promised race: a run still running at sign-in.** It finishes under
    the anonymous id. The callback records that the anonymous id now belongs
    to the signed-in account (in memory, for as long as a run can last); when
@@ -71,21 +74,25 @@ revocation are 2b.
    request's own signed-in session, for that account's rows; there is no
    separate history endpoint to probe. An anonymous page carries none.
 9. **Storage fault.** A failed history write logs and does not fail the run
-   (same posture as run history); a failed read answers with an error the
-   page shows, never someone else's rows.
+   (same posture as run history); a failed read shows "Your history could
+   not be loaded just now", never an empty history or someone else's rows.
 10. **The copy stays false.** For a signed-in visitor the composer lede
     says what is kept (the last 5 questions, 30 days) and what is not (the
     answer: export one to keep it). The result footer and receipt lines
     ("this result vanishes when the session ends") stay: they are about the
     answer, which is still not kept. Anonymous visitors see the existing
     copy, byte-identical (visual baselines are anonymous).
-12. **Deletion is not built yet.** The owner's approval says the questions
+11. **Deletion is not built yet.** The owner's approval says the questions
     are removed when the account is deleted. Account deletion is W7's next
     pull request (2b); until it ships, a signed-in account's questions are
     removed only by the keep rules (5, 30 days).
-13. **The history box on a phone.** A panel anchored to the History button
+12. **The history box on a phone.** A panel anchored to the History button
     ran off the screen's left edge at 390px, and one centred over the page
     covered the button that closes it (both seen in screenshots). On narrow
     screens the open box takes its own row under the button.
-11. **Question length.** The question is stored as sent, bounded by the
+13. **Question length.** The question is stored as sent, bounded by the
     existing request limit.
+
+14. **Keyboard.** The history panel scrolls; a scroll box a keyboard cannot
+    reach is a SERIOUS axe failure (review measured it in WebKit). The panel
+    is focusable and named, and the disclosure closes on Escape.
