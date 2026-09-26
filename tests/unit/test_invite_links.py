@@ -296,3 +296,17 @@ def test_minting_refuses_a_malformed_link_id(bad_id: str) -> None:
     revoked list would never accept."""
     with pytest.raises(ValueError, match="12 lower-case hex digits"):
         mint_token(key=KEY, link_id=bad_id, until=date(2026, 10, 31), today=TODAY)
+
+
+def test_an_impossible_date_is_refused() -> None:
+    """A token whose date has the right shape but no such day (30 February).
+    Turns red if it raises instead of being refused like any bad token."""
+    bad = f"v1.{LINK_ID}.2026-02-30.{'a' * 64}"
+    assert verify_token(bad, key=KEY, revoked=frozenset(), today=TODAY) is None
+
+
+def test_today_is_the_utc_date() -> None:
+    """Turns red if the day used for expiry is not today's UTC date."""
+    from datetime import UTC, datetime
+
+    assert invite_links._today() == datetime.now(UTC).date()
