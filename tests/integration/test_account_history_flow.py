@@ -306,7 +306,7 @@ def test_the_verdict_the_result_showed_is_kept(sign_in: SignIn) -> None:
     _finish(run)
     (entry,) = account_history.history_for(account) or []
     assert entry.verdict is not None
-    assert entry.verdict.endswith(" of 2 carried into the final answer")
+    assert entry.verdict.endswith(" of 2 opening positions carried into the final answer")
     assert entry.verdict in client.get("/ui").text
 
 
@@ -356,3 +356,39 @@ def test_the_link_waits_as_long_as_a_run_can_run(
     query_run_repository.update_status(running.query_run_id, status_value=QueryRunStatus.COMPLETED)
     account_history.record_finished_run(query_run_repository.get(running.query_run_id))
     assert _questions(_account_id(sign_in)) == ["a long run"]
+
+
+def test_a_failed_run_has_no_verdict(sign_in: SignIn) -> None:
+    """Review round 2: a FAILED run showed "2 of 2 carried into the final
+    answer" with no final answer. Turns red if a run that did not complete
+    gets a verdict."""
+    from tests.integration.test_quick_verdict_served import _answer
+
+    client = sign_in.client()
+    _signed_in(client)
+    account = _account_id(sign_in)
+    run = _start_run(account, "a failed run")
+    for slot, slot_model in enumerate(run.model_slots, 1):
+        query_run_repository.record_initial_answer(
+            run.query_run_id, _answer(slot, slot_model.model_id, 2)
+        )
+    query_run_repository.update_status(run.query_run_id, status_value=QueryRunStatus.FAILED)
+    qro._persist_terminal_run(run.query_run_id)
+    (entry,) = account_history.history_for(account) or []
+    assert entry.status == "failed"
+    assert entry.verdict is None
+
+
+def test_carry_over_fails_closed_when_the_accounts_cannot_be_read(
+    sign_in: SignIn, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review round 2: with the accounts lookup failing, carry-over read the
+    signed-in session as anonymous and moved its runs. Turns red if a read
+    error lets runs move."""
+    client = sign_in.client()
+    csrf = _boot(client)
+    _finish(_start_run(_session_account(client), "must not move on an error"))
+    monkeypatch.setattr(sign_in.store, "is_anonymous", lambda _id: None)
+    query = _start(client, csrf)
+    _callback(client, code="stub-auth-code-1", state=query["state"])
+    assert _questions(_account_id(sign_in)) == []

@@ -39,8 +39,10 @@ first: `docs/analysis/2026-09-26-w7-history-failure-modes.md`.
 1. A `history` table in the sessions database (beside `accounts`, created by
    a guarded migration, `w7_history`): the run id, the account id, the
    question, status, mode, number of models, estimated cost, completion time
-   and verdict, the result's own caption, captured when the run finishes
-   from the response already built (no extra judge call). No answer, source
+   and verdict, the result's own caption ("N of M opening positions carried
+   into the final answer", or a quick answer's level), captured when the run
+   finishes from the response already built (no extra judge call); none for
+   a run that did not complete. No answer, source
    or judge rationale.
 2. A finished run joins a history only if its account is signed in, or its
    ANONYMOUS session has since signed in (`account_history.carry_over`,
@@ -49,7 +51,8 @@ first: `docs/analysis/2026-09-26-w7-history-failure-modes.md`.
    in one account's history is never moved to another (review round 1
    found a sign-in switch moving one account's question into another's).
    The link is kept in memory for the longer of `QUERY_RUN_ACTIVE_TTL` and
-   the run deadline setting.
+   the run deadline setting. "Anonymous" needs a positive answer from the
+   accounts table: if it cannot be read, nothing is carried (review round 2).
 3. Every write keeps only the account's newest `HISTORY_KEEP_COUNT` (5) rows
    and none completed more than `HISTORY_KEEP_DAYS` (30) ago, in one
    transaction; reading applies the same rules. A run is keyed by its id, so

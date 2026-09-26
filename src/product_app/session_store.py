@@ -126,9 +126,9 @@ class HistoryEntry:
     cost_usd: Decimal
     completed_at: datetime
     #: The verdict as the result showed it when the run finished: "3 of 4
-    #: carried into the final answer" (panel) or "well supported" (quick).
-    #: ``None`` when the run had none (a failed run, a quick answer the judge
-    #: did not check).
+    #: opening positions carried into the final answer" (panel) or the quick
+    #: answer's level ("well supported", ..., "not checked"). ``None`` when the
+    #: run did not complete (no final answer to speak of).
     verdict: str | None = None
 
 
@@ -686,6 +686,25 @@ class SessionStore:
                 self._warn("record a signed-in account", exc)
                 return None
         return account_id
+
+    def is_anonymous(self, account_id: UUID) -> bool | None:
+        """``True`` only when ``account_id`` is certainly in no accounts row;
+        ``None`` when that cannot be read. W7 carry-over moves runs only on
+        ``True``, so a read error fails closed (review round 2: ``account_for``
+        returning ``None`` on an error read as "anonymous")."""
+        if not self._accounts_ready:
+            return None
+        with self._lock:
+            if self._closed:
+                return None
+            try:
+                row = self._conn.execute(
+                    "SELECT 1 FROM accounts WHERE account_id = ?", (str(account_id),)
+                ).fetchone()
+            except sqlite3.Error as exc:
+                self._warn("check whether a session is anonymous", exc)
+                return None
+        return row is None
 
     def account_for(self, account_id: UUID) -> StoredAccount | None:
         """The signed-in account behind ``account_id``, or ``None``.

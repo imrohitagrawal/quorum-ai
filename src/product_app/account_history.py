@@ -116,7 +116,7 @@ def carry_over(*, anonymous_account_id: UUID, account_id: UUID) -> None:
     questions into another's). The keep rules then apply as for any write."""
     try:
         store = session_store.get_store()
-        if store is None or store.account_for(anonymous_account_id) is not None:
+        if store is None or store.is_anonymous(anonymous_account_id) is not True:
             return
         now = _now()
         with _lock:

@@ -180,3 +180,30 @@ def test_a_read_that_fails_in_sqlite_is_none(store: SessionStore, tmp_path: Path
     finally:
         connection.close()
     assert store.history_for("acct-a", keep_count=5, keep_days=30, now=NOW) is None
+
+
+def test_is_anonymous_is_true_only_when_certain(store: SessionStore) -> None:
+    """Turns red if a read failure, or a signed-in id, reads as anonymous."""
+    from uuid import uuid4
+
+    anonymous = uuid4()
+    signed_in = store.upsert_google_account(google_sub="s-9", email="x@example.com", now=NOW)
+    assert signed_in is not None
+    assert store.is_anonymous(anonymous) is True
+    assert store.is_anonymous(signed_in) is False
+    store.close()
+    assert store.is_anonymous(anonymous) is None
+
+
+def test_is_anonymous_is_none_on_an_sqlite_error(store: SessionStore, tmp_path: Path) -> None:
+    """Turns red if an SQLite error while checking reads as "anonymous" (the
+    carry-over would then move a signed-in account's runs)."""
+    from uuid import uuid4
+
+    connection = sqlite3.connect(str(tmp_path / "sessions.sqlite3"))
+    try:
+        connection.execute("ALTER TABLE accounts RENAME TO accounts_gone")
+        connection.commit()
+    finally:
+        connection.close()
+    assert store.is_anonymous(uuid4()) is None

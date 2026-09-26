@@ -1709,14 +1709,20 @@ def _reconcile_run_billing(*, query_run: QueryRun, response: QueryRunResultRespo
 
 def _history_verdict(response: QueryRunResultResponse) -> str | None:
     """The verdict a history row shows, in the result's own words: the
-    agreement caption for a panel ("3 of 4 carried into the final answer")
-    and the judge's level for a quick answer ("well supported")."""
+    agreement caption for a panel ("3 of 4 opening positions carried into the
+    final answer") and the judge's level for a quick answer ("well
+    supported"). ``None`` for a run that did not complete or partly complete:
+    there is no final answer for a caption to describe."""
+    if response.status not in (QueryRunStatus.COMPLETED, QueryRunStatus.PARTIAL):
+        return None
     if response.quick_verdict is not None:
         return response.quick_verdict.level.replace("_", " ")
     agreement = response.result.agreement
     if agreement is None or agreement.total == 0:
         return None
-    return f"{agreement.aligned} of {agreement.total} carried into the final answer"
+    return (
+        f"{agreement.aligned} of {agreement.total} opening positions carried into the final answer"
+    )
 
 
 def _persist_terminal_run(query_run_id: UUID) -> None:

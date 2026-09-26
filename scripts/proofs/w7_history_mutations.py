@@ -95,7 +95,7 @@ MUTATIONS: list[tuple[str, str, str, int, int]] = [
     (AH, "        return link[0]\n", "        return None\n", 1, 0),
     (
         AH,
-        "        if store is None or store.account_for(anonymous_account_id) is not None:\n"
+        "        if store is None or store.is_anonymous(anonymous_account_id) is not True:\n"
         "            return\n",
         "",
         1,
@@ -124,8 +124,27 @@ MUTATIONS: list[tuple[str, str, str, int, int]] = [
     (QO, "        query_run.history_verdict = _history_verdict(response)\n", "", 1, 0),
     (
         QO,
-        '    return f"{agreement.aligned} of {agreement.total} carried into the final answer"',
-        '    return f"{agreement.aligned} of {agreement.total} models aligned"',
+        'f"{agreement.aligned} of {agreement.total} opening positions carried into '
+        'the final answer"',
+        'f"{agreement.aligned} of {agreement.total} models aligned"',
+        1,
+        0,
+    ),
+    (
+        QO,
+        "    if response.status not in (QueryRunStatus.COMPLETED, QueryRunStatus.PARTIAL):\n"
+        "        return None\n",
+        "",
+        1,
+        0,
+    ),
+    (ST, "        return row is None\n", "        return True\n", 1, 0),
+    (
+        ST,
+        '                self._warn("check whether a session is anonymous", exc)\n'
+        "                return None",
+        '                self._warn("check whether a session is anonymous", exc)\n'
+        "                return True",
         1,
         0,
     ),
