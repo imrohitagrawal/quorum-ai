@@ -165,7 +165,7 @@ import pytest
 
 from product_app import feedback_store, session_store, store_reconnect
 from product_app.auth import session_repository
-from product_app.google_signin import pending_sign_ins
+from product_app.google_signin import pending_sign_ins, sign_in_start_limiter
 from product_app.query_runs import (
     _account_rate_limiter,
     _evaluation_memo_clear_for_tests,
@@ -254,6 +254,7 @@ def _reset_state() -> None:
     # W7: started-and-unfinished sign-ins are a process global keyed by
     # session id (rule 16a).
     pending_sign_ins.clear()
+    sign_in_start_limiter.clear()
     _ip_rate_limiter.clear()
     _account_rate_limiter.clear()
     # Issue #284. The terminal evaluation is memoised per

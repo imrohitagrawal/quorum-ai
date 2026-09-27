@@ -113,6 +113,8 @@ def test_the_delete_account_steps_are_exact() -> None:
     assert main._account_delete_html() == (
         '<div class="account-delete" id="account-delete">'
         '<p class="history-note account-delete-heading">Your account</p>'
+        '<button type="button" id="sign-out-everywhere" class="account-delete-link">'
+        "Sign out everywhere</button>"
         '<button type="button" id="account-delete-start" class="account-delete-link">'
         "Delete my account…</button>"
         '<div id="account-delete-reminder" hidden>'

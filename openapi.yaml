@@ -188,6 +188,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SignInErrorResponse'
+        '429':
+          description: Too many sign-in starts from this network; Retry-After says when.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SignInErrorResponse'
   /v1/auth/sign-out:
     post:
       tags:

@@ -202,6 +202,7 @@ BUCKET_A_LITERAL_PIN = (
     "session_store.SessionStore._ACCOUNTS_MIGRATION",
     "session_store.SessionStore._HISTORY_MIGRATION",
     "session_store.SessionStore._SPEND_KEY_MIGRATION",
+    "session_store.SessionStore._SESSION_SAFETY_MIGRATION",
     # How long a deleted account's spend key is kept for its re-creation: the
     # ledger's 24-hour window. Shorter resets a re-created account's day.
     "session_store.SPEND_KEY_CARRY",
@@ -607,6 +608,13 @@ BUCKET_C_NO_PIN = {
     "session_store._PROCESS_ACCOUNT_KEY": (
         "a random per-process key used only when QUORUM_TOKEN_SECRET is unset (local); "
         "its use is pinned by test_the_spend_key_depends_on_the_server_secret"
+    ),
+    "session_store.SessionStore._SIGN_IN_EVENTS_DDL": (
+        "the sign-in events table's shape; its columns are pinned exactly by "
+        "test_sign_in_sign_out_and_sign_out_everywhere_are_recorded"
+    ),
+    "session_store.SessionStore._SIGN_IN_EVENTS_INDEX_DDL": (
+        "an index for the per-account newest-first prune; it changes no result"
     ),
     "session_store.SessionStore._SPEND_KEY_CARRY_DDL": (
         "the spend-key pointer table's shape; its use is pinned by "
@@ -1362,6 +1370,7 @@ def test_the_google_sign_in_constants_are_pinned() -> None:
     assert session_store.SessionStore._ACCOUNTS_MIGRATION == "w7_accounts"
     assert session_store.SessionStore._HISTORY_MIGRATION == "w7_history"
     assert session_store.SessionStore._SPEND_KEY_MIGRATION == "w7_spend_key"
+    assert session_store.SessionStore._SESSION_SAFETY_MIGRATION == "w7_session_safety"
     assert timedelta(hours=24) == session_store.SPEND_KEY_CARRY
 
 

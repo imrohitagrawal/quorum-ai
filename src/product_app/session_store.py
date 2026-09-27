@@ -337,6 +337,23 @@ class SessionStore:
     #: Name of the W7 history migration in ``schema_migrations``.
     _HISTORY_MIGRATION = "w7_history"
 
+    #: W7 part 3 (ADR-0137): sign out everywhere and sign-in events.
+    #: ``accounts.sessions_valid_after`` is the durable cutoff: a session of
+    #: the account created at or before it is refused when restored.
+    #: ``sign_in_events`` holds the account, the time and a closed outcome,
+    #: nothing else (CHG-021 d). Guarded like the tables before it.
+    _SESSION_SAFETY_MIGRATION = "w7_session_safety"
+    _SIGN_IN_EVENTS_DDL = (
+        "CREATE TABLE IF NOT EXISTS sign_in_events ("
+        "account_id TEXT NOT NULL, "
+        "at TEXT NOT NULL, "
+        "outcome TEXT NOT NULL)"
+    )
+    _SIGN_IN_EVENTS_INDEX_DDL = (
+        "CREATE INDEX IF NOT EXISTS sign_in_events_account_at_idx "
+        "ON sign_in_events (account_id, at)"
+    )
+
     #: One summary row per finished run of a signed-in account (ADR-0135). The
     #: columns are the whole contract: a test fails if one is added.
     _HISTORY_DDL = (
@@ -372,6 +389,7 @@ class SessionStore:
         # be metered under its random id, a fresh envelope (ADR-0136).
         self._accounts_ready = self._migrate_accounts() and self._migrate_spend_key()
         self._history_ready = self._accounts_ready and self._migrate_history()
+        self._safety_ready = self._accounts_ready and self._migrate_session_safety()
         _open_stores.add(self)
 
     def _migrate_accounts(self) -> bool:
@@ -457,6 +475,145 @@ class SessionStore:
                 exc,
             )
             return False
+
+    def _migrate_session_safety(self) -> bool:
+        """Add the sessions cutoff column and the sign-in events table once."""
+        try:
+            with self._lock:
+                applied = self._conn.execute(
+                    "SELECT 1 FROM schema_migrations WHERE name = ?",
+                    (self._SESSION_SAFETY_MIGRATION,),
+                ).fetchone()
+                if applied is not None:
+                    return True
+                self._conn.execute("BEGIN IMMEDIATE")
+                try:
+                    self._conn.execute("ALTER TABLE accounts ADD COLUMN sessions_valid_after TEXT")
+                    self._conn.execute(self._SIGN_IN_EVENTS_DDL)
+                    self._conn.execute(self._SIGN_IN_EVENTS_INDEX_DDL)
+                    self._conn.execute(
+                        "INSERT INTO schema_migrations (name, applied_at) VALUES (?, ?)",
+                        (self._SESSION_SAFETY_MIGRATION, datetime.now(UTC).isoformat()),
+                    )
+                    self._conn.execute("COMMIT")
+                except BaseException:
+                    self._conn.execute("ROLLBACK")
+                    raise
+                return True
+        except sqlite3.Error as exc:
+            _log.warning(
+                "session_store: the session-safety tables could not be created, so "
+                "sign-out everywhere and sign-in events are unavailable until a "
+                "restart on a writable volume: %s",
+                exc,
+            )
+            return False
+
+    # -- sign out everywhere and sign-in events (W7 part 3, ADR-0137) ----------
+
+    def end_sessions_before(self, account_id: UUID, cutoff: datetime) -> bool:
+        """Record ``cutoff`` as the account's sessions cutoff and delete its
+        session rows created at or before it, in one transaction. ``False``
+        when it did not happen (nothing changed)."""
+        if not self._safety_ready:
+            return False
+        key, stamp = str(account_id), cutoff.astimezone(UTC).isoformat()
+        with self._lock:
+            if self._closed:
+                return False
+            try:
+                self._conn.execute("BEGIN IMMEDIATE")
+                try:
+                    updated = self._conn.execute(
+                        "UPDATE accounts SET sessions_valid_after = ? WHERE account_id = ?",
+                        (stamp, key),
+                    ).rowcount
+                    if updated != 1:
+                        self._conn.execute("ROLLBACK")
+                        return False
+                    self._conn.execute(
+                        "DELETE FROM sessions WHERE account_id = ? AND created_at <= ?",
+                        (key, stamp),
+                    )
+                    self._conn.execute("COMMIT")
+                except BaseException:
+                    self._conn.execute("ROLLBACK")
+                    raise
+            except sqlite3.Error as exc:
+                self._warn("end an account's sessions", exc)
+                return False
+        return True
+
+    def delete_sessions_before(self, account_id: UUID, cutoff: datetime) -> bool:
+        """The second pass: a row another device wrote back after
+        :meth:`end_sessions_before` and before its cached session was dropped."""
+        return self._write(
+            "DELETE FROM sessions WHERE account_id = ? AND created_at <= ?",
+            (str(account_id), cutoff.astimezone(UTC).isoformat()),
+        )
+
+    def sessions_valid_after(self, account_id: UUID) -> tuple[bool, datetime | None]:
+        """``(read, cutoff)``: the account's sessions cutoff, ``None`` when it
+        has none (every anonymous session). ``read`` is ``False`` when it could
+        not be read; the caller then refuses the session (the closed side)."""
+        if not self._safety_ready:
+            return True, None
+        with self._lock:
+            if self._closed:
+                return False, None
+            try:
+                row = self._conn.execute(
+                    "SELECT sessions_valid_after FROM accounts WHERE account_id = ?",
+                    (str(account_id),),
+                ).fetchone()
+            except sqlite3.Error as exc:
+                self._warn("read a sessions cutoff", exc)
+                return False, None
+        if row is None or row[0] is None:
+            return True, None
+        try:
+            return True, _require_aware(row[0])
+        except (TypeError, ValueError) as exc:
+            self._warn("read a sessions cutoff", exc)
+            return False, None
+
+    def record_sign_in_event(
+        self, account_id: UUID, outcome: str, *, now: datetime, keep_count: int, keep_days: int
+    ) -> bool:
+        """Add one event for an account that exists, and apply the keep rules,
+        in one transaction. ``False`` if it could not be written."""
+        if not self._safety_ready:
+            return False
+        key, stamp = str(account_id), _to_utc(now).isoformat()
+        cutoff = (_to_utc(now) - timedelta(days=keep_days)).isoformat()
+        with self._lock:
+            if self._closed:
+                return False
+            try:
+                self._conn.execute("BEGIN IMMEDIATE")
+                try:
+                    self._conn.execute(
+                        "INSERT INTO sign_in_events (account_id, at, outcome) "
+                        "SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM accounts WHERE account_id = ?)",
+                        (key, stamp, outcome, key),
+                    )
+                    self._conn.execute(
+                        "DELETE FROM sign_in_events WHERE account_id = ? AND at < ?", (key, cutoff)
+                    )
+                    self._conn.execute(
+                        "DELETE FROM sign_in_events WHERE account_id = ? AND rowid NOT IN ("
+                        "SELECT rowid FROM sign_in_events WHERE account_id = ? "
+                        "ORDER BY at DESC, rowid DESC LIMIT ?)",
+                        (key, key, keep_count),
+                    )
+                    self._conn.execute("COMMIT")
+                except BaseException:
+                    self._conn.execute("ROLLBACK")
+                    raise
+            except sqlite3.Error as exc:
+                self._warn("record a sign-in event", exc)
+                return False
+        return True
 
     def _migrate_history(self) -> bool:
         """Create the history table once, guarded like the accounts table."""
@@ -812,6 +969,10 @@ class SessionStore:
                     self._carry_spend_key(key)
                     if self._history_ready:
                         self._conn.execute("DELETE FROM history WHERE account_id = ?", (key,))
+                    if self._safety_ready:
+                        self._conn.execute(
+                            "DELETE FROM sign_in_events WHERE account_id = ?", (key,)
+                        )
                     self._conn.execute("DELETE FROM sessions WHERE account_id = ?", (key,))
                     self._conn.execute("DELETE FROM accounts WHERE account_id = ?", (key,))
                     self._conn.execute("COMMIT")

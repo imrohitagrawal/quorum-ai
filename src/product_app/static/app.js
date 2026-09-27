@@ -9886,9 +9886,9 @@
             throw new Error("unexpected sign-in address");
           }
           window.location.assign(target.href);
-        } catch (_) {
+        } catch (err) {
           signIn.disabled = false;
-          toast({ message: "Sign-in could not start. Please try again.", tone: "error" });
+          toast({ message: signInStartMessage(err), tone: "error" });
         }
       });
     }
@@ -9902,6 +9902,20 @@
         } catch (_) {
           signOut.disabled = false;
           toast({ message: "Sign-out did not complete. Please try again.", tone: "error" });
+        }
+      });
+    }
+    // W7 part 3 (ADR-0137): end every session of the account, this one too.
+    const everywhere = el("sign-out-everywhere");
+    if (everywhere) {
+      everywhere.addEventListener("click", async () => {
+        everywhere.disabled = true;
+        try {
+          await api("/v1/auth/sign-out-everywhere", { method: "POST" });
+          window.location.assign("/ui");
+        } catch (_) {
+          everywhere.disabled = false;
+          toast({ message: "Could not sign out everywhere. Please try again.", tone: "error" });
         }
       });
     }
@@ -9979,6 +9993,15 @@
         }
       });
     }
+  }
+
+  // W7 part 3 (ADR-0137): the sign-in start is rate-limited per network; a
+  // 429 is not something retrying at once can fix.
+  function signInStartMessage(err) {
+    if (err && err.status === 429) {
+      return "Too many sign-in attempts. Try again in a few minutes.";
+    }
+    return "Sign-in could not start. Please try again.";
   }
 
   // W7 (ADR-0136): the delete step's error line. "Try again" for a store

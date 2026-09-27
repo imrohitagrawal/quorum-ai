@@ -56,6 +56,7 @@ import binascii
 import hashlib
 import json
 import logging
+import math
 import secrets
 import threading
 import time
@@ -75,6 +76,7 @@ from pydantic import BaseModel
 from product_app import auth, session_store
 from product_app.config import settings
 from product_app.credentialed_url import CREDENTIAL_OPENER, is_credential_safe
+from product_app.query_runs import _InMemoryIpRateLimiter
 
 _log = logging.getLogger(__name__)
 
@@ -525,7 +527,34 @@ _DOCUMENTED_ERRORS: dict[int | str, dict[str, object]] = {
         "model": SignInErrorResponse,
         "description": "Sign-in was started on a host other than the redirect URI's.",
     },
+    429: {
+        "model": SignInErrorResponse,
+        "description": "Too many sign-in starts from this network; Retry-After says when.",
+    },
 }
+
+#: W7 part 3 (ADR-0137, CHG-021 e): starting a sign-in is limited per visitor
+#: address, in its own bucket (the session limiter is separate). No exemption:
+#: the allow-list lifts only the two per-network session limits (CHG-022).
+sign_in_start_limiter = _InMemoryIpRateLimiter(
+    capacity=settings.sign_in_starts_per_address_burst,
+    refill_per_minute=settings.sign_in_starts_per_address_per_minute,
+)
+
+
+def _record_event(account_id: UUID, outcome: str) -> None:
+    """A sign-in event (CHG-021 d): the account, the time and the outcome,
+    nothing else. Best effort, like history: a failure is logged."""
+    store = session_store.get_store()
+    if store is not None and not store.record_sign_in_event(
+        account_id,
+        outcome,
+        now=datetime.now(UTC),
+        keep_count=settings.sign_in_events_keep_count,
+        keep_days=settings.sign_in_events_keep_days,
+    ):
+        _log.warning("a sign-in event could not be recorded: %s", outcome)
+
 
 #: The routes are registered with ``add_api_route`` at the end of this module,
 #: not with decorators: mutmut cannot mutate a decorated function, and
@@ -610,6 +639,20 @@ def start_google_sign_in(request: Request) -> SignInStartResponse:
                 + ". Open Quorum there to sign in.",
             },
         )
+    if not sign_in_start_limiter.allow(
+        ip=auth.client_ip_of(request) or "unknown", now_epoch=time.time()
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail={
+                "code": "SIGN_IN_RATE_LIMITED",
+                "message": "Too many sign-in attempts from this network. "
+                "Try again in a few minutes.",
+            },
+            headers={
+                "Retry-After": str(math.ceil(60 / settings.sign_in_starts_per_address_per_minute))
+            },
+        )
     pending = pending_sign_ins.begin(session.session_id, now=datetime.now(UTC))
     return SignInStartResponse(authorization_url=authorization_url(pending))
 
@@ -670,6 +713,7 @@ def google_sign_in_callback(request: Request) -> RedirectResponse:
     response = RedirectResponse(AFTER_SIGN_IN_PATH, status_code=status.HTTP_303_SEE_OTHER)
     response.headers["Cache-Control"] = "no-store"
     auth.attach_session_cookie(response, session)
+    _record_event(account_id, "signed_in")
     _log.info("google sign-in completed")
     return response
 
@@ -684,7 +728,45 @@ def sign_out(request: Request) -> JSONResponse:
     session = _require_cookie_session(request)
     pending_sign_ins.discard(session.session_id)
     auth.session_repository.revoke(session.session_id)
+    store = session_store.get_store()
+    if store is not None and store.account_for(session.account_id) is not None:
+        _record_event(session.account_id, "signed_out")
     response = JSONResponse(SignOutResponse(signed_out=True).model_dump())
+    auth.clear_session_cookie(response)
+    return response
+
+
+def sign_out_everywhere(request: Request) -> JSONResponse:
+    """End every session of this browser's account, this one included
+    (ADR-0137, CHG-021 c). Deletes nothing but sessions.
+
+    The store records the cutoff and deletes the account's rows in one
+    transaction; the cached sessions are dropped; the rows are deleted
+    again, for a row another device wrote back in between. Not gated on the
+    sign-in settings, like sign-out.
+    """
+    session = _require_cookie_session(request)
+    store = session_store.get_store()
+    if store is None or store.account_for(session.account_id) is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"code": "NOT_SIGNED_IN", "message": "Sign in to sign out everywhere."},
+        )
+    cutoff = datetime.now(UTC)
+    if not store.end_sessions_before(session.account_id, cutoff):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "SIGN_OUT_EVERYWHERE_FAILED",
+                "message": "Could not sign out everywhere just now. Please try again.",
+            },
+        )
+    auth.session_repository.end_sessions_of(session.account_id, cutoff)
+    store.delete_sessions_before(session.account_id, cutoff)
+    pending_sign_ins.discard(session.session_id)
+    _record_event(session.account_id, "signed_out_everywhere")
+    response = JSONResponse(SignOutResponse(signed_out=True).model_dump())
+    response.headers["Cache-Control"] = "no-store"
     auth.clear_session_cookie(response)
     return response
 
@@ -699,6 +781,12 @@ router.add_api_route(
 )
 router.add_api_route(
     CALLBACK_PATH, google_sign_in_callback, methods=["GET"], include_in_schema=False
+)
+router.add_api_route(
+    "/v1/auth/sign-out-everywhere",
+    sign_out_everywhere,
+    methods=["POST"],
+    include_in_schema=False,
 )
 router.add_api_route(
     "/v1/auth/sign-out",

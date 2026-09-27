@@ -794,6 +794,20 @@ class Settings(BaseSettings):
     history_keep_count: int = Field(default=5, ge=1, le=50)
     history_keep_days: int = Field(default=30, ge=1, le=365)
 
+    #: W7 part 3 (ADR-0137, CHG-021 d): sign-in events kept per account, the
+    #: newest ``sign_in_events_keep_count`` and none older than
+    #: ``sign_in_events_keep_days``. PROPOSED — AWAITING OWNER: the session's
+    #: values (CHG-021 says the session proposes them as settings).
+    sign_in_events_keep_count: int = Field(default=10, ge=1, le=100)
+    sign_in_events_keep_days: int = Field(default=30, ge=1, le=365)
+    #: W7 part 3 (ADR-0137, CHG-021 e): starting a sign-in is limited per
+    #: visitor address (IPv6 by /64): a bucket of
+    #: ``sign_in_starts_per_address_burst`` starts, refilling
+    #: ``sign_in_starts_per_address_per_minute`` a minute. PROPOSED — AWAITING
+    #: OWNER: the session's values; no external standard was found.
+    sign_in_starts_per_address_burst: int = Field(default=5, ge=1, le=100)
+    sign_in_starts_per_address_per_minute: int = Field(default=1, ge=1, le=100)
+
     #: W32 (ADR-0134, CHG-022 item 4): the invite-link signing key. Empty (the
     #: shipped state) turns invite links off. At least 32 characters (the
     #: session's PROPOSED bound, ADR-0134), or the app stops at startup. Set as
