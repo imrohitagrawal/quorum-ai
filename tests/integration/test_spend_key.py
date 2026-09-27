@@ -382,3 +382,71 @@ def test_a_spend_key_read_error_is_none(sign_in: SignIn) -> None:
     assert sign_in.store.spend_key_for(account) == spend_key
     sign_in.store._conn.execute("ALTER TABLE accounts RENAME TO accounts_gone")
     assert sign_in.store.spend_key_for(account) is None
+
+
+def test_the_spend_key_depends_on_the_server_secret() -> None:
+    """Turns red if the key stops being keyed (anyone could then compute a
+    person's spend key from their public Google subject) or stops depending
+    on the subject."""
+    first = session_store.account_id_for("108000000000000000001", key=b"k" * 32)
+    assert first == session_store.account_id_for("108000000000000000001", key=b"k" * 32)
+    assert first != session_store.account_id_for("108000000000000000001", key=b"j" * 32)
+    assert first != session_store.account_id_for("108000000000000000002", key=b"k" * 32)
+
+
+def test_the_create_routes_running_total_reads_the_spend_key(sign_in: SignIn) -> None:
+    """The in-memory running total (the rail that binds first) is tested only
+    in the estimate, and the create route re-estimates. Turns red if the
+    create route's estimate reads the account id: the durable ledger is empty
+    here, so only this rail can refuse."""
+    from product_app.costs import HARD_LIMIT_USD, CostThresholdAction, cost_event_recorder
+    from product_app.feedback_store import COST_ACCEPTED_SIMULATED_EVENT
+
+    assert cost_event_recorder is not None
+    with ledger_for_tests() as ledger:
+        client = sign_in.client()
+        _signed_in(client)
+        account, spend_key, _ = _account(sign_in)
+        cost_event_recorder.record(
+            event_type=COST_ACCEPTED_SIMULATED_EVENT,
+            account_id=spend_key,
+            query_run_id=uuid4(),
+            estimated_cost_usd=HARD_LIMIT_USD - Decimal("0.001"),
+            threshold_action=CostThresholdAction.ALLOW,
+            confirmed=False,
+            persist=False,
+        )
+        assert ledger.daily_spend_for(spend_key) == Decimal("0")
+        response = _create(client)
+        assert response.status_code == 402, response.text
+        assert query_run_repository.get_active_for_account(account) is None
+
+
+def test_the_spend_key_is_refused_between_the_rows_going_and_the_second_refusal(
+    sign_in: SignIn, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``spend_key_for`` reads the row, then the mark. Deletion must set the
+    mark BEFORE the row goes, or a lookup landing just after the commit (and
+    before the second refusal) finds neither and meters under the account id,
+    a fresh envelope. Turns red if the first refusal is dropped."""
+    from fastapi import HTTPException
+
+    from product_app import account_deletion
+
+    client = sign_in.client()
+    _signed_in(client)
+    account, _, _ = _account(sign_in)
+    session = auth.SessionContext(account_id=account, session_id="s", csrf_token="c", legacy=False)
+    real_delete = sign_in.store.delete_account
+    seen: list[int] = []
+
+    def delete_then_look(account_id: UUID) -> bool:
+        assert real_delete(account_id) is True
+        with pytest.raises(HTTPException) as refused:
+            auth.spend_key_for(session)
+        seen.append(refused.value.status_code)
+        return True
+
+    monkeypatch.setattr(sign_in.store, "delete_account", delete_then_look)
+    assert account_deletion.delete_account(account) is True
+    assert seen == [401]
