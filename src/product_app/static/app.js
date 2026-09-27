@@ -9915,6 +9915,7 @@
           window.location.assign("/ui");
         } catch (_) {
           everywhere.disabled = false;
+          everywhere.focus();
           toast({ message: "Could not sign out everywhere. Please try again.", tone: "error" });
         }
       });

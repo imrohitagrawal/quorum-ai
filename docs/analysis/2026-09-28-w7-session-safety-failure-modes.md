@@ -42,15 +42,18 @@ below ships as a setting, **PROPOSED — AWAITING OWNER**.
 ## (c) Sign out everywhere
 
 C1. **Other devices, including requests in flight** (the owner's required
-    test). Answer: a per-account cutoff time. Sessions of the account created
-    at or before it are refused, in memory (checked on every cache read)
-    and on disk (`accounts.sessions_valid_after`, read when a session is
-    restored). The rows go in the same transaction that records the cutoff,
-    the cached sessions are dropped, then the rows are deleted again (a row
-    written back in between). A request already past the session check is
-    re-checked when it asks for its spend key, so an estimate or a create is
-    refused (401) rather than charged. Tests: another device's request
-    racing each step; a session restored from disk after; 20 concurrent
+    test). Answer: a per-account cutoff time, the later of now and the
+    newest existing session of the account. The cached sessions of the
+    account are dropped (a dropped session is never written again), and a
+    session created at or before the cutoff is refused when restored from
+    disk (`accounts.sessions_valid_after`, and the in-memory cutoff under the
+    lock). The rows go in the same transaction that records the cutoff, then
+    are deleted again with the same cutoff (a row written back in between).
+    A request already past the session check is re-checked when it asks for
+    its spend key, so an estimate or a create whose key is read after the
+    sign-out is refused (401); one whose key was read just before still runs
+    and is charged (review round 1 measured it; recorded in ADR-0137). Tests: another device's request
+    racing each step; a session restored from disk after; 10 concurrent
     requests of another device during the sign-out, all 401 after and no
     rows left.
 C2. **The next sign-in must work.** Unlike deletion's refusal, the cutoff is
@@ -78,14 +81,16 @@ D1. **Privacy.** A row holds the account id, the time and an outcome from a
     closed list (`signed_in`, `signed_out`, `signed_out_everywhere`). Never
     the code, `state`, the verifier, a token, the Google subject, the email,
     the session id, an IP address or a user agent. Test: every column of
-    every row after a full sign-in, sign-out and sign-out-everywhere holds
-    none of the stub's secrets (positive partner: the dump does find them
-    in a planted row).
+    every row after a full sign-in holds none of the code, the state, the
+    PKCE challenge, the subject, the email, the session id or the client
+    address (positive partner: the dump does find them in a planted row);
+    the other two outcomes are fixed strings written by the same function.
 D2. **Growth and forgery.** Only server code writes rows; no route accepts
     an event. A failed callback has no account to attribute, so failures
     stay what they are today: fixed reason codes in the log, never rows.
     Keep rules like history: the newest `sign_in_events_keep_count` rows,
-    none older than `sign_in_events_keep_days` (PROPOSED 10 and 30).
+    none older than `sign_in_events_keep_days` (PROPOSED 10 and 30), applied
+    at the account's next event.
     Deleting the account deletes its events (same transaction). A write for
     an account with no row stores nothing.
 D3. **Where they are shown.** Nowhere yet; CHG-021 says record. The

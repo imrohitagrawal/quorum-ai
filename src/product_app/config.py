@@ -808,6 +808,23 @@ class Settings(BaseSettings):
     sign_in_starts_per_address_burst: int = Field(default=5, ge=1, le=100)
     sign_in_starts_per_address_per_minute: int = Field(default=1, ge=1, le=100)
 
+    @field_validator("sign_in_starts_per_address_per_minute", mode="after")
+    @classmethod
+    def _sign_in_burst_refills_before_it_is_swept(cls, value: int, info: Any) -> int:
+        # The limiter drops a bucket idle for 300 s as if it had refilled
+        # (``_InMemoryIpRateLimiter.STALE_BUCKET_SECONDS``); that holds only
+        # when the burst refills within 5 minutes. Review round 1 measured a
+        # burst of 10 at 1 a minute allowing 10 more after 301 s.
+        burst = (info.data or {}).get("sign_in_starts_per_address_burst")
+        if burst is not None and burst > 5 * value:
+            raise ValueError(
+                "SIGN_IN_STARTS_PER_ADDRESS_BURST must be at most 5 times "
+                "SIGN_IN_STARTS_PER_ADDRESS_PER_MINUTE: the limiter forgets a "
+                "bucket after 5 idle minutes, so a larger burst would be "
+                "handed back before it had refilled"
+            )
+        return value
+
     #: W32 (ADR-0134, CHG-022 item 4): the invite-link signing key. Empty (the
     #: shipped state) turns invite links off. At least 32 characters (the
     #: session's PROPOSED bound, ADR-0134), or the app stops at startup. Set as

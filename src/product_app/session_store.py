@@ -511,26 +511,42 @@ class SessionStore:
 
     # -- sign out everywhere and sign-in events (W7 part 3, ADR-0137) ----------
 
-    def end_sessions_before(self, account_id: UUID, cutoff: datetime) -> bool:
-        """Record ``cutoff`` as the account's sessions cutoff and delete its
-        session rows created at or before it, in one transaction. ``False``
-        when it did not happen (nothing changed)."""
+    def end_sessions_before(
+        self, account_id: UUID, cutoff: datetime, *, include_existing: bool
+    ) -> tuple[str, datetime]:
+        """Raise the account's sessions cutoff to ``cutoff`` (never lower it)
+        and delete its session rows created at or before it, in one
+        transaction. With ``include_existing`` the cutoff is first raised to
+        the newest session row of the account, so a wall clock that stepped
+        backwards cannot leave an existing session after it (review round 1).
+
+        Returns ``("ended", effective cutoff)``, ``("no_account", cutoff)``
+        when the account row is gone, or ``("failed", cutoff)`` when nothing
+        could be written (nothing changed)."""
         if not self._safety_ready:
-            return False
-        key, stamp = str(account_id), cutoff.astimezone(UTC).isoformat()
+            return "failed", cutoff
+        key = str(account_id)
+        stamp = cutoff.astimezone(UTC).isoformat()
         with self._lock:
             if self._closed:
-                return False
+                return "failed", cutoff
             try:
                 self._conn.execute("BEGIN IMMEDIATE")
                 try:
+                    if include_existing:
+                        (newest,) = self._conn.execute(
+                            "SELECT MAX(created_at) FROM sessions WHERE account_id = ?", (key,)
+                        ).fetchone()
+                        if newest is not None and newest > stamp:
+                            stamp = newest
                     updated = self._conn.execute(
-                        "UPDATE accounts SET sessions_valid_after = ? WHERE account_id = ?",
+                        "UPDATE accounts SET sessions_valid_after = "
+                        "MAX(COALESCE(sessions_valid_after, ''), ?) WHERE account_id = ?",
                         (stamp, key),
                     ).rowcount
                     if updated != 1:
                         self._conn.execute("ROLLBACK")
-                        return False
+                        return "no_account", cutoff
                     self._conn.execute(
                         "DELETE FROM sessions WHERE account_id = ? AND created_at <= ?",
                         (key, stamp),
@@ -541,16 +557,8 @@ class SessionStore:
                     raise
             except sqlite3.Error as exc:
                 self._warn("end an account's sessions", exc)
-                return False
-        return True
-
-    def delete_sessions_before(self, account_id: UUID, cutoff: datetime) -> bool:
-        """The second pass: a row another device wrote back after
-        :meth:`end_sessions_before` and before its cached session was dropped."""
-        return self._write(
-            "DELETE FROM sessions WHERE account_id = ? AND created_at <= ?",
-            (str(account_id), cutoff.astimezone(UTC).isoformat()),
-        )
+                return "failed", cutoff
+        return "ended", _require_aware(stamp)
 
     def sessions_valid_after(self, account_id: UUID) -> tuple[bool, datetime | None]:
         """``(read, cutoff)``: the account's sessions cutoff, ``None`` when it

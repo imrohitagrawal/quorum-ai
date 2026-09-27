@@ -28,33 +28,32 @@ GS = "src/product_app/google_signin.py"
 
 #: (file, anchor, replacement, expected count, which occurrence)
 MUTATIONS: list[tuple[str, str, str, int, int]] = [
-    # The cutoff in memory: recorded, cached sessions dropped, checked on reads.
+    # The cutoff in memory: raised to the newest cached session, recorded,
+    # cached sessions dropped, lapsed cutoffs pruned.
     (
         AU,
-        "            self._valid_after[account_id] = cutoff if current is None"
-        " else max(current, cutoff)\n",
-        "            pass\n",
+        "            effective = max([cutoff, *(s.created_at for s in mine)])",
+        "            effective = cutoff",
         1,
         0,
     ),
     (
         AU,
-        "                if session.account_id == account_id and session.created_at <= cutoff\n"
-        "            ]:\n"
-        "                self._sessions.pop(session_id, None)",
-        "                if session.account_id == account_id and session.created_at <= cutoff\n"
-        "            ]:\n"
-        "                pass",
+        "            self._valid_after[account_id] = (\n"
+        "                effective if current is None else max(current, effective)\n"
+        "            )\n",
+        "",
         1,
         0,
     ),
     (
         AU,
-        "            if cached is not None and self._before_cutoff_locked(cached):",
-        "            if False:",
+        "                    self._sessions.pop(session.session_id, None)",
+        "                    pass",
         1,
         0,
     ),
+    (AU, "                del self._valid_after[lapsed]\n", "                pass\n", 1, 0),
     # The cutoff on disk, read at restore; a failed read refuses.
     (
         AU,
@@ -86,12 +85,19 @@ MUTATIONS: list[tuple[str, str, str, int, int]] = [
         1,
         0,
     ),
-    # The store: the cutoff and the rows in one transaction; the second pass.
+    # The store: the cutoff raised to the newest row, never lowered, and the
+    # rows, in one transaction; the second pass; no account says so.
     (
         ST,
-        '"UPDATE accounts SET sessions_valid_after = ? WHERE account_id = ?",',
-        '"UPDATE accounts SET sessions_valid_after = sessions_valid_after '
-        'WHERE ? IS NOT NULL AND account_id = ?",',
+        "                        if newest is not None and newest > stamp:",
+        "                        if False:",
+        1,
+        0,
+    ),
+    (
+        ST,
+        "\"MAX(COALESCE(sessions_valid_after, ''), ?) WHERE account_id = ?\",",
+        '"? WHERE account_id = ?",',
         1,
         0,
     ),
@@ -105,11 +111,12 @@ MUTATIONS: list[tuple[str, str, str, int, int]] = [
     ),
     (
         GS,
-        "    store.delete_sessions_before(session.account_id, cutoff)\n",
+        "    store.end_sessions_before(session.account_id, cutoff, include_existing=False)\n",
         "",
         1,
         0,
     ),
+    (GS, '    if outcome == "no_account":', '    if outcome == "never":', 1, 0),
     # Events: only for an existing account; the keep rules; gone with it.
     (
         ST,
@@ -134,6 +141,13 @@ MUTATIONS: list[tuple[str, str, str, int, int]] = [
     ),
     (
         ST,
+        '"ORDER BY at DESC, rowid DESC LIMIT ?)",',
+        '"ORDER BY at ASC, rowid ASC LIMIT ?)",',
+        1,
+        0,
+    ),
+    (
+        ST,
         '"DELETE FROM sign_in_events WHERE account_id = ?", (key,)',
         '"SELECT ?", (key,)',
         1,
@@ -142,8 +156,8 @@ MUTATIONS: list[tuple[str, str, str, int, int]] = [
     (GS, '    _record_event(account_id, "signed_in")\n', "", 1, 0),
     (GS, '        _record_event(session.account_id, "signed_out")\n', "        pass\n", 1, 0),
     (GS, '    _record_event(session.account_id, "signed_out_everywhere")\n', "", 1, 0),
-    # The route: signed-in accounts only; a failed write refuses; this
-    # browser's cookie goes; the in-memory step runs.
+    # The route: signed-in accounts only; a failed write refuses; the
+    # in-memory step runs; the response is not cached.
     (
         GS,
         "    if store is None or store.account_for(session.account_id) is None:\n"
@@ -155,19 +169,42 @@ MUTATIONS: list[tuple[str, str, str, int, int]] = [
         1,
         0,
     ),
+    (GS, '    if outcome != "ended":', '    if outcome == "never":', 1, 0),
     (
         GS,
-        "    if not store.end_sessions_before(session.account_id, cutoff):",
-        "    if store.end_sessions_before(session.account_id, cutoff) and False:",
+        "    cutoff = auth.session_repository.end_sessions_of(session.account_id, cutoff)\n",
+        "",
         1,
         0,
     ),
-    (GS, "    auth.session_repository.end_sessions_of(session.account_id, cutoff)\n", "", 1, 0),
-    # The start limit.
+    (
+        GS,
+        "    response = JSONResponse(SignOutResponse(signed_out=True).model_dump())\n"
+        '    response.headers["Cache-Control"] = "no-store"\n',
+        "    response = JSONResponse(SignOutResponse(signed_out=True).model_dump())\n",
+        1,
+        0,
+    ),
+    # The start limit: on, per address, 60 s Retry-After, a sound burst.
     (
         GS,
         "    if not sign_in_start_limiter.allow(",
         "    if False and not sign_in_start_limiter.allow(",
+        1,
+        0,
+    ),
+    (GS, 'ip=auth.client_ip_of(request) or "unknown"', 'ip="everyone"', 1, 0),
+    (
+        GS,
+        "str(math.ceil(60 / settings.sign_in_starts_per_address_per_minute))",
+        '"1"',
+        1,
+        0,
+    ),
+    (
+        "src/product_app/config.py",
+        "        if burst is not None and burst > 5 * value:",
+        "        if False:",
         1,
         0,
     ),

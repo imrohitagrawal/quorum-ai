@@ -752,8 +752,16 @@ def sign_out_everywhere(request: Request) -> JSONResponse:
             status_code=status.HTTP_403_FORBIDDEN,
             detail={"code": "NOT_SIGNED_IN", "message": "Sign in to sign out everywhere."},
         )
-    cutoff = datetime.now(UTC)
-    if not store.end_sessions_before(session.account_id, cutoff):
+    outcome, cutoff = store.end_sessions_before(
+        session.account_id, datetime.now(UTC), include_existing=True
+    )
+    if outcome == "no_account":
+        # The account was deleted in the meantime; its sessions went with it.
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"code": "NOT_SIGNED_IN", "message": "Sign in to sign out everywhere."},
+        )
+    if outcome != "ended":
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail={
@@ -761,8 +769,10 @@ def sign_out_everywhere(request: Request) -> JSONResponse:
                 "message": "Could not sign out everywhere just now. Please try again.",
             },
         )
-    auth.session_repository.end_sessions_of(session.account_id, cutoff)
-    store.delete_sessions_before(session.account_id, cutoff)
+    cutoff = auth.session_repository.end_sessions_of(session.account_id, cutoff)
+    # The second pass: the same cutoff, not raised again (a sign-in finishing
+    # now is not signed out), for a row written back before the cache drop.
+    store.end_sessions_before(session.account_id, cutoff, include_existing=False)
     pending_sign_ins.discard(session.session_id)
     _record_event(session.account_id, "signed_out_everywhere")
     response = JSONResponse(SignOutResponse(signed_out=True).model_dump())
