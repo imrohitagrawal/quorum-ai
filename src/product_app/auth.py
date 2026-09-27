@@ -782,10 +782,12 @@ def spend_key_for(session: SessionContext) -> UUID:
         return session.account_id
     store = session_store.get_store()
     key = session.account_id if store is None else store.spend_key_for(session.account_id)
-    # A key read from the account's row proves the delete has not committed,
-    # so only a lookup that missed the row (the key is then the id) is refused
-    # while a delete is under way or just done. A deleted account's lookup
-    # always misses: its random id never comes back.
+    # A key that differs from the id proves the row was read, so the delete
+    # has not committed; a key equal to the id is refused while a delete is
+    # under way or just done. That covers every deleted account (its random
+    # id never comes back), and also, for the length of one delete
+    # transaction, an account created before the spend key, whose key IS its
+    # id: its other devices get a 401 then and work again straight after.
     if key == session.account_id and session_repository.account_is_going(session.account_id):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

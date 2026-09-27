@@ -311,6 +311,26 @@ MUTATIONS: list[tuple[str, str, str, int, int]] = [
         1,
         0,
     ),
+    # Pinned after the final review: the refusal comes before the second
+    # pass, and a returning sign-in purges lapsed pointers too.
+    (
+        AD,
+        "        auth.session_repository.revoke_account(account_id)\n"
+        "        # Once refused, no session of the account is written again; a row\n"
+        "        # another device wrote back just before the refusal goes now.\n"
+        "        store.delete_sessions_of(account_id)\n",
+        "        store.delete_sessions_of(account_id)\n"
+        "        auth.session_repository.revoke_account(account_id)\n",
+        1,
+        0,
+    ),
+    (
+        ST,
+        "                    self._purge_lapsed_carry()\n                    if row is None:\n",
+        "                    if row is None:\n                        self._purge_lapsed_carry()\n",
+        1,
+        0,
+    ),
     # A sign-in finishing during the delete revokes its own session.
     (GS, "    if store.account_for(account_id) is None:\n", "    if False:\n", 1, 0),
 ]

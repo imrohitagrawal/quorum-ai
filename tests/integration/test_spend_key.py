@@ -591,6 +591,12 @@ def test_a_lapsed_pointer_is_removed_at_sign_in_and_on_open(
     sign_in.stub.claims = {**sign_in.stub.claims, "sub": "someone-else", "email": "b@example.com"}
     _signed_in(sign_in.client())
     assert sign_in.store._conn.execute(count).fetchone()[0] == 0
+    # A RETURNING person's sign-in purges too, not only a first one.
+    sign_in.store._conn.execute(
+        "INSERT INTO spend_key_carry VALUES ('x', 'v', '2000-01-01T00:00:00+00:00')"
+    )
+    _signed_in(sign_in.client())
+    assert sign_in.store._conn.execute(count).fetchone()[0] == 0
     # On open: a lapsed row left by a process that stopped.
     path = tmp_path / "reopen.sqlite3"
     first = SessionStore(str(path))

@@ -427,7 +427,8 @@ class SessionStore:
                     # lacks the pointer table; a no-op once it exists.
                     self._conn.execute(self._SPEND_KEY_CARRY_DDL)
                     # Housekeeping only: a read-only volume refuses even a
-                    # DELETE that matches nothing, and must still sign in.
+                    # DELETE that matches nothing, and must still open with
+                    # its accounts usable, so signed-in sessions still resolve.
                     try:
                         self._purge_lapsed_carry()
                     except sqlite3.Error as exc:

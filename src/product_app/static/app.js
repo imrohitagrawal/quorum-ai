@@ -9981,10 +9981,12 @@
     }
   }
 
-  // W7 (ADR-0136): the delete step's error line. "Try again" only where
-  // trying again can work: a store failure (503 DELETION_FAILED, nothing was
-  // changed) or a dropped connection. A stale token, an expired session or a
-  // missing cookie sends the same thing and fails the same way: reload.
+  // W7 (ADR-0136): the delete step's error line. "Try again" for a store
+  // failure (503 DELETION_FAILED, nothing was changed) or a dropped
+  // connection; everything else is told to reload first, which is what a
+  // stale token, an expired session or a missing cookie needs (retrying them
+  // sends the same thing and fails the same way). A proxy error with no code
+  // gets the reload line too.
   function accountDeleteMessage(err) {
     const code = err && err.code;
     if (code === "CONFIRMATION_MISMATCH") {

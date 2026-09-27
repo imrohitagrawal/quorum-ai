@@ -76,9 +76,12 @@ read 0 on the new). Failure modes first:
    ceiling degrade) carry the spend key. A spend key that cannot be read
    refuses the request (503 `SPEND_KEY_UNAVAILABLE`), for anonymous visitors
    too while the sessions database cannot be read; a request of a deleted
-   account is refused (401), and so is one whose lookup found no account row
-   while a delete of that id is under way. A lookup that found the row gets
-   its key even then, so a delete that fails refuses no other device. Deleting and signing in again gets
+   account is refused (401), and so is one whose lookup returned the id while
+   a delete of that id is under way. A lookup that returned a different key
+   read the row, so for an account created after this change a delete that
+   fails refuses no other device; an account created before it (its key IS
+   its id) is refused for the length of that delete's transaction, and works
+   again straight after. Deleting and signing in again gets
    a NEW id and the SAME spend key, from the 24-hour pointer, so the day's
    spend still counts, for an account of either age.
 4. A run still running when its account is deleted finishes. Its history
@@ -123,9 +126,10 @@ read 0 on the new). Failure modes first:
 - The pointer holds the keyed hash of the Google subject and the spend key
   for 24 hours after a deletion (`SPEND_KEY_CARRY`); after that it is not
   used, and it is removed at the next open, sign-in or deletion.
-- The page says "try again" only for a store failure or a dropped
-  connection; a stale token, an expired session or a missing cookie is told
-  to reload (`accountDeleteMessage`, pinned under Node).
+- The page says "try again" for a store failure or a dropped connection;
+  everything else, including a stale token, an expired session, a missing
+  cookie and a proxy error with no code, is told to reload first
+  (`accountDeleteMessage`, pinned under Node).
 - The spend key is stored, never recomputed, so rotating
   `QUORUM_TOKEN_SECRET` leaves live accounts' envelopes intact; only an
   account deleted before a rotation and re-created after it starts fresh

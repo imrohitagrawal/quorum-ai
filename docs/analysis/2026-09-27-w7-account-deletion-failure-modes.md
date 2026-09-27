@@ -202,7 +202,10 @@ S9. **Two lives of one person at once.** Both charge under the same key
   deletion. Answer: also at open (best effort, so a read-only volume still
   opens) and at every sign-in.
 - **A delete that fails refused another device's estimate**: answer: only a
-  lookup that missed the account row is refused while a delete is under way.
+  lookup that returned the id is refused while a delete is under way, so an
+  account created after this change is not refused; one created before it
+  (key = id) still is, for that one transaction (the final review measured
+  it), and works straight after.
 - **The delete page's "try again"** reached errors that retrying cannot fix;
   answer: only a store failure or a dropped connection says it.
 - **A database marked by an earlier build of this branch** had no pointer

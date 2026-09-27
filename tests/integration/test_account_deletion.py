@@ -752,3 +752,31 @@ def test_the_session_rows_go_with_the_account_even_if_the_process_dies_after(
     ).fetchone()[0]
     assert rows == 0
     assert sign_in.account_rows() == []
+
+
+def test_a_session_written_back_after_the_second_pass_is_still_refused(
+    sign_in: SignIn, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The refusal must come BEFORE the second pass deletes the session rows:
+    once refused, no row is written again. Turns red if the two are swapped
+    and a request after the second pass writes the row back."""
+    from product_app import account_deletion
+
+    phone = sign_in.client()
+    laptop = sign_in.client()
+    _signed_in(phone)
+    _signed_in(laptop)
+    account = _account(sign_in)
+    real_second_pass = sign_in.store.delete_sessions_of
+
+    def second_pass_then_laptop_calls(account_id: UUID) -> bool:
+        done = real_second_pass(account_id)
+        laptop.get("/v1/session")
+        return done
+
+    monkeypatch.setattr(sign_in.store, "delete_sessions_of", second_pass_then_laptop_calls)
+    assert account_deletion.delete_account(account) is True
+    rows = sign_in.store._conn.execute(
+        "SELECT COUNT(*) FROM sessions WHERE account_id = ?", (str(account),)
+    ).fetchone()[0]
+    assert rows == 0
