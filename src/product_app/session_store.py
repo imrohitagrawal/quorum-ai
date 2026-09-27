@@ -38,8 +38,10 @@ from __future__ import annotations
 
 import atexit
 import hashlib
+import hmac
 import logging
 import os
+import secrets
 import sqlite3
 import threading
 import weakref
@@ -130,6 +132,32 @@ class HistoryEntry:
     #: answer's level ("well supported", ..., "not checked"). ``None`` when the
     #: run did not complete (no final answer to speak of).
     verdict: str | None = None
+
+
+#: W7 (ADR-0136): how long a deleted account's spend key is kept for its
+#: re-creation: the ledger's 24-hour spend window (``FeedbackStore``'s
+#: ``timedelta(hours=24)`` cutoffs), after which the old spend no longer counts.
+SPEND_KEY_CARRY = timedelta(hours=24)
+
+#: A per-process key used only when ``QUORUM_TOKEN_SECRET`` is unset (local
+#: development; production refuses to start without it). Keys derived under
+#: it are stable only for the life of the process.
+_PROCESS_ACCOUNT_KEY = secrets.token_bytes(32)
+
+
+def _account_key() -> bytes:
+    secret = os.environ.get("QUORUM_TOKEN_SECRET", "")
+    return secret.encode() if secret else _PROCESS_ACCOUNT_KEY
+
+
+def account_id_for(google_sub: str, *, key: bytes) -> UUID:
+    """A keyed one-way hash of a Google subject, as a UUID (W7, ADR-0136): a
+    new account's spend key, and the key its spend key is kept under for a
+    day after deletion. The account id itself is random per account life.
+    Without the key the value says nothing about the subject. (The name
+    predates the re-plan, CHG-025.)"""
+    digest = hmac.new(key, b"w7-account:" + google_sub.encode(), hashlib.sha256).digest()
+    return UUID(bytes=digest[:16], version=4)
 
 
 def _to_utc(value: datetime) -> datetime:
@@ -287,6 +315,25 @@ class SessionStore:
         "last_sign_in_at TEXT NOT NULL)"
     )
 
+    #: W7 (ADR-0136): the spend key column. Each account life has a random
+    #: id; the 24-hour spend envelope is keyed on this instead, so it survives
+    #: deletion. Existing rows are backfilled with their own id, so no
+    #: account's number changes at deploy. Guarded like the accounts table.
+    _SPEND_KEY_MIGRATION = "w7_spend_key"
+
+    #: W7 (ADR-0136, CHG-025): when an account is deleted, its spend key is
+    #: kept for :data:`SPEND_KEY_CARRY` under the keyed hash of its Google
+    #: subject, so a re-created account takes it back. Without it an account
+    #: whose key is its own old id (created before the spend key) would start
+    #: a fresh envelope; with it, none re-created within the 24 hours under
+    #: the same secret does. Nothing else is kept.
+    _SPEND_KEY_CARRY_DDL = (
+        "CREATE TABLE IF NOT EXISTS spend_key_carry ("
+        "subject_key TEXT PRIMARY KEY, "
+        "spend_key TEXT NOT NULL, "
+        "until TEXT NOT NULL)"
+    )
+
     #: Name of the W7 history migration in ``schema_migrations``.
     _HISTORY_MIGRATION = "w7_history"
 
@@ -321,7 +368,9 @@ class SessionStore:
         self._conn.row_factory = sqlite3.Row
         with self._lock:
             self._conn.executescript(self._SCHEMA)
-        self._accounts_ready = self._migrate_accounts()
+        # Sign-in needs BOTH: without the spend key column a new account would
+        # be metered under its random id, a fresh envelope (ADR-0136).
+        self._accounts_ready = self._migrate_accounts() and self._migrate_spend_key()
         self._history_ready = self._accounts_ready and self._migrate_history()
         _open_stores.add(self)
 
@@ -360,6 +409,50 @@ class SessionStore:
         except sqlite3.Error as exc:
             _log.warning(
                 "session_store: the accounts table could not be created, so sign-in "
+                "is unavailable until a restart on a writable volume: %s",
+                exc,
+            )
+            return False
+
+    def _migrate_spend_key(self) -> bool:
+        """Add and backfill ``accounts.spend_key`` once; ``True`` if it is there."""
+        try:
+            with self._lock:
+                applied = self._conn.execute(
+                    "SELECT 1 FROM schema_migrations WHERE name = ?",
+                    (self._SPEND_KEY_MIGRATION,),
+                ).fetchone()
+                if applied is not None:
+                    # A database marked by an earlier build of this change
+                    # lacks the pointer table; a no-op once it exists.
+                    self._conn.execute(self._SPEND_KEY_CARRY_DDL)
+                    # Housekeeping only: a read-only volume refuses even a
+                    # DELETE that matches nothing, and must still open with
+                    # its accounts usable, so signed-in sessions still resolve.
+                    try:
+                        self._purge_lapsed_carry()
+                    except sqlite3.Error as exc:
+                        self._warn("drop lapsed spend-key pointers", exc)
+                    return True
+                self._conn.execute("BEGIN IMMEDIATE")
+                try:
+                    self._conn.execute("ALTER TABLE accounts ADD COLUMN spend_key TEXT")
+                    self._conn.execute(self._SPEND_KEY_CARRY_DDL)
+                    self._conn.execute(
+                        "UPDATE accounts SET spend_key = account_id WHERE spend_key IS NULL"
+                    )
+                    self._conn.execute(
+                        "INSERT INTO schema_migrations (name, applied_at) VALUES (?, ?)",
+                        (self._SPEND_KEY_MIGRATION, datetime.now(UTC).isoformat()),
+                    )
+                    self._conn.execute("COMMIT")
+                except BaseException:
+                    self._conn.execute("ROLLBACK")
+                    raise
+                return True
+        except sqlite3.Error as exc:
+            _log.warning(
+                "session_store: the spend key column could not be added, so sign-in "
                 "is unavailable until a restart on a writable volume: %s",
                 exc,
             )
@@ -413,11 +506,15 @@ class SessionStore:
                 self._conn.execute("BEGIN IMMEDIATE")
                 try:
                     # A run already in another account's history is never moved:
-                    # the update applies only when the account matches.
+                    # the update applies only when the account matches. And
+                    # nothing is written for an account that is not there
+                    # (W7, ADR-0136): checked in this transaction, so a delete
+                    # landing after the caller looked cannot be undone by it.
                     self._conn.execute(
                         "INSERT INTO history (query_run_id, account_id, question, status, "
                         "mode, model_count, cost_usd, completed_at, verdict) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                        "SELECT ?, ?, ?, ?, ?, ?, ?, ?, ? "
+                        "WHERE EXISTS (SELECT 1 FROM accounts WHERE account_id = ?) "
                         "ON CONFLICT(query_run_id) DO UPDATE SET question = excluded.question, "
                         "status = excluded.status, mode = excluded.mode, "
                         "model_count = excluded.model_count, cost_usd = excluded.cost_usd, "
@@ -433,6 +530,7 @@ class SessionStore:
                             str(entry.cost_usd),
                             _to_utc(entry.completed_at).isoformat(),
                             entry.verdict,
+                            entry.account_id,
                         ),
                     )
                     self._conn.execute(
@@ -663,13 +761,24 @@ class SessionStore:
                     row = self._conn.execute(
                         "SELECT account_id FROM accounts WHERE google_sub = ?", (google_sub,)
                     ).fetchone()
+                    self._purge_lapsed_carry()
                     if row is None:
+                        # W7 (ADR-0136): a random id per account life, and the
+                        # spend key derived from the subject, so a deleted and
+                        # re-created account keeps its 24-hour envelope and
+                        # nothing else.
                         account_id = uuid4()
+                        subject_key = account_id_for(google_sub, key=_account_key())
+                        # Lapsed pointers were purged above, in this transaction.
+                        carried = self._conn.execute(
+                            "SELECT spend_key FROM spend_key_carry WHERE subject_key = ?",
+                            (str(subject_key),),
+                        ).fetchone()
+                        spend_key = subject_key if carried is None else UUID(carried[0])
                         self._conn.execute(
-                            "INSERT INTO accounts "
-                            "(account_id, google_sub, email, created_at, last_sign_in_at) "
-                            "VALUES (?, ?, ?, ?, ?)",
-                            (str(account_id), google_sub, email, stamp, stamp),
+                            "INSERT INTO accounts (account_id, google_sub, email, "
+                            "created_at, last_sign_in_at, spend_key) VALUES (?, ?, ?, ?, ?, ?)",
+                            (str(account_id), google_sub, email, stamp, stamp, str(spend_key)),
                         )
                     else:
                         account_id = UUID(row["account_id"])
@@ -686,6 +795,92 @@ class SessionStore:
                 self._warn("record a signed-in account", exc)
                 return None
         return account_id
+
+    def delete_account(self, account_id: UUID) -> bool:
+        """Remove the account, its history and its sessions, in one
+        transaction (W7, ADR-0136). ``True`` when it ran; ``False`` on any
+        failure, when nothing was removed."""
+        if not self._accounts_ready:
+            return False
+        key = str(account_id)
+        with self._lock:
+            if self._closed:
+                return False
+            try:
+                self._conn.execute("BEGIN IMMEDIATE")
+                try:
+                    self._carry_spend_key(key)
+                    if self._history_ready:
+                        self._conn.execute("DELETE FROM history WHERE account_id = ?", (key,))
+                    self._conn.execute("DELETE FROM sessions WHERE account_id = ?", (key,))
+                    self._conn.execute("DELETE FROM accounts WHERE account_id = ?", (key,))
+                    self._conn.execute("COMMIT")
+                except BaseException:
+                    self._conn.execute("ROLLBACK")
+                    raise
+            except sqlite3.Error as exc:
+                self._warn("delete an account", exc)
+                return False
+        return True
+
+    def _purge_lapsed_carry(self) -> None:
+        """Drop pointers past :data:`SPEND_KEY_CARRY` (caller holds the lock):
+        at open, at every sign-in and every delete, so a deleted person's
+        keyed hash is not kept longer than the docs say."""
+        self._conn.execute(
+            "DELETE FROM spend_key_carry WHERE until <= ?", (datetime.now(UTC).isoformat(),)
+        )
+
+    def _carry_spend_key(self, key: str) -> None:
+        """Inside :meth:`delete_account`'s transaction: keep the account's
+        spend key for its re-creation, and drop lapsed ones."""
+        now = datetime.now(UTC)
+        self._purge_lapsed_carry()
+        row = self._conn.execute(
+            "SELECT google_sub, spend_key FROM accounts WHERE account_id = ?", (key,)
+        ).fetchone()
+        if row is None:
+            return
+        subject_key = account_id_for(row["google_sub"], key=_account_key())
+        self._conn.execute(
+            "INSERT OR REPLACE INTO spend_key_carry (subject_key, spend_key, until) "
+            "VALUES (?, ?, ?)",
+            (str(subject_key), row["spend_key"] or key, (now + SPEND_KEY_CARRY).isoformat()),
+        )
+
+    def delete_sessions_of(self, account_id: UUID) -> bool:
+        """Every session row of ``account_id``. Account deletion calls it again
+        after refusing the sessions: a request from another device in the
+        moment before the refusal can write its row back (review round 2)."""
+        return self._write("DELETE FROM sessions WHERE account_id = ?", (str(account_id),))
+
+    def spend_key_for(self, account_id: UUID) -> UUID | None:
+        """The key the spend rails meter ``account_id`` under (ADR-0136).
+
+        The account's stored spend key; the id itself for an id in no row (an
+        anonymous session) or a row without one (written by an older build);
+        ``None`` when it cannot be read, which the caller refuses rather than
+        falling back to the id: that would open a fresh, empty envelope.
+        """
+        if not self._accounts_ready:
+            return account_id
+        with self._lock:
+            if self._closed:
+                return None
+            try:
+                row = self._conn.execute(
+                    "SELECT spend_key FROM accounts WHERE account_id = ?", (str(account_id),)
+                ).fetchone()
+            except sqlite3.Error as exc:
+                self._warn("read a spend key", exc)
+                return None
+        if row is None or row["spend_key"] is None:
+            return account_id
+        try:
+            return UUID(row["spend_key"])
+        except ValueError as exc:
+            self._warn("read a spend key", exc)
+            return None
 
     def is_anonymous(self, account_id: UUID) -> bool | None:
         """``True`` only when ``account_id`` is certainly in no accounts row;

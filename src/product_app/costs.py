@@ -725,6 +725,7 @@ class CostEstimationService:
         query_run_id: UUID | None = None,
         context: dict[str, Any] | None = None,
         mode: str = MODE_PANEL,
+        spend_key: UUID | None = None,
     ) -> CostEstimate:
         # Issue #123: the cheapest, most frequently-hit request path is where
         # a stale-store reconnect gets kicked off. Both calls are cheap on
@@ -797,8 +798,12 @@ class CostEstimationService:
         # also bills and rate-limits — but it prevents a single
         # client from exhausting the demo budget via repeated small
         # calls.
-        if account_id is not None and cost_event_recorder is not None:
-            cumulative = self._cumulative_spend_for(account_id)
+        # W7 (ADR-0136): the per-account rails read the SPEND key, which for a
+        # signed-in account is not its id; the confirmation token below stays
+        # bound to the id (it checks who asked, not how much was spent).
+        meter_key = spend_key if spend_key is not None else account_id
+        if meter_key is not None and cost_event_recorder is not None:
+            cumulative = self._cumulative_spend_for(meter_key)
             # UNITS: ``cumulative`` is a sum of RECORDED point estimates, so the
             # term added to it must be the point estimate too. ``59a4a8f``
             # switched this (and the daily cap below) to ``bound`` to "fail
@@ -841,7 +846,7 @@ class CostEstimationService:
         # check behaves. Reads from the durable SQLite feedback
         # store (not the in-memory ring buffer — that is bounded to
         # ``MAX_EVENTS``).
-        if account_id is not None:
+        if meter_key is not None:
             from product_app.feedback_store import get_store  # local import to avoid cycles
 
             store = get_store()
@@ -957,7 +962,7 @@ class CostEstimationService:
                 # mypy, which cannot follow narrowing through an intermediate
                 # boolean.
                 assert store is not None
-                already_spent = store.daily_spend_for(account_id)
+                already_spent = store.daily_spend_for(meter_key)
                 # Same unit rule as the cumulative rail above. ``daily_spend_for``
                 # books each run at ``estimated_cost_usd`` and then CORRECTS it
                 # to the measured actual once the run ends (#255/ADR-0016), so

@@ -518,6 +518,12 @@ class QueryRun:
     #: builds (no extra judge call), so a run carried into a history later
     #: still has it. ``None`` until then, and for a run with no verdict.
     history_verdict: str | None = None
+    #: W7 (ADR-0136): the key the run's money is metered under, read once
+    #: when the run is created. A signed-in account's spend key is not its id,
+    #: and the charge, void, reconcile and judge pre-flight must all use the
+    #: one key the charge opened under. ``None`` only on a run built outside
+    #: :meth:`QueryRunRepository.create`; it then meters under the id.
+    spend_key: UUID | None = None
     #: E2: how far each billable stage got in the usage-recording handshake.
     #: Read by ``_actual_cost`` to tell an honestly-empty usage list (nothing
     #: was billable) from a silently-empty one (billed, never recorded). Both
@@ -617,6 +623,7 @@ class InMemoryQueryRunRepository:
         cost_estimate: CostEstimate,
         context: dict[str, Any] | None = None,
         mode: RunMode = MODE_PANEL,
+        spend_key: UUID | None = None,
     ) -> QueryRun:
         with self._lock:
             self._purge_expired_locked()
@@ -638,6 +645,7 @@ class InMemoryQueryRunRepository:
                 progress=_initial_progress(),
                 context=context,
                 mode=mode,
+                spend_key=account_id if spend_key is None else spend_key,
             )
             self._query_runs[query_run_id] = query_run
             return query_run
@@ -999,6 +1007,12 @@ _synthesis_pool = ThreadPoolExecutor(
 )
 
 
+def _spend_key(query_run: QueryRun) -> UUID:
+    """The key every money call for this run uses (W7, ADR-0136): the one its
+    charge opened under, never looked up again."""
+    return query_run.account_id if query_run.spend_key is None else query_run.spend_key
+
+
 def _record_run_billing(
     *,
     session: SessionContext,
@@ -1023,7 +1037,7 @@ def _record_run_billing(
     ``RECORDED`` means money may be spent.
     """
     return cost_estimation_service.try_record_run_charge(
-        account_id=session.account_id,
+        account_id=_spend_key(query_run),
         query_run_id=query_run.query_run_id,
         estimated_cost_usd=query_run.cost_estimate.estimated_cost_usd,
         threshold_action=query_run.cost_estimate.threshold_action,
@@ -1061,7 +1075,7 @@ def _void_run_billing(
     """
     with contextlib.suppress(Exception):
         cost_estimation_service.void_run_charge(
-            account_id=session.account_id,
+            account_id=_spend_key(query_run),
             query_run_id=query_run.query_run_id,
             reason=reason,
         )
@@ -1700,7 +1714,7 @@ def _reconcile_run_billing(*, query_run: QueryRun, response: QueryRunResultRespo
         # only the durable one leaves the ring summing estimates forever, and
         # the ring is the rail that binds first.
         cost_estimation_service.reconcile_run_charge(
-            account_id=query_run.account_id,
+            account_id=_spend_key(query_run),
             query_run_id=query_run.query_run_id,
             estimated_cost_usd=query_run.cost_estimate.estimated_cost_usd,
             actual_cost_usd=response.actual_cost_usd,
@@ -1827,6 +1841,15 @@ def _persist_terminal_run(query_run_id: UUID) -> None:
             mode=query_run.mode,
         )
         _record_run_history(row)
+        # W7 (ADR-0136): a run of an account deleted while it ran is kept
+        # without the account, as the deletion left the account's other rows.
+        # Checked AFTER the write: the deleted mark is set before the deletion
+        # NULLs the account's rows, so this catches a row written either side.
+        from product_app import run_history_store
+        from product_app.auth import session_repository
+
+        if session_repository.account_was_deleted(query_run.account_id):
+            run_history_store.forget_account(str(query_run.account_id))
         # W7 (ADR-0135): a signed-in account's history. The verdict is read
         # from the response built above, which has already paid for any judge
         # call, and kept on the run for a later carry-over. Local import: the
@@ -2519,7 +2542,7 @@ def _request_path_judge(query_run: QueryRun) -> _MemoisedRunJudge | None:
     # Zero I/O to here. The money rails are read inside ``evaluate``, and only
     # when it is about to pay — never to decide whether a memo hit is served.
     return _MemoisedRunJudge(
-        str(query_run.query_run_id), query_run.account_id, quick=query_run.mode == MODE_QUICK
+        str(query_run.query_run_id), _spend_key(query_run), quick=query_run.mode == MODE_QUICK
     )
 
 

@@ -25,7 +25,7 @@ import threading
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
-from product_app import session_store
+from product_app import auth, session_store
 from product_app.config import settings
 from product_app.query_run_orchestration import (
     QUERY_RUN_ACTIVE_TTL,
@@ -118,6 +118,12 @@ def carry_over(*, anonymous_account_id: UUID, account_id: UUID) -> None:
         store = session_store.get_store()
         if store is None or store.is_anonymous(anonymous_account_id) is not True:
             return
+        # An id with no account row because its account is being or was just
+        # deleted is not anonymous (ADR-0136): its runs are the deleted
+        # account's, never the signing-in one's. Checked AFTER the row read,
+        # for the ordering ``auth.spend_key_for`` explains.
+        if auth.session_repository.account_is_going(anonymous_account_id):
+            return
         now = _now()
         with _lock:
             _carried[anonymous_account_id] = (account_id, now + _link_lifetime())
@@ -138,6 +144,13 @@ def history_for(account_id: UUID) -> list[HistoryEntry] | None:
         keep_days=settings.history_keep_days,
         now=_now(),
     )
+
+
+def forget_account(account_id: UUID) -> None:
+    """Account deletion: drop every carry-over link to or from it."""
+    with _lock:
+        for anonymous in [a for a, (target, _) in _carried.items() if account_id in (a, target)]:
+            del _carried[anonymous]
 
 
 def clear_carried() -> None:

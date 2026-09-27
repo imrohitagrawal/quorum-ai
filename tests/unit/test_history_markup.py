@@ -62,7 +62,7 @@ def test_the_history_markup_is_exact(monkeypatch: pytest.MonkeyPatch) -> None:
         '<li class="history-item"><span class="history-question">Quick one</span>'
         '<span class="history-meta">2026-09-25 09:05 UTC · completed · quick answer · '
         "estimated $0.0100</span></li>"
-        "</ol></div></details>"
+        "</ol>" + main._account_delete_html() + "</div></details>"
     )
 
 
@@ -84,7 +84,7 @@ def test_the_empty_and_unavailable_states_are_exact(
     """Turns red if either state's markup or words change."""
     monkeypatch.setattr(account_history, "history_for", lambda _id: entries)
     html = main._history_html(uuid4())
-    assert html.endswith(body + "</div></details>")
+    assert html.endswith(body + main._account_delete_html() + "</div></details>")
 
 
 def test_the_signed_in_lede_is_exact() -> None:
@@ -105,3 +105,34 @@ def test_times_are_stored_in_utc() -> None:
     ist = datetime(2026, 9, 26, 17, 30, tzinfo=timezone(timedelta(hours=5, minutes=30)))
     assert _to_utc(ist) == datetime(2026, 9, 26, 12, 0, tzinfo=UTC)
     assert _to_utc(ist).tzinfo is UTC
+
+
+def test_the_delete_account_steps_are_exact() -> None:
+    """W7 (ADR-0136). Pinned with a literal: turns red if a step, a word, an
+    id or the hidden state of a step changes."""
+    assert main._account_delete_html() == (
+        '<div class="account-delete" id="account-delete">'
+        '<p class="history-note account-delete-heading">Your account</p>'
+        '<button type="button" id="account-delete-start" class="account-delete-link">'
+        "Delete my account…</button>"
+        '<div id="account-delete-reminder" hidden>'
+        "<p>Deleting your account removes your question history and signs you out on "
+        "every device. It cannot be undone.</p>"
+        '<label for="account-delete-email">Type the email address you signed in with</label>'
+        '<input id="account-delete-email" type="email" autocomplete="off" spellcheck="false" '
+        'aria-describedby="account-delete-error">'
+        '<div class="account-delete-actions">'
+        '<button type="button" id="account-delete-continue">Continue</button>'
+        '<button type="button" id="account-delete-cancel">Keep my account</button>'
+        "</div></div>"
+        '<div id="account-delete-final" hidden>'
+        "<p><strong>Last check:</strong> this permanently deletes your account. "
+        "There is no undo.</p>"
+        '<div class="account-delete-actions">'
+        '<button type="button" id="account-delete-confirm" class="account-delete-danger">'
+        "Delete permanently</button>"
+        '<button type="button" id="account-delete-back">Keep my account</button>'
+        "</div></div>"
+        '<p id="account-delete-error" class="account-delete-error" role="alert" hidden></p>'
+        "</div>"
+    )

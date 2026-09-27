@@ -9919,6 +9919,83 @@
         if (history.open && !history.contains(event.target)) history.open = false;
       });
     }
+    // W7 (ADR-0136): delete the account in three steps (CHG-021 f): a
+    // reminder, the typed email, a last "Delete permanently".
+    const deleteStart = el("account-delete-start");
+    if (deleteStart) {
+      const reminder = el("account-delete-reminder");
+      const final = el("account-delete-final");
+      const email = el("account-delete-email");
+      const error = el("account-delete-error");
+      const show = (step) => {
+        deleteStart.hidden = step !== "start";
+        reminder.hidden = step !== "reminder";
+        final.hidden = step !== "final";
+        if (step !== "final") error.hidden = true;
+      };
+      deleteStart.addEventListener("click", () => {
+        show("reminder");
+        email.focus();
+      });
+      // Focus goes back to the step's own control, never to the page.
+      const restart = () => {
+        show("start");
+        deleteStart.focus();
+      };
+      el("account-delete-cancel").addEventListener("click", restart);
+      el("account-delete-back").addEventListener("click", restart);
+      // Closing the History panel starts the steps over and forgets the
+      // typed email, so reopening it never lands on "Delete permanently".
+      history.addEventListener("toggle", () => {
+        if (history.open) return;
+        show("start");
+        email.value = "";
+      });
+      el("account-delete-continue").addEventListener("click", () => {
+        if (!email.value.trim()) {
+          email.focus();
+          return;
+        }
+        show("final");
+        // A mismatch shown on the last try must not stay beside the new one.
+        error.hidden = true;
+        el("account-delete-confirm").focus();
+      });
+      const confirm = el("account-delete-confirm");
+      confirm.addEventListener("click", async () => {
+        confirm.disabled = true;
+        try {
+          await api("/v1/account/delete", {
+            method: "POST",
+            body: JSON.stringify({ confirm_email: email.value }),
+          });
+          window.location.assign("/ui");
+        } catch (err) {
+          confirm.disabled = false;
+          show("reminder");
+          error.textContent = accountDeleteMessage(err);
+          error.hidden = false;
+          email.focus();
+        }
+      });
+    }
+  }
+
+  // W7 (ADR-0136): the delete step's error line. "Try again" for a store
+  // failure (503 DELETION_FAILED, nothing was changed) or a dropped
+  // connection; everything else is told to reload first, which is what a
+  // stale token, an expired session or a missing cookie needs (retrying them
+  // sends the same thing and fails the same way). A proxy error with no code
+  // gets the reload line too.
+  function accountDeleteMessage(err) {
+    const code = err && err.code;
+    if (code === "CONFIRMATION_MISMATCH") {
+      return "That is not the email address you signed in with.";
+    }
+    if (code === "DELETION_FAILED" || code === "NETWORK_UNREACHABLE" || (err && err.status === 0)) {
+      return "Your account could not be deleted just now. Please try again.";
+    }
+    return "Your session changed. Reload the page, then try again.";
   }
 
   function initWorkflowKeyboard() {

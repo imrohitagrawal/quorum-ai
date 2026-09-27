@@ -381,6 +381,15 @@ class RunHistoryStore:
             rows = cursor.fetchall()
         return [_row_from_sqlite(row) for row in rows]
 
+    def forget_account(self, account_id: str) -> int:
+        """Set ``account_id`` to NULL on the account's rows (W7 account
+        deletion, CHG-012 D7); return how many rows changed."""
+        with self._lock:
+            cursor = self._conn.execute(
+                "UPDATE runs SET account_id = NULL WHERE account_id = ?", (account_id,)
+            )
+            return int(cursor.rowcount)
+
     def run_count(self) -> int:
         with self._lock:
             cursor = self._conn.execute("SELECT COUNT(*) AS n FROM runs")
@@ -486,6 +495,17 @@ def configure(store: RunHistoryStore | None) -> None:
 def get_store() -> RunHistoryStore | None:
     """Return the process-wide store, or ``None`` if not configured."""
     return _store
+
+
+def forget_account(account_id: str) -> None:
+    """Best effort, like every run-history write: a failure is logged."""
+    store = get_store()
+    if store is None:
+        return
+    try:
+        store.forget_account(account_id)
+    except Exception:
+        _log.exception("run_history: could not forget a deleted account")
 
 
 def record_terminal_run(row: RunHistoryRow) -> None:
