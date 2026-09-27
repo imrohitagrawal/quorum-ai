@@ -504,3 +504,25 @@ def test_one_run_at_a_time_still_holds_while_a_deleted_accounts_run_finishes(
         _run(account, "a second one")
     _finish(running)
     assert _run(account, "after it finished").account_id == account
+
+
+def test_a_carried_run_stays_out_when_the_same_person_signs_in_again(sign_in: SignIn) -> None:
+    """A run asked anonymously, linked to the account at sign-in, still
+    running when the account is deleted, finishing after the same person
+    signs in again (same id). Turns red if deletion keeps the link, so the
+    run joins the new account's history."""
+    from tests.integration.test_google_sign_in import _boot, _callback, _start
+
+    client = sign_in.client()
+    csrf = _boot(client)
+    anonymous = auth.session_repository.get(client.cookies[COOKIE]).account_id  # type: ignore[union-attr]
+    running = _run(anonymous, "carried, then deleted")
+    query = _start(client, csrf)
+    _callback(client, code="stub-auth-code-1", state=query["state"])
+    account = _account(sign_in)
+    assert _delete(client).status_code == 200
+    again = sign_in.client()
+    _signed_in(again)
+    assert _account(sign_in) == account
+    _finish(running)
+    assert account_history.history_for(account) == []
