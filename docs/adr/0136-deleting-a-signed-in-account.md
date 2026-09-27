@@ -17,10 +17,11 @@ Two further owner decisions, both on 2026-09-27, each choosing an option the
 session had drafted:
 
 - 12:02:35Z (CHG-024): accept a one-time envelope reset for accounts created
-  before this change (Consequences, below).
+  before this change.
 - 15:05:02Z (CHG-025): after review round 2 found blockers the first design
   could not close, re-plan with a separate spend key (Decision 3, and the
-  first rejected alternative).
+  first rejected alternative). The chosen option ended with *"Also ends the
+  old-account reset (CHG-024)."*, so that reset no longer happens.
 
 The session's own choices are marked below. Among them: typing the account's
 own email as the typed confirmation; the three steps' order and words; one
@@ -46,16 +47,19 @@ read 0 on the new). Failure modes first:
    An anonymous session gets 403 `NOT_SIGNED_IN`; a wrong email 400
    `CONFIRMATION_MISMATCH`. A request on the local-only `X-Account-Id` path
    (no cookie) is refused as not signed in.
-2. Order: every session of the account is refused
+2. Order: the delete is marked as under way
+   (`SessionRepository.begin_deletion`; it refuses nothing on its own); the
+   account row, its history and its sessions are deleted in one transaction,
+   and the account's spend key is kept for 24 hours under the keyed hash of
+   its Google subject (the `spend_key_carry` table, same transaction); only
+   then is every session of the account refused
    (`SessionRepository.revoke_account`: a deleted mark kept in memory for the
-   session lifetime, and the cached sessions dropped); then the account row,
-   its history and its sessions are deleted in one transaction; then the
-   sessions are refused AGAIN (a session issued in between is dropped), its
-   carry-over links dropped, and its run-history rows given a NULL
-   `account_id`. A session being read from disk during the delete is checked
-   against the mark before it is cached. If the store refuses the delete
-   (503 `DELETION_FAILED`), the mark is lifted: nothing changed, and "try
-   again" is true.
+   session lifetime, and the cached sessions dropped), its carry-over links
+   (to or from it) dropped, and its run-history rows given a NULL
+   `account_id`. A session read from disk during the delete is refused as it
+   is cached, or dropped by the refusal. If the store refuses the delete (503
+   `DELETION_FAILED`), nothing has been changed: other devices stay signed
+   in and "try again" is true.
 3. **Each account life has a random id; the spend envelope has its own key.**
    A new account row gets a random `account_id` (as ADR-0130 had) and a
    `spend_key`: HMAC-SHA256 of the Google subject under
@@ -67,10 +71,14 @@ read 0 on the new). Failure modes first:
    (`QueryRun.spend_key`); the per-account rails (the daily cap, the
    in-memory running total, the charge, its void and its reconciliation, the
    judge's pre-flight) all use that one key. The confirmation token and the
-   guardrail audit events stay on the account id. A spend key that cannot be
-   read refuses the request (503 `SPEND_KEY_UNAVAILABLE`); a deleted
-   account's request is refused (401). Deleting and signing in again gets a
-   NEW id and the SAME spend key, so the day's spend still counts.
+   estimate-time audit events (preview, blocked, confirmation required) stay
+   on the account id; the charge step's events (the opening charge, a
+   ceiling degrade) carry the spend key. A spend key that cannot be read
+   refuses the request (503 `SPEND_KEY_UNAVAILABLE`), for anonymous visitors
+   too while the sessions database cannot be read; a request of an account
+   being or just deleted is refused (401). Deleting and signing in again gets
+   a NEW id and the SAME spend key, from the 24-hour pointer, so the day's
+   spend still counts, for an account of either age.
 4. A run still running when its account is deleted finishes. Its history
    write finds no account row (checked in the write's own transaction) and
    stores nothing; its run-history row is written without the account (the
@@ -105,15 +113,21 @@ read 0 on the new). Failure modes first:
 - Deleting and signing in again within 24 hours keeps what the person
   already spent that day, through the estimate and the create routes
   (`tests/integration/test_spend_key.py`).
-- An account created before this change has its own id as its spend key; if
-  it is deleted and re-created, the new row gets the hashed key and the
-  envelope does not carry over, once per such account. **The product owner
-  accepted this on 2026-09-27 at 12:02:35Z (CHG-024).** While live execution
-  is off, that spend is simulated only. How many such accounts exist in
-  production was not measured.
+- An account created before this change keeps its own id as its spend key,
+  so no number moves at deploy, and deleting and re-creating it keeps its
+  day through the pointer. The one-time reset the owner accepted on
+  2026-09-27 at 12:02:35Z (CHG-024) therefore no longer happens, as the
+  option chosen at 15:05:02Z (CHG-025) said.
+- The pointer holds the keyed hash of the Google subject and the spend key
+  for 24 hours after a deletion (`SPEND_KEY_CARRY`), then lapses.
 - The spend key is stored, never recomputed, so rotating
   `QUORUM_TOKEN_SECRET` leaves live accounts' envelopes intact; only an
-  account deleted and re-created after a rotation starts fresh.
+  account deleted before a rotation and re-created after it starts fresh
+  (the pointer is found by the hash under the current secret).
+- Review measured one state, reachable only by a fault, that meters a
+  signed-in account as its id: the spend-key column present without its
+  migration marker. Sign-in is then off, but a session already signed in
+  would be metered as its id.
 - Cost-ledger rows keep the spend key after the 24 hours (nothing in `src/`
   deletes cost rows), and a run degraded to simulation at the global
   ceiling sends it to Sentry as `account_id` (the charge step's call to

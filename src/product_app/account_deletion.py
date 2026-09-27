@@ -33,23 +33,27 @@ def delete_account(account_id: UUID) -> bool:
     """Delete ``account_id`` everywhere it is kept. ``False`` if the account
     rows could not be removed; nothing is changed then.
 
-    The account's sessions are refused BEFORE the rows go (a session read
-    from disk in that moment stays out) and AGAIN AFTER (a session made in
-    between is dropped: review round 2); its carry-over links are dropped
-    after. Each account life has its own random id (ADR-0136), so nothing
-    made after this can ever belong to it.
+    The delete is marked as under way first (it refuses nothing, so another
+    device keeps working if the store refuses), the rows go in one
+    transaction, and only then are the account's sessions refused, its
+    carry-over links dropped and its run-history rows NULLed. A session read
+    from disk in between is refused as it is cached, or dropped here. Each
+    account life has its own random id (ADR-0136), so nothing made after
+    this can ever belong to it.
     """
-    auth.session_repository.revoke_account(account_id)
-    store = session_store.get_store()
-    if store is None or not store.delete_account(account_id):
-        auth.session_repository.restore_account(account_id)
-        _log.error("account deletion: the account rows could not be removed")
-        return False
-    auth.session_repository.revoke_account(account_id)
-    account_history.forget_account(account_id)
-    run_history_store.forget_account(str(account_id))
-    _log.info("account deleted")
-    return True
+    auth.session_repository.begin_deletion(account_id)
+    try:
+        store = session_store.get_store()
+        if store is None or not store.delete_account(account_id):
+            _log.error("account deletion: the account rows could not be removed")
+            return False
+        auth.session_repository.revoke_account(account_id)
+        account_history.forget_account(account_id)
+        run_history_store.forget_account(str(account_id))
+        _log.info("account deleted")
+        return True
+    finally:
+        auth.session_repository.end_deletion(account_id)
 
 
 class AccountDeleteRequest(BaseModel):

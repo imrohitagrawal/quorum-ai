@@ -59,7 +59,8 @@ second pull request; history was part a, ADR-0135).
 5. **Operator rows keep the account.** The run-history table's `account_id`
    is set to NULL for the deleted account's rows; the cost ledger keeps the
    hash-derived id, which is what keeps the 24-hour envelope.
-6. **A run in flight when the account is deleted.** It finishes; it is
+6. **A run in flight when the account is deleted.** *(Replaced by the
+   re-plan below.)* It finishes; it is
    marked at deletion, so it writes no history and its run-history row is
    written without the account id. (The first draft said its history write
    "finds no account". Review round 1 showed that is false once the same
@@ -88,7 +89,7 @@ second pull request; history was part a, ADR-0135).
     row for a deleted account. Answer: after issuing, the callback checks
     the account row again and, if it is gone, revokes the session and
     reports "did not complete".
-12. **A failed delete.** The sessions are refused before the rows are
+12. **A failed delete.** *(Replaced by the re-plan below: nothing changes.)* The sessions are refused before the rows are
     deleted, so a 503 leaves the visitor signed out. The message says so.
 13. **The local `X-Account-Id` path.** It needs no cookie. Deletion refuses
     it.
@@ -171,3 +172,22 @@ S9. **Two lives of one person at once.** Both charge under the same key
 
 - Cost-ledger rows keep the spend key after the 24 hours; nothing in `src/`
   deletes cost rows. That was already true of the derived id on this branch.
+
+### Added by review round 1 of the re-plan (2026-09-27)
+
+- **An account switch racing the delete** (critical, reproduced by review):
+  device 1 signed in as Ada switches to Grace while Ada is deleted on device
+  2. Ada's id then had no account row, and carry-over took it for anonymous,
+  moving Ada's questions into Grace's history. Answer: carry-over refuses an
+  id whose account is being or was just deleted, and deletion drops links to
+  or from the id.
+- **A failed delete that still changed things**: the refusal was set before
+  the store transaction, so another device was signed out and a run
+  finishing then NULLed the account's run rows. Answer: before the rows go,
+  the delete is only marked as under way (read by the spend-key lookup and
+  carry-over, refusing nothing); the refusal comes after the commit.
+- **The old-account reset** (CHG-024): the option the owner chose (CHG-025)
+  said the re-plan also ends it. Answer: a deleted account's spend key is
+  kept 24 hours under the keyed hash of its subject, and the re-created
+  account takes it back.
+

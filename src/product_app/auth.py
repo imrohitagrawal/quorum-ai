@@ -317,14 +317,14 @@ class SessionRepository:
 
     def __init__(self) -> None:
         self._sessions: dict[str, _Session] = {}
-        #: W7 (ADR-0136): accounts deleted in this process, and until when to
-        #: refuse their sessions. A session read from disk a moment before the
-        #: delete is checked against this before it is cached, so it cannot
-        #: be put back (the race the review map measured on main).
-        #: W7 (ADR-0136): deleted account id -> when the mark lapses. Each
-        #: account life has its own random id, so every session of a marked
-        #: id is refused.
+        #: W7 (ADR-0136): deleted account id -> until when its sessions are
+        #: refused. A session read from disk a moment before the delete is
+        #: checked against this before it is cached, so it cannot be put back.
+        #: Each account life has its own random id, so every session of a
+        #: marked id is refused.
         self._deleted_accounts: dict[UUID, datetime] = {}
+        #: W7 (ADR-0136): account id -> how many deletes of it are under way.
+        self._deleting: dict[UUID, int] = {}
         self._lock = RLock()
 
     def create(self, *, account_id: UUID) -> _Session:
@@ -403,17 +403,32 @@ class SessionRepository:
             until = self._deleted_accounts.get(account_id)
             return until is not None and until > datetime.now(UTC)
 
-    def restore_account(self, account_id: UUID) -> None:
-        """Lift the deleted mark after a delete that did not happen (the store
-        refused it): the account and its session rows are still there, and its
-        sessions resolve again from disk (ADR-0136)."""
+    def begin_deletion(self, account_id: UUID) -> None:
+        """A delete of ``account_id`` is under way (ADR-0136). Refuses nothing
+        on its own, so another device keeps working if the delete fails; it
+        is what :func:`spend_key_for` and carry-over read in the moment
+        between the account row going and :meth:`revoke_account`."""
         with self._lock:
-            self._deleted_accounts.pop(account_id, None)
+            self._deleting[account_id] = self._deleting.get(account_id, 0) + 1
+
+    def end_deletion(self, account_id: UUID) -> None:
+        with self._lock:
+            left = self._deleting.get(account_id, 0) - 1
+            if left > 0:
+                self._deleting[account_id] = left
+            else:
+                self._deleting.pop(account_id, None)
+
+    def account_is_going(self, account_id: UUID) -> bool:
+        """Deleted within the session lifetime, or being deleted now."""
+        with self._lock:
+            return account_id in self._deleting or self.account_was_deleted(account_id)
 
     def forget_deleted_accounts(self) -> None:
         """Tests: forget every deleted-account mark."""
         with self._lock:
             self._deleted_accounts.clear()
+            self._deleting.clear()
 
     def revoke(self, session_id: str) -> None:
         """Drop the session from both halves.
@@ -751,17 +766,22 @@ def spend_key_for(session: SessionContext) -> UUID:
     """The key this session's runs are metered under (W7, ADR-0136).
 
     Read once per request by the estimate and create routes, and stored on the
-    run, so its charge, void and reconcile use one key. Never falls back to the
-    account id for a signed-in account: that would be a fresh, empty envelope.
-    The lookup comes FIRST and the deleted mark SECOND: deletion sets the mark
-    before it removes the account row, so a lookup that already misses the
-    row is certain to see the mark.
+    run, so its charge, void and reconcile use one key. A read error refuses
+    (503) rather than falling back to the account id, which for a signed-in
+    account would be a fresh, empty envelope; this refuses anonymous runs
+    too while the sessions database cannot be read. The id is used as is only
+    where the store says the id has no account row, or has no usable
+    accounts table at all.
+    The lookup comes FIRST and the deletion check SECOND: a delete is marked
+    as under way before the account row goes and stays marked until the
+    sessions are refused, so a lookup that already misses the row of a
+    deleted account sees one or the other (within the session lifetime).
     """
     if session.legacy:
         return session.account_id
     store = session_store.get_store()
     key = session.account_id if store is None else store.spend_key_for(session.account_id)
-    if session_repository.account_was_deleted(session.account_id):
+    if session_repository.account_is_going(session.account_id):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail={

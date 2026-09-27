@@ -1,9 +1,9 @@
 """Re-runnable mutation proof for W7's account-deletion pull request (ADR-0136).
 
 Each mutation breaks one part of deleting an account (refusing its sessions,
-the restore re-check, each row the transaction removes, the keyed-hash
-account id, the typed-email check, CSRF, the cookie, the operator rows, the
-carry-over links, the random id per account life, and the spend key that
+the restore re-check, each row the transaction removes, the keyed hash, the
+typed-email check, CSRF, the cookie, the operator rows, the carry-over links,
+the random id per account life, and the spend key that
 keeps the 24-hour envelope: its column, its backfill, and every money call
 and route that must pass it) and runs the deletion and spend-key tests.
 
@@ -67,12 +67,18 @@ MUTATIONS: list[tuple[str, str, str, int, int]] = [
         0,
     ),
     (AU, "                del self._deleted_accounts[lapsed]\n", "                pass\n", 1, 0),
-    (AU, "            self._deleted_accounts.pop(account_id, None)\n", "            pass\n", 1, 0),
+    (
+        AU,
+        "            return account_id in self._deleting or self.account_was_deleted(account_id)",
+        "            return self.account_was_deleted(account_id)",
+        1,
+        0,
+    ),
     # The spend key at the request: a deleted account refused, a read error
     # refused rather than falling back to the id.
     (
         AU,
-        "    if session_repository.account_was_deleted(session.account_id):\n        raise",
+        "    if session_repository.account_is_going(session.account_id):\n        raise",
         "    if False:\n        raise",
         1,
         0,
@@ -92,8 +98,8 @@ MUTATIONS: list[tuple[str, str, str, int, int]] = [
     ),
     (
         ST,
-        "                        spend_key = account_id_for(google_sub, key=_account_key())\n",
-        "                        spend_key = account_id\n",
+        "                        subject_key = account_id_for(google_sub, key=_account_key())\n",
+        "                        subject_key = account_id\n",
         1,
         0,
     ),
@@ -212,9 +218,9 @@ MUTATIONS: list[tuple[str, str, str, int, int]] = [
     (AD, "    auth.enforce_csrf(request, session)\n", "", 1, 0),
     (AD, "    if account is None:\n", "    if False:\n", 1, 0),
     (AD, " or session.legacy else", " else", 1, 0),
-    (AD, "    auth.session_repository.revoke_account(account_id)\n", "", 2, 0),
-    (AD, "    auth.session_repository.revoke_account(account_id)\n", "", 2, 1),
-    (AD, "        auth.session_repository.restore_account(account_id)\n", "", 1, 0),
+    (AD, "        auth.session_repository.revoke_account(account_id)\n", "", 1, 0),
+    (AD, "        auth.session_repository.end_deletion(account_id)\n", "        pass\n", 1, 0),
+    (AD, "    auth.session_repository.begin_deletion(account_id)\n", "", 1, 0),
     (AD, "    account_history.forget_account(account_id)\n", "", 1, 0),
     (AD, "    run_history_store.forget_account(str(account_id))\n", "", 1, 0),
     (AD, "    auth.clear_session_cookie(response)\n", "", 1, 0),
@@ -232,6 +238,33 @@ MUTATIONS: list[tuple[str, str, str, int, int]] = [
         1,
         0,
     ),
+    # The spend key is kept a day for the account's re-creation (CHG-025).
+    (ST, "                    self._carry_spend_key(key)\n", "", 1, 0),
+    (
+        ST,
+        "spend_key = subject_key if carried is None else UUID(carried[0])",
+        "spend_key = subject_key",
+        1,
+        0,
+    ),
+    (
+        ST,
+        '"WHERE subject_key = ? AND until > ?",',
+        '"WHERE subject_key = ? AND ? IS NOT NULL",',
+        1,
+        0,
+    ),
+    (ST, 'row["spend_key"] or key, (now + SPEND_KEY_CARRY)', "key, (now + SPEND_KEY_CARRY)", 1, 0),
+    # Carry-over never takes a deleted account's runs, and forgets links from it.
+    (
+        AH,
+        "        if auth.session_repository.account_is_going(anonymous_account_id):\n"
+        "            return",
+        "        if False:\n            return",
+        1,
+        0,
+    ),
+    (AH, "if account_id in (a, target)", "if target == account_id", 1, 0),
     # A sign-in finishing during the delete revokes its own session.
     (GS, "    if store.account_for(account_id) is None:\n", "    if False:\n", 1, 0),
 ]

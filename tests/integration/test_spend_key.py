@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Iterator
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
@@ -396,7 +397,7 @@ def test_the_spend_key_depends_on_the_server_secret() -> None:
 
 
 def test_the_create_routes_running_total_reads_the_spend_key(sign_in: SignIn) -> None:
-    """The in-memory running total (the rail that binds first) is tested only
+    """The in-memory running total is tested only
     in the estimate, and the create route re-estimates. Turns red if the
     create route's estimate reads the account id: the durable ledger is empty
     here, so only this rail can refuse."""
@@ -530,3 +531,45 @@ def test_a_sign_in_with_no_session_store_does_not_complete(
     response = _callback(client, code="stub-auth-code-1", state=query["state"])
     assert response.status_code == 303
     assert response.headers["location"].endswith("sign_in=failed")
+
+
+def test_an_older_account_keeps_its_days_spend_when_deleted_and_recreated(
+    sign_in: SignIn,
+) -> None:
+    """CHG-025: the chosen option "also ends the old-account reset (CHG-024)".
+    An account created before this change has its own id as its spend key;
+    deleting it keeps a 24-hour pointer from the subject's hash to that key,
+    and the re-created account takes it. Turns red if the new life starts a
+    fresh envelope."""
+    with ledger_for_tests() as ledger:
+        client = sign_in.client()
+        _signed_in(client)
+        old, _, _ = _account(sign_in)
+        sign_in.store._conn.execute("UPDATE accounts SET spend_key = account_id")
+        assert sign_in.store.spend_key_for(old) == old
+        _charge(ledger, old, "0.39")
+        assert _delete(client).status_code == 200
+        again = sign_in.client()
+        _signed_in(again)
+        new, key, _ = _account(sign_in)
+        assert new != old
+        assert key == old
+        assert _estimate(again).json()["cost_estimate"]["threshold_action"] == "block"
+
+
+def test_the_spend_key_pointer_lapses_after_a_day(sign_in: SignIn) -> None:
+    """The pointer lasts the spend window and no longer. Turns red if a
+    lapsed pointer is still used, or the pointer never lapses."""
+    client = sign_in.client()
+    _signed_in(client)
+    old, _, subject = _account(sign_in)
+    sign_in.store._conn.execute("UPDATE accounts SET spend_key = account_id")
+    assert _delete(client).status_code == 200
+    (until,) = sign_in.store._conn.execute("SELECT until FROM spend_key_carry").fetchone()
+    assert timedelta(hours=24) == session_store.SPEND_KEY_CARRY
+    sign_in.store._conn.execute("UPDATE spend_key_carry SET until = '2000-01-01T00:00:00+00:00'")
+    _signed_in(sign_in.client())
+    _, key, _ = _account(sign_in)
+    assert key == session_store.account_id_for(subject, key=session_store._account_key())
+    assert key != old
+    assert until > datetime.now(UTC).isoformat()

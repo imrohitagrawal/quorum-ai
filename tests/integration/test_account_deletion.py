@@ -446,6 +446,7 @@ def test_a_sign_in_finishing_during_the_delete_leaves_nothing_behind(
     ).fetchone()[0]
     assert rows == 0
     assert _stored_history(sign_in, account) == []
+    assert anonymous not in account_history._carried
 
 
 def test_a_session_issued_while_the_rows_are_deleted_is_dropped(
@@ -500,3 +501,97 @@ def test_lapsed_deleted_marks_are_dropped() -> None:
     auth.session_repository.revoke_account(uuid4())
     assert lapsed not in auth.session_repository._deleted_accounts
     assert kept in auth.session_repository._deleted_accounts
+
+
+# -- Re-plan review round 1 (2026-09-27).
+
+
+def test_a_deleted_accounts_questions_never_move_to_another_account(
+    sign_in: SignIn, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Device 1 is signed in as Ada and switches to Grace; Ada is deleted on
+    device 2 while the switch is between issuing Grace's session and carrying
+    runs over. Ada's id then reads as "no account row", which carry-over took
+    for anonymous. Turns red if Ada's questions (finished or still running)
+    reach Grace's history, or a link from Ada's id is kept."""
+    from tests.integration.test_google_sign_in import _callback, _start
+
+    from product_app import account_deletion
+
+    device = sign_in.client()
+    _signed_in(device)
+    ada = _account(sign_in)
+    _finish(_run(ada, "SECRET-A finished"))
+    running = _run(ada, "SECRET-A running")
+    sign_in.stub.claims = {**sign_in.stub.claims, "sub": "grace-sub", "email": "grace@example.com"}
+    real_issue = auth.issue_signed_in_session
+
+    def issue_then_delete(*args: Any, **kwargs: Any) -> Any:
+        issued = real_issue(*args, **kwargs)
+        assert account_deletion.delete_account(ada) is True
+        return issued
+
+    monkeypatch.setattr(auth, "issue_signed_in_session", issue_then_delete)
+    query = _start(device, _csrf(device))
+    _callback(device, code="stub-auth-code-1", state=query["state"])
+    monkeypatch.setattr(auth, "issue_signed_in_session", real_issue)
+    (grace_row,) = sign_in.account_rows()
+    grace = UUID(grace_row["account_id"])
+    assert grace != ada
+    assert ada not in account_history._carried
+    _finish(running)
+    assert account_history.history_for(grace) == []
+
+
+def test_forgetting_an_account_drops_links_from_it_too(sign_in: SignIn) -> None:
+    """Turns red if a carry-over link whose SOURCE is the deleted id is kept
+    (only links pointing AT it were dropped)."""
+    source, target, other = uuid4(), uuid4(), uuid4()
+    far = datetime.now(UTC).replace(year=2100)
+    account_history._carried[source] = (target, far)
+    account_history._carried[other] = (source, far)
+    account_history._carried[uuid4()] = (target, far)
+    account_history.forget_account(source)
+    assert source not in account_history._carried
+    assert other not in account_history._carried
+    assert len(account_history._carried) == 1
+
+
+def test_a_failed_delete_signs_no_other_device_out_and_keeps_run_rows(
+    sign_in: SignIn, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """While the store is failing the delete, another device loads the page
+    and a run of the account finishes. Turns red if that device is signed out
+    or the account's run-history rows lose their account (the account was
+    never deleted)."""
+    with run_history_store.configure_for_tests() as runs:
+        phone = sign_in.client()
+        laptop = sign_in.client()
+        _signed_in(phone)
+        _signed_in(laptop)
+        account = _account(sign_in)
+        earlier = _run(account, "earlier")
+        _finish(earlier)
+        running = _run(account, "finishing during the failed delete")
+        seen: dict[str, bool] = {}
+
+        def fail_after_others_act(_id: UUID) -> bool:
+            seen["laptop"] = 'id="account-email"' in laptop.get("/ui").text
+            _finish(running)
+            return False
+
+        monkeypatch.setattr(sign_in.store, "delete_account", fail_after_others_act)
+        assert _delete(phone).status_code == 503
+        assert seen == {"laptop": True}
+        assert 'id="account-email"' in laptop.get("/ui").text
+        # Nothing is left marked as being deleted: the account can still run.
+        csrf = str(laptop.get("/v1/session").json()["csrf_token"])
+        estimate = laptop.post(
+            "/v1/query-runs/estimate",
+            json={"query_text": "q", "model_slots": list(DEFAULT_MODEL_IDS)},
+            headers={"X-CSRF-Token": csrf},
+        )
+        assert estimate.status_code == 200, estimate.text
+        for run in (earlier, running):
+            row = runs.get(str(run.query_run_id))
+            assert row is not None and row.account_id == str(account)

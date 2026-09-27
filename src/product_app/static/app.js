@@ -9973,10 +9973,15 @@
         } catch (err) {
           confirm.disabled = false;
           show("reminder");
+          // Retrying helps only a store failure or a dropped connection; an
+          // expired session or a stale token needs the page reloaded.
+          const code = err && err.code;
           error.textContent =
-            err && err.code === "CONFIRMATION_MISMATCH"
+            code === "CONFIRMATION_MISMATCH"
               ? "That is not the email address you signed in with."
-              : "Your account could not be deleted just now. Please try again.";
+              : code === "CSRF_INVALID" || code === "SESSION_EXPIRED"
+                ? "Your session changed. Reload the page, then try again."
+                : "Your account could not be deleted just now. Please try again.";
           error.hidden = false;
           email.focus();
         }

@@ -137,6 +137,11 @@ class HistoryEntry:
 #: A per-process key used only when ``QUORUM_TOKEN_SECRET`` is unset (local
 #: development; production refuses to start without it). Account ids derived
 #: under it are stable only for the life of the process.
+#: W7 (ADR-0136): how long a deleted account's spend key is kept for its
+#: re-creation: the ledger's 24-hour spend window (``FeedbackStore``'s
+#: ``timedelta(hours=24)`` cutoffs), after which the old spend no longer counts.
+SPEND_KEY_CARRY = timedelta(hours=24)
+
 _PROCESS_ACCOUNT_KEY = secrets.token_bytes(32)
 
 
@@ -146,11 +151,11 @@ def _account_key() -> bytes:
 
 
 def account_id_for(google_sub: str, *, key: bytes) -> UUID:
-    """A new account's id: a keyed one-way hash of its Google subject (W7,
-    ADR-0136). The same subject gets the same id after its account is deleted
-    and signed in again, so the 24-hour spend recorded under the id still
-    counts (CHG-012 D7); without the key the id says nothing about the
-    subject."""
+    """A keyed one-way hash of a Google subject, as a UUID (W7, ADR-0136): a
+    new account's spend key, and the key its spend key is kept under for a
+    day after deletion. The account id itself is random per account life.
+    Without the key the value says nothing about the subject. (The name
+    predates the re-plan, CHG-025.)"""
     digest = hmac.new(key, b"w7-account:" + google_sub.encode(), hashlib.sha256).digest()
     return UUID(bytes=digest[:16], version=4)
 
@@ -316,6 +321,18 @@ class SessionStore:
     #: account's number changes at deploy. Guarded like the accounts table.
     _SPEND_KEY_MIGRATION = "w7_spend_key"
 
+    #: W7 (ADR-0136, CHG-025): when an account is deleted, its spend key is
+    #: kept for :data:`SPEND_KEY_CARRY` under the keyed hash of its Google
+    #: subject, so a re-created account takes it back. Without it an account
+    #: whose key is its own old id (created before the spend key) would start
+    #: a fresh envelope; with it, no account does. Nothing else is kept.
+    _SPEND_KEY_CARRY_DDL = (
+        "CREATE TABLE IF NOT EXISTS spend_key_carry ("
+        "subject_key TEXT PRIMARY KEY, "
+        "spend_key TEXT NOT NULL, "
+        "until TEXT NOT NULL)"
+    )
+
     #: Name of the W7 history migration in ``schema_migrations``.
     _HISTORY_MIGRATION = "w7_history"
 
@@ -409,6 +426,7 @@ class SessionStore:
                 self._conn.execute("BEGIN IMMEDIATE")
                 try:
                     self._conn.execute("ALTER TABLE accounts ADD COLUMN spend_key TEXT")
+                    self._conn.execute(self._SPEND_KEY_CARRY_DDL)
                     self._conn.execute(
                         "UPDATE accounts SET spend_key = account_id WHERE spend_key IS NULL"
                     )
@@ -738,7 +756,13 @@ class SessionStore:
                         # re-created account keeps its 24-hour envelope and
                         # nothing else.
                         account_id = uuid4()
-                        spend_key = account_id_for(google_sub, key=_account_key())
+                        subject_key = account_id_for(google_sub, key=_account_key())
+                        carried = self._conn.execute(
+                            "SELECT spend_key FROM spend_key_carry "
+                            "WHERE subject_key = ? AND until > ?",
+                            (str(subject_key), stamp),
+                        ).fetchone()
+                        spend_key = subject_key if carried is None else UUID(carried[0])
                         self._conn.execute(
                             "INSERT INTO accounts (account_id, google_sub, email, "
                             "created_at, last_sign_in_at, spend_key) VALUES (?, ?, ?, ?, ?, ?)",
@@ -773,6 +797,7 @@ class SessionStore:
             try:
                 self._conn.execute("BEGIN IMMEDIATE")
                 try:
+                    self._carry_spend_key(key)
                     if self._history_ready:
                         self._conn.execute("DELETE FROM history WHERE account_id = ?", (key,))
                     self._conn.execute("DELETE FROM sessions WHERE account_id = ?", (key,))
@@ -785,6 +810,23 @@ class SessionStore:
                 self._warn("delete an account", exc)
                 return False
         return True
+
+    def _carry_spend_key(self, key: str) -> None:
+        """Inside :meth:`delete_account`'s transaction: keep the account's
+        spend key for its re-creation, and drop lapsed ones."""
+        now = datetime.now(UTC)
+        self._conn.execute("DELETE FROM spend_key_carry WHERE until <= ?", (now.isoformat(),))
+        row = self._conn.execute(
+            "SELECT google_sub, spend_key FROM accounts WHERE account_id = ?", (key,)
+        ).fetchone()
+        if row is None:
+            return
+        subject_key = account_id_for(row["google_sub"], key=_account_key())
+        self._conn.execute(
+            "INSERT OR REPLACE INTO spend_key_carry (subject_key, spend_key, until) "
+            "VALUES (?, ?, ?)",
+            (str(subject_key), row["spend_key"] or key, (now + SPEND_KEY_CARRY).isoformat()),
+        )
 
     def spend_key_for(self, account_id: UUID) -> UUID | None:
         """The key the spend rails meter ``account_id`` under (ADR-0136).

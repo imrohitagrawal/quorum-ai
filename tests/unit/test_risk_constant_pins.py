@@ -202,6 +202,9 @@ BUCKET_A_LITERAL_PIN = (
     "session_store.SessionStore._ACCOUNTS_MIGRATION",
     "session_store.SessionStore._HISTORY_MIGRATION",
     "session_store.SessionStore._SPEND_KEY_MIGRATION",
+    # How long a deleted account's spend key is kept for its re-creation: the
+    # ledger's 24-hour window. Shorter resets a re-created account's day.
+    "session_store.SPEND_KEY_CARRY",
     # A wrong value is silently harmful in both directions: dropping "https"
     # breaks every production catalog fetch, and adding "file" turns an
     # operator's typo into an arbitrary local-file read served as live prices.
@@ -603,7 +606,11 @@ BUCKET_B_PIN_BEHAVIOUR = {
 BUCKET_C_NO_PIN = {
     "session_store._PROCESS_ACCOUNT_KEY": (
         "a random per-process key used only when QUORUM_TOKEN_SECRET is unset (local); "
-        "its use is pinned by test_a_new_accounts_id_is_a_keyed_hash_of_its_google_subject"
+        "its use is pinned by test_the_spend_key_depends_on_the_server_secret"
+    ),
+    "session_store.SessionStore._SPEND_KEY_CARRY_DDL": (
+        "the spend-key pointer table's shape; its use is pinned by "
+        "test_an_older_account_keeps_its_days_spend_when_deleted_and_recreated"
     ),
     "main._ANONYMOUS_LEDE": (
         "the anonymous composer lede, pinned exactly by "
@@ -1355,6 +1362,7 @@ def test_the_google_sign_in_constants_are_pinned() -> None:
     assert session_store.SessionStore._ACCOUNTS_MIGRATION == "w7_accounts"
     assert session_store.SessionStore._HISTORY_MIGRATION == "w7_history"
     assert session_store.SessionStore._SPEND_KEY_MIGRATION == "w7_spend_key"
+    assert timedelta(hours=24) == session_store.SPEND_KEY_CARRY
 
 
 def test_the_session_mint_window_is_pinned() -> None:
