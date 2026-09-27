@@ -241,7 +241,7 @@ def test_a_run_history_row_written_just_after_the_nulling_is_nulled(
         _signed_in(client)
         account = _account(sign_in)
         running = _run(account, "written late")
-        real_record = qro._record_run_history
+        real_record = run_history_store.record_terminal_run
 
         def delete_then_record(row: Any) -> None:
             assert account_deletion.delete_account(account) is True

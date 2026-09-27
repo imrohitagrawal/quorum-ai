@@ -34,6 +34,7 @@ from product_app import auth, session_store
 from product_app import query_run_orchestration as qro
 from product_app.costs import DAILY_CAP_USD, cost_estimation_service
 from product_app.feedback_store import configure_for_tests as ledger_for_tests
+from product_app.providers import InitialAnswerStatus
 from product_app.query_run_orchestration import query_run_repository
 from product_app.session_store import SessionStore
 
@@ -198,7 +199,7 @@ def test_the_judge_reads_the_spend_key(sign_in: SignIn, monkeypatch: pytest.Monk
     run = query_run_repository.get(UUID(_create(client).json()["query_run_id"]))
     monkeypatch.setattr(qro, "judge_configured", lambda: True)
     run.initial_answers = [
-        SimpleNamespace(status=qro.InitialAnswerStatus.COMPLETED, provider_path="openrouter")
+        SimpleNamespace(status=InitialAnswerStatus.COMPLETED, provider_path="openrouter")  # type: ignore[list-item]
     ]
     judge = qro._request_path_judge(run)
     assert judge is not None
@@ -450,3 +451,82 @@ def test_the_spend_key_is_refused_between_the_rows_going_and_the_second_refusal(
     monkeypatch.setattr(sign_in.store, "delete_account", delete_then_look)
     assert account_deletion.delete_account(account) is True
     assert seen == [401]
+
+
+# -- Fail-closed branches of the store (each returns what the caller refuses
+# -- on, or the id only where no signed-in account can exist).
+
+
+def test_spend_key_for_before_the_accounts_table_is_ready_is_the_id(tmp_path: Path) -> None:
+    """With no usable accounts table no one can be signed in, so every id is
+    metered as itself. Turns red if that reads as an error instead."""
+    path = tmp_path / "old.sqlite3"
+    _old_database(path, uuid4())
+    path.chmod(0o444)
+    try:
+        store = SessionStore(str(path))
+        try:
+            anyone = uuid4()
+            assert store.spend_key_for(anyone) == anyone
+            assert store.delete_account(anyone) is False
+        finally:
+            store.close()
+    finally:
+        path.chmod(0o644)
+
+
+def test_a_closed_store_refuses_both(tmp_path: Path) -> None:
+    """Turns red if a closed store reports a key or a deletion."""
+    store = SessionStore(str(tmp_path / "s.sqlite3"))
+    store.close()
+    assert store.spend_key_for(uuid4()) is None
+    assert store.delete_account(uuid4()) is False
+
+
+def test_an_unreadable_spend_key_is_none(sign_in: SignIn) -> None:
+    """A value that is not a UUID. Turns red if it is metered as the id."""
+    _signed_in(sign_in.client())
+    account, _, _ = _account(sign_in)
+    sign_in.store._conn.execute("UPDATE accounts SET spend_key = 'not-a-uuid'")
+    assert sign_in.store.spend_key_for(account) is None
+
+
+def test_a_delete_that_fails_inside_its_transaction_removes_nothing(sign_in: SignIn) -> None:
+    """Turns red if a failure part-way through the transaction leaves the
+    account half-deleted: the history table is dropped, so the first DELETE
+    fails and everything rolls back."""
+    _signed_in(sign_in.client())
+    account, _, _ = _account(sign_in)
+    sign_in.store._conn.execute("ALTER TABLE history RENAME TO history_gone")
+    assert sign_in.store.delete_account(account) is False
+    assert len(sign_in.account_rows()) == 1
+    assert sign_in.store._conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0] > 0
+
+
+def test_forgetting_run_rows_that_fails_is_logged(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Best effort, like every run-history write. Turns red if the failure
+    escapes into the deletion or goes unlogged."""
+    from product_app import run_history_store
+
+    class Broken:
+        def forget_account(self, _account_id: str) -> None:
+            raise RuntimeError("disk gone")
+
+    monkeypatch.setattr(run_history_store, "get_store", lambda: Broken())
+    run_history_store.forget_account(str(uuid4()))
+    assert "could not forget a deleted account" in caplog.text
+
+
+def test_a_sign_in_with_no_session_store_does_not_complete(
+    sign_in: SignIn, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Turns red if a callback with no store signs anyone in."""
+    client = sign_in.client()
+    csrf = _boot(client)
+    query = _start(client, csrf)
+    monkeypatch.setattr(session_store, "get_store", lambda: None)
+    response = _callback(client, code="stub-auth-code-1", state=query["state"])
+    assert response.status_code == 303
+    assert response.headers["location"].endswith("sign_in=failed")
