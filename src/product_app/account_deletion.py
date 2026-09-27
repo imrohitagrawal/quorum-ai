@@ -25,22 +25,28 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, StrictStr
 
 from product_app import account_history, auth, run_history_store, session_store
-from product_app.query_run_orchestration import query_run_repository
 
 _log = logging.getLogger(__name__)
 
 
 def delete_account(account_id: UUID) -> bool:
     """Delete ``account_id`` everywhere it is kept. ``False`` if the account
-    rows could not be removed: its sessions are refused all the same (they
-    were refused first), so the visitor is signed out either way."""
+    rows could not be removed; nothing is changed then.
+
+    The account's sessions are refused BEFORE the rows go (a session read
+    from disk in that moment stays out) and AGAIN AFTER (a session made in
+    between is dropped: review round 2); its carry-over links are dropped
+    after. Each account life has its own random id (ADR-0136), so nothing
+    made after this can ever belong to it.
+    """
     auth.session_repository.revoke_account(account_id)
-    query_run_repository.detach_account(account_id)
-    account_history.forget_account(account_id)
     store = session_store.get_store()
     if store is None or not store.delete_account(account_id):
+        auth.session_repository.restore_account(account_id)
         _log.error("account deletion: the account rows could not be removed")
         return False
+    auth.session_repository.revoke_account(account_id)
+    account_history.forget_account(account_id)
     run_history_store.forget_account(str(account_id))
     _log.info("account deleted")
     return True
@@ -78,11 +84,8 @@ def delete_signed_in_account(body: AccountDeleteRequest, request: Request) -> JS
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail={
                 "code": "DELETION_FAILED",
-                # Every session of the account is already refused by then.
-                "message": (
-                    "Your account could not be deleted just now, and you are signed out. "
-                    "Sign in again to try once more."
-                ),
+                # Nothing was changed, so trying again is true (ADR-0136).
+                "message": "Your account could not be deleted just now. Please try again.",
             },
         )
     response = JSONResponse({"deleted": True})

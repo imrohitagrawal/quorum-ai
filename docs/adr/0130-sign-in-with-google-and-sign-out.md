@@ -80,7 +80,8 @@ the code, see that page).
    (`w7_accounts`), never in `SessionStore._SCHEMA`: an existing read-only
    database still opens, serves sessions, and only sign-in is unavailable.
    Columns: `account_id` (a new uuid4, minted once per subject; since
-   2026-09-27 derived from the subject instead, ADR-0136), `google_sub`
+   2026-09-27 once per account life, with the spend envelope keyed on a
+   separate `spend_key` column, ADR-0136), `google_sub`
    (unique), `email` (display only), `created_at`, `last_sign_in_at`. Nothing
    else: no token, no name, no picture. A returning subject gets its old id
    and an updated email.

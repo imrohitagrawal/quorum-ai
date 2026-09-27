@@ -201,6 +201,7 @@ BUCKET_A_LITERAL_PIN = (
     # renaming it re-runs the migration on every database.
     "session_store.SessionStore._ACCOUNTS_MIGRATION",
     "session_store.SessionStore._HISTORY_MIGRATION",
+    "session_store.SessionStore._SPEND_KEY_MIGRATION",
     # A wrong value is silently harmful in both directions: dropping "https"
     # breaks every production catalog fetch, and adding "file" turns an
     # operator's typo into an arbitrary local-file read served as live prices.
@@ -1353,6 +1354,7 @@ def test_the_google_sign_in_constants_are_pinned() -> None:
     assert google_signin._DEFAULT_PORTS == {"http": 80, "https": 443}
     assert session_store.SessionStore._ACCOUNTS_MIGRATION == "w7_accounts"
     assert session_store.SessionStore._HISTORY_MIGRATION == "w7_history"
+    assert session_store.SessionStore._SPEND_KEY_MIGRATION == "w7_spend_key"
 
 
 def test_the_session_mint_window_is_pinned() -> None:

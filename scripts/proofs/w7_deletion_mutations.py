@@ -3,8 +3,9 @@
 Each mutation breaks one part of deleting an account (refusing its sessions,
 the restore re-check, each row the transaction removes, the keyed-hash
 account id, the typed-email check, CSRF, the cookie, the operator rows, the
-carry-over links, and what keeps the time before a deletion out once the
-same Google account signs in again) and runs the deletion tests.
+carry-over links, the random id per account life, and the spend key that
+keeps the 24-hour envelope: its column, its backfill, and every money call
+and route that must pass it) and runs the deletion and spend-key tests.
 
 Applies each mutation by exact text (the anchor must occur the stated number
 of times, or the proof is reported invalid), clears ``__pycache__``, runs the
@@ -36,18 +37,14 @@ AU = "src/product_app/auth.py"
 RH = "src/product_app/run_history_store.py"
 GS = "src/product_app/google_signin.py"
 QO = "src/product_app/query_run_orchestration.py"
-M = "src/product_app/main.py"
-C = "src/product_app/config.py"
+CO = "src/product_app/costs.py"
+QR = "src/product_app/query_runs.py"
 
 #: (file, anchor, replacement, expected count, which occurrence)
 MUTATIONS: list[tuple[str, str, str, int, int]] = [
-    (
-        AU,
-        "            self._deleted_accounts[account_id] = (now + SESSION_TTL, now)\n",
-        "",
-        1,
-        0,
-    ),
+    # Deleting: refusing the account's sessions, the restore re-check, the
+    # mark's lifetime, lifting it after a failed delete.
+    (AU, "            self._deleted_accounts[account_id] = now + SESSION_TTL\n", "", 1, 0),
     (
         AU,
         "                self._sessions.pop(session_id, None)\n\n    def account_was_deleted",
@@ -57,26 +54,46 @@ MUTATIONS: list[tuple[str, str, str, int, int]] = [
     ),
     (
         AU,
-        "            if self.account_was_deleted("
-        "session.account_id, created_before=session.created_at):\n",
-        "            if False:\n",
+        "            if self.account_was_deleted(session.account_id):\n                return None",
+        "            if False:\n                return None",
         1,
         0,
     ),
     (
         AU,
-        "            if mark is None or mark[0] <= datetime.now(UTC):",
-        "            if mark is None:",
+        "            return until is not None and until > datetime.now(UTC)",
+        "            return until is not None",
         1,
         0,
     ),
+    (AU, "                del self._deleted_accounts[lapsed]\n", "                pass\n", 1, 0),
+    (AU, "            self._deleted_accounts.pop(account_id, None)\n", "            pass\n", 1, 0),
+    # The spend key at the request: a deleted account refused, a read error
+    # refused rather than falling back to the id.
+    (
+        AU,
+        "    if session_repository.account_was_deleted(session.account_id):\n        raise",
+        "    if False:\n        raise",
+        1,
+        0,
+    ),
+    (AU, "    if key is None:\n        raise", "    if False:\n        raise", 1, 0),
+    # The rows one transaction removes.
     (ST, '"DELETE FROM history WHERE account_id = ?", (key,)', '"SELECT ?", (key,)', 1, 0),
     (ST, '"DELETE FROM sessions WHERE account_id = ?", (key,)', '"SELECT ?", (key,)', 1, 0),
     (ST, '"DELETE FROM accounts WHERE account_id = ?", (key,)', '"SELECT ?", (key,)', 1, 0),
+    # A random id per life; the spend key from the subject, under the key.
     (
         ST,
-        "account_id = account_id_for(google_sub, key=_account_key())",
-        "account_id = UUID(bytes=secrets.token_bytes(16), version=4)",
+        "                        account_id = uuid4()\n",
+        "                        account_id = account_id_for(google_sub, key=_account_key())\n",
+        1,
+        0,
+    ),
+    (
+        ST,
+        "                        spend_key = account_id_for(google_sub, key=_account_key())\n",
+        "                        spend_key = account_id\n",
         1,
         0,
     ),
@@ -87,6 +104,104 @@ MUTATIONS: list[tuple[str, str, str, int, int]] = [
         1,
         0,
     ),
+    # The migration: backfill with the id, sign-in off without it, a NULL
+    # key means the id, a read error is None.
+    (
+        ST,
+        '"UPDATE accounts SET spend_key = account_id WHERE spend_key IS NULL"',
+        '"UPDATE accounts SET spend_key = NULL WHERE spend_key IS NULL"',
+        1,
+        0,
+    ),
+    (
+        ST,
+        "self._migrate_accounts() and self._migrate_spend_key()",
+        "self._migrate_accounts() and (self._migrate_spend_key() or True)",
+        1,
+        0,
+    ),
+    (
+        ST,
+        '        if row is None or row["spend_key"] is None:\n            return account_id',
+        "        if row is None:\n            return account_id",
+        1,
+        0,
+    ),
+    (
+        ST,
+        '                self._warn("read a spend key", exc)\n                return None\n'
+        "        if row is None",
+        '                self._warn("read a spend key", exc)\n                return account_id\n'
+        "        if row is None",
+        1,
+        0,
+    ),
+    # History only for an account row, checked in the write's transaction.
+    (
+        ST,
+        '"WHERE EXISTS (SELECT 1 FROM accounts WHERE account_id = ?) "',
+        '"WHERE ? IS NOT NULL "',
+        1,
+        0,
+    ),
+    # The run keeps the key its charge opened under; every money call uses it.
+    (
+        QO,
+        "    return query_run.account_id if query_run.spend_key is None else query_run.spend_key",
+        "    return query_run.account_id",
+        1,
+        0,
+    ),
+    (
+        QO,
+        "spend_key=account_id if spend_key is None else spend_key,",
+        "spend_key=account_id,",
+        1,
+        0,
+    ),
+    (QO, "account_id=_spend_key(query_run),", "account_id=query_run.account_id,", 3, 0),
+    (QO, "account_id=_spend_key(query_run),", "account_id=query_run.account_id,", 3, 1),
+    (QO, "account_id=_spend_key(query_run),", "account_id=query_run.account_id,", 3, 2),
+    (
+        QO,
+        "str(query_run.query_run_id), _spend_key(query_run), quick=",
+        "str(query_run.query_run_id), query_run.account_id, quick=",
+        1,
+        0,
+    ),
+    (
+        CO,
+        "        meter_key = spend_key if spend_key is not None else account_id\n",
+        "        meter_key = account_id\n",
+        1,
+        0,
+    ),
+    # The routes pass the key.
+    (QR, "        spend_key=spend_key,\n        # WP-G2", "        # WP-G2", 1, 0),
+    (
+        QR,
+        "        spend_key=spend_key,\n        context=payload.context,",
+        "        context=payload.context,",
+        1,
+        0,
+    ),
+    (
+        QR,
+        "            spend_key=spend_key,\n        )\n    except ActiveQueryRunExistsError",
+        "        )\n    except ActiveQueryRunExistsError",
+        1,
+        0,
+    ),
+    # A run-history row written either side of the NULLing loses the account.
+    (
+        QO,
+        "        if session_repository.account_was_deleted(query_run.account_id):\n"
+        "            run_history_store.forget_account",
+        "        if False:\n            run_history_store.forget_account",
+        1,
+        0,
+    ),
+    # The endpoint and the deletion order.
     (
         AD,
         "    if body.confirm_email.strip().casefold() != account.email.strip().casefold():",
@@ -96,9 +211,12 @@ MUTATIONS: list[tuple[str, str, str, int, int]] = [
     ),
     (AD, "    auth.enforce_csrf(request, session)\n", "", 1, 0),
     (AD, "    if account is None:\n", "    if False:\n", 1, 0),
-    (AD, "    auth.session_repository.revoke_account(account_id)\n", "", 1, 0),
-    (AD, "    run_history_store.forget_account(str(account_id))\n", "", 1, 0),
+    (AD, " or session.legacy else", " else", 1, 0),
+    (AD, "    auth.session_repository.revoke_account(account_id)\n", "", 2, 0),
+    (AD, "    auth.session_repository.revoke_account(account_id)\n", "", 2, 1),
+    (AD, "        auth.session_repository.restore_account(account_id)\n", "", 1, 0),
     (AD, "    account_history.forget_account(account_id)\n", "", 1, 0),
+    (AD, "    run_history_store.forget_account(str(account_id))\n", "", 1, 0),
     (AD, "    auth.clear_session_cookie(response)\n", "", 1, 0),
     (
         AD,
@@ -114,78 +232,16 @@ MUTATIONS: list[tuple[str, str, str, int, int]] = [
         1,
         0,
     ),
-    (
-        QO,
-        "            account_id=None if query_run.account_deleted else str(query_run.account_id),",
-        "            account_id=str(query_run.account_id),",
-        1,
-        0,
-    ),
-    # Review round 1 (2026-09-27): the id comes back on signing in again.
-    (
-        AU,
-        "            return created_before is None or created_before < mark[1]",
-        "            return True",
-        1,
-        0,
-    ),
-    (AU, "                del self._deleted_accounts[lapsed]\n", "                pass\n", 1, 0),
-    (QO, "                query_run.account_deleted = True\n", "                pass\n", 1, 0),
-    (
-        QO,
-        " or query_run.account_id != account_id or query_run.account_deleted:",
-        " or query_run.account_id != account_id:",
-        1,
-        0,
-    ),
-    (
-        QO,
-        "                    and not query_run.is_terminal\n"
-        "                    and not query_run.account_deleted\n",
-        "                    and not query_run.is_terminal\n",
-        1,
-        0,
-    ),
-    (
-        QO,
-        "                query_run.account_id == account_id and not query_run.is_terminal\n"
-        "                for query_run in self._query_runs.values()",
-        "                query_run.account_id == account_id and not query_run.is_terminal\n"
-        "                and not query_run.account_deleted\n"
-        "                for query_run in self._query_runs.values()",
-        1,
-        0,
-    ),
-    (
-        AH,
-        "        if not query_run.is_terminal or query_run.account_deleted:",
-        "        if not query_run.is_terminal:",
-        1,
-        0,
-    ),
-    (
-        ST,
-        '"WHERE EXISTS (SELECT 1 FROM accounts WHERE account_id = ?) "',
-        '"WHERE ? IS NOT NULL "',
-        1,
-        0,
-    ),
+    # A sign-in finishing during the delete revokes its own session.
     (GS, "    if store.account_for(account_id) is None:\n", "    if False:\n", 1, 0),
-    (AD, "    query_run_repository.detach_account(account_id)\n", "", 1, 0),
-    (AD, " or session.legacy else", " else", 1, 0),
-    (
-        AD,
-        '"Sign in again to try once more."',
-        '"Please try again."',
-        1,
-        0,
-    ),
 ]
 
 TESTS = [
     "tests/integration/test_account_deletion.py",
+    "tests/integration/test_spend_key.py",
     "tests/integration/test_account_history_flow.py",
     "tests/integration/test_google_sign_in.py",
+    "tests/unit/test_account_history_store.py",
 ]
 
 

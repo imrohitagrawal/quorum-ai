@@ -9957,6 +9957,8 @@
           return;
         }
         show("final");
+        // A mismatch shown on the last try must not stay beside the new one.
+        error.hidden = true;
         el("account-delete-confirm").focus();
       });
       const confirm = el("account-delete-confirm");
@@ -9971,15 +9973,10 @@
         } catch (err) {
           confirm.disabled = false;
           show("reminder");
-          // DELETION_FAILED comes after every session was refused (ADR-0136).
-          const code = err && err.code;
           error.textContent =
-            code === "CONFIRMATION_MISMATCH"
+            err && err.code === "CONFIRMATION_MISMATCH"
               ? "That is not the email address you signed in with."
-              : code === "DELETION_FAILED"
-                ? "Your account could not be deleted just now, and you are signed out. " +
-                  "Sign in again to try once more."
-                : "Your account could not be deleted just now. Please try again.";
+              : "Your account could not be deleted just now. Please try again.";
           error.hidden = false;
           email.focus();
         }

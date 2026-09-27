@@ -321,11 +321,10 @@ class SessionRepository:
         #: refuse their sessions. A session read from disk a moment before the
         #: delete is checked against this before it is cached, so it cannot
         #: be put back (the race the review map measured on main).
-        #: W7 (ADR-0136): deleted account id -> (when the mark lapses, when
-        #: the account was deleted). Only sessions created BEFORE the
-        #: deletion are refused: the same Google account signing in again
-        #: gets the same id back, and its new sessions must work.
-        self._deleted_accounts: dict[UUID, tuple[datetime, datetime]] = {}
+        #: W7 (ADR-0136): deleted account id -> when the mark lapses. Each
+        #: account life has its own random id, so every session of a marked
+        #: id is refused.
+        self._deleted_accounts: dict[UUID, datetime] = {}
         self._lock = RLock()
 
     def create(self, *, account_id: UUID) -> _Session:
@@ -383,34 +382,33 @@ class SessionRepository:
         return session
 
     def revoke_account(self, account_id: UUID) -> None:
-        """Refuse every session of ``account_id`` created before now, and drop
-        the cached ones (W7 account deletion). The durable rows are deleted by
+        """Refuse every session of ``account_id``, and drop the cached ones
+        (W7 account deletion). The durable rows are deleted by
         ``SessionStore.delete_account``, in the same transaction as the
         account; this call must come FIRST, so a restore racing the delete
         sees the account already refused. Lapsed marks are dropped here."""
         now = datetime.now(UTC)
         with self._lock:
-            for lapsed in [
-                aid for aid, (until, _) in self._deleted_accounts.items() if until <= now
-            ]:
+            for lapsed in [aid for aid, until in self._deleted_accounts.items() if until <= now]:
                 del self._deleted_accounts[lapsed]
-            self._deleted_accounts[account_id] = (now + SESSION_TTL, now)
+            self._deleted_accounts[account_id] = now + SESSION_TTL
             for session_id in [
                 sid for sid, session in self._sessions.items() if session.account_id == account_id
             ]:
                 self._sessions.pop(session_id, None)
 
-    def account_was_deleted(
-        self, account_id: UUID, *, created_before: datetime | None = None
-    ) -> bool:
-        """Whether ``account_id`` was deleted within the session lifetime;
-        with ``created_before``, whether it was deleted after that moment
-        (a session created then belongs to the deleted account)."""
+    def account_was_deleted(self, account_id: UUID) -> bool:
+        """Whether ``account_id`` was deleted within the session lifetime."""
         with self._lock:
-            mark = self._deleted_accounts.get(account_id)
-            if mark is None or mark[0] <= datetime.now(UTC):
-                return False
-            return created_before is None or created_before < mark[1]
+            until = self._deleted_accounts.get(account_id)
+            return until is not None and until > datetime.now(UTC)
+
+    def restore_account(self, account_id: UUID) -> None:
+        """Lift the deleted mark after a delete that did not happen (the store
+        refused it): the account and its session rows are still there, and its
+        sessions resolve again from disk (ADR-0136)."""
+        with self._lock:
+            self._deleted_accounts.pop(account_id, None)
 
     def forget_deleted_accounts(self) -> None:
         """Tests: forget every deleted-account mark."""
@@ -464,7 +462,7 @@ class SessionRepository:
         with self._lock:
             # W7 (ADR-0136): re-checked under the lock, after the disk read,
             # so an account deleted while this read was in flight stays out.
-            if self.account_was_deleted(session.account_id, created_before=session.created_at):
+            if self.account_was_deleted(session.account_id):
                 return None
             # ``setdefault``, not assignment: two requests arriving together on
             # a cold process both restore, and the loser must return the SAME
@@ -747,6 +745,39 @@ def _legacy_path_allowed() -> bool:
     if settings.runtime_environment == "production":
         return False
     return bool(settings.account_legacy_header_enabled)
+
+
+def spend_key_for(session: SessionContext) -> UUID:
+    """The key this session's runs are metered under (W7, ADR-0136).
+
+    Read once per request by the estimate and create routes, and stored on the
+    run, so its charge, void and reconcile use one key. Never falls back to the
+    account id for a signed-in account: that would be a fresh, empty envelope.
+    The lookup comes FIRST and the deleted mark SECOND: deletion sets the mark
+    before it removes the account row, so a lookup that already misses the
+    row is certain to see the mark.
+    """
+    if session.legacy:
+        return session.account_id
+    store = session_store.get_store()
+    key = session.account_id if store is None else store.spend_key_for(session.account_id)
+    if session_repository.account_was_deleted(session.account_id):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={
+                "code": AuthError.SESSION_EXPIRED.value,
+                "message": "Browser session expired and must be renewed.",
+            },
+        )
+    if key is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "SPEND_KEY_UNAVAILABLE",
+                "message": "Your spending limit could not be checked just now. Please try again.",
+            },
+        )
+    return key
 
 
 def require_session(request: Request) -> SessionContext:

@@ -518,11 +518,12 @@ class QueryRun:
     #: builds (no extra judge call), so a run carried into a history later
     #: still has it. ``None`` until then, and for a run with no verdict.
     history_verdict: str | None = None
-    #: W7 (ADR-0136): set when the run's account is deleted while the run is
-    #: held here. The id comes back if the same Google account signs in
-    #: again, so this, not the id, keeps the run out of the new account's
-    #: reads and history. The money rails still key on ``account_id``.
-    account_deleted: bool = False
+    #: W7 (ADR-0136): the key the run's money is metered under, read once
+    #: when the run is created. A signed-in account's spend key is not its id,
+    #: and the charge, void, reconcile and judge pre-flight must all use the
+    #: one key the charge opened under. ``None`` only on a run built outside
+    #: :meth:`QueryRunRepository.create`; it then meters under the id.
+    spend_key: UUID | None = None
     #: E2: how far each billable stage got in the usage-recording handshake.
     #: Read by ``_actual_cost`` to tell an honestly-empty usage list (nothing
     #: was billable) from a silently-empty one (billed, never recorded). Both
@@ -622,15 +623,11 @@ class InMemoryQueryRunRepository:
         cost_estimate: CostEstimate,
         context: dict[str, Any] | None = None,
         mode: RunMode = MODE_PANEL,
+        spend_key: UUID | None = None,
     ) -> QueryRun:
         with self._lock:
             self._purge_expired_locked()
-            # Counts a run of a deleted account too: one run at a time per id
-            # still holds while it finishes (W7, ADR-0136).
-            if any(
-                query_run.account_id == account_id and not query_run.is_terminal
-                for query_run in self._query_runs.values()
-            ):
+            if self.get_active_for_account(account_id) is not None:
                 raise ActiveQueryRunExistsError
             query_run_id = uuid4()
             now = datetime.now(UTC)
@@ -648,6 +645,7 @@ class InMemoryQueryRunRepository:
                 progress=_initial_progress(),
                 context=context,
                 mode=mode,
+                spend_key=account_id if spend_key is None else spend_key,
             )
             self._query_runs[query_run_id] = query_run
             return query_run
@@ -664,7 +662,7 @@ class InMemoryQueryRunRepository:
         with self._lock:
             self._purge_expired_locked()
             query_run = self._query_runs.get(query_run_id)
-            if query_run is None or query_run.account_id != account_id or query_run.account_deleted:
+            if query_run is None or query_run.account_id != account_id:
                 return None
             return query_run
 
@@ -675,30 +673,16 @@ class InMemoryQueryRunRepository:
             return [
                 query_run
                 for query_run in self._query_runs.values()
-                if query_run.account_id == account_id
-                and query_run.is_terminal
-                and not query_run.account_deleted
+                if query_run.account_id == account_id and query_run.is_terminal
             ]
 
     def get_active_for_account(self, account_id: UUID) -> QueryRun | None:
         with self._lock:
             self._purge_expired_locked()
             for query_run in self._query_runs.values():
-                if (
-                    query_run.account_id == account_id
-                    and not query_run.is_terminal
-                    and not query_run.account_deleted
-                ):
+                if query_run.account_id == account_id and not query_run.is_terminal:
                     return query_run
             return None
-
-    def detach_account(self, account_id: UUID) -> int:
-        """W7 (ADR-0136): mark every run of a deleted account; return how many."""
-        with self._lock:
-            runs = [q for q in self._query_runs.values() if q.account_id == account_id]
-            for query_run in runs:
-                query_run.account_deleted = True
-            return len(runs)
 
     def transition(
         self,
@@ -1023,6 +1007,12 @@ _synthesis_pool = ThreadPoolExecutor(
 )
 
 
+def _spend_key(query_run: QueryRun) -> UUID:
+    """The key every money call for this run uses (W7, ADR-0136): the one its
+    charge opened under, never looked up again."""
+    return query_run.account_id if query_run.spend_key is None else query_run.spend_key
+
+
 def _record_run_billing(
     *,
     session: SessionContext,
@@ -1047,7 +1037,7 @@ def _record_run_billing(
     ``RECORDED`` means money may be spent.
     """
     return cost_estimation_service.try_record_run_charge(
-        account_id=session.account_id,
+        account_id=_spend_key(query_run),
         query_run_id=query_run.query_run_id,
         estimated_cost_usd=query_run.cost_estimate.estimated_cost_usd,
         threshold_action=query_run.cost_estimate.threshold_action,
@@ -1085,7 +1075,7 @@ def _void_run_billing(
     """
     with contextlib.suppress(Exception):
         cost_estimation_service.void_run_charge(
-            account_id=session.account_id,
+            account_id=_spend_key(query_run),
             query_run_id=query_run.query_run_id,
             reason=reason,
         )
@@ -1724,7 +1714,7 @@ def _reconcile_run_billing(*, query_run: QueryRun, response: QueryRunResultRespo
         # only the durable one leaves the ring summing estimates forever, and
         # the ring is the rail that binds first.
         cost_estimation_service.reconcile_run_charge(
-            account_id=query_run.account_id,
+            account_id=_spend_key(query_run),
             query_run_id=query_run.query_run_id,
             estimated_cost_usd=query_run.cost_estimate.estimated_cost_usd,
             actual_cost_usd=response.actual_cost_usd,
@@ -1821,11 +1811,9 @@ def _persist_terminal_run(query_run_id: UUID) -> None:
         final_synthesis = query_run.final_synthesis
         if final_synthesis is not None and final_synthesis.citation_coverage is not None:
             citation_ratio = final_synthesis.citation_coverage.sourced_answer_ratio
-        # W7 (ADR-0136): a run of an account deleted while it ran is written
-        # without the account, as the deletion left the account's other rows.
         row = RunHistoryRow(
             query_run_id=str(query_run.query_run_id),
-            account_id=None if query_run.account_deleted else str(query_run.account_id),
+            account_id=str(query_run.account_id),
             correlation_id=query_run.correlation_id,
             status=query_run.status.value,
             created_at=query_run.created_at,
@@ -1853,6 +1841,15 @@ def _persist_terminal_run(query_run_id: UUID) -> None:
             mode=query_run.mode,
         )
         _record_run_history(row)
+        # W7 (ADR-0136): a run of an account deleted while it ran is kept
+        # without the account, as the deletion left the account's other rows.
+        # Checked AFTER the write: the deleted mark is set before the deletion
+        # NULLs the account's rows, so this catches a row written either side.
+        from product_app import run_history_store
+        from product_app.auth import session_repository
+
+        if session_repository.account_was_deleted(query_run.account_id):
+            run_history_store.forget_account(str(query_run.account_id))
         # W7 (ADR-0135): a signed-in account's history. The verdict is read
         # from the response built above, which has already paid for any judge
         # call, and kept on the run for a later carry-over. Local import: the
@@ -2545,7 +2542,7 @@ def _request_path_judge(query_run: QueryRun) -> _MemoisedRunJudge | None:
     # Zero I/O to here. The money rails are read inside ``evaluate``, and only
     # when it is about to pay — never to decide whether a memo hit is served.
     return _MemoisedRunJudge(
-        str(query_run.query_run_id), query_run.account_id, quick=query_run.mode == MODE_QUICK
+        str(query_run.query_run_id), _spend_key(query_run), quick=query_run.mode == MODE_QUICK
     )
 
 

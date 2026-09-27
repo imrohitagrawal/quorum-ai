@@ -33,9 +33,41 @@ def _entry(n: int, *, account: str = "acct-a", days_ago: float = 0.0) -> History
     )
 
 
+def _add_account(store: SessionStore, account: str) -> None:
+    """History belongs to an account row (ADR-0136: a write for an id with
+    no row stores nothing), so the store fixture holds the two accounts the
+    tests write for."""
+    store._conn.execute(
+        "INSERT INTO accounts (account_id, google_sub, email, created_at, last_sign_in_at, "
+        "spend_key) VALUES (?, ?, ?, ?, ?, ?)",
+        (
+            account,
+            f"sub-{account}",
+            f"{account}@example.com",
+            NOW.isoformat(),
+            NOW.isoformat(),
+            account,
+        ),
+    )
+
+
 @pytest.fixture
 def store(tmp_path: Path) -> SessionStore:
-    return SessionStore(str(tmp_path / "sessions.sqlite3"))
+    opened = SessionStore(str(tmp_path / "sessions.sqlite3"))
+    for account in ("acct-a", "acct-b"):
+        _add_account(opened, account)
+    return opened
+
+
+def test_history_for_an_id_with_no_account_row_is_not_stored(store: SessionStore) -> None:
+    """ADR-0136: checked inside the write's own transaction, so a delete that
+    lands after the caller looked cannot be undone by the write. Turns red if
+    a row is stored for an id with no account (its partner: acct-a, which has
+    one, stores)."""
+    store.record_history(_entry(1, account="acct-gone"), keep_count=5, keep_days=30, now=NOW)
+    assert _rows(store, "acct-gone") == []
+    _record(store, _entry(1))
+    assert [e.question for e in _rows(store)] == ["question 1"]
 
 
 def _rows(store: SessionStore, account: str = "acct-a", now: datetime = NOW) -> list[HistoryEntry]:
@@ -239,7 +271,7 @@ def test_a_history_table_that_cannot_be_created_leaves_history_off(
         names = {r[0] for r in connection.execute("SELECT name FROM schema_migrations")}
     finally:
         connection.close()
-    assert names == {"w7_accounts"}
+    assert names == {"w7_accounts", "w7_spend_key"}
 
 
 def test_a_write_that_fails_inside_its_transaction_rolls_back(

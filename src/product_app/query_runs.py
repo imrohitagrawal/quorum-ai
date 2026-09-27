@@ -20,7 +20,7 @@ from uuid import UUID, uuid4
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field, model_validator
 
-from product_app.auth import SessionContext, enforce_csrf, require_session
+from product_app.auth import SessionContext, enforce_csrf, require_session, spend_key_for
 from product_app.config import RuntimeEnvironment, settings
 from product_app.costs import (
     CostConfirmation,
@@ -600,6 +600,8 @@ def estimate_query_run(
     enforce_csrf(request, session)
     # SEC-C3: per-account rate limit to prevent rapid-fire estimate spam
     _enforce_account_rate_limit(request, session)
+    # W7 (ADR-0136): the key the per-account spend rails read.
+    spend_key = spend_key_for(session)
     model_slots = _validated_model_slots(
         payload.model_slots,
         slot_search=payload.slot_search,
@@ -609,6 +611,7 @@ def estimate_query_run(
         query_text=payload.query_text,
         model_slots=model_slots,
         account_id=session.account_id,
+        spend_key=spend_key,
         # WP-G2 (F-10): the fix here is the ``context`` field on the shared
         # request base, NOT this line — with the field present, the old
         # ``getattr(payload, "context", None)`` would read the same value. It
@@ -651,6 +654,9 @@ def create_query_run(
     enforce_csrf(request, session)
     # SEC-C3: per-account rate limit to prevent rapid-fire run creation
     _enforce_account_rate_limit(request, session)
+    # W7 (ADR-0136): read once, stored on the run, so its charge, void and
+    # reconcile all use the key the estimate read.
+    spend_key = spend_key_for(session)
     model_slots = _validated_model_slots(
         payload.model_slots,
         slot_search=payload.slot_search,
@@ -685,6 +691,7 @@ def create_query_run(
         query_text=payload.query_text,
         model_slots=model_slots,
         account_id=session.account_id,
+        spend_key=spend_key,
         context=payload.context,
         mode=payload.mode,
     )
@@ -779,6 +786,7 @@ def create_query_run(
             cost_estimate=cost_estimate,
             cost_decision=cost_decision,
             capacity_permit=capacity_permit,
+            spend_key=spend_key,
             # Issue #100 §2.8: the global-ceiling Sentry alert wants an
             # IP breakdown alongside account_id. The visitor's own address
             # (VisitorAddressMiddleware, ADR-0132); the session limits key on
@@ -803,6 +811,7 @@ def _start_reserved_query_run(
     cost_estimate: CostEstimate,
     cost_decision: CostGuardrailDecision,
     capacity_permit: BoundedSemaphore | None,
+    spend_key: UUID,
     client_ip: str | None = None,
 ) -> QueryRunCreateResponse:
     """Create, bill and launch a run whose capacity permit is already held.
@@ -824,6 +833,7 @@ def _start_reserved_query_run(
             cost_estimate=cost_estimate,
             context=payload.context,
             mode=payload.mode,
+            spend_key=spend_key,
         )
     except ActiveQueryRunExistsError as exc:
         raise HTTPException(

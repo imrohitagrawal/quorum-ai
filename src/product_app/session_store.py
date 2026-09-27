@@ -50,7 +50,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
-from uuid import UUID
+from uuid import UUID, uuid4
 
 _log = logging.getLogger(__name__)
 
@@ -310,6 +310,12 @@ class SessionStore:
         "last_sign_in_at TEXT NOT NULL)"
     )
 
+    #: W7 (ADR-0136): the spend key column. Each account life has a random
+    #: id; the 24-hour spend envelope is keyed on this instead, so it survives
+    #: deletion. Existing rows are backfilled with their own id, so no
+    #: account's number changes at deploy. Guarded like the accounts table.
+    _SPEND_KEY_MIGRATION = "w7_spend_key"
+
     #: Name of the W7 history migration in ``schema_migrations``.
     _HISTORY_MIGRATION = "w7_history"
 
@@ -344,7 +350,9 @@ class SessionStore:
         self._conn.row_factory = sqlite3.Row
         with self._lock:
             self._conn.executescript(self._SCHEMA)
-        self._accounts_ready = self._migrate_accounts()
+        # Sign-in needs BOTH: without the spend key column a new account would
+        # be metered under its random id, a fresh envelope (ADR-0136).
+        self._accounts_ready = self._migrate_accounts() and self._migrate_spend_key()
         self._history_ready = self._accounts_ready and self._migrate_history()
         _open_stores.add(self)
 
@@ -383,6 +391,39 @@ class SessionStore:
         except sqlite3.Error as exc:
             _log.warning(
                 "session_store: the accounts table could not be created, so sign-in "
+                "is unavailable until a restart on a writable volume: %s",
+                exc,
+            )
+            return False
+
+    def _migrate_spend_key(self) -> bool:
+        """Add and backfill ``accounts.spend_key`` once; ``True`` if it is there."""
+        try:
+            with self._lock:
+                applied = self._conn.execute(
+                    "SELECT 1 FROM schema_migrations WHERE name = ?",
+                    (self._SPEND_KEY_MIGRATION,),
+                ).fetchone()
+                if applied is not None:
+                    return True
+                self._conn.execute("BEGIN IMMEDIATE")
+                try:
+                    self._conn.execute("ALTER TABLE accounts ADD COLUMN spend_key TEXT")
+                    self._conn.execute(
+                        "UPDATE accounts SET spend_key = account_id WHERE spend_key IS NULL"
+                    )
+                    self._conn.execute(
+                        "INSERT INTO schema_migrations (name, applied_at) VALUES (?, ?)",
+                        (self._SPEND_KEY_MIGRATION, datetime.now(UTC).isoformat()),
+                    )
+                    self._conn.execute("COMMIT")
+                except BaseException:
+                    self._conn.execute("ROLLBACK")
+                    raise
+                return True
+        except sqlite3.Error as exc:
+            _log.warning(
+                "session_store: the spend key column could not be added, so sign-in "
                 "is unavailable until a restart on a writable volume: %s",
                 exc,
             )
@@ -692,14 +733,16 @@ class SessionStore:
                         "SELECT account_id FROM accounts WHERE google_sub = ?", (google_sub,)
                     ).fetchone()
                     if row is None:
-                        # W7 (ADR-0136): derived, not random, so a deleted and
-                        # re-created account keeps its 24-hour spend envelope.
-                        account_id = account_id_for(google_sub, key=_account_key())
+                        # W7 (ADR-0136): a random id per account life, and the
+                        # spend key derived from the subject, so a deleted and
+                        # re-created account keeps its 24-hour envelope and
+                        # nothing else.
+                        account_id = uuid4()
+                        spend_key = account_id_for(google_sub, key=_account_key())
                         self._conn.execute(
-                            "INSERT INTO accounts "
-                            "(account_id, google_sub, email, created_at, last_sign_in_at) "
-                            "VALUES (?, ?, ?, ?, ?)",
-                            (str(account_id), google_sub, email, stamp, stamp),
+                            "INSERT INTO accounts (account_id, google_sub, email, "
+                            "created_at, last_sign_in_at, spend_key) VALUES (?, ?, ?, ?, ?, ?)",
+                            (str(account_id), google_sub, email, stamp, stamp, str(spend_key)),
                         )
                     else:
                         account_id = UUID(row["account_id"])
@@ -742,6 +785,34 @@ class SessionStore:
                 self._warn("delete an account", exc)
                 return False
         return True
+
+    def spend_key_for(self, account_id: UUID) -> UUID | None:
+        """The key the spend rails meter ``account_id`` under (ADR-0136).
+
+        The account's stored spend key; the id itself for an id in no row (an
+        anonymous session) or a row without one (written by an older build);
+        ``None`` when it cannot be read, which the caller refuses rather than
+        falling back to the id: that would open a fresh, empty envelope.
+        """
+        if not self._accounts_ready:
+            return account_id
+        with self._lock:
+            if self._closed:
+                return None
+            try:
+                row = self._conn.execute(
+                    "SELECT spend_key FROM accounts WHERE account_id = ?", (str(account_id),)
+                ).fetchone()
+            except sqlite3.Error as exc:
+                self._warn("read a spend key", exc)
+                return None
+        if row is None or row["spend_key"] is None:
+            return account_id
+        try:
+            return UUID(row["spend_key"])
+        except ValueError as exc:
+            self._warn("read a spend key", exc)
+            return None
 
     def is_anonymous(self, account_id: UUID) -> bool | None:
         """``True`` only when ``account_id`` is certainly in no accounts row;

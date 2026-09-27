@@ -46,7 +46,8 @@ second pull request; history was part a, ADR-0135).
    the id as deleted (in memory, for the session lifetime) so a session read
    from disk a moment before cannot be restored after. A test signs in on two
    devices, deletes on one, and the other's next request is anonymous.
-4. **The spend cap resets by deleting and re-creating.** A new account's id is
+4. **The spend cap resets by deleting and re-creating.** *(The answer below
+   was replaced by the re-plan at the end of this page.)* A new account's id is
    derived from a keyed one-way hash of the Google subject (HMAC-SHA256 with
    the server's token secret). Deleting and signing in again gets the SAME id,
    so the 24-hour spend already recorded under it still counts. The cost
@@ -72,7 +73,7 @@ second pull request; history was part a, ADR-0135).
 
 ## Added by review round 1 (2026-09-27)
 
-10. **The id comes back.** Because of 4, the same Google account signing in
+10. **The id comes back.** *(Closed by construction by the re-plan below.)* Because of 4, the same Google account signing in
     again gets the same id, so anything keyed only on the id treats the time
     before the deletion as the new account's. Review showed three cases,
     each by a forced interleaving or a probe in its own copy: a run from
@@ -94,3 +95,79 @@ second pull request; history was part a, ADR-0135).
 14. **Accounts created before this change.** Their id is random, so for
     them the envelope does not carry over, once each. The product owner
     accepted that on 2026-09-27 at 12:02:35Z (CHG-024).
+
+## Re-plan after review round 2 (2026-09-27)
+
+Round 2 found four blockers; two were added by the round-1 fixes. The root
+cause is 4 above: the account id was derived from the Google subject, so it
+came back after deletion, and every guard against the time before the
+deletion was one check with a gap. The product owner chose, on 2026-09-27 at
+15:05:02Z, to re-plan with a separate spend key (CHG-025). Written before the
+code, from two read-only maps of the tree at 6301fc7.
+
+**The design.** Each account life gets a fresh random id again (as ADR-0130
+had). The 24-hour spend envelope is keyed on a separate **spend key**, stored
+in a new `accounts.spend_key` column: HMAC-SHA256 of the Google subject for a
+new account; the account's own id for an existing one (backfilled), so no
+number changes at deploy and CHG-024's one-time reset stays exactly as
+accepted. An anonymous session's spend key is its account id.
+
+### How a separate spend key fails
+
+S1. **A money call left on the account id.** It reads 0 for a signed-in
+    account and never trips. Answer: the key is resolved once per request in
+    the route and stored on the run; each money call site passes it. Test: a
+    signed-in account whose key differs from its id, driven through the real
+    routes; each call site mutated back to the id must turn a test red.
+S2. **A reconcile or void under a different key from the charge.** The
+    read-only map measured it: the store accepts the correction, the global
+    meter moves, the account's meter keeps the estimate, and a later correct
+    write is refused. Answer: charge, void, reconcile and the judge's
+    pre-flight all read `QueryRun.spend_key`, never look it up again. Test:
+    reconcile with actual ≠ estimate moves `daily_spend_for(spend_key)`.
+S3. **Estimate and token disagree.** The confirmation token stays bound to
+    the account id (it checks who asked); only the rails take the spend key.
+    Test: a signed-in confirm-band run completes its confirmation.
+S4. **The lookup fails, or the account is gone mid-request.** Falling back
+    to the account id would open a fresh, empty envelope. Answer: a read
+    error refuses the request (503); a deleted account's request is refused
+    (401). Test: both, and no charge row under the account id.
+S5. **The migration on a read-only volume.** Guarded, one transaction, like
+    `w7_accounts`; sign-in needs both markers. With the column missing,
+    every row's key is its id, which is exactly the backfill value. Test: the
+    backfill sets spend key = account id on an existing row (with a partner
+    proving the row exists).
+S6. **A rolled-back build inserts a row without a spend key.** NULL means
+    the account id. Test: a NULL row resolves to its id.
+S7. **The secret is rotated.** The key is stored, never recomputed, so a
+    live account keeps its day. Only an account deleted and re-created after
+    a rotation starts fresh (recorded).
+S8. **An anonymous run, then sign-in mid-run.** The run keeps the key it was
+    charged under. Test: reconcile after sign-in lands under the anonymous key.
+S9. **Two lives of one person at once.** Both charge under the same key
+    inside the store's one lock; the atomic check still holds.
+
+### The account side, once ids are random again
+
+- Gone by construction: a run, history row, session or carry-over link from
+  before the deletion can never match the new life's id. The round-1
+  `account_deleted` run flag is removed.
+- Still guarded:
+  - a history write racing the delete: the write checks the account row in
+    its own transaction (kept; the history-store tests now seed a row);
+  - a sign-in or session caught in the delete: deletion drops cached
+    sessions and carry-over links BEFORE and AGAIN AFTER the rows are
+    deleted, and the callback re-checks the row;
+  - a run-history row written just after the NULLing: after writing, the
+    run re-checks the deleted mark and NULLs again;
+  - a failed delete: the mark is lifted, so nothing changed and "please try
+    again" is true (round 2 showed the old order hid a surviving account's
+    run and signed it out).
+- One run at a time now keys on the account id (the session's choice): a new
+  life can run while an old run finishes. Money stays bounded by the atomic
+  charge (S9). It removes the dead-end 409 round 2 found.
+
+### Open, for the owner (not blocking this design)
+
+- Cost-ledger rows keep the spend key after the 24 hours; nothing in `src/`
+  deletes cost rows. That was already true of the derived id on this branch.
