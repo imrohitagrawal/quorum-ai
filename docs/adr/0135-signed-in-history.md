@@ -79,7 +79,7 @@ first: `docs/analysis/2026-09-26-w7-history-failure-modes.md`.
 
 - A signed-in account's questions are stored (at most 5, at most 30 days).
   Until account deletion ships in W7's next pull request, the keep rules are
-  the only removal. `docs/48` records this for signed-in history only.
+  the only removal. (2026-09-27: it shipped, ADR-0136.) `docs/48` records this for signed-in history only.
 - A run still running at sign-in joins the history when it finishes
   (the promised race, pinned by
   `test_a_run_still_running_at_sign_in_joins_when_it_finishes`).

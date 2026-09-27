@@ -19,7 +19,7 @@ second pull request; history was part a, ADR-0135).
   deleting an account while it is signed in on another device.
 - CHG-023: the stored questions are removed with the account.
 
-## Measured on main by the read-only map (2026-09-26)
+## Reported on main by the read-only map (2026-09-26; its probes are not committed)
 
 - Deleting only the accounts row leaves another device's session working,
   still carrying the deleted id (a probe showed it resolving).
@@ -58,12 +58,39 @@ second pull request; history was part a, ADR-0135).
 5. **Operator rows keep the account.** The run-history table's `account_id`
    is set to NULL for the deleted account's rows; the cost ledger keeps the
    hash-derived id, which is what keeps the 24-hour envelope.
-6. **A run in flight when the account is deleted.** It finishes; its history
-   write finds no account and writes nothing; its run-history row is written
-   without the account id.
+6. **A run in flight when the account is deleted.** It finishes; it is
+   marked at deletion, so it writes no history and its run-history row is
+   written without the account id. (The first draft said its history write
+   "finds no account". Review round 1 showed that is false once the same
+   person signs in again: the id comes back. See 10.)
 7. **Partial deletion.** The account row, its history and its sessions go in
    one transaction in the sessions database; the run-history NULLing is a
    separate database and runs after, best effort, logged on failure.
 8. **Deleting an anonymous session.** Refused: there is no account.
 9. **The page after deletion.** The browser is signed out (the session is
    gone) and shown the anonymous page.
+
+## Added by review round 1 (2026-09-27)
+
+10. **The id comes back.** Because of 4, the same Google account signing in
+    again gets the same id, so anything keyed only on the id treats the time
+    before the deletion as the new account's. Review showed three cases,
+    each by a forced interleaving or a probe in its own copy: a run from
+    before the deletion landing in the new history; a history write that
+    checked the account just before the delete landing just after it; the
+    2-hour deleted mark refusing the new account's own sessions and run
+    rows. Answer: runs are marked at deletion; the history write checks the
+    account row inside its own transaction; the mark refuses only sessions
+    created before the deletion.
+11. **A sign-in finishing during the delete.** The callback reads the
+    account, the delete runs, then the session is issued, leaving a session
+    row for a deleted account. Answer: after issuing, the callback checks
+    the account row again and, if it is gone, revokes the session and
+    reports "did not complete".
+12. **A failed delete.** The sessions are refused before the rows are
+    deleted, so a 503 leaves the visitor signed out. The message says so.
+13. **The local `X-Account-Id` path.** It needs no cookie. Deletion refuses
+    it.
+14. **Accounts created before this change.** Their id is random, so for
+    them the envelope does not carry over, once each. The product owner
+    accepted that on 2026-09-27 at 12:02:35Z (CHG-024).

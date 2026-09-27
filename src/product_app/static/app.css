@@ -419,14 +419,14 @@ a { color: var(--accent); text-underline-offset: 2px; }
   gap: var(--space-2);
 }
 .account-delete-danger {
-  border-color: var(--danger, #B42318) !important;
-  color: var(--danger, #B42318) !important;
+  border-color: var(--danger) !important;
+  color: var(--danger) !important;
   font-weight: 600;
 }
 .account-delete-error {
   margin: 0;
   font-size: 0.85rem;
-  color: var(--danger, #B42318);
+  color: var(--danger);
 }
 .account-delete [hidden] {
   display: none;

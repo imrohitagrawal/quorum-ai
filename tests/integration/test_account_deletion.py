@@ -99,9 +99,11 @@ def test_deleting_removes_the_account_its_history_and_its_session(sign_in: SignI
 
 
 @pytest.mark.parametrize("typed", ["ada@example.com", "  ADA@Example.com "])
-def test_the_typed_email_is_compared_without_case_or_spaces(sign_in: SignIn, typed: str) -> None:
+def test_the_typed_email_is_compared_without_case_or_surrounding_spaces(
+    sign_in: SignIn, typed: str
+) -> None:
     """Turns red if a visitor typing their own email with other case or
-    stray spaces is refused."""
+    stray spaces around it is refused."""
     client = sign_in.client()
     _signed_in(client)
     assert _delete(client, typed).status_code == 200
@@ -304,12 +306,201 @@ def test_a_carried_run_finishing_after_deletion_writes_no_history(sign_in: SignI
 
 
 def test_the_deleted_mark_lapses_after_the_session_lifetime() -> None:
-    """Turns red if an account's deleted mark never lapses (a memory leak),
-    or lapses at once (the restore race reopens)."""
+    """Turns red if an account's deleted mark never lapses, or lapses at
+    once (the restore race reopens)."""
     from datetime import timedelta
 
     account = uuid4()
     auth.session_repository.revoke_account(account)
     assert auth.session_repository.account_was_deleted(account) is True
-    auth.session_repository._deleted_accounts[account] = datetime.now(UTC) - timedelta(seconds=1)
+    _until, deleted_at = auth.session_repository._deleted_accounts[account]
+    auth.session_repository._deleted_accounts[account] = (
+        datetime.now(UTC) - timedelta(seconds=1),
+        deleted_at,
+    )
     assert auth.session_repository.account_was_deleted(account) is False
+
+
+# -- Review round 1 (2026-09-27). The account id comes back when the same
+# -- Google account signs in again, so everything from before the deletion
+# -- must be refused by something other than the id.
+
+
+def test_a_history_write_racing_the_delete_writes_nothing(
+    sign_in: SignIn, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The run's owner is read, then the account is deleted, then the history
+    row is written. Turns red if the row lands for the deleted account (and
+    comes back when the same person signs in again)."""
+    from product_app import account_deletion
+
+    client = sign_in.client()
+    _signed_in(client)
+    account = _account(sign_in)
+    running = _run(account, "finishing during the delete")
+    real_owner = account_history._owner
+
+    def owner_then_delete(*args: Any, **kwargs: Any) -> Any:
+        owner = real_owner(*args, **kwargs)
+        assert owner == account
+        assert account_deletion.delete_account(account) is True
+        return owner
+
+    monkeypatch.setattr(account_history, "_owner", owner_then_delete)
+    query_run_repository.update_status(running.query_run_id, status_value=QueryRunStatus.COMPLETED)
+    account_history.record_finished_run(query_run_repository.get(running.query_run_id))
+    monkeypatch.setattr(account_history, "_owner", real_owner)
+    again = sign_in.client()
+    _signed_in(again)
+    assert _account(sign_in) == account
+    assert account_history.history_for(account) == []
+
+
+def test_a_run_from_before_deletion_stays_gone_after_signing_in_again(sign_in: SignIn) -> None:
+    """A run still running when the account is deleted, finishing after the
+    same person signs in again (same id). Turns red if its question joins the
+    new account's history, or the new account can read the run."""
+    client = sign_in.client()
+    _signed_in(client)
+    account = _account(sign_in)
+    running = _run(account, "asked before deletion")
+    assert _delete(client).status_code == 200
+    again = sign_in.client()
+    _signed_in(again)
+    assert _account(sign_in) == account
+    assert again.get("/v1/query-runs/active").json().get("query_run_id") is None
+    _finish(running)
+    assert account_history.history_for(account) == []
+    assert again.get(f"/v1/query-runs/{running.query_run_id}").status_code == 404
+
+
+def test_the_new_accounts_own_runs_keep_their_account(sign_in: SignIn) -> None:
+    """After deleting and signing in again, a NEW run belongs to the new
+    account. Turns red if it is written to run history without its account,
+    or its session cannot be restored from disk."""
+    with run_history_store.configure_for_tests() as runs:
+        client = sign_in.client()
+        _signed_in(client)
+        account = _account(sign_in)
+        assert _delete(client).status_code == 200
+        again = sign_in.client()
+        _signed_in(again)
+        fresh = _run(account, "a new question")
+        _finish(fresh)
+        row = runs.get(str(fresh.query_run_id))
+        assert row is not None and row.account_id == str(account)
+        assert [e.question for e in account_history.history_for(account) or []] == [
+            "a new question"
+        ]
+        session_id = again.cookies[COOKIE]
+        auth.session_repository._sessions.pop(session_id)
+        assert auth.session_repository.get(session_id) is not None
+
+
+def test_a_sign_in_finishing_during_the_delete_leaves_nothing_behind(
+    sign_in: SignIn, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The laptop's sign-in reads the account, then the phone deletes it,
+    then the laptop's session is issued. Turns red if the laptop ends up
+    signed in, a session row of the deleted account survives on disk, or the
+    laptop's earlier question lands in history."""
+    from tests.integration.test_google_sign_in import _boot, _callback, _start
+
+    from product_app import account_deletion
+
+    phone = sign_in.client()
+    _signed_in(phone)
+    account = _account(sign_in)
+    laptop = sign_in.client()
+    csrf = _boot(laptop)
+    anonymous = auth.session_repository.get(laptop.cookies[COOKIE]).account_id  # type: ignore[union-attr]
+    _finish(_run(anonymous, "laptop question"))
+    store = session_store.get_store()
+    assert store is not None
+    real_upsert = store.upsert_google_account
+
+    def upsert_then_delete(**kwargs: Any) -> Any:
+        found = real_upsert(**kwargs)
+        assert found == account
+        assert account_deletion.delete_account(account) is True
+        return found
+
+    monkeypatch.setattr(store, "upsert_google_account", upsert_then_delete)
+    query = _start(laptop, csrf)
+    _callback(laptop, code="stub-auth-code-1", state=query["state"])
+    monkeypatch.setattr(store, "upsert_google_account", real_upsert)
+    assert 'id="account-email"' not in laptop.get("/ui").text
+    rows = store._conn.execute(
+        "SELECT COUNT(*) FROM sessions WHERE account_id = ?", (str(account),)
+    ).fetchone()[0]
+    assert rows == 0
+    assert store.history_for(str(account), keep_count=5, keep_days=30, now=datetime.now(UTC)) == []
+
+
+def test_a_failed_delete_says_to_sign_in_again(
+    sign_in: SignIn, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When the store refuses, every session is already refused, so the page
+    must not say "try again" as if still signed in. Turns red if the message
+    changes back, or the session is still signed in after the 503."""
+    client = sign_in.client()
+    _signed_in(client)
+    monkeypatch.setattr(sign_in.store, "delete_account", lambda _id: False)
+    response = _delete(client)
+    assert response.status_code == 503
+    assert "sign in again" in response.json()["detail"]["message"].lower()
+    assert 'id="account-email"' not in client.get("/ui").text
+    assert len(sign_in.account_rows()) == 1
+
+
+def test_the_legacy_account_header_cannot_delete_an_account(sign_in: SignIn) -> None:
+    """The local-only X-Account-Id path needs no cookie. Turns red if it can
+    permanently delete an account."""
+    client = sign_in.client()
+    _signed_in(client)
+    account = _account(sign_in)
+    bare = sign_in.client()
+    response = bare.post(
+        "/v1/account/delete",
+        json={"confirm_email": EMAIL},
+        headers={"X-Account-Id": str(account), "X-CSRF-Token": auth.LEGACY_CSRF_PLACEHOLDER},
+    )
+    assert response.status_code == 403
+    assert len(sign_in.account_rows()) == 1
+
+
+def test_lapsed_deleted_marks_are_dropped() -> None:
+    """Turns red if a lapsed mark is kept for the life of the process."""
+    from datetime import timedelta
+
+    kept, lapsed = uuid4(), uuid4()
+    auth.session_repository.revoke_account(kept)
+    auth.session_repository.revoke_account(lapsed)
+    until, deleted_at = auth.session_repository._deleted_accounts[lapsed]
+    auth.session_repository._deleted_accounts[lapsed] = (
+        datetime.now(UTC) - timedelta(seconds=1),
+        deleted_at,
+    )
+    auth.session_repository.revoke_account(uuid4())
+    assert lapsed not in auth.session_repository._deleted_accounts
+    assert kept in auth.session_repository._deleted_accounts
+
+
+def test_one_run_at_a_time_still_holds_while_a_deleted_accounts_run_finishes(
+    sign_in: SignIn,
+) -> None:
+    """The run of a deleted account is hidden from the new account's reads,
+    but it still counts as the id's one active run: the per-account money
+    rails key on the id. Turns red if signing in again allows a second run
+    alongside it."""
+    client = sign_in.client()
+    _signed_in(client)
+    account = _account(sign_in)
+    running = _run(account, "still running")
+    assert _delete(client).status_code == 200
+    again = sign_in.client()
+    _signed_in(again)
+    with pytest.raises(qro.ActiveQueryRunExistsError):
+        _run(account, "a second one")
+    _finish(running)
+    assert _run(account, "after it finished").account_id == account

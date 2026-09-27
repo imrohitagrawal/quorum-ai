@@ -518,6 +518,11 @@ class QueryRun:
     #: builds (no extra judge call), so a run carried into a history later
     #: still has it. ``None`` until then, and for a run with no verdict.
     history_verdict: str | None = None
+    #: W7 (ADR-0136): set when the run's account is deleted while the run is
+    #: held here. The id comes back if the same Google account signs in
+    #: again, so this, not the id, keeps the run out of the new account's
+    #: reads and history. The money rails still key on ``account_id``.
+    account_deleted: bool = False
     #: E2: how far each billable stage got in the usage-recording handshake.
     #: Read by ``_actual_cost`` to tell an honestly-empty usage list (nothing
     #: was billable) from a silently-empty one (billed, never recorded). Both
@@ -620,7 +625,12 @@ class InMemoryQueryRunRepository:
     ) -> QueryRun:
         with self._lock:
             self._purge_expired_locked()
-            if self.get_active_for_account(account_id) is not None:
+            # Counts a run of a deleted account too: one run at a time per id
+            # still holds while it finishes (W7, ADR-0136).
+            if any(
+                query_run.account_id == account_id and not query_run.is_terminal
+                for query_run in self._query_runs.values()
+            ):
                 raise ActiveQueryRunExistsError
             query_run_id = uuid4()
             now = datetime.now(UTC)
@@ -654,7 +664,7 @@ class InMemoryQueryRunRepository:
         with self._lock:
             self._purge_expired_locked()
             query_run = self._query_runs.get(query_run_id)
-            if query_run is None or query_run.account_id != account_id:
+            if query_run is None or query_run.account_id != account_id or query_run.account_deleted:
                 return None
             return query_run
 
@@ -665,16 +675,30 @@ class InMemoryQueryRunRepository:
             return [
                 query_run
                 for query_run in self._query_runs.values()
-                if query_run.account_id == account_id and query_run.is_terminal
+                if query_run.account_id == account_id
+                and query_run.is_terminal
+                and not query_run.account_deleted
             ]
 
     def get_active_for_account(self, account_id: UUID) -> QueryRun | None:
         with self._lock:
             self._purge_expired_locked()
             for query_run in self._query_runs.values():
-                if query_run.account_id == account_id and not query_run.is_terminal:
+                if (
+                    query_run.account_id == account_id
+                    and not query_run.is_terminal
+                    and not query_run.account_deleted
+                ):
                     return query_run
             return None
+
+    def detach_account(self, account_id: UUID) -> int:
+        """W7 (ADR-0136): mark every run of a deleted account; return how many."""
+        with self._lock:
+            runs = [q for q in self._query_runs.values() if q.account_id == account_id]
+            for query_run in runs:
+                query_run.account_deleted = True
+            return len(runs)
 
     def transition(
         self,
@@ -1799,15 +1823,9 @@ def _persist_terminal_run(query_run_id: UUID) -> None:
             citation_ratio = final_synthesis.citation_coverage.sourced_answer_ratio
         # W7 (ADR-0136): a run of an account deleted while it ran is written
         # without the account, as the deletion left the account's other rows.
-        from product_app.auth import session_repository
-
         row = RunHistoryRow(
             query_run_id=str(query_run.query_run_id),
-            account_id=(
-                None
-                if session_repository.account_was_deleted(query_run.account_id)
-                else str(query_run.account_id)
-            ),
+            account_id=None if query_run.account_deleted else str(query_run.account_id),
             correlation_id=query_run.correlation_id,
             status=query_run.status.value,
             created_at=query_run.created_at,

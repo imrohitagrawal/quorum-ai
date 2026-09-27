@@ -91,7 +91,7 @@ def record_finished_run(query_run: QueryRun) -> None:
     """Add a finished run to its owner's history, if it has one. Best effort:
     a failure is logged and never reaches the run."""
     try:
-        if not query_run.is_terminal:
+        if not query_run.is_terminal or query_run.account_deleted:
             return
         now = _now()
         owner = _owner(query_run.account_id, now)

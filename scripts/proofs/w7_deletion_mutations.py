@@ -3,7 +3,8 @@
 Each mutation breaks one part of deleting an account (refusing its sessions,
 the restore re-check, each row the transaction removes, the keyed-hash
 account id, the typed-email check, CSRF, the cookie, the operator rows, the
-carry-over links) and runs the deletion tests.
+carry-over links, and what keeps the time before a deletion out once the
+same Google account signs in again) and runs the deletion tests.
 
 Applies each mutation by exact text (the anchor must occur the stated number
 of times, or the proof is reported invalid), clears ``__pycache__``, runs the
@@ -42,7 +43,7 @@ C = "src/product_app/config.py"
 MUTATIONS: list[tuple[str, str, str, int, int]] = [
     (
         AU,
-        "            self._deleted_accounts[account_id] = datetime.now(UTC) + SESSION_TTL\n",
+        "            self._deleted_accounts[account_id] = (now + SESSION_TTL, now)\n",
         "",
         1,
         0,
@@ -56,15 +57,16 @@ MUTATIONS: list[tuple[str, str, str, int, int]] = [
     ),
     (
         AU,
-        "            if self.account_was_deleted(session.account_id):\n",
+        "            if self.account_was_deleted("
+        "session.account_id, created_before=session.created_at):\n",
         "            if False:\n",
         1,
         0,
     ),
     (
         AU,
-        "            return until is not None and until > datetime.now(UTC)",
-        "            return until is not None",
+        "            if mark is None or mark[0] <= datetime.now(UTC):",
+        "            if mark is None:",
         1,
         0,
     ),
@@ -114,8 +116,67 @@ MUTATIONS: list[tuple[str, str, str, int, int]] = [
     ),
     (
         QO,
-        "                if session_repository.account_was_deleted(query_run.account_id)",
-        "                if False",
+        "            account_id=None if query_run.account_deleted else str(query_run.account_id),",
+        "            account_id=str(query_run.account_id),",
+        1,
+        0,
+    ),
+    # Review round 1 (2026-09-27): the id comes back on signing in again.
+    (
+        AU,
+        "            return created_before is None or created_before < mark[1]",
+        "            return True",
+        1,
+        0,
+    ),
+    (AU, "                del self._deleted_accounts[lapsed]\n", "                pass\n", 1, 0),
+    (QO, "                query_run.account_deleted = True\n", "                pass\n", 1, 0),
+    (
+        QO,
+        " or query_run.account_id != account_id or query_run.account_deleted:",
+        " or query_run.account_id != account_id:",
+        1,
+        0,
+    ),
+    (
+        QO,
+        "                    and not query_run.is_terminal\n"
+        "                    and not query_run.account_deleted\n",
+        "                    and not query_run.is_terminal\n",
+        1,
+        0,
+    ),
+    (
+        QO,
+        "                query_run.account_id == account_id and not query_run.is_terminal\n"
+        "                for query_run in self._query_runs.values()",
+        "                query_run.account_id == account_id and not query_run.is_terminal\n"
+        "                and not query_run.account_deleted\n"
+        "                for query_run in self._query_runs.values()",
+        1,
+        0,
+    ),
+    (
+        AH,
+        "        if not query_run.is_terminal or query_run.account_deleted:",
+        "        if not query_run.is_terminal:",
+        1,
+        0,
+    ),
+    (
+        ST,
+        '"WHERE EXISTS (SELECT 1 FROM accounts WHERE account_id = ?) "',
+        '"WHERE ? IS NOT NULL "',
+        1,
+        0,
+    ),
+    (GS, "    if store.account_for(account_id) is None:\n", "    if False:\n", 1, 0),
+    (AD, "    query_run_repository.detach_account(account_id)\n", "", 1, 0),
+    (AD, " or session.legacy else", " else", 1, 0),
+    (
+        AD,
+        '"Sign in again to try once more."',
+        '"Please try again."',
         1,
         0,
     ),

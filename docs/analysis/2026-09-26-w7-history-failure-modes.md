@@ -85,7 +85,8 @@ revocation are 2b.
 11. **Deletion is not built yet.** The owner's approval says the questions
     are removed when the account is deleted. Account deletion is W7's next
     pull request (2b); until it ships, a signed-in account's questions are
-    removed only by the keep rules (5, 30 days).
+    removed only by the keep rules (5, 30 days). (2026-09-27: deletion
+    shipped, ADR-0136.)
 12. **The history box on a phone.** A panel anchored to the History button
     ran off the screen's left edge at 390px, and one centred over the page
     covered the button that closes it (both seen in screenshots). On narrow

@@ -119,7 +119,8 @@ def test_the_delete_account_steps_are_exact() -> None:
         "<p>Deleting your account removes your question history and signs you out on "
         "every device. It cannot be undone.</p>"
         '<label for="account-delete-email">Type the email address you signed in with</label>'
-        '<input id="account-delete-email" type="email" autocomplete="off" spellcheck="false">'
+        '<input id="account-delete-email" type="email" autocomplete="off" spellcheck="false" '
+        'aria-describedby="account-delete-error">'
         '<div class="account-delete-actions">'
         '<button type="button" id="account-delete-continue">Continue</button>'
         '<button type="button" id="account-delete-cancel">Keep my account</button>'

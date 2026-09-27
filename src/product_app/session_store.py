@@ -436,11 +436,15 @@ class SessionStore:
                 self._conn.execute("BEGIN IMMEDIATE")
                 try:
                     # A run already in another account's history is never moved:
-                    # the update applies only when the account matches.
+                    # the update applies only when the account matches. And
+                    # nothing is written for an account that is not there
+                    # (W7, ADR-0136): checked in this transaction, so a delete
+                    # landing after the caller looked cannot be undone by it.
                     self._conn.execute(
                         "INSERT INTO history (query_run_id, account_id, question, status, "
                         "mode, model_count, cost_usd, completed_at, verdict) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                        "SELECT ?, ?, ?, ?, ?, ?, ?, ?, ? "
+                        "WHERE EXISTS (SELECT 1 FROM accounts WHERE account_id = ?) "
                         "ON CONFLICT(query_run_id) DO UPDATE SET question = excluded.question, "
                         "status = excluded.status, mode = excluded.mode, "
                         "model_count = excluded.model_count, cost_usd = excluded.cost_usd, "
@@ -456,6 +460,7 @@ class SessionStore:
                             str(entry.cost_usd),
                             _to_utc(entry.completed_at).isoformat(),
                             entry.verdict,
+                            entry.account_id,
                         ),
                     )
                     self._conn.execute(

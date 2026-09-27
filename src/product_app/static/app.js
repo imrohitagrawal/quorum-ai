@@ -9937,8 +9937,20 @@
         show("reminder");
         email.focus();
       });
-      el("account-delete-cancel").addEventListener("click", () => show("start"));
-      el("account-delete-back").addEventListener("click", () => show("start"));
+      // Focus goes back to the step's own control, never to the page.
+      const restart = () => {
+        show("start");
+        deleteStart.focus();
+      };
+      el("account-delete-cancel").addEventListener("click", restart);
+      el("account-delete-back").addEventListener("click", restart);
+      // Closing the History panel starts the steps over and forgets the
+      // typed email, so reopening it never lands on "Delete permanently".
+      history.addEventListener("toggle", () => {
+        if (history.open) return;
+        show("start");
+        email.value = "";
+      });
       el("account-delete-continue").addEventListener("click", () => {
         if (!email.value.trim()) {
           email.focus();
@@ -9959,11 +9971,17 @@
         } catch (err) {
           confirm.disabled = false;
           show("reminder");
+          // DELETION_FAILED comes after every session was refused (ADR-0136).
+          const code = err && err.code;
           error.textContent =
-            err && err.code === "CONFIRMATION_MISMATCH"
+            code === "CONFIRMATION_MISMATCH"
               ? "That is not the email address you signed in with."
-              : "Your account could not be deleted just now. Please try again.";
+              : code === "DELETION_FAILED"
+                ? "Your account could not be deleted just now, and you are signed out. " +
+                  "Sign in again to try once more."
+                : "Your account could not be deleted just now. Please try again.";
           error.hidden = false;
+          email.focus();
         }
       });
     }

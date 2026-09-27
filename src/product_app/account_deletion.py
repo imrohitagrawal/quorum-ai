@@ -25,14 +25,17 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, StrictStr
 
 from product_app import account_history, auth, run_history_store, session_store
+from product_app.query_run_orchestration import query_run_repository
 
 _log = logging.getLogger(__name__)
 
 
 def delete_account(account_id: UUID) -> bool:
     """Delete ``account_id`` everywhere it is kept. ``False`` if the account
-    rows could not be removed (the refusal of its sessions still stands)."""
+    rows could not be removed: its sessions are refused all the same (they
+    were refused first), so the visitor is signed out either way."""
     auth.session_repository.revoke_account(account_id)
+    query_run_repository.detach_account(account_id)
     account_history.forget_account(account_id)
     store = session_store.get_store()
     if store is None or not store.delete_account(account_id):
@@ -45,7 +48,8 @@ def delete_account(account_id: UUID) -> bool:
 
 class AccountDeleteRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    #: The visitor types their own email; compared without case or spaces.
+    #: The visitor types their own email; compared without case or
+    #: surrounding spaces.
     confirm_email: StrictStr
 
 
@@ -54,7 +58,8 @@ def delete_signed_in_account(body: AccountDeleteRequest, request: Request) -> JS
     session = auth.require_session(request)
     auth.enforce_csrf(request, session)
     store = session_store.get_store()
-    account = None if store is None else store.account_for(session.account_id)
+    # The local-only X-Account-Id path needs no cookie: it never deletes.
+    account = None if store is None or session.legacy else store.account_for(session.account_id)
     if account is None:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -73,7 +78,11 @@ def delete_signed_in_account(body: AccountDeleteRequest, request: Request) -> JS
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail={
                 "code": "DELETION_FAILED",
-                "message": "Your account could not be deleted just now. Please try again.",
+                # Every session of the account is already refused by then.
+                "message": (
+                    "Your account could not be deleted just now, and you are signed out. "
+                    "Sign in again to try once more."
+                ),
             },
         )
     response = JSONResponse({"deleted": True})

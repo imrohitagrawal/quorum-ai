@@ -2,8 +2,8 @@
 
 The owner's purpose (CHG-012 D7): *"the purpose of sig-in is to preserve the
 history of the searches from a account."* This module is the sign-in half;
-the history, its retention, account deletion and the hashed spend key are the
-second pull request. Everything here is shaped so they fit: a signed-in
+the history, its retention, account deletion and the hashed spend key came
+in the second pull request (ADR-0135, ADR-0136). Everything here is shaped so they fit: a signed-in
 session is an ordinary session whose ``account_id`` comes from the accounts
 table (``session_store``), one row per Google identity.
 
@@ -644,12 +644,10 @@ def google_sign_in_callback(request: Request) -> RedirectResponse:
     except SignInFailed as exc:
         return _failed(exc.reason)
     store = session_store.get_store()
-    account_id = (
-        None
-        if store is None
-        else store.upsert_google_account(
-            google_sub=identity.google_sub, email=identity.email, now=datetime.now(UTC)
-        )
+    if store is None:
+        return _failed("account_not_recorded")
+    account_id = store.upsert_google_account(
+        google_sub=identity.google_sub, email=identity.email, now=datetime.now(UTC)
     )
     if account_id is None:
         return _failed("account_not_recorded")
@@ -662,6 +660,13 @@ def google_sign_in_callback(request: Request) -> RedirectResponse:
         from product_app import account_history
 
         account_history.carry_over(anonymous_account_id=previous.account_id, account_id=account_id)
+    if store.account_for(account_id) is None:
+        # W7 (ADR-0136): the account was deleted while this sign-in ran.
+        from product_app import account_history
+
+        auth.session_repository.revoke(session.session_id)
+        account_history.forget_account(account_id)
+        return _failed("account_not_recorded")
     response = RedirectResponse(AFTER_SIGN_IN_PATH, status_code=status.HTTP_303_SEE_OTHER)
     response.headers["Cache-Control"] = "no-store"
     auth.attach_session_cookie(response, session)
