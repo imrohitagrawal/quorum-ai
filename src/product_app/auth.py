@@ -383,10 +383,10 @@ class SessionRepository:
 
     def revoke_account(self, account_id: UUID) -> None:
         """Refuse every session of ``account_id``, and drop the cached ones
-        (W7 account deletion). The durable rows are deleted by
-        ``SessionStore.delete_account``, in the same transaction as the
-        account; this call must come FIRST, so a restore racing the delete
-        sees the account already refused. Lapsed marks are dropped here."""
+        (W7 account deletion). Called once the account's rows are gone
+        (``SessionStore.delete_account``); from then on a restore racing the
+        delete sees the account refused, and ``_persist`` writes no row for
+        it. Lapsed marks are dropped here."""
         now = datetime.now(UTC)
         with self._lock:
             for lapsed in [aid for aid, until in self._deleted_accounts.items() if until <= now]:
@@ -404,10 +404,11 @@ class SessionRepository:
             return until is not None and until > datetime.now(UTC)
 
     def begin_deletion(self, account_id: UUID) -> None:
-        """A delete of ``account_id`` is under way (ADR-0136). Refuses nothing
-        on its own, so another device keeps working if the delete fails; it
-        is what :func:`spend_key_for` and carry-over read in the moment
-        between the account row going and :meth:`revoke_account`."""
+        """A delete of ``account_id`` is under way (ADR-0136). No session is
+        refused for it, so another device keeps working if the delete fails;
+        :func:`spend_key_for` and carry-over read it for an id whose account
+        row they did not find, in the moment between the row going and
+        :meth:`revoke_account`."""
         with self._lock:
             self._deleting[account_id] = self._deleting.get(account_id, 0) + 1
 
@@ -781,7 +782,13 @@ def spend_key_for(session: SessionContext) -> UUID:
         return session.account_id
     store = session_store.get_store()
     key = session.account_id if store is None else store.spend_key_for(session.account_id)
-    if session_repository.account_is_going(session.account_id):
+    # A key read from the account's row proves the delete has not committed;
+    # only a lookup that missed the row (the key is then the id) is refused
+    # while a delete is under way. A finished delete is refused either way.
+    missed = key == session.account_id
+    if session_repository.account_was_deleted(session.account_id) or (
+        missed and session_repository.account_is_going(session.account_id)
+    ):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail={

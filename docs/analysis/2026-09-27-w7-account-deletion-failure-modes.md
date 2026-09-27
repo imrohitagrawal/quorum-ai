@@ -191,3 +191,21 @@ S9. **Two lives of one person at once.** Both charge under the same key
   kept 24 hours under the keyed hash of its subject, and the re-created
   account takes it back.
 
+### Added by review round 2 of the re-plan, fixed in a third round the owner approved (2026-09-27, 18:34:19Z)
+
+- **A session row written back during the delete** (introduced by the round-1
+  reordering): another device's request between the commit and the refusal
+  rewrote its session row, which came back after a restart. Answer: after the
+  refusal, the account's session rows are deleted again; from then on no row
+  is written for it.
+- **The pointer outlived 24 hours**: lapsed rows were removed only at the next
+  deletion. Answer: also at open (best effort, so a read-only volume still
+  opens) and at every sign-in.
+- **A delete that fails refused another device's estimate**: answer: only a
+  lookup that missed the account row is refused while a delete is under way.
+- **The delete page's "try again"** reached errors that retrying cannot fix;
+  answer: only a store failure or a dropped connection says it.
+- **A database marked by an earlier build of this branch** had no pointer
+  table; answer: the table is created on every open (a no-op once it
+  exists). Local only: production never ran those builds.
+

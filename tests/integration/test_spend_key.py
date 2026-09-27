@@ -573,3 +573,56 @@ def test_the_spend_key_pointer_lapses_after_a_day(sign_in: SignIn) -> None:
     assert key == session_store.account_id_for(subject, key=session_store._account_key())
     assert key != old
     assert until > datetime.now(UTC).isoformat()
+
+
+def test_a_lapsed_pointer_is_removed_at_sign_in_and_on_open(
+    sign_in: SignIn, tmp_path: Path
+) -> None:
+    """docs/48 and ADR-0136 say the pointer is kept 24 hours. Turns red if a
+    lapsed row (the keyed hash of a deleted person's subject) is kept until
+    some other account happens to be deleted."""
+    client = sign_in.client()
+    _signed_in(client)
+    assert _delete(client).status_code == 200
+    lapse = "UPDATE spend_key_carry SET until = '2000-01-01T00:00:00+00:00'"
+    count = "SELECT COUNT(*) FROM spend_key_carry"
+    sign_in.store._conn.execute(lapse)
+    assert sign_in.store._conn.execute(count).fetchone()[0] == 1
+    sign_in.stub.claims = {**sign_in.stub.claims, "sub": "someone-else", "email": "b@example.com"}
+    _signed_in(sign_in.client())
+    assert sign_in.store._conn.execute(count).fetchone()[0] == 0
+    # On open: a lapsed row left by a process that stopped.
+    path = tmp_path / "reopen.sqlite3"
+    first = SessionStore(str(path))
+    first._conn.execute(
+        "INSERT INTO spend_key_carry VALUES ('k', 'v', '2000-01-01T00:00:00+00:00')"
+    )
+    first._conn.execute(
+        "INSERT INTO spend_key_carry VALUES ('live', 'v', '2999-01-01T00:00:00+00:00')"
+    )
+    first.close()
+    reopened = SessionStore(str(path))
+    try:
+        rows = [r[0] for r in reopened._conn.execute("SELECT subject_key FROM spend_key_carry")]
+    finally:
+        reopened.close()
+    assert rows == ["live"]
+
+
+def test_a_database_marked_before_the_pointer_table_gets_it(tmp_path: Path) -> None:
+    """A database migrated by an earlier build of this branch has the
+    spend-key marker but no pointer table. Turns red if such a database
+    cannot sign anyone new in or delete an account."""
+    path = tmp_path / "early.sqlite3"
+    first = SessionStore(str(path))
+    first._conn.execute("DROP TABLE spend_key_carry")
+    first.close()
+    store = SessionStore(str(path))
+    try:
+        created = store.upsert_google_account(
+            google_sub="sub-new", email="n@example.com", now=datetime.now(UTC)
+        )
+        assert created is not None
+        assert store.delete_account(created) is True
+    finally:
+        store.close()

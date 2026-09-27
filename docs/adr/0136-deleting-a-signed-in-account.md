@@ -54,9 +54,9 @@ read 0 on the new). Failure modes first:
    its Google subject (the `spend_key_carry` table, same transaction); only
    then is every session of the account refused
    (`SessionRepository.revoke_account`: a deleted mark kept in memory for the
-   session lifetime, and the cached sessions dropped), its carry-over links
-   (to or from it) dropped, and its run-history rows given a NULL
-   `account_id`. A session read from disk during the delete is refused as it
+   session lifetime, and the cached sessions dropped), any session row another
+   device wrote back just before that deleted again, its carry-over links (to
+   or from it) dropped, and its run-history rows given a NULL `account_id`. A session read from disk during the delete is refused as it
    is cached, or dropped by the refusal. If the store refuses the delete (503
    `DELETION_FAILED`), nothing has been changed: other devices stay signed
    in and "try again" is true.
@@ -75,8 +75,10 @@ read 0 on the new). Failure modes first:
    on the account id; the charge step's events (the opening charge, a
    ceiling degrade) carry the spend key. A spend key that cannot be read
    refuses the request (503 `SPEND_KEY_UNAVAILABLE`), for anonymous visitors
-   too while the sessions database cannot be read; a request of an account
-   being or just deleted is refused (401). Deleting and signing in again gets
+   too while the sessions database cannot be read; a request of a deleted
+   account is refused (401), and so is one whose lookup found no account row
+   while a delete of that id is under way. A lookup that found the row gets
+   its key even then, so a delete that fails refuses no other device. Deleting and signing in again gets
    a NEW id and the SAME spend key, from the 24-hour pointer, so the day's
    spend still counts, for an account of either age.
 4. A run still running when its account is deleted finishes. Its history
@@ -119,7 +121,11 @@ read 0 on the new). Failure modes first:
   2026-09-27 at 12:02:35Z (CHG-024) therefore no longer happens, as the
   option chosen at 15:05:02Z (CHG-025) said.
 - The pointer holds the keyed hash of the Google subject and the spend key
-  for 24 hours after a deletion (`SPEND_KEY_CARRY`), then lapses.
+  for 24 hours after a deletion (`SPEND_KEY_CARRY`); after that it is not
+  used, and it is removed at the next open, sign-in or deletion.
+- The page says "try again" only for a store failure or a dropped
+  connection; a stale token, an expired session or a missing cookie is told
+  to reload (`accountDeleteMessage`, pinned under Node).
 - The spend key is stored, never recomputed, so rotating
   `QUORUM_TOKEN_SECRET` leaves live accounts' envelopes intact; only an
   account deleted before a rotation and re-created after it starts fresh

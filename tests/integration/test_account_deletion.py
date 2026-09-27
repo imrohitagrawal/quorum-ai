@@ -595,3 +595,116 @@ def test_a_failed_delete_signs_no_other_device_out_and_keeps_run_rows(
         for run in (earlier, running):
             row = runs.get(str(run.query_run_id))
             assert row is not None and row.account_id == str(account)
+
+
+# -- Re-plan review round 2 (2026-09-27), fixed in a bounded third round the
+# -- owner approved (2026-09-27, 18:34:19Z).
+
+
+def test_a_session_written_back_during_the_delete_does_not_survive_a_restart(
+    sign_in: SignIn, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Another device's request lands between the commit and the refusal and
+    writes its session row back. Turns red if that row is still on disk
+    afterwards, so the session comes back after a restart."""
+    from product_app import account_deletion
+
+    phone = sign_in.client()
+    laptop = sign_in.client()
+    _signed_in(phone)
+    _signed_in(laptop)
+    account = _account(sign_in)
+    laptop_session = laptop.cookies[COOKIE]
+    real_delete = sign_in.store.delete_account
+
+    def delete_then_laptop_calls(account_id: UUID) -> bool:
+        assert real_delete(account_id) is True
+        assert laptop.get("/v1/session").status_code == 200
+        return True
+
+    monkeypatch.setattr(sign_in.store, "delete_account", delete_then_laptop_calls)
+    assert account_deletion.delete_account(account) is True
+    rows = sign_in.store._conn.execute(
+        "SELECT COUNT(*) FROM sessions WHERE account_id = ?", (str(account),)
+    ).fetchone()[0]
+    assert rows == 0
+    auth.session_repository._sessions.clear()
+    auth.session_repository.forget_deleted_accounts()
+    assert auth.session_repository.get(laptop_session) is None
+
+
+def test_a_run_finishing_just_after_the_nulling_still_loses_the_account(
+    sign_in: SignIn, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The sessions must be refused (the mark set) BEFORE the run rows are
+    NULLed: a run finishing right after the NULLing checks the mark. Turns
+    red if the order is swapped and that run's row keeps the id."""
+    from product_app import account_deletion
+
+    with run_history_store.configure_for_tests() as runs:
+        client = sign_in.client()
+        _signed_in(client)
+        account = _account(sign_in)
+        running = _run(account, "finishing right after")
+        real_forget = run_history_store.forget_account
+
+        def forget_then_finish(account_id: str) -> None:
+            real_forget(account_id)
+            _finish(running)
+
+        monkeypatch.setattr(run_history_store, "forget_account", forget_then_finish)
+        assert account_deletion.delete_account(account) is True
+        row = runs.get(str(running.query_run_id))
+        assert row is not None and row.account_id is None
+
+
+def test_overlapping_deletes_keep_each_others_mark(sign_in: SignIn) -> None:
+    """Two deletes of one account under way; one ends. Turns red if the
+    other's being-deleted mark is cleared with it."""
+    account = uuid4()
+    auth.session_repository.begin_deletion(account)
+    auth.session_repository.begin_deletion(account)
+    auth.session_repository.end_deletion(account)
+    assert auth.session_repository.account_is_going(account) is True
+    auth.session_repository.end_deletion(account)
+    assert auth.session_repository.account_is_going(account) is False
+
+
+def test_deleting_an_already_deleted_account_is_harmless(sign_in: SignIn) -> None:
+    """A second delete of the same id (a double submit, or two devices).
+    Turns red if it raises (a 500) instead of completing quietly."""
+    from product_app import account_deletion
+
+    _signed_in(sign_in.client())
+    account = _account(sign_in)
+    assert account_deletion.delete_account(account) is True
+    assert account_deletion.delete_account(account) is True
+    assert sign_in.account_rows() == []
+
+
+def test_another_devices_estimate_works_while_a_delete_that_fails_is_under_way(
+    sign_in: SignIn, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review round 2: the being-deleted mark refused another device's
+    estimate (401) even though the row read found the account. Turns red if
+    a request whose row was found is refused during a delete."""
+    phone = sign_in.client()
+    laptop = sign_in.client()
+    _signed_in(phone)
+    _signed_in(laptop)
+    seen: list[int] = []
+
+    def laptop_estimates(_id: UUID) -> bool:
+        csrf = str(laptop.get("/v1/session").json()["csrf_token"])
+        seen.append(
+            laptop.post(
+                "/v1/query-runs/estimate",
+                json={"query_text": "q", "model_slots": list(DEFAULT_MODEL_IDS)},
+                headers={"X-CSRF-Token": csrf},
+            ).status_code
+        )
+        return False
+
+    monkeypatch.setattr(sign_in.store, "delete_account", laptop_estimates)
+    assert _delete(phone).status_code == 503
+    assert seen == [200]

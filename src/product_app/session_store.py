@@ -134,14 +134,14 @@ class HistoryEntry:
     verdict: str | None = None
 
 
-#: A per-process key used only when ``QUORUM_TOKEN_SECRET`` is unset (local
-#: development; production refuses to start without it). Account ids derived
-#: under it are stable only for the life of the process.
 #: W7 (ADR-0136): how long a deleted account's spend key is kept for its
 #: re-creation: the ledger's 24-hour spend window (``FeedbackStore``'s
 #: ``timedelta(hours=24)`` cutoffs), after which the old spend no longer counts.
 SPEND_KEY_CARRY = timedelta(hours=24)
 
+#: A per-process key used only when ``QUORUM_TOKEN_SECRET`` is unset (local
+#: development; production refuses to start without it). Keys derived under
+#: it are stable only for the life of the process.
 _PROCESS_ACCOUNT_KEY = secrets.token_bytes(32)
 
 
@@ -325,7 +325,8 @@ class SessionStore:
     #: kept for :data:`SPEND_KEY_CARRY` under the keyed hash of its Google
     #: subject, so a re-created account takes it back. Without it an account
     #: whose key is its own old id (created before the spend key) would start
-    #: a fresh envelope; with it, no account does. Nothing else is kept.
+    #: a fresh envelope; with it, none re-created within the 24 hours under
+    #: the same secret does. Nothing else is kept.
     _SPEND_KEY_CARRY_DDL = (
         "CREATE TABLE IF NOT EXISTS spend_key_carry ("
         "subject_key TEXT PRIMARY KEY, "
@@ -422,6 +423,15 @@ class SessionStore:
                     (self._SPEND_KEY_MIGRATION,),
                 ).fetchone()
                 if applied is not None:
+                    # A database marked by an earlier build of this change
+                    # lacks the pointer table; a no-op once it exists.
+                    self._conn.execute(self._SPEND_KEY_CARRY_DDL)
+                    # Housekeeping only: a read-only volume refuses even a
+                    # DELETE that matches nothing, and must still sign in.
+                    try:
+                        self._purge_lapsed_carry()
+                    except sqlite3.Error as exc:
+                        self._warn("drop lapsed spend-key pointers", exc)
                     return True
                 self._conn.execute("BEGIN IMMEDIATE")
                 try:
@@ -750,6 +760,7 @@ class SessionStore:
                     row = self._conn.execute(
                         "SELECT account_id FROM accounts WHERE google_sub = ?", (google_sub,)
                     ).fetchone()
+                    self._purge_lapsed_carry()
                     if row is None:
                         # W7 (ADR-0136): a random id per account life, and the
                         # spend key derived from the subject, so a deleted and
@@ -811,11 +822,19 @@ class SessionStore:
                 return False
         return True
 
+    def _purge_lapsed_carry(self) -> None:
+        """Drop pointers past :data:`SPEND_KEY_CARRY` (caller holds the lock):
+        at open, at every sign-in and every delete, so a deleted person's
+        keyed hash is not kept longer than the docs say."""
+        self._conn.execute(
+            "DELETE FROM spend_key_carry WHERE until <= ?", (datetime.now(UTC).isoformat(),)
+        )
+
     def _carry_spend_key(self, key: str) -> None:
         """Inside :meth:`delete_account`'s transaction: keep the account's
         spend key for its re-creation, and drop lapsed ones."""
         now = datetime.now(UTC)
-        self._conn.execute("DELETE FROM spend_key_carry WHERE until <= ?", (now.isoformat(),))
+        self._purge_lapsed_carry()
         row = self._conn.execute(
             "SELECT google_sub, spend_key FROM accounts WHERE account_id = ?", (key,)
         ).fetchone()
@@ -827,6 +846,12 @@ class SessionStore:
             "VALUES (?, ?, ?)",
             (str(subject_key), row["spend_key"] or key, (now + SPEND_KEY_CARRY).isoformat()),
         )
+
+    def delete_sessions_of(self, account_id: UUID) -> bool:
+        """Every session row of ``account_id``. Account deletion calls it again
+        after refusing the sessions: a request from another device in the
+        moment before the refusal can write its row back (review round 2)."""
+        return self._write("DELETE FROM sessions WHERE account_id = ?", (str(account_id),))
 
     def spend_key_for(self, account_id: UUID) -> UUID | None:
         """The key the spend rails meter ``account_id`` under (ADR-0136).

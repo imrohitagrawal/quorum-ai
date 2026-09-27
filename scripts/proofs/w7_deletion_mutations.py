@@ -78,8 +78,8 @@ MUTATIONS: list[tuple[str, str, str, int, int]] = [
     # refused rather than falling back to the id.
     (
         AU,
-        "    if session_repository.account_is_going(session.account_id):\n        raise",
-        "    if False:\n        raise",
+        "    if session_repository.account_was_deleted(session.account_id) or (",
+        "    if False or (",
         1,
         0,
     ),
@@ -265,6 +265,59 @@ MUTATIONS: list[tuple[str, str, str, int, int]] = [
         0,
     ),
     (AH, "if account_id in (a, target)", "if target == account_id", 1, 0),
+    # Review round 2 of the re-plan, fixed in the owner-approved third round.
+    (AD, "        store.delete_sessions_of(account_id)\n", "", 1, 0),
+    (
+        AU,
+        "            if left > 0:\n                self._deleting[account_id] = left\n"
+        "            else:\n                self._deleting.pop(account_id, None)",
+        "            self._deleting.pop(account_id, None)",
+        1,
+        0,
+    ),
+    (
+        ST,
+        "        if row is None:\n            return\n        subject_key",
+        "        subject_key",
+        1,
+        0,
+    ),
+    (
+        AD,
+        "        auth.session_repository.revoke_account(account_id)\n        # Once refused",
+        "        # Once refused",
+        1,
+        0,
+    ),
+    (
+        ST,
+        "                    self._purge_lapsed_carry()\n                    if row is None:",
+        "                    if row is None:",
+        1,
+        0,
+    ),
+    (
+        ST,
+        "                    try:\n                        self._purge_lapsed_carry()\n",
+        "                    try:\n                        pass\n",
+        1,
+        0,
+    ),
+    (
+        ST,
+        "                    self._conn.execute(self._SPEND_KEY_CARRY_DDL)\n"
+        "                    # Housekeeping",
+        "                    # Housekeeping",
+        1,
+        0,
+    ),
+    (
+        AU,
+        "        missed and session_repository.account_is_going",
+        "        session_repository.account_is_going",
+        1,
+        0,
+    ),
     # A sign-in finishing during the delete revokes its own session.
     (GS, "    if store.account_for(account_id) is None:\n", "    if False:\n", 1, 0),
 ]
@@ -275,6 +328,7 @@ TESTS = [
     "tests/integration/test_account_history_flow.py",
     "tests/integration/test_google_sign_in.py",
     "tests/unit/test_account_history_store.py",
+    "tests/unit/test_account_delete_message.py",
 ]
 
 

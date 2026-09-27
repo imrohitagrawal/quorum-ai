@@ -8,11 +8,12 @@ visitor through a reminder, typing their own email, and a final
 token and does the deletion. Failure modes:
 ``docs/analysis/2026-09-27-w7-account-deletion-failure-modes.md``.
 
-Order matters: every session of the account is refused FIRST
-(``SessionRepository.revoke_account``), then the account, its history and its
-sessions are deleted in one transaction. A session being restored from disk
-on another device in that moment is checked against the refusal before it
-is cached, so it cannot come back (the race promised a test on 2026-09-25).
+Order matters (see :func:`delete_account`): the delete is marked as under
+way, the account, its history and its sessions are deleted in one
+transaction, and only then are its sessions refused and any row written back
+in between deleted again. A session being restored from disk on another
+device is checked against the refusal before it is cached, so it cannot come
+back (the race promised a test on 2026-09-25).
 """
 
 from __future__ import annotations
@@ -48,6 +49,9 @@ def delete_account(account_id: UUID) -> bool:
             _log.error("account deletion: the account rows could not be removed")
             return False
         auth.session_repository.revoke_account(account_id)
+        # Once refused, no session of the account is written again; a row
+        # another device wrote back just before the refusal goes now.
+        store.delete_sessions_of(account_id)
         account_history.forget_account(account_id)
         run_history_store.forget_account(str(account_id))
         _log.info("account deleted")

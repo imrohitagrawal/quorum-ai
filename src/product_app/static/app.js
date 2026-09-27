@@ -9973,20 +9973,27 @@
         } catch (err) {
           confirm.disabled = false;
           show("reminder");
-          // Retrying helps only a store failure or a dropped connection; an
-          // expired session or a stale token needs the page reloaded.
-          const code = err && err.code;
-          error.textContent =
-            code === "CONFIRMATION_MISMATCH"
-              ? "That is not the email address you signed in with."
-              : code === "CSRF_INVALID" || code === "SESSION_EXPIRED"
-                ? "Your session changed. Reload the page, then try again."
-                : "Your account could not be deleted just now. Please try again.";
+          error.textContent = accountDeleteMessage(err);
           error.hidden = false;
           email.focus();
         }
       });
     }
+  }
+
+  // W7 (ADR-0136): the delete step's error line. "Try again" only where
+  // trying again can work: a store failure (503 DELETION_FAILED, nothing was
+  // changed) or a dropped connection. A stale token, an expired session or a
+  // missing cookie sends the same thing and fails the same way: reload.
+  function accountDeleteMessage(err) {
+    const code = err && err.code;
+    if (code === "CONFIRMATION_MISMATCH") {
+      return "That is not the email address you signed in with.";
+    }
+    if (code === "DELETION_FAILED" || code === "NETWORK_UNREACHABLE" || (err && err.status === 0)) {
+      return "Your account could not be deleted just now. Please try again.";
+    }
+    return "Your session changed. Reload the page, then try again.";
   }
 
   function initWorkflowKeyboard() {
