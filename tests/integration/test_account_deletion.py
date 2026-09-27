@@ -708,3 +708,47 @@ def test_another_devices_estimate_works_while_a_delete_that_fails_is_under_way(
     monkeypatch.setattr(sign_in.store, "delete_account", laptop_estimates)
     assert _delete(phone).status_code == 503
     assert seen == [200]
+
+
+def test_a_failed_delete_leaves_an_older_account_able_to_run(
+    sign_in: SignIn, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every account created before the spend key has its own id as its key,
+    so its lookup looks like a miss. Turns red if a delete that failed leaves
+    it marked as being deleted, which would then refuse its runs (401)."""
+    client = sign_in.client()
+    _signed_in(client)
+    sign_in.store._conn.execute("UPDATE accounts SET spend_key = account_id")
+    monkeypatch.setattr(sign_in.store, "delete_account", lambda _id: False)
+    assert _delete(client).status_code == 503
+    csrf = str(client.get("/v1/session").json()["csrf_token"])
+    estimate = client.post(
+        "/v1/query-runs/estimate",
+        json={"query_text": "q", "model_slots": list(DEFAULT_MODEL_IDS)},
+        headers={"X-CSRF-Token": csrf},
+    )
+    assert estimate.status_code == 200, estimate.text
+
+
+def test_the_session_rows_go_with_the_account_even_if_the_process_dies_after(
+    sign_in: SignIn, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The account's session rows are deleted in the same transaction as the
+    account, not only by the second pass after the refusal. Turns red if a
+    process that stops right after the commit leaves them on disk."""
+    from product_app import account_deletion
+
+    _signed_in(sign_in.client())
+    account = _account(sign_in)
+
+    def process_stops(_id: UUID) -> None:
+        raise RuntimeError("the process stopped")
+
+    monkeypatch.setattr(auth.session_repository, "revoke_account", process_stops)
+    with pytest.raises(RuntimeError):
+        account_deletion.delete_account(account)
+    rows = sign_in.store._conn.execute(
+        "SELECT COUNT(*) FROM sessions WHERE account_id = ?", (str(account),)
+    ).fetchone()[0]
+    assert rows == 0
+    assert sign_in.account_rows() == []

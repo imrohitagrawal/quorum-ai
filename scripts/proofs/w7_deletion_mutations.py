@@ -78,8 +78,8 @@ MUTATIONS: list[tuple[str, str, str, int, int]] = [
     # refused rather than falling back to the id.
     (
         AU,
-        "    if session_repository.account_was_deleted(session.account_id) or (",
-        "    if False or (",
+        "    if key == session.account_id and session_repository.account_is_going(",
+        "    if False and session_repository.account_is_going(",
         1,
         0,
     ),
@@ -247,13 +247,6 @@ MUTATIONS: list[tuple[str, str, str, int, int]] = [
         1,
         0,
     ),
-    (
-        ST,
-        '"WHERE subject_key = ? AND until > ?",',
-        '"WHERE subject_key = ? AND ? IS NOT NULL",',
-        1,
-        0,
-    ),
     (ST, 'row["spend_key"] or key, (now + SPEND_KEY_CARRY)', "key, (now + SPEND_KEY_CARRY)", 1, 0),
     # Carry-over never takes a deleted account's runs, and forgets links from it.
     (
@@ -313,8 +306,8 @@ MUTATIONS: list[tuple[str, str, str, int, int]] = [
     ),
     (
         AU,
-        "        missed and session_repository.account_is_going",
-        "        session_repository.account_is_going",
+        "    if key == session.account_id and session_repository.account_is_going(",
+        "    if session_repository.account_is_going(",
         1,
         0,
     ),

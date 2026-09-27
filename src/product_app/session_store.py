@@ -768,10 +768,10 @@ class SessionStore:
                         # nothing else.
                         account_id = uuid4()
                         subject_key = account_id_for(google_sub, key=_account_key())
+                        # Lapsed pointers were purged above, in this transaction.
                         carried = self._conn.execute(
-                            "SELECT spend_key FROM spend_key_carry "
-                            "WHERE subject_key = ? AND until > ?",
-                            (str(subject_key), stamp),
+                            "SELECT spend_key FROM spend_key_carry WHERE subject_key = ?",
+                            (str(subject_key),),
                         ).fetchone()
                         spend_key = subject_key if carried is None else UUID(carried[0])
                         self._conn.execute(
