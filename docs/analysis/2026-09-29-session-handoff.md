@@ -40,17 +40,21 @@ production only with #524: its Tests job hit the old 15-minute limit twice.
 
 ## Traps this session paid for
 
-- **CI time limits are at the edge.** The `pytest` job took up to 14m50s and
-  was killed twice at 15 minutes with the suite complete; #524 gives it 20.
+- **CI time limits are at the edge.** The `pytest` job's last 30 successful
+  runs took 10m29s to 14m50s. On #522's merge it was killed at 15 minutes
+  twice: once 4 seconds after the whole suite passed, once at 99% on the
+  re-run. #524 gives it 20. (#524's merge message says both kills came with
+  the suite complete; the second did not.)
   `validate-and-test` has about 3.5 minutes left under its 20. Going higher
   also moves the deploy gate's wait (1500 s) and the drift alarm's grace
   (1800 s, ADR-0026, sized against it): measure and change the three
   together.
 - **A background gate chain outlives its useful result.** Stop it by task
   before editing or starting another; never `pkill` by the venv path while
-  a mutation proof in a copy shares that venv (it kills the proof's pytest).
-- **`make diff-cover` was red on a branch that had never finished a run**
-  (W7 3a, 82%): failure paths in new store code had no tests.
+  a mutation proof in a copy shares that venv (it kills the proof's pytest;
+  seen once this session, not recorded elsewhere).
+- **`make diff-cover` was red on W7 3a's first local run** (`22db3dd`: 150
+  lines, 26 missing, 82%): failure paths in new store code had no tests.
 - **Tests that sign in share one stub Google subject**, so a charge in one
   file reaches the process-global spend total another file reads; give a
   test that charges its own subject.
