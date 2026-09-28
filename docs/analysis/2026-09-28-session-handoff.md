@@ -23,9 +23,10 @@ run 36347465450; two were cancelled by concurrency).
 - History: two review rounds; round 2 reproduced two defects that round 1's
   own fixes had added. The owner approved one bounded simplifying round
   (2026-09-28, 12:14:14Z), committed as `14dde83`.
-- **What it still needs, in order:** the mutation proof
-  (`uv run python scripts/proofs/w7_session_safety_mutations.py`, in a
-  `git archive` copy), all gates and both e2e lanes on `14dde83`, then ONE
+- **What it still needs, in order:** the branch's session-safety mutation
+  proof (the script under `scripts/proofs/` on that branch; list it with
+  `git ls-tree --name-only origin/w7/session-safety scripts/proofs/`), run in
+  a `git archive` copy; all gates and both e2e lanes on `14dde83`; then ONE
   final review of the simplifying round. Merge only if that review finds no
   reproduced blocker; otherwise park it and ask the owner. The runs of
   those checks on `14dde83` died when the disk filled (ENOSPC), so nothing
@@ -36,9 +37,11 @@ run 36347465450; two were cancelled by concurrency).
 
 1. **W7 part 3, pull request B: idle expiry** with a keep-active reminder
    (CHG-021 b). Board needle: `ABSENT src/product_app/config.py ::
-   signed_in_idle_minutes`. Read first: the failure-mode page on the
-   branch above (`docs/analysis/2026-09-28-w7-session-safety-failure-modes.md`)
-   and ADR-0137. A read-only map found, on `a2801da`, that an idle-expired
+   signed_in_idle_minutes`. Read first: the branch's session-safety
+   failure-mode page, dated 2026-09-28 (it exists only on
+   `origin/w7/session-safety` until pull request A merges; list it with
+   `git ls-tree --name-only origin/w7/session-safety docs/analysis/`), and
+   ADR-0137 on the same branch. A read-only map found, on `a2801da`, that an idle-expired
    signed-in session becomes a new counted anonymous session, so after two
    in a day an address gets 429 and cannot even start signing in again;
    sign-in is on in production, so this can happen today. The map's
