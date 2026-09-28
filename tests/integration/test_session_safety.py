@@ -27,6 +27,7 @@ from product_app.feedback_store import configure_for_tests as ledger_for_tests
 from product_app.model_slots import DEFAULT_MODEL_IDS, validate_model_slots_with_search
 from product_app.query_run_orchestration import QueryRunStatus, query_run_repository
 from product_app.query_runs import _ip_rate_limiter
+from product_app.safety import WARNING_VERSION, WarningType
 
 COOKIE = "quorum_session"
 EVERYWHERE = "/v1/auth/sign-out-everywhere"
@@ -167,12 +168,21 @@ def test_only_a_signed_in_browser_with_its_csrf_token_can_do_it(sign_in: SignIn)
     assert _session_rows(sign_in, account) >= 1
 
 
-def test_a_create_already_past_the_session_check_is_refused(
-    sign_in: SignIn, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """THE OWNER'S REQUIRED RACE: the laptop's create has passed its session
-    check when the phone signs out everywhere. Turns red if the create still
-    starts a run or charges anything."""
+_CREATE = {
+    "query_text": "in flight",
+    "model_slots": list(DEFAULT_MODEL_IDS),
+    "safety_acknowledgements": [
+        {"warning_type": WarningType.SENSITIVE_DATA, "version": WARNING_VERSION}
+    ],
+}
+
+
+def _create_racing_a_sign_out(
+    sign_in: SignIn, monkeypatch: pytest.MonkeyPatch, *, sign_out: bool
+) -> tuple[Any, list[int], UUID, Decimal]:
+    """The laptop's create passes its session check; the phone signs out
+    everywhere at that moment (or, for the partner, does nothing). Returns
+    the create's response, the sign-out's status, the account and its spend."""
     from product_app import query_runs
 
     phone = sign_in.client()
@@ -187,27 +197,43 @@ def test_a_create_already_past_the_session_check_is_refused(
 
     def limit_then_phone_signs_out_everywhere(*args: Any, **kwargs: Any) -> None:
         real_limit(*args, **kwargs)
-        if not ended:
+        if sign_out and not ended:
             ended.append(_everywhere(phone, csrf=phone_csrf).status_code)
 
     with ledger_for_tests() as ledger:
         monkeypatch.setattr(
             query_runs, "_enforce_account_rate_limit", limit_then_phone_signs_out_everywhere
         )
-        created = laptop.post(
-            "/v1/query-runs",
-            json={
-                "query_text": "in flight",
-                "model_slots": list(DEFAULT_MODEL_IDS),
-                "safety_acknowledgements": [],
-            },
-            headers={"X-CSRF-Token": laptop_csrf},
-        )
-        assert ended == [200]
-        assert created.status_code == 401, created.text
-        assert query_run_repository.get_active_for_account(account) is None
+        created = laptop.post("/v1/query-runs", json=_CREATE, headers={"X-CSRF-Token": laptop_csrf})
         (row,) = sign_in.account_rows()
-        assert ledger.daily_spend_for(UUID(row["spend_key"])) == Decimal("0")
+        return created, ended, account, ledger.daily_spend_for(UUID(row["spend_key"]))
+
+
+def test_a_create_already_past_the_session_check_is_refused(
+    sign_in: SignIn, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The race promised to the owner on 2026-09-25 (11:30:42Z), in reply to
+    their question about race conditions: the laptop's create has passed its
+    session check when the phone signs out everywhere. Turns red if the
+    create still starts a run or charges anything."""
+    created, ended, account, spent = _create_racing_a_sign_out(sign_in, monkeypatch, sign_out=True)
+    assert ended == [200]
+    assert created.status_code == 401, created.text
+    assert query_run_repository.get_active_for_account(account) is None
+    assert spent == Decimal("0")
+
+
+def test_the_same_create_without_the_sign_out_starts_and_charges(
+    sign_in: SignIn, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Positive partner: the same request, with no sign-out, starts a run and
+    is charged, so the refusal above is the sign-out's doing. Turns red if
+    the payload stops being a create that would run."""
+    created, ended, account, spent = _create_racing_a_sign_out(sign_in, monkeypatch, sign_out=False)
+    assert ended == []
+    assert created.status_code == 202, created.text
+    assert query_run_repository.get_active_for_account(account) is not None
+    assert spent > Decimal("0")
 
 
 def test_a_session_being_restored_during_it_is_not_put_back(
@@ -403,8 +429,9 @@ def test_sign_in_sign_out_and_sign_out_everywhere_are_recorded(sign_in: SignIn) 
 
 
 def test_no_secret_reaches_an_event_row(sign_in: SignIn) -> None:
-    """Turns red if a code, state, verifier, token, subject, email, session
-    id or address reaches the table. Partner: the same scan finds each one
+    """Turns red if a code, state, PKCE challenge, subject, email, session id
+    or address reaches the table: the list scanned below, which holds no
+    PKCE verifier or token. Partner: the same scan finds each one
     in a planted row, so the scan is not blind."""
     client = sign_in.client()
     csrf = _boot(client)

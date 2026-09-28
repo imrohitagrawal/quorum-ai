@@ -9920,6 +9920,86 @@
         }
       });
     }
+    // W7 part 3 (ADR-0138): a signed-in page only (the markup is rendered for
+    // a signed-in account alone). Moved to <body>: the top bar is hidden on
+    // the result and transcript views.
+    const idleBox = el("idle-reminder");
+    if (idleBox) {
+      document.body.appendChild(idleBox);
+      const idleSeconds = Number(idleBox.dataset.idleSeconds);
+      const warningSeconds = Number(idleBox.dataset.warningSeconds);
+      const idleText = el("idle-reminder-text");
+      const stay = el("idle-stay");
+      const leave = el("idle-sign-out");
+      const reload = el("idle-reload");
+      let idleTimer = null;
+      const later = (ms, fn) => {
+        window.clearTimeout(idleTimer);
+        idleTimer = window.setTimeout(fn, ms);
+      };
+      const hideReminder = () => {
+        idleBox.hidden = true;
+        idleText.textContent = "";
+      };
+      // Shown first, text second, so the polite announcement is heard.
+      const showReminder = (text, expired) => {
+        idleBox.hidden = false;
+        stay.hidden = expired;
+        leave.hidden = expired;
+        reload.hidden = !expired;
+        window.setTimeout(() => {
+          idleText.textContent = text;
+        }, 50);
+      };
+      const showExpired = () => {
+        window.clearTimeout(idleTimer);
+        showReminder(idleExpiredText(idleSeconds), true);
+      };
+      const idleCheck = async () => {
+        let body;
+        try {
+          body = await api("/v1/session/idle");
+        } catch (err) {
+          if (err && err.status === 401) {
+            showExpired();
+          } else {
+            later(60000, idleCheck);
+          }
+          return;
+        }
+        if (body.idle_seconds_left > warningSeconds) {
+          hideReminder();
+          later(idleCheckDelayMs(body.idle_seconds_left, warningSeconds), idleCheck);
+          return;
+        }
+        showReminder(idleReminderText(body.idle_seconds_left), false);
+        later((body.idle_seconds_left + 2) * 1000, idleCheck);
+      };
+      stay.addEventListener("click", async () => {
+        stay.disabled = true;
+        try {
+          const body = await api("/v1/session/keep-active", { method: "POST" });
+          hideReminder();
+          later(idleCheckDelayMs(body.idle_seconds_left, warningSeconds), idleCheck);
+        } catch (err) {
+          if (err && err.status === 401) {
+            showExpired();
+          } else {
+            toast({ message: "Could not keep you signed in. Please try again.", tone: "error" });
+          }
+        } finally {
+          stay.disabled = false;
+        }
+      });
+      leave.addEventListener("click", () => {
+        const signOutButton = el("sign-out");
+        if (signOutButton) signOutButton.click();
+      });
+      reload.addEventListener("click", () => window.location.assign("/ui"));
+      // The page load itself used the session, so the first ask is due one
+      // warning before a full idle length from now.
+      later(idleCheckDelayMs(idleSeconds, warningSeconds), idleCheck);
+    }
     // W7 (ADR-0135): the History disclosure closes on Escape (focus returns to
     // its button) and on a click outside it, as a menu does.
     const history = el("account-history");
@@ -9994,6 +10074,34 @@
         }
       });
     }
+  }
+
+  // W7 part 3 (ADR-0138): the idle reminder. The page's timer only decides
+  // when to ASK the server how long is left; the server's answer decides
+  // whether to warn (another tab, a sleeping laptop or a clock that differs
+  // would otherwise make the page wrong).
+  function idleCheckDelayMs(secondsLeft, warningSeconds) {
+    return Math.max(0, secondsLeft - warningSeconds) * 1000;
+  }
+
+  // Minutes rounded UP: "about 5 minutes" for 241 seconds is the side that
+  // never promises more time than is left.
+  function idleReminderText(secondsLeft) {
+    const minutes = Math.ceil(secondsLeft / 60);
+    const when = minutes <= 1 ? "about a minute" : "about " + minutes + " minutes";
+    return (
+      "You will be signed out in " +
+      when +
+      " because nothing has happened on this page. Stay signed in?"
+    );
+  }
+
+  function idleExpiredText(idleSeconds) {
+    return (
+      "You were signed out after " +
+      Math.round(idleSeconds / 60) +
+      " minutes with nothing happening on this page. Reload the page to sign in again."
+    );
   }
 
   // W7 part 3 (ADR-0137): the sign-in start is rate-limited per network; a

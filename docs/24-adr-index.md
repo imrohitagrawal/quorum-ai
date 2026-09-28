@@ -140,6 +140,7 @@ ways, so the record shows what was believed on a date and what replaced it.
 | [ADR-0135](adr/0135-signed-in-history.md) | Signed-in history keeps the last 5 questions for 30 days | Architecture | Accepted — 2026-09-26, board row W7, part a of the second pull request |
 | [ADR-0136](adr/0136-deleting-a-signed-in-account.md) | Deleting a signed-in account | Architecture | Accepted — 2026-09-27, board row W7, part b of the second pull request |
 | [ADR-0137](adr/0137-sign-out-everywhere-sign-in-events-and-a-sign-in-start-limit.md) | Sign out everywhere, sign-in events, and a limit on starting a sign-in | Architecture | Accepted — 2026-09-28, board row W7, part 3 of 3, first of two pull requests |
+| [ADR-0138](adr/0138-idle-expiry-for-signed-in-sessions-with-a-keep-active-reminder.md) | Idle expiry for signed-in sessions, with a keep-active reminder | Architecture | Accepted — 2026-09-28, board row W7, part 3 of 3, second of two pull |
 
 **This index was itself stale** until 2026-07-30: ADR-0002 had existed since
 2026-07-19 and was never listed here. A hand-maintained index is a derived fact

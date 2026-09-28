@@ -780,6 +780,76 @@ def sign_out_everywhere(request: Request) -> JSONResponse:
     return response
 
 
+class SessionIdleResponse(BaseModel):
+    """W7 part 3 (ADR-0138): how long this browser's session has left."""
+
+    signed_in: bool
+    idle_seconds_left: int
+
+
+def _idle_response(session_id: str) -> JSONResponse:
+    """The time the session has left, and the cookie renewed for exactly
+    that long, so an active page never loses its cookie before its session
+    (API calls do not renew the cookie)."""
+    session = auth.session_repository.get(session_id)
+    if session is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={
+                "code": auth.AuthError.SESSION_EXPIRED.value,
+                "message": "Browser session expired and must be renewed.",
+            },
+        )
+    ends = session.last_used_at + session.idle_limit
+    left = max(0, int((ends - datetime.now(UTC)).total_seconds()))
+    body = SessionIdleResponse(
+        signed_in=signed_in_account(session.account_id) is not None, idle_seconds_left=left
+    )
+    response = JSONResponse(body.model_dump())
+    response.headers["Cache-Control"] = "no-store"
+    auth.attach_session_cookie(
+        response,
+        auth.SessionIssueResponse(
+            account_id=session.account_id,
+            session_id=session.session_id,
+            csrf_token=session.csrf_token,
+            expires_at=ends,
+            session_expires_in_seconds=left,
+        ),
+        max_age=left,
+    )
+    return response
+
+
+def session_idle_status(request: Request) -> JSONResponse:
+    """How long this session has left, WITHOUT keeping it alive (ADR-0138):
+    no touch and no new CSRF token, so asking never stops a session expiring
+    and never breaks another tab. Never creates a session."""
+    session_id = auth.get_session_cookie_from_request(request)
+    if not session_id:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={
+                "code": auth.AuthError.AUTH_REQUIRED.value,
+                "message": "Browser session is required for this endpoint.",
+            },
+        )
+    return _idle_response(session_id)
+
+
+def keep_session_active(request: Request) -> JSONResponse:
+    """The reminder's "Stay signed in" (ADR-0138): resets the idle clock like
+    any request, keeps the CSRF token, and renews the cookie."""
+    session = _require_cookie_session(request)
+    return _idle_response(session.session_id)
+
+
+router.add_api_route(
+    "/v1/session/idle", session_idle_status, methods=["GET"], include_in_schema=False
+)
+router.add_api_route(
+    "/v1/session/keep-active", keep_session_active, methods=["POST"], include_in_schema=False
+)
 router.add_api_route(
     "/v1/auth/google/start",
     start_google_sign_in,
