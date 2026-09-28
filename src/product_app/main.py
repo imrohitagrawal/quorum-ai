@@ -834,6 +834,7 @@ def _account_controls_html(
             + "</span>"
             + _history_html(account.account_id)
             + '<button id="sign-out" class="topbar-howitworks" type="button">Sign out</button>'
+            + _idle_reminder_html()
         ), True
     if not sign_in_enabled() or not on_sign_in_host:
         return "", False
@@ -913,6 +914,28 @@ def _history_html(account_id: UUID) -> str:
         + body
         + _account_delete_html()
         + "</div></details>"
+    )
+
+
+def _idle_reminder_html() -> str:
+    """W7 part 3 (ADR-0138, CHG-021 b): the reminder shown before a signed-in
+    session ends for want of activity, and the note shown after. Hidden until
+    ``app.js`` needs it; ``app.js`` moves it out of the top bar (hidden on the
+    result and transcript views) so it shows on every view. The two values
+    are the settings, in seconds, for the page's timer."""
+    idle = settings.signed_in_idle_minutes * 60
+    warning = settings.signed_in_idle_warning_minutes * 60
+    return (
+        '<div class="idle-reminder" id="idle-reminder" role="region" '
+        'aria-label="Staying signed in" hidden '
+        f'data-idle-seconds="{idle}" data-warning-seconds="{warning}">'
+        '<p class="idle-reminder-text" id="idle-reminder-text" aria-live="polite"></p>'
+        '<div class="idle-reminder-actions">'
+        '<button type="button" id="idle-stay" class="topbar-howitworks">Stay signed in</button>'
+        '<button type="button" id="idle-sign-out" class="topbar-howitworks">Sign out now</button>'
+        '<button type="button" id="idle-reload" class="topbar-howitworks" hidden>'
+        "Reload the page</button>"
+        "</div></div>"
     )
 
 

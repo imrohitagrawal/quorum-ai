@@ -284,9 +284,18 @@ class _Session:
     #: Purely local bookkeeping for :meth:`SessionRepository._persist_touch`;
     #: never read from the sink and never part of the session's identity.
     persisted_last_used_at: datetime | None = None
+    #: W7 part 3 (ADR-0138): how long this session may go without a request.
+    #: The lifetime for an anonymous session; ``signed_in_idle_minutes`` for a
+    #: signed-in one (never longer: that setting is bounded by the lifetime).
+    idle_limit: timedelta = SESSION_TTL
 
     def is_expired(self, *, now: datetime) -> bool:
-        return (now - self.last_used_at) > SESSION_TTL
+        return (now - self.last_used_at) > self.idle_limit
+
+
+def signed_in_idle_limit() -> timedelta:
+    """W7 part 3 (ADR-0138): the idle limit of a signed-in session."""
+    return timedelta(minutes=settings.signed_in_idle_minutes)
 
 
 def _to_stored(session: _Session) -> StoredSession:
@@ -333,7 +342,7 @@ class SessionRepository:
         self._valid_after: dict[UUID, datetime] = {}
         self._lock = RLock()
 
-    def create(self, *, account_id: UUID) -> _Session:
+    def create(self, *, account_id: UUID, idle_limit: timedelta = SESSION_TTL) -> _Session:
         with self._lock:
             self._purge_expired_locked()
             now = datetime.now(UTC)
@@ -343,6 +352,7 @@ class SessionRepository:
                 csrf_token=secrets.token_urlsafe(24),
                 created_at=now,
                 last_used_at=now,
+                idle_limit=idle_limit,
             )
             self._sessions[session.session_id] = session
         self._persist(session)
@@ -505,6 +515,10 @@ class SessionRepository:
         read, cutoff = store.sessions_valid_after(stored.account_id)
         if not read or (cutoff is not None and stored.created_at <= cutoff):
             return None
+        # W7 part 3 (ADR-0138): the row does not say whether the session is
+        # signed in, so ask once, here; a lookup that fails gets the signed-in
+        # limit, the shorter one (the closed side).
+        anonymous = store.is_anonymous(stored.account_id)
         session = _Session(
             session_id=stored.session_id,
             account_id=stored.account_id,
@@ -512,7 +526,10 @@ class SessionRepository:
             created_at=stored.created_at,
             last_used_at=stored.last_used_at,
             persisted_last_used_at=stored.last_used_at,
+            idle_limit=SESSION_TTL if anonymous is True else signed_in_idle_limit(),
         )
+        if session.is_expired(now=datetime.now(UTC)):
+            return None
         with self._lock:
             # W7 (ADR-0136): re-checked under the lock, after the disk read,
             # so an account deleted while this read was in flight stays out;
@@ -560,6 +577,19 @@ class SessionRepository:
             session.persisted_last_used_at = written_at
             store.save(_to_stored(session))
 
+    def flush(self, session_id: str) -> None:
+        """Write the session's last use through now, whatever the touch
+        throttle (ADR-0138). The idle status route calls it, so the time left
+        it reports survives a restart: without it the disk copy can lag the
+        last use by up to ``SESSION_TOUCH_PERSIST_INTERVAL_S``, and a check the
+        page scheduled from that answer would find less time than it was told.
+        Changes the durable copy and, like any write, restarts the touch
+        throttle's interval; never the session's last use."""
+        with self._lock:
+            session = self._sessions.get(session_id)
+        if session is not None and session.persisted_last_used_at != session.last_used_at:
+            self._persist(session)
+
     def _persist_touch(self, session: _Session) -> None:
         """Write ``last_used_at`` through, but no more than once per
         ``SESSION_TOUCH_PERSIST_INTERVAL_S``.
@@ -587,7 +617,7 @@ class SessionRepository:
         expired = [
             session_id
             for session_id, session in self._sessions.items()
-            if (now - session.last_used_at) > SESSION_TTL
+            if session.is_expired(now=now)
         ]
         for session_id in expired:
             self._sessions.pop(session_id, None)
@@ -772,13 +802,13 @@ def issue_signed_in_session(previous_session_id: str, *, account_id: UUID) -> Se
     """
     _enforce_production_guards(require_legacy_disabled=True)
     session_repository.revoke(previous_session_id)
-    session = session_repository.create(account_id=account_id)
+    session = session_repository.create(account_id=account_id, idle_limit=signed_in_idle_limit())
     return SessionIssueResponse(
         account_id=session.account_id,
         session_id=session.session_id,
         csrf_token=session.csrf_token,
-        expires_at=session.last_used_at + SESSION_TTL,
-        session_expires_in_seconds=int(SESSION_TTL.total_seconds()),
+        expires_at=session.last_used_at + session.idle_limit,
+        session_expires_in_seconds=int(session.idle_limit.total_seconds()),
     )
 
 
@@ -1069,8 +1099,8 @@ def issue_or_resume_session(
                     account_id=resumed.account_id,
                     session_id=resumed.session_id,
                     csrf_token=resumed.csrf_token,
-                    expires_at=resumed.last_used_at + SESSION_TTL,
-                    session_expires_in_seconds=int(SESSION_TTL.total_seconds()),
+                    expires_at=resumed.last_used_at + resumed.idle_limit,
+                    session_expires_in_seconds=int(resumed.idle_limit.total_seconds()),
                 )
             # C10: rotate CSRF on resume. The fresh token replaces
             # the one previously issued for this session. See
@@ -1085,7 +1115,7 @@ def issue_or_resume_session(
                 account_id=rotated.account_id,
                 session_id=rotated.session_id,
                 csrf_token=rotated.csrf_token,
-                expires_at=rotated.last_used_at + SESSION_TTL,
-                session_expires_in_seconds=int(SESSION_TTL.total_seconds()),
+                expires_at=rotated.last_used_at + rotated.idle_limit,
+                session_expires_in_seconds=int(rotated.idle_limit.total_seconds()),
             )
     return issue_session(client_ip=client_ip, mint_cap=mint_cap)

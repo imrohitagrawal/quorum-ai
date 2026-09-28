@@ -45,12 +45,15 @@ charged; and nothing limited `POST /v1/auth/google/start`.
 2. **The next sign-in works.** The cutoff is a time, not a refusal of the
    account, so a session made after it, even with the same account id, is
    allowed, including after a restart.
-3. **A request already past its session check** is re-checked when it asks
-   for its spend key (`auth.spend_key_for`), so an estimate or a create whose
-   key is read after the sign-out is refused with 401. This narrows the
-   window, it does not close it: a create whose key was read just before
-   the sign-out still starts its run and is charged (measured by review),
-   like a run already running.
+3. **A request already past its session check** is checked again when it
+   asks for its spend key (`auth.spend_key_for`), just BEFORE the key is
+   read: an estimate or a create whose second check runs after the sign-out
+   is refused with 401. This narrows the window, it does not close it: a
+   create whose second check ran just before the sign-out still starts its
+   run and is charged, even if its key is read after it (both measured by
+   review), like a run already running. (Corrected 2026-09-28 by W7 part 3's
+   second pull request: this said "whose key is read after the sign-out",
+   which put the edge a few lines late.)
 4. **It deletes nothing else**: no account, history, spend key, cost row or
    run-history link, and no deleted mark. Runs already running finish and are
    charged as usual; cancelling them is not in CHG-021 (recorded).
@@ -96,8 +99,11 @@ charged; and nothing limited `POST /v1/auth/google/start`.
   wall clock steps backwards, the cutoff can be earlier than sessions that
   already exist, and those survive (measured by review round 1); a new
   sign-in made while the clock is behind the cutoff works until its session
-  is next restored from disk (a restart), which refuses it until the clock
-  passes the cutoff. Round 1 raised the cutoff to the newest existing
+  is next restored from disk (a restart), which then refuses that session
+  for good (it was made before the cutoff); a sign-in made after the clock
+  passes the cutoff works (measured by the final review; this said "until
+  the clock passes the cutoff" until W7 part 3's second pull request).
+  Round 1 raised the cutoff to the newest existing
   session to close the first case; round 2 showed that raise had no bound
   (one future-dated session row locked the account out for good), and the
   owner approved returning to the simpler rule (2026-09-28, 12:14:14Z).
@@ -111,6 +117,8 @@ charged; and nothing limited `POST /v1/auth/google/start`.
 - The start limit is in memory: a restart resets it (the machine stops when
   idle).
 - Open for the owner: the four values above; whether runs already running
-  (and a create already past its key read) should be cancelled; whether the
-  events should be shown to the account; whether other devices signed out
-  this way should get a session the daily cap does not count.
+  (and a create already past its second session check) should be
+  cancelled; whether the events should be shown to the account; whether
+  other devices signed out this way should get a session the daily cap does
+  not count; and failed sign-ins, which are not stored as rows (Decision 5),
+  where the proposal the owner agreed to said "time and success or failure".

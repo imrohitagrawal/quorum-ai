@@ -656,6 +656,35 @@ a { color: var(--accent); text-underline-offset: 2px; }
   max-width: min(420px, calc(100vw - var(--space-5) * 2));
 }
 
+/* W7 part 3 (ADR-0138): the idle reminder, on every view. */
+.idle-reminder {
+  position: fixed;
+  bottom: var(--space-5);
+  right: var(--space-5);
+  z-index: 2000;
+  max-width: min(420px, calc(100vw - var(--space-5) * 2));
+  padding: var(--space-4);
+  border-radius: var(--radius-md);
+  background: var(--panel-strong);
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--info);
+  box-shadow: var(--shadow-md);
+}
+
+.idle-reminder[hidden] {
+  display: none;
+}
+
+.idle-reminder-text {
+  margin: 0 0 var(--space-3);
+}
+
+.idle-reminder-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
 .toast {
   pointer-events: auto;
   display: grid;

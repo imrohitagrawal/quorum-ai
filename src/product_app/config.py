@@ -797,7 +797,7 @@ class Settings(BaseSettings):
     #: W7 part 3 (ADR-0137, CHG-021 d): sign-in events kept per account, the
     #: newest ``sign_in_events_keep_count`` and none older than
     #: ``sign_in_events_keep_days``. PROPOSED — AWAITING OWNER: the session's
-    #: values (CHG-021 says the session proposes them as settings).
+    #: values (CHG-021 approved recording the events and set no keep values).
     sign_in_events_keep_count: int = Field(default=10, ge=1, le=100)
     sign_in_events_keep_days: int = Field(default=30, ge=1, le=365)
     #: W7 part 3 (ADR-0137, CHG-021 e): starting a sign-in is limited per
@@ -812,6 +812,17 @@ class Settings(BaseSettings):
     #: tool's recorded cap (review round 2).
     sign_in_starts_per_address_burst: int = Field(default=5, ge=1, le=100)
     sign_in_starts_per_address_per_minute: int = Field(default=1, ge=1, le=100)
+    #: W7 part 3 (ADR-0138, CHG-021 b): a signed-in session ends after
+    #: ``signed_in_idle_minutes`` without a request, and the page offers to
+    #: keep it active ``signed_in_idle_warning_minutes`` before. PROPOSED —
+    #: AWAITING OWNER: the session's values (CHG-021 says the session proposes
+    #: the idle length as a setting). 120 is every session's lifetime today
+    #: (``auth.SESSION_TTL``), so nobody is signed out sooner than before; it
+    #: is also the upper bound, because every other rule that ages a session
+    #: (restore, clean-up, the sign-out-everywhere cutoff) uses that lifetime.
+    #: The bounds keep the warning shorter than the length.
+    signed_in_idle_minutes: int = Field(default=120, ge=15, le=120)
+    signed_in_idle_warning_minutes: int = Field(default=5, ge=1, le=10)
 
     #: W32 (ADR-0134, CHG-022 item 4): the invite-link signing key. Empty (the
     #: shipped state) turns invite links off. At least 32 characters (the
