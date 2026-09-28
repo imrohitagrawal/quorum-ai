@@ -47,8 +47,11 @@ So the expiry exists; what was missing is the warning, and a way to stay.
 2. **The page asks, the server answers.** `GET /v1/session/idle` (not in the
    published API schema) returns `signed_in` and `idle_seconds_left`
    WITHOUT resetting the clock or replacing the CSRF token, never creates a
-   session, and renews the cookie for exactly the time left. The page's
-   timer only decides when to ask: one warning (`signed_in_idle_warning_minutes`,
+   session, renews the cookie for the full session lifetime (never less: API
+   calls do not renew it, and a cookie cut to the time left was lost by
+   anyone who kept working while the reminder showed, review measured), and
+   writes the session's last use through, so its answer survives a restart.
+   The page's timer only decides when to ask: one warning (`signed_in_idle_warning_minutes`,
    **PROPOSED 5**, bounds 1 to 10) before the end it last heard of. Activity
    in another tab, a sleeping laptop or a clock that differs are therefore
    the server's to judge.
@@ -84,9 +87,13 @@ So the expiry exists; what was missing is the warning, and a way to stay.
   logic is tested as pure functions under Node, its markup is pinned, its
   routes are tested through the real sign-in flow, and it was driven in a
   real browser for this pull request.
-- After a restart, the server can report up to 5 minutes less than before
-  (the session's last use is written to disk at most every 300 seconds), so
-  the reminder can come early, never late.
+- The session's last use is written to disk at most every 300 seconds, so
+  after a restart the server can report up to 5 minutes less than before.
+  The status route writes it through each time it answers, so a check the
+  page scheduled from that answer still finds the time it was told; the
+  first check is timed from the page load, which already writes it. (The
+  first build said "early, never late" without that write; review measured
+  a scheduled check coming late by the lag.)
 - Timers in a background tab can fire up to a minute late; the answer then
   comes from the server either way.
 - **Open for the owner — the lockout after expiry.** A replacement session
@@ -97,4 +104,7 @@ So the expiry exists; what was missing is the warning, and a way to stay.
   makes it rarer, not impossible. Changing who the cap counts is the
   owner's decision (ADR-0137 lists the same question for sign out
   everywhere).
-- Open for the owner as well: the two values; the wording.
+- Open for the owner as well: the two values; the wording. And one premise:
+  idle expiry already applied to every session (2 hours) before this pull
+  request, so at the proposed default it adds the reminder and the setting,
+  not a shorter expiry; a shorter signed-in length is one setting away.

@@ -160,13 +160,19 @@ B3. **Keep-active breaks other tabs.** Reusing `/v1/session` would replace
     works after keep-active.
 B4. **The cookie dies before the session.** An active user whose activity
     is only API calls loses the cookie 2 hours after the page loaded. Answer:
-    keep-active and the status route renew the cookie's lifetime; the page
-    also counts the cookie's deadline when it decides when to ask. Test:
-    the response sets the cookie with the remaining lifetime.
+    keep-active and the status route renew the cookie for the full 2-hour
+    lifetime, never less, and the page asks at least once per idle length,
+    so an open page renews its cookie before it runs out. (The first build
+    cut the cookie to the time left; review showed that someone working on
+    while the reminder showed then lost the cookie and was told they had
+    been idle.) Tests: the cookie's `Max-Age` is the lifetime even with
+    minutes left; activity while the reminder shows keeps the cookie.
 B5. **A reminder for an anonymous session.** The owner's words name signed-in
     sessions. Answer: only a signed-in page runs the timer; the status route
-    says whether the session is signed in. Test: anonymous page, no timer
-    (markup and Node).
+    says whether the session is signed in. Tests: an anonymous page has no
+    reminder element (markup), and the status route says `signed_in: false`;
+    that the page script starts no timer without the element was checked in
+    a browser, not by a test.
 B6. **A setting that cannot work.** A signed-in idle length longer than the
     2-hour session lifetime would be silently cut to 2 hours by every other
     rule that uses `SESSION_TTL` (restore, clean-up, the sign-out-everywhere
@@ -179,8 +185,9 @@ B6. **A setting that cannot work.** A signed-in idle length longer than the
 B7. **"Or not."** The owner said the user decides. Answer: the reminder
     offers "Stay signed in" and "Sign out now"; ignoring it lets the session
     expire as today. After expiry the page says so plainly and offers to
-    reload, instead of the generic "Session expired" banner. Test: each
-    button's request (Node), and the markup.
+    reload, instead of the generic "Session expired" banner. Tests: each
+    button's action (`idleKeepActive`, `idleSignOutNow`, under Node) and the
+    markup; the click listeners that call them were driven in a browser.
 B8. **Accessibility.** The reminder appears without a user action. Answer:
     a region announced politely (`aria-live="polite"`), which never moves
     focus while the user is typing, with buttons reachable by keyboard. The
@@ -192,9 +199,14 @@ B10. **Expiry mid-run.** The run poll resets the clock, so a tab showing a
     running query does not expire. Test: none needed beyond the existing
     poll; recorded.
 B11. **Restart.** The disk copy of `last_used_at` can lag the memory copy by
-    up to 300 seconds (the throttled write), so after a restart the status
-    route can report up to 5 minutes less than before. That errs towards
-    warning early, never late. Recorded.
+    up to 300 seconds (the throttled write). The first build called that
+    "early, never late"; review showed a check the page had scheduled from an
+    earlier answer then came late, by up to the lag. Answer: the status route
+    writes the last use through each time it answers, so a check scheduled
+    from its answer finds at least the time it was told; the first check is
+    timed from the page load, which already writes it (the CSRF rotation).
+    Test: a lagging disk copy, a status answer, a restart: no time lost
+    (partner: without the status answer, the restart takes the lag off).
 B12. **What this does NOT change**: who the daily new-session cap counts.
     A replacement session after an idle expiry still counts; changing that
     is an owner decision (ADR-0137 lists it as open), raised with the owner
@@ -203,6 +215,6 @@ B12. **What this does NOT change**: who the daily new-session cap counts.
 ### Values — PROPOSED, AWAITING OWNER
 
 `signed_in_idle_minutes` 120 (today's lifetime, so no one is signed out
-sooner than today), bounded 10 to 120; `signed_in_idle_warning_minutes` 5.
+sooner than today), bounded 15 to 120; `signed_in_idle_warning_minutes` 5.
 CHG-021 records: *"The idle length and the rate-limit value are NOT the
 owner's: the building session proposes them as settings."*

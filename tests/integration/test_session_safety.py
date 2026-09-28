@@ -18,6 +18,7 @@ from uuid import UUID
 
 import pytest
 from fastapi.testclient import TestClient
+from tests.google_token_stub import good_claims
 from tests.integration.test_google_sign_in import SignIn, _boot, _callback, _signed_in, _start
 
 from product_app import account_history, auth, google_signin, session_store
@@ -182,9 +183,17 @@ def _create_racing_a_sign_out(
 ) -> tuple[Any, list[int], UUID, Decimal]:
     """The laptop's create passes its session check; the phone signs out
     everywhere at that moment (or, for the partner, does nothing). Returns
-    the create's response, the sign-out's status, the account and its spend."""
+    the create's response, the sign-out's status, the account and its spend.
+
+    Signs in as a Google account of its own: the spend key comes from the
+    Google subject, and the in-memory spend total is process-global, so a
+    charge under the shared stub subject would reach later tests
+    (``tests/integration/test_spend_key.py`` measured it doubled)."""
+    from uuid import uuid4
+
     from product_app import query_runs
 
+    sign_in.stub.claims = good_claims(sub=f"sub-{uuid4().hex}", email="race@example.com")
     phone = sign_in.client()
     laptop = sign_in.client()
     _signed_in(phone)

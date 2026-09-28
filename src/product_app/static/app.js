@@ -9978,7 +9978,7 @@
       stay.addEventListener("click", async () => {
         stay.disabled = true;
         try {
-          const body = await api("/v1/session/keep-active", { method: "POST" });
+          const body = await idleKeepActive(api);
           hideReminder();
           later(idleCheckDelayMs(body.idle_seconds_left, warningSeconds), idleCheck);
         } catch (err) {
@@ -9991,10 +9991,7 @@
           stay.disabled = false;
         }
       });
-      leave.addEventListener("click", () => {
-        const signOutButton = el("sign-out");
-        if (signOutButton) signOutButton.click();
-      });
+      leave.addEventListener("click", () => idleSignOutNow(el));
       reload.addEventListener("click", () => window.location.assign("/ui"));
       // The page load itself used the session, so the first ask is due one
       // warning before a full idle length from now.
@@ -10084,8 +10081,19 @@
     return Math.max(0, secondsLeft - warningSeconds) * 1000;
   }
 
-  // Minutes rounded UP: "about 5 minutes" for 241 seconds is the side that
-  // never promises more time than is left.
+  // The reminder's two choices, as functions the Node harness can run.
+  function idleKeepActive(apiFn) {
+    return apiFn("/v1/session/keep-active", { method: "POST" });
+  }
+
+  function idleSignOutNow(byId) {
+    const button = byId("sign-out");
+    if (!button) return false;
+    button.click();
+    return true;
+  }
+
+  // Minutes rounded up: 241 seconds reads "about 5 minutes".
   function idleReminderText(secondsLeft) {
     const minutes = Math.ceil(secondsLeft / 60);
     const when = minutes <= 1 ? "about a minute" : "about " + minutes + " minutes";

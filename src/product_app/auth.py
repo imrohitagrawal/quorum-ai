@@ -577,6 +577,18 @@ class SessionRepository:
             session.persisted_last_used_at = written_at
             store.save(_to_stored(session))
 
+    def flush(self, session_id: str) -> None:
+        """Write the session's last use through now, whatever the touch
+        throttle (ADR-0138). The idle status route calls it, so the time left
+        it reports survives a restart: without it the disk copy can lag the
+        last use by up to ``SESSION_TOUCH_PERSIST_INTERVAL_S``, and a check the
+        page scheduled from that answer would find less time than it was told.
+        Changes nothing but the durable copy."""
+        with self._lock:
+            session = self._sessions.get(session_id)
+        if session is not None and session.persisted_last_used_at != session.last_used_at:
+            self._persist(session)
+
     def _persist_touch(self, session: _Session) -> None:
         """Write ``last_used_at`` through, but no more than once per
         ``SESSION_TOUCH_PERSIST_INTERVAL_S``.
@@ -1020,15 +1032,12 @@ def require_csrf(
 # ---------------------------------------------------------------------------
 
 
-def attach_session_cookie(
-    response: object, session: SessionIssueResponse, *, max_age: int | None = None
-) -> None:
+def attach_session_cookie(response: object, session: SessionIssueResponse) -> None:
     """Attach the session cookie to ``response`` if it supports it.
 
     The response is typed loosely to keep this module importable from
     tests that use ``fastapi.responses.JSONResponse`` / ``HTMLResponse``
-    without depending on the same import path. ``max_age`` defaults to the
-    session lifetime; the idle routes (ADR-0138) pass the time left.
+    without depending on the same import path.
     """
     set_cookie = getattr(response, "set_cookie", None)
     if set_cookie is None:
@@ -1036,7 +1045,7 @@ def attach_session_cookie(
     set_cookie(
         key=get_session_cookie_name(),
         value=session.session_id,
-        max_age=int(SESSION_TTL.total_seconds()) if max_age is None else max_age,
+        max_age=int(SESSION_TTL.total_seconds()),
         httponly=True,
         secure=settings.session_cookie_secure,
         samesite="lax",

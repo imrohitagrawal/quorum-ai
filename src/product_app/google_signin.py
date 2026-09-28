@@ -788,9 +788,10 @@ class SessionIdleResponse(BaseModel):
 
 
 def _idle_response(session_id: str) -> JSONResponse:
-    """The time the session has left, and the cookie renewed for exactly
-    that long, so an active page never loses its cookie before its session
-    (API calls do not renew the cookie)."""
+    """The time the session has left. The cookie is renewed for the full
+    session lifetime, never shortened (API calls do not renew it, and the page
+    asks at least once per idle length, so an open page keeps its cookie), and
+    the last use is written through so the answer survives a restart."""
     session = auth.session_repository.get(session_id)
     if session is None:
         raise HTTPException(
@@ -800,6 +801,7 @@ def _idle_response(session_id: str) -> JSONResponse:
                 "message": "Browser session expired and must be renewed.",
             },
         )
+    auth.session_repository.flush(session.session_id)
     ends = session.last_used_at + session.idle_limit
     left = max(0, int((ends - datetime.now(UTC)).total_seconds()))
     body = SessionIdleResponse(
@@ -816,7 +818,6 @@ def _idle_response(session_id: str) -> JSONResponse:
             expires_at=ends,
             session_expires_in_seconds=left,
         ),
-        max_age=left,
     )
     return response
 

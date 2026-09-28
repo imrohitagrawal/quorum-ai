@@ -95,8 +95,8 @@ def test_the_page_asks_the_server_when_the_warning_is_due() -> None:
 
 @pytest.mark.usefixtures("_node")
 def test_the_reminder_says_how_long_is_left() -> None:
-    """Turns red if the minutes are rounded down (promising more time than is
-    left is the harmful direction reversed) or the singular is wrong."""
+    """Minutes rounded up. Turns red if the rounding or the singular
+    changes."""
     got = _run(
         ["idleReminderText"],
         "[idleReminderText(300), idleReminderText(241), idleReminderText(61), "
@@ -123,3 +123,29 @@ def test_the_expired_message_names_the_idle_length() -> None:
         "You were signed out after 45 minutes with nothing happening on this page. "
         "Reload the page to sign in again.",
     ]
+
+
+@pytest.mark.usefixtures("_node")
+def test_stay_signed_in_asks_the_keep_active_route() -> None:
+    """B7, the owner's "keep it active". Turns red if the button's request
+    changes route or method (for example to the status route, which keeps
+    nothing alive)."""
+    got = _run(
+        ["idleKeepActive"],
+        "(() => { const calls = []; idleKeepActive((path, options) => { "
+        "calls.push([path, options]); return {}; }); return calls; })()",
+    )
+    assert got == [["/v1/session/keep-active", {"method": "POST"}]]
+
+
+@pytest.mark.usefixtures("_node")
+def test_sign_out_now_presses_the_sign_out_button() -> None:
+    """B7, "or not". Turns red if the button stops using the page's sign-out,
+    or claims to have signed out with no sign-out button on the page."""
+    got = _run(
+        ["idleSignOutNow"],
+        "(() => { let clicks = 0; const button = { click() { clicks += 1; } }; "
+        "const found = idleSignOutNow((id) => (id === 'sign-out' ? button : null)); "
+        "const missing = idleSignOutNow(() => null); return [found, clicks, missing]; })()",
+    )
+    assert got == [True, 1, False]

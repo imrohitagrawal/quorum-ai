@@ -105,18 +105,73 @@ def test_the_status_keeps_the_csrf_token(sign_in: SignIn) -> None:
     assert kept.status_code == 200
 
 
-def test_the_status_renews_the_cookie_for_the_time_left(sign_in: SignIn) -> None:
-    """B4. Turns red if the cookie is not renewed, or outlives or undercuts
-    the session's own time left by more than the request's own second."""
+LIFETIME = int(auth.SESSION_TTL.total_seconds())
+
+
+def test_the_status_renews_the_cookie_for_the_whole_lifetime(sign_in: SignIn) -> None:
+    """B4. Turns red if the cookie is not renewed, or is cut to the time left
+    (API calls never renew it, so activity after a short cookie would lose it
+    while the session lives on: review of this pull request, round 1)."""
     client = sign_in.client()
     _signed_in(client)
-    _idle_for(sign_in, client, 30)
+    _idle_for(sign_in, client, 115)
     response = client.get(STATUS)
-    left = response.json()["idle_seconds_left"]
-    max_age = _max_age(response)
-    assert max_age is not None
-    assert abs(max_age - left) <= 1
+    assert response.json()["idle_seconds_left"] <= 5 * 60
+    assert _max_age(response) == LIFETIME
     assert response.headers["cache-control"] == "no-store"
+
+
+def test_activity_while_the_reminder_shows_keeps_the_cookie(sign_in: SignIn) -> None:
+    """The reminder is up, the person keeps working without pressing Stay.
+    Turns red if the cookie the status route set runs out before the session
+    the activity kept alive."""
+    client = sign_in.client()
+    _signed_in(client)
+    _idle_for(sign_in, client, 119)
+    shown = client.get(STATUS)
+    assert shown.json()["idle_seconds_left"] <= 60
+    assert client.get("/v1/query-runs/active").status_code in {200, 404}
+    left = client.get(STATUS).json()["idle_seconds_left"]
+    assert left >= 119 * 60
+    assert (_max_age(shown) or 0) >= left
+
+
+def test_the_time_left_survives_a_restart(sign_in: SignIn) -> None:
+    """B11. The disk copy of the last use lags the memory copy (the touch
+    throttle); after the status route answers, a restart must not take time
+    off. Turns red if the answer is not written through."""
+    client = sign_in.client()
+    _signed_in(client)
+    session_id = client.cookies[COOKIE]
+    session = auth.session_repository._sessions[session_id]
+    lagging = session.last_used_at - timedelta(minutes=4)
+    session.persisted_last_used_at = lagging
+    sign_in.store._conn.execute(
+        "UPDATE sessions SET last_used_at = ? WHERE session_digest = ?",
+        (lagging.isoformat(), _digest(session_id)),
+    )
+    before = client.get(STATUS).json()["idle_seconds_left"]
+    _restart()
+    after = client.get(STATUS).json()["idle_seconds_left"]
+    assert before >= 119 * 60
+    assert after >= before - 2
+
+
+def test_without_the_status_route_a_restart_takes_the_lag_off(sign_in: SignIn) -> None:
+    """Positive partner: the lag the test above removes is real. Turns red if
+    the setup no longer produces a lagging disk copy."""
+    client = sign_in.client()
+    _signed_in(client)
+    session_id = client.cookies[COOKIE]
+    session = auth.session_repository._sessions[session_id]
+    lagging = session.last_used_at - timedelta(minutes=4)
+    session.persisted_last_used_at = lagging
+    sign_in.store._conn.execute(
+        "UPDATE sessions SET last_used_at = ? WHERE session_digest = ?",
+        (lagging.isoformat(), _digest(session_id)),
+    )
+    _restart()
+    assert client.get(STATUS).json()["idle_seconds_left"] <= 116 * 60
 
 
 def test_an_anonymous_session_is_not_signed_in(sign_in: SignIn) -> None:
@@ -150,8 +205,7 @@ def test_keep_active_resets_the_clock_and_keeps_the_token(sign_in: SignIn) -> No
     assert response.status_code == 200
     left = response.json()["idle_seconds_left"]
     assert left >= 119 * 60
-    assert _max_age(response) is not None
-    assert abs((_max_age(response) or 0) - left) <= 1
+    assert _max_age(response) == LIFETIME
     assert client.get(STATUS).json()["idle_seconds_left"] >= 119 * 60
     assert client.post("/v1/auth/sign-out", headers={"X-CSRF-Token": token}).status_code == 200
 
