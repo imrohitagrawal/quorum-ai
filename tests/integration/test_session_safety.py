@@ -7,6 +7,7 @@ Failure modes first: ``docs/analysis/2026-09-28-w7-session-safety-failure-modes.
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 import threading
 from collections.abc import Iterator
@@ -311,6 +312,65 @@ def test_a_store_that_cannot_record_the_cutoff_refuses_and_changes_nothing(
     assert response.json()["detail"]["code"] == "SIGN_OUT_EVERYWHERE_FAILED"
     assert auth.session_repository.get(laptop_session) is not None
     assert _signed_in_page(phone)
+
+
+def test_a_second_pass_that_does_not_run_is_logged_and_the_sign_out_holds(
+    sign_in: SignIn, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The first pass records the cutoff; the second one fails. Turns red if
+    that failure is not logged, turns the sign-out into an error, or lets
+    the laptop's session through after a restart (the cutoff on disk still
+    refuses it)."""
+    phone = sign_in.client()
+    laptop = sign_in.client()
+    _signed_in(phone)
+    _signed_in(laptop)
+    laptop_session = laptop.cookies[COOKIE]
+    real_end = sign_in.store.end_sessions_before
+    calls: list[str] = []
+
+    def first_real_then_failed(*args: Any, **kwargs: Any) -> str:
+        calls.append("call")
+        return real_end(*args, **kwargs) if len(calls) == 1 else "failed"
+
+    monkeypatch.setattr(sign_in.store, "end_sessions_before", first_real_then_failed)
+    caplog.set_level(logging.WARNING, logger="product_app.google_signin")
+    assert _everywhere(phone).status_code == 200
+    assert len(calls) == 2
+    assert "the second pass over the rows did not run" in caplog.text
+    _restart()
+    assert auth.session_repository.get(laptop_session) is None
+
+
+def test_an_event_that_cannot_be_recorded_is_logged_and_the_sign_out_holds(
+    sign_in: SignIn, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Events are best effort. Turns red if a failed event is not logged with
+    its outcome, or fails the sign-out."""
+    phone = sign_in.client()
+    laptop = sign_in.client()
+    _signed_in(phone)
+    _signed_in(laptop)
+    laptop_session = laptop.cookies[COOKIE]
+    monkeypatch.setattr(sign_in.store, "record_sign_in_event", lambda *_a, **_k: False)
+    caplog.set_level(logging.WARNING, logger="product_app.google_signin")
+    assert _everywhere(phone).status_code == 200
+    assert "a sign-in event could not be recorded: signed_out_everywhere" in caplog.text
+    assert auth.session_repository.get(laptop_session) is None
+
+
+def test_with_no_store_it_says_not_signed_in(
+    sign_in: SignIn, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without a store there is no account to sign out. Turns red if that is
+    reported as success or as a server error."""
+    phone = sign_in.client()
+    _signed_in(phone)
+    csrf = _csrf(phone)
+    monkeypatch.setattr(session_store, "get_store", lambda: None)
+    response = _everywhere(phone, csrf=csrf)
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "NOT_SIGNED_IN"
 
 
 # -- (d) Sign-in events -----------------------------------------------------
