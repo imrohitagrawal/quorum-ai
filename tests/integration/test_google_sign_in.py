@@ -844,7 +844,7 @@ def test_the_migration_adds_the_accounts_table_to_an_old_database(tmp_path: Path
     finally:
         connection.close()
     # W7 history (ADR-0135) adds its own guarded migration beside the accounts one.
-    assert names == {"w7_accounts", "w7_spend_key", "w7_history"}
+    assert names == {"w7_accounts", "w7_spend_key", "w7_history", "w7_session_safety"}
     # Opening again is a no-op (the marker is there) and keeps the row.
     again = SessionStore(str(path))
     try:

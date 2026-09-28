@@ -325,6 +325,12 @@ class SessionRepository:
         self._deleted_accounts: dict[UUID, datetime] = {}
         #: W7 (ADR-0136): account id -> how many deletes of it are under way.
         self._deleting: dict[UUID, int] = {}
+        #: W7 part 3 (ADR-0137): account id -> its sessions cutoff. A session
+        #: of the account created at or before it is refused (sign out
+        #: everywhere). A time, not a refusal of the account: a session made
+        #: after it, by the next sign-in, works. The durable copy is
+        #: ``accounts.sessions_valid_after``, read when a session is restored.
+        self._valid_after: dict[UUID, datetime] = {}
         self._lock = RLock()
 
     def create(self, *, account_id: UUID) -> _Session:
@@ -356,6 +362,32 @@ class SessionRepository:
         if cached is not None:
             return cached
         return self._restore(session_id)
+
+    def _before_cutoff_locked(self, session: _Session) -> bool:
+        cutoff = self._valid_after.get(session.account_id)
+        return cutoff is not None and session.created_at <= cutoff
+
+    def end_sessions_of(self, account_id: UUID, cutoff: datetime) -> None:
+        """Sign out everywhere (ADR-0137): refuse every session of
+        ``account_id`` created at or before ``cutoff`` and drop the cached
+        ones. Called after the store has recorded the cutoff and deleted the
+        rows, so a session restored in between is refused on its disk read.
+        Once dropped, a session is never written again (``_persist`` checks
+        that it is still the cached one). The in-memory cutoff never moves
+        back, and cutoffs older than the session lifetime refuse nothing and
+        are dropped here."""
+        now = datetime.now(UTC)
+        with self._lock:
+            for lapsed in [a for a, c in self._valid_after.items() if c + SESSION_TTL <= now]:
+                del self._valid_after[lapsed]
+            current = self._valid_after.get(account_id)
+            self._valid_after[account_id] = cutoff if current is None else max(current, cutoff)
+            for session_id in [
+                sid
+                for sid, session in self._sessions.items()
+                if session.account_id == account_id and session.created_at <= cutoff
+            ]:
+                self._sessions.pop(session_id, None)
 
     def touch(self, session_id: str) -> _Session | None:
         session = self.get(session_id)
@@ -430,6 +462,7 @@ class SessionRepository:
         with self._lock:
             self._deleted_accounts.clear()
             self._deleting.clear()
+            self._valid_after.clear()
 
     def revoke(self, session_id: str) -> None:
         """Drop the session from both halves.
@@ -467,6 +500,11 @@ class SessionRepository:
         stored = store.fetch(session_id, not_used_before=datetime.now(UTC) - SESSION_TTL)
         if stored is None:
             return None
+        # W7 part 3 (ADR-0137): the durable sessions cutoff, read AFTER the
+        # session row; one that cannot be read refuses the session.
+        read, cutoff = store.sessions_valid_after(stored.account_id)
+        if not read or (cutoff is not None and stored.created_at <= cutoff):
+            return None
         session = _Session(
             session_id=stored.session_id,
             account_id=stored.account_id,
@@ -477,8 +515,10 @@ class SessionRepository:
         )
         with self._lock:
             # W7 (ADR-0136): re-checked under the lock, after the disk read,
-            # so an account deleted while this read was in flight stays out.
-            if self.account_was_deleted(session.account_id):
+            # so an account deleted while this read was in flight stays out;
+            # and the in-memory cutoff, for a sign-out everywhere that landed
+            # after the disk read (ADR-0137).
+            if self.account_was_deleted(session.account_id) or self._before_cutoff_locked(session):
                 return None
             # ``setdefault``, not assignment: two requests arriving together on
             # a cold process both restore, and the loser must return the SAME
@@ -564,6 +604,7 @@ class SessionRepository:
         store = session_store.get_store()
         with self._lock:
             self._sessions.clear()
+            self._valid_after.clear()
             if store is not None:
                 store.delete_all()
 
@@ -780,6 +821,17 @@ def spend_key_for(session: SessionContext) -> UUID:
     """
     if session.legacy:
         return session.account_id
+    # W7 part 3 (ADR-0137): a request already past its session check when the
+    # account signed out everywhere (or was deleted) is refused here, before
+    # it can be estimated or charged.
+    if session_repository.get(session.session_id) is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={
+                "code": AuthError.SESSION_EXPIRED.value,
+                "message": "Browser session expired and must be renewed.",
+            },
+        )
     store = session_store.get_store()
     key = session.account_id if store is None else store.spend_key_for(session.account_id)
     # A key that differs from the id proves the row was read, so the delete

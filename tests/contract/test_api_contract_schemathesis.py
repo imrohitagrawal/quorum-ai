@@ -132,6 +132,9 @@ def _pin_static_catalog() -> None:
 # with sockets blocked).
 _pin_static_catalog()
 
+from product_app.google_signin import (  # noqa: E402  (must follow the catalog pin)
+    sign_in_start_limiter,
+)
 from product_app.main import app  # noqa: E402  (must follow the catalog pin)
 from product_app.query_runs import (  # noqa: E402  (must follow the catalog pin)
     _account_rate_limiter,
@@ -242,6 +245,7 @@ def test_api_conforms_to_openapi_contract(case: Case) -> None:
     # path has its own dedicated tests in tests/security.
     _ip_rate_limiter.clear()
     _account_rate_limiter.clear()
+    sign_in_start_limiter.clear()
     # Authenticate via the legacy X-Account-Id header (enabled for tests in
     # tests/conftest.py) so generation reaches the real handlers instead of
     # bouncing off 401. A fresh account per example keeps runs independent.

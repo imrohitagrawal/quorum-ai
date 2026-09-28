@@ -924,6 +924,10 @@ def _account_delete_html() -> str:
     return (
         '<div class="account-delete" id="account-delete">'
         '<p class="history-note account-delete-heading">Your account</p>'
+        # W7 part 3 (ADR-0137, CHG-021 c): one action ends every session of
+        # the account, this one included.
+        '<button type="button" id="sign-out-everywhere" class="account-delete-link">'
+        "Sign out everywhere</button>"
         '<button type="button" id="account-delete-start" class="account-delete-link">'
         "Delete my account…</button>"
         '<div id="account-delete-reminder" hidden>'

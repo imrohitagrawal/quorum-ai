@@ -49,6 +49,8 @@ _RENDERED_ONLY_WITH_SIGN_IN = frozenset(
         "account-delete-confirm",
         "account-delete-back",
         "account-delete-error",
+        # W7 part 3 (ADR-0137): sign out everywhere.
+        "sign-out-everywhere",
     }
 )
 
