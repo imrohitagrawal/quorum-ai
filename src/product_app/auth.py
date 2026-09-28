@@ -367,31 +367,27 @@ class SessionRepository:
         cutoff = self._valid_after.get(session.account_id)
         return cutoff is not None and session.created_at <= cutoff
 
-    def end_sessions_of(self, account_id: UUID, cutoff: datetime) -> datetime:
+    def end_sessions_of(self, account_id: UUID, cutoff: datetime) -> None:
         """Sign out everywhere (ADR-0137): refuse every session of
-        ``account_id`` created at or before the cutoff and drop the cached
-        ones; return the cutoff used. It is raised to the newest cached
-        session of the account, as the store raises it to the newest row, so
-        a wall clock stepping backwards spares no existing session. Called
-        after the store has recorded its cutoff and deleted the rows, so a
-        session restored in between is refused on its disk read. Once
-        dropped, a session is never written again (``_persist`` checks that
-        it is still the cached one). Cutoffs older than the session lifetime
-        refuse nothing and are dropped here."""
+        ``account_id`` created at or before ``cutoff`` and drop the cached
+        ones. Called after the store has recorded the cutoff and deleted the
+        rows, so a session restored in between is refused on its disk read.
+        Once dropped, a session is never written again (``_persist`` checks
+        that it is still the cached one). The in-memory cutoff never moves
+        back, and cutoffs older than the session lifetime refuse nothing and
+        are dropped here."""
         now = datetime.now(UTC)
         with self._lock:
             for lapsed in [a for a, c in self._valid_after.items() if c + SESSION_TTL <= now]:
                 del self._valid_after[lapsed]
-            mine = [s for s in self._sessions.values() if s.account_id == account_id]
-            effective = max([cutoff, *(s.created_at for s in mine)])
             current = self._valid_after.get(account_id)
-            self._valid_after[account_id] = (
-                effective if current is None else max(current, effective)
-            )
-            for session in mine:
-                if session.created_at <= effective:
-                    self._sessions.pop(session.session_id, None)
-            return effective
+            self._valid_after[account_id] = cutoff if current is None else max(current, cutoff)
+            for session_id in [
+                sid
+                for sid, session in self._sessions.items()
+                if session.account_id == account_id and session.created_at <= cutoff
+            ]:
+                self._sessions.pop(session_id, None)
 
     def touch(self, session_id: str) -> _Session | None:
         session = self.get(session_id)

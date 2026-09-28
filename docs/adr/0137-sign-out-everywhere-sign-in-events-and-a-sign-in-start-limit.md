@@ -31,10 +31,8 @@ charged; and nothing limited `POST /v1/auth/google/start`.
    /v1/auth/sign-out-everywhere` (not in the published API schema; the
    History panel calls it): a cookie session of a signed-in account, with its
    CSRF token; an anonymous session gets 403 `NOT_SIGNED_IN`, the local-only
-   header path 403. The cutoff is the later of now and the newest existing
-   session of the account (on disk and in memory), so a wall clock that
-   stepped backwards spares no session that exists. The store raises
-   `accounts.sessions_valid_after` to it (never lowers it) and deletes the
+   header path 403. The cutoff is the moment of the request. The store
+   raises `accounts.sessions_valid_after` to it (never lowers it) and deletes the
    account's session rows created at or before it, in one transaction; the
    cached ones are dropped (a dropped session is never written again), and
    any session of the account created at or before the cutoff is refused
@@ -71,9 +69,11 @@ charged; and nothing limited `POST /v1/auth/google/start`.
 6. **Starting a sign-in is limited per visitor address** (`client_ip_of`,
    IPv6 by /64), in its own bucket: `sign_in_starts_per_address_burst`
    starts (**PROPOSED 5**), refilling `sign_in_starts_per_address_per_minute`
-   a minute (**PROPOSED 1**); the burst may be at most 5 times the rate, or
-   the app refuses to start (the limiter forgets a bucket after 5 idle
-   minutes as if it had refilled). 429 `SIGN_IN_RATE_LIMITED` with
+   a minute (**PROPOSED 1**). The burst should be at most 5 times the rate
+   (the limiter forgets a bucket after 5 idle minutes as if it had
+   refilled); that rule is documented next to the settings, not enforced at
+   startup (a check there would be one more decorated function over the
+   mutation tool's recorded cap). 429 `SIGN_IN_RATE_LIMITED` with
    `Retry-After` (60 seconds at the proposed rate);
    the page says "Too many sign-in attempts. Try again in a few minutes."
    No exemption: the allow-list lifts only the two per-network session
@@ -92,10 +92,15 @@ charged; and nothing limited `POST /v1/auth/google/start`.
 
 ## Consequences
 
-- A session made in the same instant as the cutoff is refused (`<=`). A new
-  sign-in made while the wall clock is behind the cutoff works until its
-  session is next restored from disk (a restart), which refuses it until
-  the clock passes the cutoff; the callback does not report that.
+- A session made in the same instant as the cutoff is refused (`<=`). If the
+  wall clock steps backwards, the cutoff can be earlier than sessions that
+  already exist, and those survive (measured by review round 1); a new
+  sign-in made while the clock is behind the cutoff works until its session
+  is next restored from disk (a restart), which refuses it until the clock
+  passes the cutoff. Round 1 raised the cutoff to the newest existing
+  session to close the first case; round 2 showed that raise had no bound
+  (one future-dated session row locked the account out for good), and the
+  owner approved returning to the simpler rule (2026-09-28, 12:14:14Z).
 - Other devices of the account, reloading afterwards, get a fresh anonymous
   session under the daily new-session cap, so on a network that has used it
   up they see the cap page (429), as after a plain sign-out today

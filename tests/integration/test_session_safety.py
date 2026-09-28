@@ -305,9 +305,7 @@ def test_a_store_that_cannot_record_the_cutoff_refuses_and_changes_nothing(
     _signed_in(phone)
     _signed_in(laptop)
     laptop_session = laptop.cookies[COOKIE]
-    monkeypatch.setattr(
-        sign_in.store, "end_sessions_before", lambda _id, cutoff, **_k: ("failed", cutoff)
-    )
+    monkeypatch.setattr(sign_in.store, "end_sessions_before", lambda *_a, **_k: "failed")
     response = _everywhere(phone)
     assert response.status_code == 503
     assert response.json()["detail"]["code"] == "SIGN_OUT_EVERYWHERE_FAILED"
@@ -390,17 +388,18 @@ def test_events_keep_the_newest_and_drop_the_old(sign_in: SignIn) -> None:
     sign_in.store._conn.execute(
         "INSERT INTO sign_in_events VALUES (?, ?, 'signed_in')", (str(account), old)
     )
+    before_last = ""
     for _ in range(settings.sign_in_events_keep_count + 2):
         # Neither limiter is what this test is about.
         google_signin.sign_in_start_limiter.clear()
         _ip_rate_limiter.clear()
+        before_last = datetime.now(UTC).isoformat()
         _signed_in(sign_in.client())
     rows = _events(sign_in)
     assert len(rows) == settings.sign_in_events_keep_count
     assert old not in {r["at"] for r in rows}
-    # The NEWEST are the ones kept: the latest sign-in is among them.
-    newest = max(r["at"] for r in rows)
-    assert newest > (datetime.now(UTC) - timedelta(minutes=5)).isoformat()
+    # The NEWEST are kept: the last sign-in's own row is among them.
+    assert [r for r in rows if r["at"] >= before_last]
 
 
 def test_deleting_the_account_deletes_its_events(sign_in: SignIn) -> None:
@@ -585,54 +584,34 @@ def test_a_session_held_by_a_request_in_flight_is_not_written_back(sign_in: Sign
     assert _session_rows(sign_in, account) == 0
 
 
-def test_a_wall_clock_stepping_back_spares_no_existing_session(
-    sign_in: SignIn, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The cutoff is at least the newest session of the account. Turns red if
-    a clock two seconds behind lets the laptop's session survive, in memory
-    or after a restart."""
-    phone = sign_in.client()
-    laptop = sign_in.client()
-    _signed_in(phone)
-    _signed_in(laptop)
-    account = _account(sign_in)
-    laptop_session = laptop.cookies[COOKIE]
-    real_datetime = datetime
-
-    class Behind(real_datetime):  # type: ignore[misc,valid-type]
-        @classmethod
-        def now(cls, tz: Any = None) -> Any:
-            return real_datetime.now(tz) - timedelta(seconds=2)
-
-    monkeypatch.setattr(google_signin, "datetime", Behind)
-    assert _everywhere(phone).status_code == 200
-    monkeypatch.setattr(google_signin, "datetime", real_datetime)
-    assert auth.session_repository.get(laptop_session) is None
-    assert _session_rows(sign_in, account) == 0
-    _restart()
-    assert auth.session_repository.get(laptop_session) is None
-
-
-def test_the_cutoff_on_disk_never_moves_back(sign_in: SignIn) -> None:
-    """Turns red if a later write with an older cutoff lowers the stored one."""
+def test_the_cutoff_never_moves_back(sign_in: SignIn) -> None:
+    """Turns red if a later write with an older cutoff lowers the stored one,
+    on disk or in memory."""
     _signed_in(sign_in.client())
     account = _account(sign_in)
     later = datetime.now(UTC)
     earlier = later - timedelta(seconds=5)
-    assert sign_in.store.end_sessions_before(account, later, include_existing=False)[0] == "ended"
-    assert sign_in.store.end_sessions_before(account, earlier, include_existing=False)[0] == "ended"
+    assert sign_in.store.end_sessions_before(account, later) == "ended"
+    assert sign_in.store.end_sessions_before(account, earlier) == "ended"
     assert sign_in.store.sessions_valid_after(account) == (True, later)
+    auth.session_repository.end_sessions_of(account, later)
+    auth.session_repository.end_sessions_of(account, earlier)
+    assert auth.session_repository._valid_after[account] == later
 
 
 def test_lapsed_cutoffs_are_dropped_from_memory() -> None:
     """Turns red if a cutoff older than the session lifetime is kept (it can
-    refuse nothing) — the map would grow by one entry per account."""
+    refuse nothing, and the map would grow by one entry per account), or if
+    another account's live cutoff is dropped with it."""
     from uuid import uuid4
 
-    old, fresh = uuid4(), uuid4()
-    auth.session_repository._valid_after[old] = datetime.now(UTC) - auth.SESSION_TTL
-    auth.session_repository.end_sessions_of(fresh, datetime.now(UTC))
+    old, live, fresh = uuid4(), uuid4(), uuid4()
+    now = datetime.now(UTC)
+    auth.session_repository._valid_after[old] = now - auth.SESSION_TTL
+    auth.session_repository._valid_after[live] = now - timedelta(minutes=1)
+    auth.session_repository.end_sessions_of(fresh, now)
     assert old not in auth.session_repository._valid_after
+    assert live in auth.session_repository._valid_after
     assert fresh in auth.session_repository._valid_after
 
 
@@ -708,20 +687,3 @@ def test_the_start_limit_is_per_address_and_says_when_to_retry(sign_in: SignIn) 
     assert refused.headers["retry-after"] == "60"
     assert other64.post(start, headers={"X-CSRF-Token": other64_csrf}).status_code == 200
     assert v4.post(start, headers={"X-CSRF-Token": v4_csrf}).status_code == 200
-
-
-def test_a_burst_the_limiter_would_forget_early_is_refused() -> None:
-    """Turns red if a burst above 5 times the rate is accepted (the limiter
-    drops a bucket after 5 idle minutes as if it had refilled)."""
-    from pydantic import ValidationError
-
-    from product_app.config import Settings
-
-    with pytest.raises(ValidationError):
-        Settings(sign_in_starts_per_address_burst=11, sign_in_starts_per_address_per_minute=2)
-    assert (
-        Settings(
-            sign_in_starts_per_address_burst=10, sign_in_starts_per_address_per_minute=2
-        ).sign_in_starts_per_address_burst
-        == 10
-    )

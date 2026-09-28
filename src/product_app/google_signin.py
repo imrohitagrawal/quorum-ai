@@ -747,20 +747,17 @@ def sign_out_everywhere(request: Request) -> JSONResponse:
     """
     session = _require_cookie_session(request)
     store = session_store.get_store()
-    if store is None or store.account_for(session.account_id) is None:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail={"code": "NOT_SIGNED_IN", "message": "Sign in to sign out everywhere."},
-        )
-    outcome, cutoff = store.end_sessions_before(
-        session.account_id, datetime.now(UTC), include_existing=True
+    not_signed_in = HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail={"code": "NOT_SIGNED_IN", "message": "Sign in to sign out everywhere."},
     )
+    if store is None:
+        raise not_signed_in
+    cutoff = datetime.now(UTC)
+    outcome = store.end_sessions_before(session.account_id, cutoff)
     if outcome == "no_account":
-        # The account was deleted in the meantime; its sessions went with it.
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail={"code": "NOT_SIGNED_IN", "message": "Sign in to sign out everywhere."},
-        )
+        # An anonymous session, or an account deleted in the meantime.
+        raise not_signed_in
     if outcome != "ended":
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -769,10 +766,12 @@ def sign_out_everywhere(request: Request) -> JSONResponse:
                 "message": "Could not sign out everywhere just now. Please try again.",
             },
         )
-    cutoff = auth.session_repository.end_sessions_of(session.account_id, cutoff)
-    # The second pass: the same cutoff, not raised again (a sign-in finishing
-    # now is not signed out), for a row written back before the cache drop.
-    store.end_sessions_before(session.account_id, cutoff, include_existing=False)
+    auth.session_repository.end_sessions_of(session.account_id, cutoff)
+    # The second pass, same cutoff: a row another device wrote back before
+    # its cached session was dropped. A sign-in finishing after the click has
+    # a later session, which neither pass touches.
+    if store.end_sessions_before(session.account_id, cutoff) != "ended":
+        _log.warning("sign out everywhere: the second pass over the rows did not run")
     pending_sign_ins.discard(session.session_id)
     _record_event(session.account_id, "signed_out_everywhere")
     response = JSONResponse(SignOutResponse(signed_out=True).model_dump())

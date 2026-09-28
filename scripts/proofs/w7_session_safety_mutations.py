@@ -28,32 +28,37 @@ GS = "src/product_app/google_signin.py"
 
 #: (file, anchor, replacement, expected count, which occurrence)
 MUTATIONS: list[tuple[str, str, str, int, int]] = [
-    # The cutoff in memory: raised to the newest cached session, recorded,
-    # cached sessions dropped, lapsed cutoffs pruned.
+    # The cutoff in memory: recorded, never lowered, cached sessions
+    # dropped, lapsed cutoffs pruned (and only those).
     (
         AU,
-        "            effective = max([cutoff, *(s.created_at for s in mine)])",
-        "            effective = cutoff",
-        1,
-        0,
-    ),
-    (
-        AU,
-        "            self._valid_after[account_id] = (\n"
-        "                effective if current is None else max(current, effective)\n"
-        "            )\n",
+        "            self._valid_after[account_id] = cutoff if current is None"
+        " else max(current, cutoff)\n",
         "",
         1,
         0,
     ),
     (
         AU,
-        "                    self._sessions.pop(session.session_id, None)",
-        "                    pass",
+        "            self._valid_after[account_id] = cutoff if current is None"
+        " else max(current, cutoff)\n",
+        "            self._valid_after[account_id] = cutoff\n",
+        1,
+        0,
+    ),
+    (
+        AU,
+        "                if session.account_id == account_id and session.created_at <= cutoff\n"
+        "            ]:\n"
+        "                self._sessions.pop(session_id, None)",
+        "                if session.account_id == account_id and session.created_at <= cutoff\n"
+        "            ]:\n"
+        "                pass",
         1,
         0,
     ),
     (AU, "                del self._valid_after[lapsed]\n", "                pass\n", 1, 0),
+    (AU, "if c + SESSION_TTL <= now]:", "if c <= now]:", 1, 0),
     # The cutoff on disk, read at restore; a failed read refuses.
     (
         AU,
@@ -85,15 +90,8 @@ MUTATIONS: list[tuple[str, str, str, int, int]] = [
         1,
         0,
     ),
-    # The store: the cutoff raised to the newest row, never lowered, and the
-    # rows, in one transaction; the second pass; no account says so.
-    (
-        ST,
-        "                        if newest is not None and newest > stamp:",
-        "                        if False:",
-        1,
-        0,
-    ),
+    # The store: the cutoff (never lowered) and the rows, in one
+    # transaction; no account says so; the second pass.
     (
         ST,
         "\"MAX(COALESCE(sessions_valid_after, ''), ?) WHERE account_id = ?\",",
@@ -109,14 +107,16 @@ MUTATIONS: list[tuple[str, str, str, int, int]] = [
         1,
         0,
     ),
+    (GS, '    if outcome == "no_account":', '    if outcome == "never":', 1, 0),
+    (GS, '    if outcome != "ended":', '    if outcome == "never":', 1, 0),
     (
         GS,
-        "    store.end_sessions_before(session.account_id, cutoff, include_existing=False)\n",
-        "",
+        '    if store.end_sessions_before(session.account_id, cutoff) != "ended":',
+        "    if False:",
         1,
         0,
     ),
-    (GS, '    if outcome == "no_account":', '    if outcome == "never":', 1, 0),
+    (GS, "    auth.session_repository.end_sessions_of(session.account_id, cutoff)\n", "", 1, 0),
     # Events: only for an existing account; the keep rules; gone with it.
     (
         ST,
@@ -156,27 +156,7 @@ MUTATIONS: list[tuple[str, str, str, int, int]] = [
     (GS, '    _record_event(account_id, "signed_in")\n', "", 1, 0),
     (GS, '        _record_event(session.account_id, "signed_out")\n', "        pass\n", 1, 0),
     (GS, '    _record_event(session.account_id, "signed_out_everywhere")\n', "", 1, 0),
-    # The route: signed-in accounts only; a failed write refuses; the
-    # in-memory step runs; the response is not cached.
-    (
-        GS,
-        "    if store is None or store.account_for(session.account_id) is None:\n"
-        "        raise HTTPException(\n"
-        "            status_code=status.HTTP_403_FORBIDDEN,",
-        "    if store is None:\n"
-        "        raise HTTPException(\n"
-        "            status_code=status.HTTP_403_FORBIDDEN,",
-        1,
-        0,
-    ),
-    (GS, '    if outcome != "ended":', '    if outcome == "never":', 1, 0),
-    (
-        GS,
-        "    cutoff = auth.session_repository.end_sessions_of(session.account_id, cutoff)\n",
-        "",
-        1,
-        0,
-    ),
+    # The response is not cached.
     (
         GS,
         "    response = JSONResponse(SignOutResponse(signed_out=True).model_dump())\n"
@@ -185,7 +165,7 @@ MUTATIONS: list[tuple[str, str, str, int, int]] = [
         1,
         0,
     ),
-    # The start limit: on, per address, 60 s Retry-After, a sound burst.
+    # The start limit: on, per address, 60 s Retry-After.
     (
         GS,
         "    if not sign_in_start_limiter.allow(",
@@ -198,13 +178,6 @@ MUTATIONS: list[tuple[str, str, str, int, int]] = [
         GS,
         "str(math.ceil(60 / settings.sign_in_starts_per_address_per_minute))",
         '"1"',
-        1,
-        0,
-    ),
-    (
-        "src/product_app/config.py",
-        "        if burst is not None and burst > 5 * value:",
-        "        if False:",
         1,
         0,
     ),

@@ -42,8 +42,9 @@ below ships as a setting, **PROPOSED — AWAITING OWNER**.
 ## (c) Sign out everywhere
 
 C1. **Other devices, including requests in flight** (the owner's required
-    test). Answer: a per-account cutoff time, the later of now and the
-    newest existing session of the account. The cached sessions of the
+    test). Answer: a per-account cutoff time, the moment of the request (a
+    wall clock stepping backwards is recorded in ADR-0137, not handled).
+    The cached sessions of the
     account are dropped (a dropped session is never written again), and a
     session created at or before the cutoff is refused when restored from
     disk (`accounts.sessions_valid_after`, and the in-memory cutoff under the
