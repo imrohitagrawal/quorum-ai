@@ -31,7 +31,15 @@ jobs:
   test:
     name: pytest (Python 3.12)
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # 20, not 15 (2026-09-29): the 30 successful runs of this job before then
+    # took 10m29s to 14m50s, and on 2026-09-28 run 36474898867 reached 100%
+    # of the suite at 20:04:29 and was killed by the 15-minute limit at
+    # 20:04:33, which left merged code undeployed (the deploy gate needs this
+    # job). 20 is the limit the other blocking push jobs that declare one
+    # already use, which the deploy gate's wait (GATE_TIMEOUT_SECONDS,
+    # deploy.yml) covers; going higher would also move that wait and the
+    # drift alarm's grace (ADR-0026).
+    timeout-minutes: 20
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
