@@ -67,7 +67,7 @@ NODE_TOOLING_REQUIRED_ENV = "QUORUM_REQUIRE_E2E_NODE_TOOLING"
 
 #: Wall-clock ceiling for one checker subprocess. The whole module takes ~17s
 #: on node 22, so this is generous; its job is to turn a wedged `node` into a
-#: NAMED test failure instead of a job that burns to `timeout-minutes: 15` and
+#: NAMED test failure instead of a job that burns to its `timeout-minutes` and
 #: reports only "exceeded the maximum execution time". These tests only started
 #: executing in a required lane with ADR-0058, so that risk is new.
 NODE_TIMEOUT_SECONDS = 120
@@ -1041,7 +1041,7 @@ def test_a_hung_node_is_killed_by_a_timeout(
 
     Before ADR-0058 these tests never executed in a required lane, so an
     unbounded `subprocess.run` cost nothing. Now they do: a `node` that never
-    returns would burn the job to `timeout-minutes: 15`, and GitHub reports
+    returns would burn the job to its `timeout-minutes`, and GitHub reports
     only "exceeded the maximum execution time" — no test name, no output.
 
     Drives a stub `node` that sleeps, so it needs no real node install.
