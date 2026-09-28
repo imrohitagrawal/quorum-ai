@@ -583,7 +583,8 @@ class SessionRepository:
         it reports survives a restart: without it the disk copy can lag the
         last use by up to ``SESSION_TOUCH_PERSIST_INTERVAL_S``, and a check the
         page scheduled from that answer would find less time than it was told.
-        Changes nothing but the durable copy."""
+        Changes the durable copy and, like any write, restarts the touch
+        throttle's interval; never the session's last use."""
         with self._lock:
             session = self._sessions.get(session_id)
         if session is not None and session.persisted_last_used_at != session.last_used_at:
