@@ -6,7 +6,7 @@ original, because a gate and an offline agent can read it and cannot read `gh`.
 
 Verified at: `b1209b5a785e95fb208c55c4303ada85065aeb54`
 
-The board holds **40** rows, **10** of them unpinned.
+The board holds **42** rows, **12** of them unpinned.
 
 `scripts/check_open_work.py --check` reads every row's evidence off disk and
 refuses if a claim is false. It runs inside `make validate`, and
@@ -135,7 +135,9 @@ caught by any automated check and 10 of 16 by adversarial review
 | W38 | Starter questions: six audience groups, four complete questions each, with a wider high-stakes keyword list (CHG-026 j) | UNPINNED | `—` | — | — |
 | W39 | The engineering harness: agents run in a container with only the agent account's token; a signed-in real-backend journey lane with an execution-backed gate; release integrity; a slimmer AGENTS.md with tracked hooks; the skills audit (`docs/analysis/2026-09-29/NEXT-SESSION-PROMPT.md`, order steps 0–7; PROPOSED, confirm in plan mode) | UNPINNED | `—` | — | — |
 | W40 | The agent account's GitHub token expires 2026-12-29 (`NEXT-SESSION-PROMPT.md`, "Agent account DONE by the owner"); rotate it before then | UNPINNED | `—` | — | W39 |
-| W41 | The trust-score screenshot tolerance: allow just above the largest difference seen (589 px), those screenshots only (CHG-026 k) | UNPINNED | `—` | — | — |
+| W41 | The trust-score screenshot tolerance: allow just above the largest difference seen (589 px when decided; 644 px on 2026-09-30, E2E run 36677984086, a docs-only merge), those screenshots only (CHG-026 k) | UNPINNED | `—` | — | — |
+| W42 | The mutation gate cannot measure a change to the session code: in CI its clean run inside `./mutants/` charged one run twice (`test_spend_key`); locally 201 mutants died with a segmentation fault in `test_context_carry.py::test_non_string_context_value_is_rejected_not_crashed` under mutmut's per-mutant runner, while that test passes run directly with a mutant on (PR #528, 2026-09-30) | UNPINNED | `—` | — | — |
+| W43 | The empty question box is already red with "Question is required." on one plain load of `/ui` right after signing in, before anything is typed (four browser runs on 2026-09-30, W34's product review) | UNPINNED | `—` | — | W33 |
 
 **STOP** marks a row that cannot be finished without a human decision — a money,
 cost or safety guardrail value that only real measurement could justify. Do not
@@ -756,7 +758,7 @@ forever with the defect closed (trap 12, measured on W12/#379). It now pins
 `ABSENT … :: if len(stance) < 2:`, verified absent on `origin/main` and present
 after.
 
-**W33–W41 — the 2026-09-28..30 owner session, added 2026-09-30.** Added
+**W33–W43 — the 2026-09-28..30 owner session, added 2026-09-30** (W42 and W43 found by W34's reviews). Added
 unpinned: each is built in its own pull request, and that pull request pins
 the row (W34 first, pinned by ADR-0139's pull request) with the needle its change adds or deletes (memory of this repo:
 "pin a needle the fix must add or delete", not a line the fix edits around).
