@@ -21,8 +21,8 @@ After any of those, the next page load has no cookie and mints a new anonymous
 session, which counts. The third in a day rendered the capped page, which had
 no sign-in control — and the sign-in start needs a cookie session — so the
 person could not sign in at all. The owner hit it on 2026-09-30 after two
-sign-ins and a sign-out (M23). ADR-0138 had recorded the expiry case as "open
-for the owner".
+sign-ins and a sign-out (M23). ADR-0138 had recorded the expiry case as decided by the owner (CHG-026 a) and
+not yet built.
 
 The failure modes were listed before the code:
 `docs/analysis/2026-09-30-w34-session-cap-and-sign-in-failure-modes.md`.
@@ -33,15 +33,23 @@ The failure modes were listed before the code:
    request (`sign_in_enabled()` and `on_sign_in_host(request)`), the server
    mints a **sign-in-only session**: a real session id and CSRF token, bound
    to a fresh random account id, flagged `sign_in_only`. It is **not recorded
-   as a mint**.
+   as a mint**. A NEW one is minted only when the per-address per-minute
+   session limiter (the one `/v1/session` draws on, 10 a minute) allows it;
+   a browser presenting a live sign-in-only cookie reuses it and draws
+   nothing; when the limiter refuses, the page is rendered with no session,
+   no cookie and no control. Review round 1 measured the unbounded version:
+   3,000 capped page loads from one address held 3,000 sessions in memory.
 2. The flag lives **in memory only**: `SessionRepository._persist` skips such
    a session, so no schema changes, no migration runs, and a restored session
    can never carry the flag. A restart loses it; the cost is one retry of the
    capped page (failure mode 17).
 3. A sign-in-only session may start and complete Google sign-in (the callback
    rotates it away exactly as for any session) and may sign out. It may do
-   nothing else: `spend_key_for` — the choke point the estimate and the run
-   creation already pass through — refuses it with 403 `SIGN_IN_REQUIRED`;
+   nothing else: `auth.refuse_sign_in_only` answers 403 `SIGN_IN_REQUIRED`
+   from `spend_key_for` (the choke point the estimate and the run creation
+   pass through), from the warnings route (it records a durable row) and from
+   run cancel; read-only routes (idle status, keep-active, model defaults,
+   the active-run query) still answer it;
    `/ui` renders the capped page for it, never the workspace; `/v1/session`
    answers it with the same 429 `SESSION_MINT_CAP_EXCEEDED` as a cookie-less
    request, so the page script and the JSON contract are unchanged.
@@ -54,8 +62,10 @@ The failure modes were listed before the code:
    signing in is not limited by it, and offers a "Sign in with Google" button
    (a `<button>` with a short inline script; the content-security policy
    forbids forms). The invite-capped page gets the same block.
-6. When sign-in is not possible on the request, nothing changes: no
-   sign-in-only session, the page as before.
+6. When sign-in is not possible on the request, or the minute limiter
+   refuses: no sign-in-only session, no cookie, no control. The page's
+   wording (the digit, the sentence about signing in) is the same either way;
+   the page is not byte-identical to the one before this change.
 
 ## Rejected alternatives
 
