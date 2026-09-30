@@ -1768,7 +1768,8 @@ def _render_session_capped_html(
     ``<form>``, because the content-security policy has ``form-action
     'none'``. The token is the one value that comes from outside this module,
     so it is the one value escaped; the rest are sentences built from
-    integers. Without a token the page is the page it always was.
+    integers. Without a token the page carries no sign-in block; its wording
+    still names the digit, unlike the page before ADR-0139.
     """
     name = "invite-capped.html" if invite else "session-capped.html"
     template = (TEMPLATES_DIR / name).read_text(encoding="utf-8")
@@ -1803,14 +1804,16 @@ def _session_capped_response(
     and its token. The status stays 429 with ``Retry-After``: the anonymous
     allowance IS refused. ``Cache-Control: no-store`` because the page now
     carries a token. When sign-in is not possible, nothing changes: no
-    session, no cookie, the page as before (decision 6).
+    session, no cookie, no control; the wording (digit, wait) is the served page's
+    minus the sign-in block (decision 6).
 
     BOUNDED (review round 1): a live sign-in-only cookie is reused for free,
     but a NEW sign-in-only session is minted only when the per-address
     per-minute session limiter — the one ``/v1/session`` draws on — allows
     it. ``/ui`` has no limiter of its own, and 3,000 capped loads were
-    measured producing 3,000 in-memory sessions of ~7 KB each. A refused
-    load gets the plain page: 429, ``Retry-After``, no cookie, no button.
+    measured producing 3,000 in-memory sessions of about 0.5 KB each (a first
+    estimate of 7 KB had counted per-request overhead). A refused load gets
+    the plain page: 429, ``Retry-After``, no cookie, no button.
     """
     cap = _effective_session_mint_cap() if mint_cap is None else mint_cap
     session = None

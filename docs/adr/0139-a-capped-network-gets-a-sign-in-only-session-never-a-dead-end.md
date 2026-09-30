@@ -63,9 +63,10 @@ The failure modes were listed before the code:
    (a `<button>` with a short inline script; the content-security policy
    forbids forms). The invite-capped page gets the same block.
 6. When sign-in is not possible on the request, or the minute limiter
-   refuses: no sign-in-only session, no cookie, no control. The page's
-   wording (the digit, the sentence about signing in) is the same either way;
-   the page is not byte-identical to the one before this change.
+   refuses: no sign-in-only session, no cookie, no control, and no sentence
+   about signing in (that sentence is part of the control's block). The digit
+   and the wait are the same either way; the page is not byte-identical to
+   the one before this change.
 
 ## Rejected alternatives
 

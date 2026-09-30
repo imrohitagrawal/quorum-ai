@@ -1,6 +1,7 @@
       <p class="lede" id="sign-in-lede">
-        Signing in is not limited by this. A signed-in account has its own
-        limits, so sign in to keep going.
+        Signing out ends a session, and coming back starts a new one, which
+        counts; staying signed in does not. Signing in is not limited by this.
+        A signed-in account has its own limits, so sign in to keep going.
       </p>
       <p>
         <button id="sign-in-google" class="sign-in" type="button" data-csrf="__CSRF_TOKEN__">Sign in with Google</button>
@@ -22,7 +23,7 @@
           function fail(text) { note.textContent = text; button.disabled = false; }
           button.addEventListener("click", function () {
             button.disabled = true;
-            note.textContent = "";
+            note.textContent = "Opening Google sign-in\u2026";
             fetch("/v1/auth/google/start", {
               method: "POST",
               credentials: "same-origin",
