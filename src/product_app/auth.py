@@ -261,6 +261,10 @@ class SessionContext:
     csrf_token: str
     legacy: bool = False
     session_created_at: datetime | None = None
+    #: W34 (ADR-0139): the session was minted for a visitor whose network
+    #: had used its anonymous allowance. It may sign in and sign out and
+    #: nothing else: :func:`spend_key_for` refuses it before any money path.
+    sign_in_only: bool = False
 
 
 @dataclass
@@ -288,6 +292,12 @@ class _Session:
     #: The lifetime for an anonymous session; ``signed_in_idle_minutes`` for a
     #: signed-in one (never longer: that setting is bounded by the lifetime).
     idle_limit: timedelta = SESSION_TTL
+    #: W34 (ADR-0139): minted by the capped page so the visitor can sign in.
+    #: In memory only, by decision 2 of that ADR: :meth:`SessionRepository.
+    #: _persist` never writes it, so no row carries it and a restored session
+    #: can never have it set. A restart loses it at the cost of one retry of
+    #: the capped page.
+    sign_in_only: bool = False
 
     def is_expired(self, *, now: datetime) -> bool:
         return (now - self.last_used_at) > self.idle_limit
@@ -342,7 +352,13 @@ class SessionRepository:
         self._valid_after: dict[UUID, datetime] = {}
         self._lock = RLock()
 
-    def create(self, *, account_id: UUID, idle_limit: timedelta = SESSION_TTL) -> _Session:
+    def create(
+        self,
+        *,
+        account_id: UUID,
+        idle_limit: timedelta = SESSION_TTL,
+        sign_in_only: bool = False,
+    ) -> _Session:
         with self._lock:
             self._purge_expired_locked()
             now = datetime.now(UTC)
@@ -353,6 +369,7 @@ class SessionRepository:
                 created_at=now,
                 last_used_at=now,
                 idle_limit=idle_limit,
+                sign_in_only=sign_in_only,
             )
             self._sessions[session.session_id] = session
         self._persist(session)
@@ -563,6 +580,11 @@ class SessionRepository:
         """
         store = session_store.get_store()
         if store is None:
+            return
+        # W34 (ADR-0139, decision 2): a sign-in-only session lives in memory
+        # only. Writing it would need a column for the flag, or a restart
+        # would restore it as an ordinary anonymous session that can spend.
+        if session.sign_in_only:
             return
         with self._lock:
             if self._sessions.get(session.session_id) is not session:
@@ -812,6 +834,35 @@ def issue_signed_in_session(previous_session_id: str, *, account_id: UUID) -> Se
     )
 
 
+def issue_sign_in_only_session(presented_session_id: str | None = None) -> SessionIssueResponse:
+    """A session that may only sign in (W34, ADR-0139, decisions 1 and 2).
+
+    Minted by the capped page when the daily cap refused an anonymous
+    session and sign-in is possible on the request: a real session id and
+    CSRF token bound to a fresh random account id, flagged ``sign_in_only``,
+    held in memory only, and NOT recorded as a mint. It cannot spend
+    (:func:`spend_key_for` refuses it), so counting it would refuse the very
+    case being fixed, and not counting it opens nothing: the sign-in
+    callback rotates it away exactly as it does any session.
+
+    ``presented_session_id`` is reused when it already resolves to a live
+    sign-in-only session, so a second load of the capped page keeps the
+    cookie the tab holds; it is looked up, never adopted (a planted id
+    resolves to nothing and a fresh session is minted instead).
+    """
+    _enforce_production_guards(require_legacy_disabled=True)
+    session = session_repository.touch(presented_session_id) if presented_session_id else None
+    if session is None or not session.sign_in_only:
+        session = session_repository.create(account_id=uuid4(), sign_in_only=True)
+    return SessionIssueResponse(
+        account_id=session.account_id,
+        session_id=session.session_id,
+        csrf_token=session.csrf_token,
+        expires_at=session.last_used_at + session.idle_limit,
+        session_expires_in_seconds=int(session.idle_limit.total_seconds()),
+    )
+
+
 def clear_session_cookie(response: Response) -> None:
     """Tell the browser to drop the session cookie (sign-out, W7).
 
@@ -851,6 +902,22 @@ def spend_key_for(session: SessionContext) -> UUID:
     """
     if session.legacy:
         return session.account_id
+    # W34 (ADR-0139, decision 3): a sign-in-only session is refused HERE, the
+    # one choke point the estimate and the run creation both pass through
+    # before any cost or guardrail event is recorded, so nothing past the
+    # network's anonymous allowance can spend. The message names the way
+    # forward and no money figure (ADR-0139 assumption iii).
+    if session.sign_in_only:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "SIGN_IN_REQUIRED",
+                "message": (
+                    "Sign in to run a query. This network has used its new sessions "
+                    "for the last 24 hours; signing in is not limited by that."
+                ),
+            },
+        )
     # W7 part 3 (ADR-0137): a request already past its session check when the
     # account signed out everywhere (or was deleted) is refused here, before
     # it can be estimated or charged.
@@ -914,6 +981,7 @@ def require_session(request: Request) -> SessionContext:
             csrf_token=session.csrf_token,
             legacy=False,
             session_created_at=session.created_at,
+            sign_in_only=session.sign_in_only,
         )
 
     if _legacy_path_allowed():
@@ -1090,7 +1158,16 @@ def issue_or_resume_session(
     _enforce_production_guards(require_legacy_disabled=True)
     if presented_session_id:
         existing = session_repository.get(presented_session_id)
-        if existing is not None and not existing.is_expired(now=datetime.now(UTC)):
+        # W34 (ADR-0139, decision 4): a sign-in-only session is never
+        # RESUMED here. It falls through to a counted mint, so a slot that
+        # has aged out of the window is used and the visitor gets the full
+        # product back; while the cap holds, the mint raises and ``/ui``
+        # renders the capped page again while ``/v1/session`` answers 429.
+        if (
+            existing is not None
+            and not existing.sign_in_only
+            and not existing.is_expired(now=datetime.now(UTC))
+        ):
             if not rotate_csrf:
                 resumed = session_repository.touch(presented_session_id)
                 if resumed is None:

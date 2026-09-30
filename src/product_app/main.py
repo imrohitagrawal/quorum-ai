@@ -41,10 +41,12 @@ from product_app.auth import (
     SessionContext,
     SessionMintCapExceeded,
     VisitorAddressMiddleware,
+    _effective_session_mint_cap,
     attach_session_cookie,
     client_ip_of,
     get_session_cookie_from_request,
     issue_or_resume_session,
+    issue_sign_in_only_session,
     require_session,
 )
 from product_app.config import (
@@ -1691,22 +1693,27 @@ def browser_session(
         # A DIFFERENT 429 code from the burst limiter above — that one is
         # a per-minute flood guard, this one is the durable daily
         # dollar-drain guard — so an operator reading the code can tell
-        # which control fired.
+        # which control fired. W34 (ADR-0139): a sign-in-only cookie gets
+        # this same answer (it is never resumed), so the page script needs
+        # no third state; only ``/ui`` mints one, and no cookie is set here.
         return JSONResponse(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             content={
                 "detail": {
-                    # The CODE is the contract ``app.js`` reads; only the
-                    # prose changed. It used to say "today's limit" and "the
-                    # daily window resets", describing a calendar boundary
+                    # The CODE is the contract for API clients and the tests
+                    # (nothing under ``static/`` reads it: the page script
+                    # only checks the status); the prose may change. It used
+                    # to say "today's limit" and "the daily window resets",
+                    # describing a calendar boundary
                     # ``try_record_session_mint`` does not implement — its
                     # cutoff is ``now - 24h``, a rolling window.
                     "code": "SESSION_MINT_CAP_EXCEEDED",
                     "message": (
-                        "This IP address has opened its allowance of new "
-                        "sessions for the last 24 hours. An already-open "
-                        "session still works; a slot frees up as an earlier "
-                        "one ages out of the rolling window."
+                        "This IP address has opened its allowance of "
+                        f"{_effective_session_mint_cap()} new sessions for the "
+                        "last 24 hours. An already-open session still works; a "
+                        "slot frees up as an earlier one ages out of the rolling "
+                        "window. Signing in is not limited by this."
                     ),
                 },
             },
@@ -1741,15 +1748,79 @@ def _describe_retry_wait(seconds: int | None) -> str:
     return f"A slot frees up in about {hours} hours, and you can start again then."
 
 
-def _render_session_capped_html(retry_after_seconds: int | None, *, invite: bool = False) -> str:
-    """Render the 429 page. One substitution, so no escaping is needed: the
-    only interpolated value is a sentence this module built from an integer.
+def _render_session_capped_html(
+    retry_after_seconds: int | None,
+    *,
+    invite: bool = False,
+    cap: int,
+    csrf_token: str | None = None,
+) -> str:
+    """Render the 429 page.
+
     ``invite``: the refusal was an invite link's own cap (W32), not the
-    visitor's address, so the page must not blame their network.
+    visitor's address, so the page must not blame their network. ``cap`` is
+    the EFFECTIVE limit the h1 names (W34, owner bug 3: the page said "session
+    limit" with no number), so the LOCAL override and the invite link's own
+    cap both print their real digit. ``csrf_token`` is the sign-in-only
+    session's token (ADR-0139, decision 5); when given, the page carries the
+    sign-in block — a ``<button>`` with a short inline script, never a
+    ``<form>``, because the content-security policy has ``form-action
+    'none'``. The token is the one value that comes from outside this module,
+    so it is the one value escaped; the rest are sentences built from
+    integers. Without a token the page is the page it always was.
     """
     name = "invite-capped.html" if invite else "session-capped.html"
     template = (TEMPLATES_DIR / name).read_text(encoding="utf-8")
-    return template.replace("__RETRY_SENTENCE__", _describe_retry_wait(retry_after_seconds))
+    sign_in = ""
+    if csrf_token is not None:
+        sign_in = (TEMPLATES_DIR / "capped-sign-in.html").read_text(encoding="utf-8")
+        sign_in = sign_in.replace("__CSRF_TOKEN__", escape(csrf_token, quote=True))
+    return (
+        template.replace("__CAP__", str(cap))
+        .replace("__SESSIONS__", "session" if cap == 1 else "sessions")
+        .replace("__RETRY_SENTENCE__", _describe_retry_wait(retry_after_seconds))
+        .replace("__SIGN_IN_BLOCK__\n", sign_in)
+    )
+
+
+def _session_capped_response(
+    request: Request,
+    exc: SessionMintCapExceeded,
+    *,
+    invite: bool,
+    mint_cap: int | None,
+) -> HTMLResponse:
+    """The 429 page for a refused mint on ``/ui``, with a way to sign in.
+
+    W34 (ADR-0139). The daily cap counts ANONYMOUS sessions, and sign-in
+    starts from a cookie session, so a visitor whose network had used its
+    allowance could not sign in at all: the owner hit it after two sign-ins
+    and a sign-out (M23). When sign-in is possible on this request — enabled,
+    and on the host Google returns to — the page carries a sign-in-only
+    session (in memory, never counted as a mint, refused by every money path)
+    and its token. The status stays 429 with ``Retry-After``: the anonymous
+    allowance IS refused. ``Cache-Control: no-store`` because the page now
+    carries a token. When sign-in is not possible, nothing changes: no
+    session, no cookie, the page as before (decision 6).
+    """
+    cap = _effective_session_mint_cap() if mint_cap is None else mint_cap
+    session = None
+    if sign_in_enabled() and on_sign_in_host(request):
+        session = issue_sign_in_only_session(get_session_cookie_from_request(request))
+    response = HTMLResponse(
+        _render_session_capped_html(
+            exc.retry_after_seconds,
+            invite=invite,
+            cap=cap,
+            csrf_token=None if session is None else session.csrf_token,
+        ),
+        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        headers=_retry_after_header(exc.retry_after_seconds),
+    )
+    if session is not None:
+        response.headers["Cache-Control"] = "no-store"
+        attach_session_cookie(response, session)
+    return response
 
 
 @app.get("/ui/ops", response_class=HTMLResponse, include_in_schema=False)
@@ -1790,13 +1861,11 @@ def browser_ui(request: Request) -> HTMLResponse:
         # A rendered page, not a bare sentence. This is the only 429 a real
         # visitor ever sees in their address bar, and it is the last thing
         # they see before giving up, so it explains the mechanism, says an
-        # existing session still works, and names a wait it can actually
-        # derive. See ADR-0073.
-        return HTMLResponse(
-            _render_session_capped_html(exc.retry_after_seconds, invite=invite is not None),
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            headers=_retry_after_header(exc.retry_after_seconds),
-        )
+        # existing session still works, names a wait it can actually derive
+        # (ADR-0073) and, since W34, offers sign-in (ADR-0139). A sign-in-only
+        # cookie lands here too: it is never resumed, so the counted mint was
+        # tried first and a freed slot has already been taken above.
+        return _session_capped_response(request, exc, invite=invite is not None, mint_cap=mint_cap)
     controls, shows_account = _account_controls_html(
         session.account_id,
         sign_in_failed=request.query_params.get("sign_in") == "failed",
