@@ -8,6 +8,7 @@ nothing but the operator's local command can make one.
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Iterator
 from datetime import date
 from uuid import uuid4
@@ -66,7 +67,6 @@ def test_opening_a_link_sets_the_cookie(invites: None) -> None:
     assert "SameSite=lax" in cookie
     assert "Path=/" in cookie
     # It lasts to the end of the link's last day (UTC), not a day more or less.
-    import re
     from datetime import UTC, datetime
 
     max_age = int(re.search(r"Max-Age=(\d+)", cookie).group(1))  # type: ignore[union-attr]
@@ -371,5 +371,12 @@ def test_an_address_over_its_own_cap_still_gets_the_network_page(invites: None) 
             client.cookies.clear()
             codes.append(client.get("/ui", headers={"Fly-Client-IP": "81.2.69.60"}))
     assert [r.status_code for r in codes] == [200] * SESSION_MINT_CAP_PER_IP + [429]
-    assert "This network has reached its session limit" in codes[-1].text
+    # W34 (ADR-0139): the h1 names the network and the digit of the cap; the
+    # exact sentence is not pinned, the page it belongs to is.
+    match = re.search(r"<h1[^>]*>(.*?)</h1>", codes[-1].text, re.DOTALL)
+    assert match is not None
+    h1 = " ".join(match.group(1).split())
+    assert re.search(r"\bnetwork\b", h1, re.IGNORECASE), h1
+    assert re.search(r"\b2\b", h1), h1
+    assert "invite link" not in h1.lower()
     assert "This invite link has reached its daily limit" not in codes[-1].text
