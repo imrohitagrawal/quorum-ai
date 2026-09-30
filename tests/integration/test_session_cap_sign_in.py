@@ -45,6 +45,7 @@ from tests.integration.test_google_sign_in import (
     _signed_in,
     _start,
 )
+from tests.integration.test_query_run_cancel import _make_run
 from tests.integration.test_query_run_cost_guardrails import (
     DEFAULT_MODEL_IDS,
     acknowledged_request,
@@ -63,7 +64,7 @@ from product_app.costs import DAILY_CAP_USD, cost_event_recorder
 from product_app.feedback_store import FeedbackStore
 from product_app.feedback_store import get_store as get_feedback_store
 from product_app.main import app
-from product_app.query_run_orchestration import query_run_repository
+from product_app.query_run_orchestration import QueryRunStatus, query_run_repository
 from product_app.query_runs import _ip_rate_limiter
 from product_app.session_store import _digest
 
@@ -78,6 +79,7 @@ EVERYWHERE = "/v1/auth/sign-out-everywhere"
 START = "/v1/auth/google/start"
 IDLE = "/v1/session/idle"
 KEEP = "/v1/session/keep-active"
+WARNINGS = "/v1/query-runs/warnings"
 QUERY = "Compare these answers"
 
 
@@ -306,6 +308,37 @@ def _idle(sign_in: SignIn, client: TestClient, minutes: float) -> None:
     )
 
 
+def _durable_rows_for(sign_in: SignIn, session_id: str) -> int:
+    """Rows in the durable session store for one session id (keyed by digest)."""
+    return int(
+        sign_in.store._conn.execute(
+            "SELECT COUNT(*) FROM sessions WHERE session_digest = ?", (_digest(session_id),)
+        ).fetchone()[0]
+    )
+
+
+def _safety_rows(feedback: FeedbackStore) -> int:
+    return sum(1 for _ in feedback.iter_events(recorders=["safety"]))
+
+
+def _sign_in_only_sessions() -> int:
+    return sum(1 for s in auth.session_repository._sessions.values() if s.sign_in_only)
+
+
+def _cookie_attributes(response: Any) -> dict[str, str | None]:
+    """The session cookie's attributes from ``Set-Cookie``, without its value:
+    ``{"httponly": None, "samesite": "lax", ...}``; keys lower-cased."""
+    header = response.headers["set-cookie"]
+    parts = [part.strip() for part in header.split(";")]
+    name = parts[0].partition("=")[0]
+    assert name == COOKIE, header
+    attributes: dict[str, str | None] = {}
+    for part in parts[1:]:
+        key, _, value = part.partition("=")
+        attributes[key.lower()] = value.lower() if value else None
+    return attributes
+
+
 # --- A. The owner's journey ---------------------------------------------------------
 
 
@@ -448,16 +481,17 @@ def test_a_sign_in_only_session_never_gets_the_workspace(net: Network) -> None:
 
 def test_idle_status_and_keep_active_on_a_sign_in_only_session(net: Network) -> None:
     """RED-IF: the idle status reports a sign-in-only session as signed in,
-    or keep-active records a mint. Partner: a signed-in session reports
+    keep-active refuses it or reports it signed in, or either writes a
+    durable session row or a mint. Partner: a signed-in session reports
     ``signed_in: true``."""
     client, token = _sign_in_only(net)
     status = client.get(IDLE)
     assert status.status_code == 200, status.text
     assert status.json()["signed_in"] is False
     kept = client.post(KEEP, headers={"X-CSRF-Token": token})
-    assert kept.status_code < 500
-    if kept.status_code == 200:
-        assert kept.json()["signed_in"] is False
+    assert kept.status_code == 200, kept.text
+    assert kept.json()["signed_in"] is False
+    assert _durable_rows_for(net.sign_in, _session_id(client)) == 0  # still in memory only
     assert _rows(net.feedback, HERE) == 2
 
     assert _complete(client, token).headers["location"] == "/ui"
@@ -557,6 +591,115 @@ def test_sign_in_starts_from_a_sign_in_only_session_are_limited(net: Network) ->
     assert codes == [200, 200, 200, 200, 200, 429]
     last = client.post(START, headers={"X-CSRF-Token": token})
     assert last.json()["detail"]["code"] == "SIGN_IN_RATE_LIMITED"
+    assert _rows(net.feedback, HERE) == 2
+
+
+def test_sign_in_only_minting_is_bounded_by_the_per_minute_limiter(
+    net: Network, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """RED-IF: a capped address can mint sign-in-only sessions without bound
+    (``/ui`` has no limiter of its own; measured 3000 loads → 3000 in-memory
+    sessions): a NEW sign-in-only session is minted only when the per-address
+    per-minute session limiter allows it, and a refused load gets the plain
+    page (no cookie, no button, still 429). Reusing a live sign-in-only
+    cookie draws nothing. Partner: once the limiter refills, a cookie-less
+    load is served again."""
+    monkeypatch.setattr(_ip_rate_limiter, "CAPACITY", 3)
+    monkeypatch.setattr(_ip_rate_limiter, "REFILL_PER_MINUTE", 3)
+    _ip_rate_limiter.clear()
+    _spend(net.feedback, HERE, age=timedelta(hours=1))
+    clients = [net.client() for _ in range(5)]
+    responses = [client.get("/ui") for client in clients]
+    for served in responses[:3]:
+        _capped_page(served)
+        assert served.cookies.get(COOKIE)
+    for refused in responses[3:]:
+        _plain_capped_page(refused)
+        assert int(refused.headers.get("Retry-After", "0")) > 0
+    assert _sign_in_only_sessions() == 3
+    assert _rows(net.feedback, HERE) == 2
+
+    first = clients[0]
+    held = _session_id(first)
+    again = first.get("/ui")  # reuse: free, the limiter is exhausted
+    _capped_page(again)
+    assert _session_id(first) == held
+    assert _sign_in_only_sessions() == 3
+
+    _ip_rate_limiter.clear()  # the minute has passed
+    refilled = net.client().get("/ui")
+    _capped_page(refilled)
+    assert refilled.cookies.get(COOKIE)
+    assert _sign_in_only_sessions() == 4
+    assert _rows(net.feedback, HERE) == 2
+
+
+def test_a_sign_in_only_session_cannot_ask_for_warnings(net: Network) -> None:
+    """RED-IF: the warnings route serves a sign-in-only session (it records a
+    durable safety row per call: measured +60 rows from 20 sessions) or
+    refuses it with any code but SIGN_IN_REQUIRED. Partner: an under-cap
+    session on another address is served and writes exactly one row."""
+    client, token = _sign_in_only(net)
+    before = _safety_rows(net.feedback)
+    refused = client.post(
+        WARNINGS, json={"query_text": "short question"}, headers={"X-CSRF-Token": token}
+    )
+    assert refused.status_code == 403, refused.text
+    assert refused.json()["detail"]["code"] == "SIGN_IN_REQUIRED"
+    assert _safety_rows(net.feedback) == before
+
+    other = TestClient(app, client=(OTHER, 5))
+    served = other.post(
+        WARNINGS, json={"query_text": "short question"}, headers={"X-CSRF-Token": _boot(other)}
+    )
+    assert served.status_code == 200, served.text
+    assert "warnings" in served.json()
+    assert _safety_rows(net.feedback) == before + 1
+    assert _rows(net.feedback, HERE) == 2
+
+
+def test_a_sign_in_only_session_cannot_cancel_a_run(net: Network) -> None:
+    """RED-IF: the cancel route acts for a sign-in-only session (even on a
+    run under its own account id) or refuses it with any code but
+    SIGN_IN_REQUIRED. Partner: an ordinary session cancels its own run and
+    gets today's success, status ``cancelled``."""
+    client, token = _sign_in_only(net)
+    planted = _make_run(
+        account_id=_account_of(client),
+        status=QueryRunStatus.INITIAL_ANSWERS_RUNNING,
+        running_stage="initial_answers",
+    )
+    query_run_repository._query_runs[planted.query_run_id] = planted
+    refused = client.delete(f"{RUNS}/{planted.query_run_id}", headers={"X-CSRF-Token": token})
+    assert refused.status_code == 403, refused.text
+    assert refused.json()["detail"]["code"] == "SIGN_IN_REQUIRED"
+    assert (
+        query_run_repository.get(planted.query_run_id).status
+        is QueryRunStatus.INITIAL_ANSWERS_RUNNING
+    )
+
+    other = TestClient(app, client=(OTHER, 5))
+    csrf = _boot(other)
+    own = _make_run(
+        account_id=_account_of(other),
+        status=QueryRunStatus.INITIAL_ANSWERS_RUNNING,
+        running_stage="initial_answers",
+    )
+    query_run_repository._query_runs[own.query_run_id] = own
+    cancelled = other.delete(f"{RUNS}/{own.query_run_id}", headers={"X-CSRF-Token": csrf})
+    assert cancelled.status_code == 200, cancelled.text
+    assert cancelled.json()["status"] == "cancelled"
+    assert _rows(net.feedback, HERE) == 2
+
+
+def test_read_only_routes_still_serve_a_sign_in_only_session(net: Network) -> None:
+    """RED-IF: a read-only route (model defaults, the active-run lookup) is
+    refused for a sign-in-only session: the page could not even boot its
+    model list. Partner: the money route on the same session is refused."""
+    client, token = _sign_in_only(net)
+    assert client.get("/v1/models/defaults").status_code == 200
+    assert client.get(f"{RUNS}/active").status_code == 200
+    assert _estimate(client, token).status_code == 403
     assert _rows(net.feedback, HERE) == 2
 
 
@@ -1028,6 +1171,56 @@ def test_the_sign_in_only_id_stops_working_after_the_callback(net: Network) -> N
     _capped_page(replanted)
     assert replanted.cookies.get(COOKIE) not in (None, "", old_id)
     assert _rows(net.feedback, HERE) == 2
+
+
+def test_a_sign_in_only_session_is_never_written_and_does_not_survive_a_restart(
+    net: Network, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """RED-IF: a live sign-in-only session gets a row in the durable session
+    store (a restart would restore it as an ordinary session that can spend,
+    ADR-0139 decision 2), or after a restart its cookie is resumed into the
+    workspace or can estimate. Partner: an ordinary anonymous session's row
+    IS written."""
+    client, token = _sign_in_only(net)
+    session_id = _session_id(client)
+    assert _durable_rows_for(net.sign_in, session_id) == 0
+    ordinary = TestClient(app, client=(OTHER, 5))
+    _workspace(ordinary.get("/ui"), signed_in=False)
+    assert _durable_rows_for(net.sign_in, _session_id(ordinary)) == 1
+
+    monkeypatch.setattr(auth, "session_repository", auth.SessionRepository())  # a restart
+    reloaded = client.get("/ui")
+    _capped_page(reloaded)
+    assert reloaded.cookies.get(COOKIE) not in (None, "", session_id)
+    planted = net.client()
+    planted.cookies.set(COOKIE, session_id)
+    refused = _estimate(planted, token)
+    assert refused.status_code in (401, 403), refused.text
+    assert "cost_estimate" not in refused.json()
+    assert _rows(net.feedback, HERE) == 2
+
+
+@pytest.mark.parametrize("secure", [False, True])
+def test_the_capped_page_cookie_has_the_flags_of_an_ordinary_session_cookie(
+    net: Network, monkeypatch: pytest.MonkeyPatch, secure: bool
+) -> None:
+    """RED-IF: the sign-in-only cookie is set with different attributes from
+    the session cookie ``/ui`` sets (HttpOnly, SameSite=lax, Path=/, the same
+    Max-Age, Secure exactly when ``session_cookie_secure``)."""
+    monkeypatch.setattr(settings, "session_cookie_secure", secure)
+    _spend(net.feedback, HERE, age=timedelta(hours=1))
+    capped = net.client().get("/ui")
+    _capped_page(capped)
+    ordinary = TestClient(app, client=(OTHER, 5)).get("/ui")
+    _workspace(ordinary, signed_in=False)
+
+    capped_attributes = _cookie_attributes(capped)
+    assert capped_attributes == _cookie_attributes(ordinary)
+    assert "httponly" in capped_attributes
+    assert capped_attributes["samesite"] == "lax"
+    assert capped_attributes["path"] == "/"
+    assert int(capped_attributes["max-age"] or "0") > 0
+    assert ("secure" in capped_attributes) is secure
 
 
 # --- G. A store gone ----------------------------------------------------------------
