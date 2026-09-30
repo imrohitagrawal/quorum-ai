@@ -15,9 +15,16 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from tests.repo_root import find_repo_root
 
-ROOT = Path(__file__).resolve().parents[2]
+#: The REAL repository root (see test_docs_map_matches_tree.py): inside mutmut's
+#: ``./mutants/`` copy ``git ls-files`` lists nothing.
+ROOT = find_repo_root(Path(__file__))
 SCRIPT = ROOT / "scripts" / "measure_doc_reachability.py"
+
+#: Reads the repository through git and imports nothing from the application;
+#: deselected under mutmut by this marker.
+pytestmark = pytest.mark.repo_introspection
 
 if (
     subprocess.run(
