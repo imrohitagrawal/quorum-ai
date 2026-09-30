@@ -10,9 +10,10 @@ active or not."* The session's reading, recorded in CHG-021 and not
 re-confirmed word for word: (b) a signed-in session expires after an idle
 period, and before it does the page offers to keep it active. CHG-021:
 *"The idle length and the rate-limit value are NOT the owner's: the
-building session proposes them as settings."* Both values below are
-**PROPOSED — AWAITING OWNER**, and so are the reminder's wording and how it
-works.
+building session proposes them as settings."* Both values below were
+**approved by the product owner on 2026-09-29 (CHG-026 c)**; they were PROPOSED
+when this record was written. The reminder's wording and how it works are
+the session's choice.
 
 ## Context
 
@@ -35,7 +36,7 @@ So the expiry exists; what was missing is the warning, and a way to stay.
 ## Decision
 
 1. **The signed-in idle length is a setting**, `signed_in_idle_minutes`
-   (**PROPOSED 120**, bounds 15 to 120). 120 is every session's lifetime
+   (**120**, approved 2026-09-29, CHG-026; bounds 15 to 120). 120 is every session's lifetime
    today, so nobody is signed out sooner than before. It cannot be longer:
    every other rule that ages a session (restore, clean-up, the
    sign-out-everywhere cutoff, the deleted-account mark) uses the lifetime.
@@ -52,7 +53,7 @@ So the expiry exists; what was missing is the warning, and a way to stay.
    anyone who kept working while the reminder showed, review measured), and
    writes the session's last use through, so its answer survives a restart.
    The page's timer only decides when to ask: one warning (`signed_in_idle_warning_minutes`,
-   **PROPOSED 5**, bounds 1 to 10) before the end it last heard of. Activity
+   **5**, approved 2026-09-29, CHG-026; bounds 1 to 10) before the end it last heard of. Activity
    in another tab, a sleeping laptop or a clock that differs are therefore
    the server's to judge.
 3. **The reminder** appears only on a signed-in page, on every view (moved
@@ -96,7 +97,9 @@ So the expiry exists; what was missing is the warning, and a way to stay.
   a scheduled check coming late by the lag.)
 - Timers in a background tab can fire up to a minute late; the answer then
   comes from the server either way.
-- **Open for the owner — the lockout after expiry.** A replacement session
+- **The lockout after expiry — decided by the owner on 2026-09-29 (CHG-026 a):
+  the daily cap counts anonymous use only and must never stop anyone signing
+  in; not yet built.** As written on 2026-09-28: a replacement session
   after an idle expiry still counts against the per-address daily cap of 2,
   so on a network that has used it up (the second idle expiry in a day, or
   a sign-out) the next page load is the cap page (429), and sign-in cannot
@@ -104,7 +107,7 @@ So the expiry exists; what was missing is the warning, and a way to stay.
   makes it rarer, not impossible. Changing who the cap counts is the
   owner's decision (ADR-0137 lists the same question for sign out
   everywhere).
-- Open for the owner as well: the two values; the wording. And one premise:
+- The two values: approved (CHG-026 c). The wording: the session's. One premise:
   idle expiry already applied to every session (2 hours) before this pull
   request, so at the proposed default it adds the reminder and the setting,
   not a shorter expiry; a shorter signed-in length is one setting away.

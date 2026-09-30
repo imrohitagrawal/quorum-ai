@@ -6,7 +6,7 @@ original, because a gate and an offline agent can read it and cannot read `gh`.
 
 Verified at: `b1209b5a785e95fb208c55c4303ada85065aeb54`
 
-The board holds **31** rows, **2** of them unpinned.
+The board holds **40** rows, **11** of them unpinned.
 
 `scripts/check_open_work.py --check` reads every row's evidence off disk and
 refuses if a claim is false. It runs inside `make validate`, and
@@ -127,6 +127,15 @@ caught by any automated check and 10 of 16 by adversarial review
 | W30 | The per-network session limits count every visitor as the app's ingress address (CHG-022): take the visitor's address from what Fly's proxy forwards, measured first; the cap value stays 2 | DONE | `ABSENT src/product_app/auth.py :: def client_ip_of(` | — | — |
 | W31 | An allow-list of named, dated addresses or ranges (at most /24 IPv4, /48 IPv6) exempt from the per-network session limits only, never the spend limits (CHG-022) | DONE | `ABSENT src/product_app/config.py :: session_cap_exempt_networks` | — | W30 |
 | W32 | An invite link that lifts the session limit for whoever opens it, from any network, until an end date (CHG-022; planned now, not deferred) | DONE | `ABSENT src/product_app/config.py :: invite_link_signing_key` | — | W30 |
+| W33 | The owner's bugs 1–10 of 2026-09-29 (root causes: `docs/analysis/2026-09-29/owner-bugs-root-causes.md`; CHG-026 h, m): Start fresh wipes the session list; the old follow-up stays in the box; the block card names the hard cap instead of the daily cap; limits unclear; no way home from a result; empty session panel; History stale and not clickable; the composer lands on the question, not the models. Failing tests first, thin slices | UNPINNED | `—` | — | — |
+| W34 | The daily session cap counts anonymous use only and must never stop anyone signing in; today, sign-out after two sign-ins on one network locks it out with "This network has reached its session limit" (CHG-026 a; ADR-0138 records the mechanism) | UNPINNED | `—` | — | — |
+| W35 | "Sign out everywhere" during a run asks first: "Yes" stops the run and signs out everywhere; "No" signs out everywhere except the running session (CHG-026 b) | UNPINNED | `—` | — | W34 |
+| W36 | History keeps the full result (answers, debate, synthesis) for signed-in accounts, 20 conversations for 30 days, delete one / delete all; a row opens read-only with "Continue this conversation" (CHG-026 i; supersedes the 5-question keep of CHG-023 when built) | UNPINNED | `—` | — | W33 |
+| W37 | Follow-up context: the previous question and final answer go to all four models; the next-question box opens empty with "Following up on: …" (CHG-026 g) | UNPINNED | `—` | — | W33 |
+| W38 | Starter questions: six audience groups, four complete questions each, with a wider high-stakes keyword list (CHG-026 j) | UNPINNED | `—` | — | — |
+| W39 | The engineering harness: agents run in a container with only the agent account's token; a signed-in real-backend journey lane with an execution-backed gate; release integrity; a slimmer AGENTS.md with tracked hooks; the skills audit (`docs/analysis/2026-09-29/NEXT-SESSION-PROMPT.md`, order steps 0–7; PROPOSED, confirm in plan mode) | UNPINNED | `—` | — | — |
+| W40 | The agent account's GitHub token expires 2026-12-29 (`NEXT-SESSION-PROMPT.md`, "Agent account DONE by the owner"); rotate it before then | UNPINNED | `—` | — | W39 |
+| W41 | The trust-score screenshot tolerance: allow just above the largest difference seen (589 px), those screenshots only (CHG-026 k) | UNPINNED | `—` | — | — |
 
 **STOP** marks a row that cannot be finished without a human decision — a money,
 cost or safety guardrail value that only real measurement could justify. Do not
@@ -746,6 +755,17 @@ KEEPS — the guard is added above it — so the row would have read `PENDING`
 forever with the defect closed (trap 12, measured on W12/#379). It now pins
 `ABSENT … :: if len(stance) < 2:`, verified absent on `origin/main` and present
 after.
+
+**W33–W41 — the 2026-09-28..30 owner session, added 2026-09-30.** All
+unpinned: each is built in its own pull request, and that pull request pins
+the row with the needle its change adds or deletes (memory of this repo:
+"pin a needle the fix must add or delete", not a line the fix edits around).
+The owner's words are in `docs/analysis/2026-09-29/OWNER-DISCUSSION-LOG.md`,
+the decisions in CHG-026, the bug root causes in
+`docs/analysis/2026-09-29/owner-bugs-root-causes.md`, and the plan and its
+order in `docs/analysis/2026-09-29/NEXT-SESSION-PROMPT.md`. W34 is first: the
+sign-out lockout is the bug the owner hit again on 2026-09-30 (M23), and
+W35 depends on it.
 
 ## What is deliberately NOT on this board
 

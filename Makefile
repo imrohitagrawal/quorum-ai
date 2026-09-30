@@ -59,7 +59,7 @@ DIFF_BASE ?= origin/main
 # disagrees with the real pathspec is a lie waiting to be believed; the banner
 # now states the pathspec the code actually uses.
 
-.PHONY: check-python publishing-check skill-onboarding-check skill-discover handoff check-breaking apply-orbi-profile skill-route start next capture-idea validate validate-strict fr-completeness openapi-export openapi-check adr-index-check open-work-check open-work-write quality format format-check lint type-check test evals test-report gate-min-collected gate-min-executed perf-gate api-contract mutation-baseline diff-cover security-scan close-guard ci-evidence run docker-build feedback-audit session-clean close-window
+.PHONY: docs-map-check check-python publishing-check skill-onboarding-check skill-discover handoff check-breaking apply-orbi-profile skill-route start next capture-idea validate validate-strict fr-completeness openapi-export openapi-check adr-index-check open-work-check open-work-write quality format format-check lint type-check test evals test-report gate-min-collected gate-min-executed perf-gate api-contract mutation-baseline diff-cover security-scan close-guard ci-evidence run docker-build feedback-audit session-clean close-window
 
 check-python:
 	@if [ -z "$(PYTHON)" ]; then 		echo "ERROR: Python 3 is required. Install python3, or set PYTHON=/path/to/python3."; 		exit 127; 	fi
@@ -73,8 +73,15 @@ next: check-python
 capture-idea: check-python
 	@if [ -n "$(IDEA)" ]; then 		$(PYTHON) scripts/capture_idea.py "$(IDEA)"; 	else 		$(PYTHON) scripts/capture_idea.py; 	fi
 
-validate: check-python fr-completeness adr-index-check open-work-check
+validate: check-python fr-completeness adr-index-check open-work-check docs-map-check
 	$(PYTHON) scripts/validate_all.py
+
+# The docs map (`docs/README.md`) says where each kind of information lives.
+# Its inventory of `docs/` is generated, and this refuses when a file or folder
+# was added without regenerating it. Bite-proofs:
+# tests/unit/test_docs_map_matches_tree.py.
+docs-map-check:
+	$(PYTHON) scripts/check_docs_map.py --check
 
 # The ADR index is a DERIVED fact. It went stale by hand twice; it is now
 # generated and verified rather than trusted. See ADR-0004..0007's arrival.

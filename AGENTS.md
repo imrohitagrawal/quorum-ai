@@ -2,6 +2,10 @@
 
 This repository was generated from Codex Product Factory Enterprise Edition.
 
+**Where things are:** `docs/README.md` is the map — one row per kind of
+information (decisions, open work, the last session, lessons, how-tos) giving its
+one home, how it is kept current, and when to read it. Read it before searching.
+
 ## Operating rules — read these first
 
 Placed first deliberately: instruction-following degrades as instruction count

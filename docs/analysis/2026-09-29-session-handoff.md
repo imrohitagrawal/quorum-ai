@@ -1,5 +1,11 @@
 # Session handoff — 2026-09-29
 
+> Superseded in part on 2026-09-29/30: the values listed under "Waiting on
+> the owner" were approved (CHG-026 c), the lockout is decided (CHG-026 a:
+> the daily cap counts anonymous use only and must never stop sign-in), and
+> the visual-flake tolerance is decided (CHG-026 k). See
+> `docs/19-change-control-log.md`.
+
 The session ran the rest of the queue in `CONTINUE-2026-09-25-ULTRACODE-PROMPT.md`
 §5 from the point `docs/analysis/2026-09-28-session-handoff.md` left it. What
 merged is in `git log origin/main`; each pull request body carries its

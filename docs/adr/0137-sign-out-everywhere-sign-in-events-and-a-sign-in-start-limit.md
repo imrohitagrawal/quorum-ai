@@ -10,8 +10,9 @@ session's reading, recorded in CHG-021 and not re-confirmed word for word:
 (c) one action ends every session of the account; (d) sign-in events record
 time and outcome, never tokens; (e) starting a sign-in is rate-limited.
 CHG-021: *"The idle length and the rate-limit value are NOT the owner's: the
-building session proposes them as settings."* Every value below is
-**PROPOSED — AWAITING OWNER**. Splitting part 3 into two pull requests is
+building session proposes them as settings."* Every value below was
+**approved by the product owner on 2026-09-29 (CHG-026 c)**; it was PROPOSED when
+this record was written. Splitting part 3 into two pull requests is
 the session's choice, for size.
 
 ## Context
@@ -62,8 +63,8 @@ charged; and nothing limited `POST /v1/auth/google/start`.
    `signed_out_everywhere`. Never a code, `state`, verifier, token, Google
    subject, email, session id, address or user agent. Written only for an
    account row that exists, in the same transaction as the keep rules:
-   the newest `sign_in_events_keep_count` (**PROPOSED 10**), none older than
-   `sign_in_events_keep_days` (**PROPOSED 30**), applied at the account's
+   the newest `sign_in_events_keep_count` (**10**, approved 2026-09-29, CHG-026), none older than
+   `sign_in_events_keep_days` (**30**, approved 2026-09-29, CHG-026), applied at the account's
    next event, so an account with no later event keeps its rows until it is
    deleted. Deleted with the account.
    A failed callback has no account to attribute; failures stay fixed reason
@@ -71,8 +72,8 @@ charged; and nothing limited `POST /v1/auth/google/start`.
    says record); the operator reads the table.
 6. **Starting a sign-in is limited per visitor address** (`client_ip_of`,
    IPv6 by /64), in its own bucket: `sign_in_starts_per_address_burst`
-   starts (**PROPOSED 5**), refilling `sign_in_starts_per_address_per_minute`
-   a minute (**PROPOSED 1**). The burst should be at most 5 times the rate
+   starts (**5**, approved 2026-09-29, CHG-026), refilling `sign_in_starts_per_address_per_minute`
+   a minute (**1**, approved 2026-09-29, CHG-026). The burst should be at most 5 times the rate
    (the limiter forgets a bucket after 5 idle minutes as if it had
    refilled); that rule is documented next to the settings, not enforced at
    startup (a check there would be one more decorated function over the
@@ -116,9 +117,11 @@ charged; and nothing limited `POST /v1/auth/google/start`.
   minutes (review's arithmetic at the proposed values).
 - The start limit is in memory: a restart resets it (the machine stops when
   idle).
-- Open for the owner: the four values above; whether runs already running
-  (and a create already past its second session check) should be
-  cancelled; whether the events should be shown to the account; whether
-  other devices signed out this way should get a session the daily cap does
-  not count; and failed sign-ins, which are not stored as rows (Decision 5),
+- Decided by the owner on 2026-09-29 (CHG-026): the four values above
+  (approved); a run already running when "sign out everywhere" is pressed
+  (ask first — "Yes" stops the run and signs out everywhere, "No" signs out
+  everywhere except the running session; not yet built); and the daily cap
+  (it counts anonymous use only and must never stop sign-in; not yet built).
+  Still open for the owner: whether the events should be shown to the
+  account; and failed sign-ins, which are not stored as rows (Decision 5),
   where the proposal the owner agreed to said "time and success or failure".
