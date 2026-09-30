@@ -834,26 +834,7 @@ def issue_signed_in_session(previous_session_id: str, *, account_id: UUID) -> Se
     )
 
 
-def issue_sign_in_only_session(presented_session_id: str | None = None) -> SessionIssueResponse:
-    """A session that may only sign in (W34, ADR-0139, decisions 1 and 2).
-
-    Minted by the capped page when the daily cap refused an anonymous
-    session and sign-in is possible on the request: a real session id and
-    CSRF token bound to a fresh random account id, flagged ``sign_in_only``,
-    held in memory only, and NOT recorded as a mint. It cannot spend
-    (:func:`spend_key_for` refuses it), so counting it would refuse the very
-    case being fixed, and not counting it opens nothing: the sign-in
-    callback rotates it away exactly as it does any session.
-
-    ``presented_session_id`` is reused when it already resolves to a live
-    sign-in-only session, so a second load of the capped page keeps the
-    cookie the tab holds; it is looked up, never adopted (a planted id
-    resolves to nothing and a fresh session is minted instead).
-    """
-    _enforce_production_guards(require_legacy_disabled=True)
-    session = session_repository.touch(presented_session_id) if presented_session_id else None
-    if session is None or not session.sign_in_only:
-        session = session_repository.create(account_id=uuid4(), sign_in_only=True)
+def _issued(session: _Session) -> SessionIssueResponse:
     return SessionIssueResponse(
         account_id=session.account_id,
         session_id=session.session_id,
@@ -861,6 +842,39 @@ def issue_sign_in_only_session(presented_session_id: str | None = None) -> Sessi
         expires_at=session.last_used_at + session.idle_limit,
         session_expires_in_seconds=int(session.idle_limit.total_seconds()),
     )
+
+
+def resume_sign_in_only_session(presented_session_id: str | None) -> SessionIssueResponse | None:
+    """The live sign-in-only session behind the cookie, touched, or ``None``.
+
+    W34 (ADR-0139). A second load of the capped page keeps the cookie the
+    tab holds instead of minting again, so reuse costs nothing and is not
+    bounded. The id is looked up, never adopted: a planted or dead id
+    resolves to nothing, and an ordinary session is not this (it was
+    resumed upstream, or it fell through to a counted mint).
+    """
+    session = session_repository.touch(presented_session_id) if presented_session_id else None
+    if session is None or not session.sign_in_only:
+        return None
+    return _issued(session)
+
+
+def issue_sign_in_only_session() -> SessionIssueResponse:
+    """A NEW session that may only sign in (W34, ADR-0139, decisions 1 and 2).
+
+    Minted by the capped page when the daily cap refused an anonymous
+    session and sign-in is possible on the request: a real session id and
+    CSRF token bound to a fresh random account id, flagged ``sign_in_only``,
+    held in memory only, and NOT recorded as a mint. It cannot spend
+    (:func:`refuse_sign_in_only`), so counting it would refuse the very case
+    being fixed, and not counting it opens nothing: the sign-in callback
+    rotates it away exactly as it does any session. It IS bounded, by the
+    caller: ``/ui`` has no limiter of its own, and review measured 3,000
+    capped loads producing 3,000 in-memory sessions, so the caller draws on
+    the per-address per-minute session limiter before minting one.
+    """
+    _enforce_production_guards(require_legacy_disabled=True)
+    return _issued(session_repository.create(account_id=uuid4(), sign_in_only=True))
 
 
 def clear_session_cookie(response: Response) -> None:
@@ -885,6 +899,29 @@ def _legacy_path_allowed() -> bool:
     return bool(settings.account_legacy_header_enabled)
 
 
+def refuse_sign_in_only(session: SessionContext) -> None:
+    """Refuse a sign-in-only session with 403 ``SIGN_IN_REQUIRED`` (W34,
+    ADR-0139, decision 3: it may sign in and sign out and nothing else).
+
+    Called before any record or state change by every route that writes:
+    :func:`spend_key_for` (the estimate and the run creation), the warnings
+    route (a durable safety row per call) and the cancel route. Read-only
+    routes are not gated: the page must still boot its model list. The
+    message names the way forward and no money figure (assumption iii).
+    """
+    if session.sign_in_only:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "SIGN_IN_REQUIRED",
+                "message": (
+                    "Sign in to run a query. This network has used its new sessions "
+                    "for the last 24 hours; signing in is not limited by that."
+                ),
+            },
+        )
+
+
 def spend_key_for(session: SessionContext) -> UUID:
     """The key this session's runs are metered under (W7, ADR-0136).
 
@@ -905,19 +942,8 @@ def spend_key_for(session: SessionContext) -> UUID:
     # W34 (ADR-0139, decision 3): a sign-in-only session is refused HERE, the
     # one choke point the estimate and the run creation both pass through
     # before any cost or guardrail event is recorded, so nothing past the
-    # network's anonymous allowance can spend. The message names the way
-    # forward and no money figure (ADR-0139 assumption iii).
-    if session.sign_in_only:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail={
-                "code": "SIGN_IN_REQUIRED",
-                "message": (
-                    "Sign in to run a query. This network has used its new sessions "
-                    "for the last 24 hours; signing in is not limited by that."
-                ),
-            },
-        )
+    # network's anonymous allowance can spend.
+    refuse_sign_in_only(session)
     # W7 part 3 (ADR-0137): a request already past its session check when the
     # account signed out everywhere (or was deleted) is refused here, before
     # it can be estimated or charged.

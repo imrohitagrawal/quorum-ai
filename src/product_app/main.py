@@ -48,6 +48,7 @@ from product_app.auth import (
     issue_or_resume_session,
     issue_sign_in_only_session,
     require_session,
+    resume_sign_in_only_session,
 )
 from product_app.config import (
     RuntimeEnvironment,
@@ -1787,6 +1788,7 @@ def _session_capped_response(
     request: Request,
     exc: SessionMintCapExceeded,
     *,
+    client_ip: str,
     invite: bool,
     mint_cap: int | None,
 ) -> HTMLResponse:
@@ -1802,11 +1804,20 @@ def _session_capped_response(
     allowance IS refused. ``Cache-Control: no-store`` because the page now
     carries a token. When sign-in is not possible, nothing changes: no
     session, no cookie, the page as before (decision 6).
+
+    BOUNDED (review round 1): a live sign-in-only cookie is reused for free,
+    but a NEW sign-in-only session is minted only when the per-address
+    per-minute session limiter — the one ``/v1/session`` draws on — allows
+    it. ``/ui`` has no limiter of its own, and 3,000 capped loads were
+    measured producing 3,000 in-memory sessions of ~7 KB each. A refused
+    load gets the plain page: 429, ``Retry-After``, no cookie, no button.
     """
     cap = _effective_session_mint_cap() if mint_cap is None else mint_cap
     session = None
     if sign_in_enabled() and on_sign_in_host(request):
-        session = issue_sign_in_only_session(get_session_cookie_from_request(request))
+        session = resume_sign_in_only_session(get_session_cookie_from_request(request))
+        if session is None and _ip_rate_limiter.allow(ip=client_ip, now_epoch=time.time()):
+            session = issue_sign_in_only_session()
     response = HTMLResponse(
         _render_session_capped_html(
             exc.retry_after_seconds,
@@ -1865,7 +1876,9 @@ def browser_ui(request: Request) -> HTMLResponse:
         # (ADR-0073) and, since W34, offers sign-in (ADR-0139). A sign-in-only
         # cookie lands here too: it is never resumed, so the counted mint was
         # tried first and a freed slot has already been taken above.
-        return _session_capped_response(request, exc, invite=invite is not None, mint_cap=mint_cap)
+        return _session_capped_response(
+            request, exc, client_ip=client_ip, invite=invite is not None, mint_cap=mint_cap
+        )
     controls, shows_account = _account_controls_html(
         session.account_id,
         sign_in_failed=request.query_params.get("sign_in") == "failed",

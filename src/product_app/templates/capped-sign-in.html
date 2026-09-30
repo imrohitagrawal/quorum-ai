@@ -11,12 +11,13 @@
         // fetch, not a form: the content-security policy has form-action
         // 'none'. The start route needs the session cookie the capped page
         // set and the CSRF token the server put on the button. Google's URL
-        // is followed only when it really is Google's, checked by host.
+        // is followed only when it really is Google's: the whole origin, so
+        // a plain-http or odd-port look-alike is refused, not just the host.
         (function () {
           var button = document.getElementById("sign-in-google");
           var note = document.getElementById("sign-in-status");
           function isGoogle(url) {
-            try { return new URL(url).host === "accounts.google.com"; } catch (e) { return false; }
+            try { return new URL(url).origin === "https://accounts.google.com"; } catch (e) { return false; }
           }
           function fail(text) { note.textContent = text; button.disabled = false; }
           button.addEventListener("click", function () {

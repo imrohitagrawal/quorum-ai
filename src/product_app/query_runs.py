@@ -20,7 +20,13 @@ from uuid import UUID, uuid4
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field, model_validator
 
-from product_app.auth import SessionContext, enforce_csrf, require_session, spend_key_for
+from product_app.auth import (
+    SessionContext,
+    enforce_csrf,
+    refuse_sign_in_only,
+    require_session,
+    spend_key_for,
+)
 from product_app.config import RuntimeEnvironment, settings
 from product_app.costs import (
     CostConfirmation,
@@ -1001,6 +1007,8 @@ def get_query_run_warnings(
     # (``record_warning_impression``) and is therefore a state-mutating
     # action — it must enforce CSRF like the create and delete routes.
     enforce_csrf(request, session)
+    # W34 (ADR-0139): a sign-in-only session may not write a safety row.
+    refuse_sign_in_only(session)
     # SEC-C3: per-account rate limit to prevent rapid-fire warning polls
     _enforce_account_rate_limit(request, session)
     # Issue #155: discovery and enforcement MUST agree. Without ``context``
@@ -1073,6 +1081,8 @@ def cancel_query_run(
     session: Annotated[SessionContext, Depends(require_session)],
 ) -> QueryRunResultResponse:
     enforce_csrf(request, session)
+    # W34 (ADR-0139): a sign-in-only session may not change a run's state.
+    refuse_sign_in_only(session)
     # SEC-C3: per-account rate limit to prevent rapid-fire cancel spam
     _enforce_account_rate_limit(request, session)
     query_run = query_run_repository.get_for_account(
