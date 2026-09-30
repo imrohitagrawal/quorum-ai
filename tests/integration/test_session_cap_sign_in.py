@@ -601,30 +601,40 @@ def test_sign_in_only_minting_is_bounded_by_the_per_minute_limiter(
     (``/ui`` has no limiter of its own; measured 3000 loads → 3000 in-memory
     sessions): a NEW sign-in-only session is minted only when the per-address
     per-minute session limiter allows it, and a refused load gets the plain
-    page (no cookie, no button, still 429). Reusing a live sign-in-only
-    cookie draws nothing. Partner: once the limiter refills, a cookie-less
-    load is served again."""
+    page (no cookie, no button, still 429). RED-IF: reusing a live
+    sign-in-only cookie draws from the limiter (the reuse load is made with
+    one token left: the address's bucket tuple must be untouched across it,
+    and the cookie-less load after it must still get a cookie). Partner:
+    once the limiter refills, a cookie-less load is served again."""
     monkeypatch.setattr(_ip_rate_limiter, "CAPACITY", 3)
     monkeypatch.setattr(_ip_rate_limiter, "REFILL_PER_MINUTE", 3)
     _ip_rate_limiter.clear()
     _spend(net.feedback, HERE, age=timedelta(hours=1))
     clients = [net.client() for _ in range(5)]
-    responses = [client.get("/ui") for client in clients]
-    for served in responses[:3]:
+    responses = [client.get("/ui") for client in clients[:2]]
+    for served in responses:
         _capped_page(served)
         assert served.cookies.get(COOKIE)
+    assert _sign_in_only_sessions() == 2
+    bucket = _ip_rate_limiter._buckets[HERE]  # (tokens, last epoch); one token left
+    assert 1.0 <= bucket[0] < 2.0, bucket
+
+    first = clients[0]
+    held = _session_id(first)
+    again = first.get("/ui")  # reuse, with a token still in the bucket: draws nothing
+    _capped_page(again)
+    assert _session_id(first) == held
+    assert _sign_in_only_sessions() == 2
+    assert _ip_rate_limiter._buckets[HERE] == bucket  # every allow() rewrites this tuple
+
+    responses += [client.get("/ui") for client in clients[2:]]
+    _capped_page(responses[2])  # the last token was still there for a new session
+    assert responses[2].cookies.get(COOKIE)
     for refused in responses[3:]:
         _plain_capped_page(refused)
         assert int(refused.headers.get("Retry-After", "0")) > 0
     assert _sign_in_only_sessions() == 3
     assert _rows(net.feedback, HERE) == 2
-
-    first = clients[0]
-    held = _session_id(first)
-    again = first.get("/ui")  # reuse: free, the limiter is exhausted
-    _capped_page(again)
-    assert _session_id(first) == held
-    assert _sign_in_only_sessions() == 3
 
     _ip_rate_limiter.clear()  # the minute has passed
     refilled = net.client().get("/ui")
