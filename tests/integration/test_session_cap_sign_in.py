@@ -995,6 +995,11 @@ def test_two_tabs_on_a_capped_network_after_one_signs_out(net: Network) -> None:
 
     token = _capped_page(a.client.get("/ui"))
     assert _complete(a.client, token).headers["location"] == "/ui"
+    # The shared jar again. B's reload above received a server-set cookie
+    # (domain testserver.local); httpx's ``cookies.set`` would ADD a second,
+    # domain-less entry beside it and send both, which no browser does, so
+    # the jar is emptied first (harness, not product).
+    b.client.cookies.clear()
     b.client.cookies.set(COOKIE, _session_id(a.client))
     _workspace(b.client.get("/ui"), signed_in=True)
     assert _rows(net.feedback, HERE) == 2
