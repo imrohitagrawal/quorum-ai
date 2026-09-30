@@ -121,7 +121,8 @@ charged; and nothing limited `POST /v1/auth/google/start`.
   (approved); a run already running when "sign out everywhere" is pressed
   (ask first — "Yes" stops the run and signs out everywhere, "No" signs out
   everywhere except the running session; not yet built); and the daily cap
-  (it counts anonymous use only and must never stop sign-in; not yet built).
+  (it counts anonymous use only and must never stop sign-in; built in
+  ADR-0139: a capped network gets a sign-in-only session).
   Still open for the owner: whether the events should be shown to the
   account; and failed sign-ins, which are not stored as rows (Decision 5),
   where the proposal the owner agreed to said "time and success or failure".

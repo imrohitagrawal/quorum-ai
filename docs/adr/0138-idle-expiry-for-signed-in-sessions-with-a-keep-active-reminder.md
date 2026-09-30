@@ -99,7 +99,7 @@ So the expiry exists; what was missing is the warning, and a way to stay.
   comes from the server either way.
 - **The lockout after expiry — decided by the owner on 2026-09-29 (CHG-026 a):
   the daily cap counts anonymous use only and must never stop anyone signing
-  in; not yet built.** As written on 2026-09-28: a replacement session
+  in; built in ADR-0139.** As written on 2026-09-28: a replacement session
   after an idle expiry still counts against the per-address daily cap of 2,
   so on a network that has used it up (the second idle expiry in a day, or
   a sign-out) the next page load is the cap page (429), and sign-in cannot
