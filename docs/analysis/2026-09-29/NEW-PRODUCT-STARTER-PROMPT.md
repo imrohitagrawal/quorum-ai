@@ -36,12 +36,12 @@ Not installed: BMAD, Spec Kit, Kiro, Cucumber, TOON. Borrow their ideas only
 ## Deliverables (each one RUNS or is a template that a check reads)
 1. `AGENTS.md` — one page. Only must-dos, each naming the check that enforces it, or
    marked "influence only".
-2. `docs/LEARNINGS.md` — distilled lessons from the sources. Each gets one line of what
+2. A `LEARNINGS` doc under the new repository's docs — distilled lessons from the sources. Each gets one line of what
    happened, the source file, and the check that now prevents it (or "no check yet").
    No lesson without a source.
 3. `docs/DAY-ONE-PROMPT.md` — v2, short, replacing Quorum's 822-line one. The Quorum copy
    gets a pointer here, in a separate Quorum PR.
-4. `docs/skill-map.md` — table: stage → skill → command it runs → what makes it fail.
+4. A `skill-map` doc under the new repository's docs — table: stage → skill → command it runs → what makes it fail.
    Only skills that run something against real work and exit non-zero on failure are kept.
    Take the classification from Quorum's skills audit (`skills-tools-research/skills-firstpass.csv`
    is the first pass: 104 of 107 unregistered skills are prose only).
@@ -49,7 +49,7 @@ Not installed: BMAD, Spec Kit, Kiro, Cucumber, TOON. Borrow their ideas only
    call; exit code 2 blocks the call) stops destructive git commands, and stops the builder
    editing acceptance tests and gate files.
 6. `.devcontainer/`, based on Anthropic's reference (https://code.claude.com/docs/en/devcontainer),
-   with the network allow-list. Plus `docs/agent-identity.md`: agents run in the container as
+   with the network allow-list. Plus a doc `agent-identity` under the new repository's docs: agents run in the container as
    GitHub account `rohitagrawal4u`, which is a collaborator (a personal-account repo has one collaborator level: push, no settings, no branch rules, no delete). It
    uses a CLASSIC token with `repo` scope only (no `workflow`, no `delete_repo`), because GitHub's
    fine-grained tokens cannot be used on a repo where the account is only a collaborator. The
@@ -64,7 +64,7 @@ Not installed: BMAD, Spec Kit, Kiro, Cucumber, TOON. Borrow their ideas only
      advisory check states what makes it blocking
 8. Templates: decisions log/ADR, acceptance examples (Given/When/Then with negative and
    boundary rows), exploratory charter, one-page threat model, release checklist.
-9. `scripts/defect_census.py` — counts who found each bug (gate, review, owner, user) from
+9. A `defect_census` script under the new repository's scripts — counts who found each bug (gate, review, owner, user) from
    git history and issues. Run it monthly; promote a check only when it finds bugs.
 10. **Proof:** create a throwaway sample app from the template, plant one defect per gate,
     show each gate going red with its output, fix the defects, and show green. Delete the

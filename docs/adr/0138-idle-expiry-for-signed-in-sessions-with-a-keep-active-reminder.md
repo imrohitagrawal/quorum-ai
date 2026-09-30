@@ -14,7 +14,6 @@ building session proposes them as settings."* Both values below were
 **approved by the product owner on 2026-09-29 (CHG-026 c)**; they were PROPOSED
 when this record was written. The reminder's wording and how it works are
 the session's choice.
-The two values (idle 120 minutes, warning 5 minutes) were approved by the product owner on 2026-09-29 (CHG-026).
 
 ## Context
 

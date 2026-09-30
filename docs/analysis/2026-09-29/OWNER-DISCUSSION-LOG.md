@@ -1,5 +1,11 @@
 # Owner discussion log — session e25d3396 (2026-09-28 → 2026-09-30)
 
+> Copied into the repository on 2026-09-30 from the outside evidence folder. File
+> names cited below map as in this folder's `README.md`: `INDEX.md` → `README.md`,
+> `inv-results.md` → `owner-bugs-root-causes.md`, `approach-research/synthesis.md`
+> → `approach-synthesis.md`, `skills-tools-research/shortlist.md` →
+> `skills-tools-shortlist.md`. The decisions are recorded as CHG-026.
+
 Every owner message from this session, word for word (extracted mechanically from the session
 transcript: `type: user` records, excluding tool results, agent reports and system notices).
 The status table comes first; the verbatim messages follow it. When a later session acts on a row,
@@ -11,6 +17,8 @@ it updates the Status column and names the PR or commit.
 |---|---|---|---|---|
 | M01 | Finish W7 3a PR A, then W7 3b, W29, BYOK draft | Done: #521, #522 merged and deployed; W29 and BYOK plans drafted | git log; handoff 2026-09-29 | W7 DONE; W29 #523 and BYOK #525 are DRAFTS |
 | M03.1 | Colleague sign-in vs the 2-a-day limit | Network limit for anonymous use only; never blocks sign-in; signed-in users limited per account | NEXT-SESSION-PROMPT decisions | DECIDED, not built |
+| M03.2 | The flaky trust-score screenshots | Allow just above the largest difference seen (589 px), those screenshots only | CHG-026 k | DECIDED, not built |
+| M03.3 | ADR-0137's four values and ADR-0138's two | *"approve all points in 3."* — events 10 / 30 days, sign-in starts 5 then 1 a minute, idle 120 minutes, warning 5 | CHG-026 c; ADR-0137, ADR-0138, docs/48 updated | DONE (recorded 2026-09-30) |
 | M03.4, M04 | robots.txt: fetch pages when possible | Respect robots.txt; if disallowed, the judge uses the search excerpt | same | DECIDED, not built (W29) |
 | M03.5 | BYOK security research first | Parked until W29 and the limits work; key in server memory only | same | PARKED |
 | M03.6, M04 | Sign out everywhere during a run | Ask first; Yes stops the run and signs out; No keeps only the running session | same | DECIDED, not built |
@@ -232,16 +240,16 @@ I think we have already discussed these items of Google Signin and #511 retest, 
 In separation of duties, you have mentioned that you have read the code, not the running product. This is a hard-coded rule that was instructed and given in agents.md and the relevant MD files: there should be an agent in the PR review that will specifically execute the code and verify the data, not just read the code. That was a prerequisite that was defined, but then why was it not followed? Please correct me if wrong.
 It was also instructed that, in final feature testing, we should exactly do the testing with the exact system products. Do not fake or use stubs or use canned products. Then why was it being used? Do we ensure that the instructions are followed diligently and not just passed by the way? I hope you have been keeping track of all the discussions, taking notes, and making it available at some point in some MD files so that we can work upon it. This is again not getting lost, like your previous reviews found that the files were getting lost in the bugs and all those things, chats and all.
 
-### M23 — 2026-09-30 UTC
+### M23 — 2026-09-30 05:06 UTC
 
 One more bug that I have identified is that when the user is on the How It Works main page, he asks a question and is brought to the next page. Again, the focus area is the questions, but the user is unaware of what action he has to take: choose the models and all. The focus area or the display should be that the models should be visible, and the user should be asked to or guided to choose the models. Do you suggest tutorials to be done when there is a new user who is accessing the website so that he is aware of what all features are there? What is your recommendation? 
 Pass. I did 2 logins and then at logout got the "This network has reached its session limit" message. Means that the previous 9 bugs, or the bugs that were identified yesterday, are still not fixed, right?
 
-### M24 — 2026-09-30 UTC
+### M24 — 2026-09-30 05:10 UTC
 
 In the fix, when you say "Change any" or "Press See the estimate," there, we should also make it more clear: "In case you want to see the estimate, then click on Estimate, or if you want to directly run, then click on Run." What do you suggest? Rest, I agree. I also see that you are storing some of the discussions and analyses in different MD files, right? Do we have an index which keeps track? When you are run in a fresh context, will you be able to go to the exact file whenever a need arises, or will these discussions get lost in multiple MD files? Will the agents.md or you, as a worker, know the catalog of where to fetch what information?
 
-### M25 — 2026-09-30 UTC
+### M25 — 2026-09-30 05:12 UTC
 
 Over these MD files, like owner decisions.md, or other log files, I'm just wanting to understand: is the folder hierarchy, the decision hierarchy, the documents hierarchy, the way you are acting on these documents? Whenever a new agent works, will that be able to get what all different files there are, what the use cases are, what values they derive, where to access what information, and all those things? Many times, we have the information, but accessibility becomes an issue where the new model is not able to understand what to access where. I'm trying to resolve these pivotal and basic issues in the repositories.
 

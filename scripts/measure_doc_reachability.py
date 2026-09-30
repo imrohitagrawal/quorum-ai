@@ -2,7 +2,7 @@
 """How many tracked ``.md`` files can a new agent reach by following links?
 
 A new session auto-loads ``AGENTS.md`` (through ``CLAUDE.md``). This counts the
-tracked ``.md`` files (skills excluded) reachable from those two files by
+tracked ``.md`` files (``.agents/`` and ``node_modules`` excluded) reachable from those two files by
 following Markdown links and back-ticked ``.md`` paths, hop by hop, and how
 many are NOT reachable within three hops. It is a measurement, not a gate:
 run it before and after changing the entry points and quote both numbers.
@@ -27,7 +27,7 @@ _LINK = re.compile(r"(?:\]\(|`)((?:\.{0,2}/)?[\w./-]+\.md)")
 def tracked_docs(root: pathlib.Path) -> set[str]:
     out = subprocess.run(
         ["git", "ls-files", "*.md"], capture_output=True, text=True, cwd=root, check=True
-    ).stdout.split()
+    ).stdout.splitlines()
     return {f for f in out if not f.startswith((".agents/", "node_modules"))}
 
 
@@ -66,7 +66,7 @@ def measure(
 
 def main() -> int:
     result = measure(pathlib.Path.cwd())
-    print(f"tracked .md (excl. skills): {result['tracked']}")
+    print(f"tracked .md (excl. .agents/ and node_modules): {result['tracked']}")
     for key, value in result.items():
         if key.startswith("hop_"):
             print(f"{key.replace('_', ' ')}: {value}")

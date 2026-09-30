@@ -14,7 +14,6 @@ building session proposes them as settings."* Every value below was
 **approved by the product owner on 2026-09-29 (CHG-026 c)**; it was PROPOSED when
 this record was written. Splitting part 3 into two pull requests is
 the session's choice, for size.
-The four values (events kept 10 / 30 days; sign-in starts 5, then 1 a minute) were approved by the product owner on 2026-09-29 (CHG-026).
 
 ## Context
 

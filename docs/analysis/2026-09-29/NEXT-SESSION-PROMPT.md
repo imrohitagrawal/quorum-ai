@@ -1,5 +1,15 @@
 # Next session — start here (written 2026-09-29 by the session that ran W7 part 3)
 
+> Copied into the repository on 2026-09-30, unchanged below this note. In this
+> folder `INDEX.md` is `README.md`, `inv-results.md` is
+> `owner-bugs-root-causes.md`, `approach-research/synthesis.md` is
+> `approach-synthesis.md` and `skills-tools-research/shortlist.md` is
+> `skills-tools-shortlist.md`; `findability/measure_reachability.py` became
+> `scripts/measure_doc_reachability.py`. Paths under
+> `~/Projects/quorum-ai-evidence/2026-09-29/` (probes, lens reports, contests)
+> stayed outside the repository. The "Findability" pull request at the end
+> is this one; its decisions are CHG-026.
+
 Read `INDEX.md` in this folder first for the catalog. Then read in order: `AGENTS.md`, `docs/analysis/2026-09-29-session-handoff.md`, then
 this file and `ENGINEERING-REVIEW-2026-09-29.md` (same folder as this file:
 `/Users/rohitagrawal/Projects/quorum-ai-evidence/2026-09-29/`). Evidence for every

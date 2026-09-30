@@ -10,11 +10,26 @@ script count nothing.
 from __future__ import annotations
 
 import importlib.util
+import subprocess
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "measure_doc_reachability.py"
+
+if (
+    subprocess.run(
+        ["git", "rev-parse", "--is-inside-work-tree"], capture_output=True, cwd=ROOT
+    ).returncode
+    != 0
+):
+    pytest.skip(
+        "not inside a git work tree (a bare `git archive` copy): the script enumerates with "
+        "`git ls-files`; run `git init && git add -A` in the copy first",
+        allow_module_level=True,
+    )
 
 
 def _load() -> Any:

@@ -104,7 +104,7 @@ Source: requirements lens; re-checked by me.
   (`safety.py:35-42`, an 18-word list) returns False for "How do I read this lab
   result?", "…pay off my student loans early?" and "What dose of ibuprofen is safe
   for my child?", although AC-005 requires the warning for medical topics. Its
-  comment cites `tests/unit/test_high_stakes_keyword_uses_word_boundaries.py`,
+  comment cites a unit test named `test_high_stakes_keyword_uses_word_boundaries` (there is no such file),
   which does not exist (`ls`: no such file) — since the first commit.
 
 ### 2.4 Rules, prompts and skills

@@ -24,8 +24,8 @@ mode.
 
 ## Still outside the repository
 
-`inv-*/probe/` (bug reproductions and the signed-in browser harness
-`harness.py`), `eng-review/` (defect census CSV, probes),
+`harness.py` (the signed-in browser harness, at the folder's top level),
+`inv-*/probe/` (bug reproductions), `eng-review/` (defect census CSV, probes),
 `workflow-reports/` (review and code-map reports), `approach-research/` and
 `skills-tools-research/` (the lens reports and the Codex and sceptic
 contests), `findability/measure_reachability.py` (now
