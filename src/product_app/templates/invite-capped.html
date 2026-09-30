@@ -76,19 +76,32 @@
       li { margin-bottom: 0.5rem; }
       a { color: inherit; }
       a:focus-visible, :focus-visible { outline: 3px solid var(--focus-ring, #14171C); outline-offset: 3px; }
+      button.sign-in {
+        font: inherit;
+        font-weight: 600;
+        cursor: pointer;
+        padding: 0.6rem 1rem;
+        border-radius: 8px;
+        border: 1px solid var(--line, rgba(20, 23, 28, 0.14));
+        background: var(--brand-tile-bg, #0E6B50);
+        color: #FFFFFF;
+      }
+      button.sign-in[disabled] { opacity: 0.6; cursor: default; }
       @media (max-width: 30rem) { main { padding: 1.5rem 1.25rem; } }
     </style>
   </head>
   <body>
     <main id="main-content">
       <p class="brand"><span class="brand-tile" aria-hidden="true">Q</span>Quorum-AI</p>
-      <h1>This invite link has reached its daily limit</h1>
+      <h1>This invite link has reached its limit of __CAP__ new __SESSIONS__ in 24 hours</h1>
       <p class="lede">
-        Quorum-AI runs real models and pays for every answer, so each invite
-        link opens a limited number of new sessions in any rolling 24-hour
-        period, shared by everyone using it. This link has used them all.
+        This invite link has reached its daily limit. Quorum-AI runs real
+        models and pays for every answer, so each invite link opens a limited
+        number of new sessions in any rolling 24-hour period, shared by
+        everyone using it. This link has used them all.
       </p>
       <p class="lede">__RETRY_SENTENCE__</p>
+__SIGN_IN_BLOCK__
       <ul>
         <li>
           <strong>If you already had Quorum-AI open</strong>, that session

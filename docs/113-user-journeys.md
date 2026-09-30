@@ -82,3 +82,21 @@ User may include private, personal, confidential, or regulated information in th
 - Warning is visible before submission.
 - Product does not claim sensitive-data safety.
 - Privacy posture remains honest until controls are designed and validated.
+
+## Journey J-005: Signing in after the network's anonymous sessions are used up
+
+### Trigger
+
+A person on a network (an office, a home, a VPN) whose address has opened its daily allowance of new anonymous sessions loads Quorum with no live session — typically after signing out, after an idle expiry, or as a colleague arriving on the same network.
+
+### Steps
+
+1. The page says the network has reached its limit of new sessions in 24 hours, that an already-open session still works, and that signing in is not limited by this.
+2. The person presses "Sign in with Google" and completes Google's sign-in.
+3. They land on the workspace signed in, with their history, and can run a query under their account's own limits.
+
+### Success Criteria
+
+- No reachable state locks a person out of signing in (tested as a property over session states and events).
+- The sign-in-only session that carried the sign-in is never counted as a new session and can spend nothing.
+- Decided by the product owner on 2026-09-29 (CHG-026 a); design ADR-0139; acceptance AC-053.

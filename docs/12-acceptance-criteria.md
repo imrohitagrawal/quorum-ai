@@ -437,3 +437,11 @@ Given a deployment with the three `GOOGLE_OAUTH_*` settings set, when a visitor 
 - Requirement: FR-019
 - Test: TEST-FR-019 (`tests/integration/test_google_sign_in.py`; `tests/unit/test_google_signin_units.py`)
 - Decided by the product owner on 2026-09-24 (CHG-012 D7); the flow, bounds and copy are the session's (ADR-0130, CHG-020).
+
+## AC-053 A network that has used its anonymous sessions can still sign in
+
+Given a network whose address has opened its daily allowance of new anonymous sessions (2 in production), when a browser with no live session loads the page, then it sees a page that names the limit hit and offers "Sign in with Google"; when it signs in, then it gets the full product; and the sign-in-only session it held meanwhile cannot estimate, run, read history or sign out everywhere, and is never counted as a new session. When sign-in is not possible on that deployment, the page is the one it always was.
+
+- Requirement: FR-019
+- Test: TEST-FR-019 (`tests/integration/test_session_cap_sign_in.py`, 37 tests, plus 4 in `tests/unit/test_capped_page_sign_in_block.py`; the first 28 written before the code, the rest after review round 1; the owner's own journey asserts the mint count at every step)
+- Decided by the product owner on 2026-09-29 (CHG-026 a: the limit applies to anonymous use only and must never stop anyone signing in); the sign-in-only session is the session's design (ADR-0139).
