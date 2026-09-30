@@ -765,7 +765,7 @@ the decisions in CHG-026, the bug root causes in
 `docs/analysis/2026-09-29/owner-bugs-root-causes.md`, and the plan and its
 order in `docs/analysis/2026-09-29/NEXT-SESSION-PROMPT.md`. W34 is first: the
 sign-out lockout is the bug the owner hit again on 2026-09-30 (M23), and
-W35–W37 depend on the session model it changes.
+W35 depends on it.
 
 ## What is deliberately NOT on this board
 

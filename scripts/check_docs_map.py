@@ -74,7 +74,7 @@ def _title(path: Path) -> str:
     """The first ``# `` heading outside a code fence, or the file name."""
     in_fence = False
     for line in path.read_text(encoding="utf-8-sig", errors="replace").splitlines():
-        if line.startswith("```"):
+        if line.startswith(("```", "~~~")):
             in_fence = not in_fence
             continue
         if in_fence:

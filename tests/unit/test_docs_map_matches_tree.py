@@ -12,10 +12,10 @@ WHAT IT CANNOT SEE: whether the hand-written table names the right home for a
 kind of information, or whether a file inside a folder is worth reading. A new
 doc is invisible until ``git add``ed (enumeration is ``git ls-files``).
 
-FALSE-POSITIVE COST: low, not zero. It reads tracked files only, so untracked
-scratch under ``docs/`` cannot trip it; it does fire when a top-level file's
-first heading changes or a folder gains an index file, which is a real change
-to what the map says.
+FALSE-POSITIVE COST: low, not zero. The script and these tests read tracked
+files only (``git ls-files``), so untracked scratch under ``docs/`` trips
+neither; the gate does fire when a top-level file's first heading changes or
+a folder gains an index file, which is a real change to what the map says.
 
 The first version of this file had two tests that did not bite (measured by a
 reviewer on 2026-09-30 with mutations): the floor test also presented a stale
@@ -109,13 +109,13 @@ def test_the_map_lists_exactly_the_docs_on_disk() -> None:
 def test_every_top_level_doc_is_a_row_and_there_are_many() -> None:
     """The positive partner: the check above would also pass over an empty map
     of an empty directory. Turns red if the inventory stops naming every file."""
-    files = sorted(p.name for p in (ROOT / "docs").glob("*.md"))
+    files = sorted(p.name for p in CHECKER._top_level_docs(ROOT))
     assert len(files) > 50, f"expected the real docs/ directory, found {len(files)} files"
     text = MAP.read_text(encoding="utf-8")
     generated = text[text.index(CHECKER.BEGIN) : text.index(CHECKER.END)]
     missing = [name for name in files if f"| `{name}` |" not in generated]
     assert not missing, f"top-level docs missing from the map's inventory: {missing}"
-    folders = sorted(p.name for p in (ROOT / "docs").iterdir() if p.is_dir())
+    folders = sorted(p.name for p in CHECKER._folders(ROOT))
     assert folders, "docs/ has no folders — wrong root?"
     missing_folders = [name for name in folders if f"| `{name}/` |" not in generated]
     assert not missing_folders, f"folders missing from the map's inventory: {missing_folders}"
@@ -124,12 +124,13 @@ def test_every_top_level_doc_is_a_row_and_there_are_many() -> None:
 def test_a_new_doc_turns_the_check_red_and_a_rewrite_turns_it_green(tmp_path: Path) -> None:
     """The bite-proof. Turns red if: ``check`` stops comparing the generated
     part against the tree (for example, always returns 0)."""
-    root = _tree(tmp_path, ["10-a.md", "11-b.md"])
+    root = _tree(tmp_path, ["10-a.md", "11-b.md", "UPPER.MD"])
     assert CHECKER.write(root) == 0
     assert CHECKER.check(root) == 0
     text = (root / "docs" / "README.md").read_text(encoding="utf-8")
     assert "| `10-a.md` | Title of 10-a.md |" in text
     assert "| `README.md` | map |" in text
+    assert "| `UPPER.MD` | Title of UPPER.MD |" in text, "an upper-case .MD is a doc too"
 
     (root / "docs" / "12-c.md").write_text("# Title of 12-c.md\n", encoding="utf-8")
     assert CHECKER.check(root) == 0, "an UNTRACKED doc is invisible until git add (by design)"
@@ -184,6 +185,30 @@ def test_a_missing_or_duplicated_marker_is_an_error_not_a_pass(tmp_path: Path) -
     )
     with pytest.raises(SystemExit):
         CHECKER.check(root)
+
+
+def test_a_missing_map_is_red(tmp_path: Path) -> None:
+    """Turns red if: a deleted docs/README.md leaves the check green (a
+    reviewer's mutation ``return 0`` on the missing-file branch survived the
+    second version of this file)."""
+    root = _tree(tmp_path, ["10-a.md"], with_map=False)
+    assert CHECKER.check(root) == 1
+    os.environ["DOCS_MAP_ROOT"] = str(root)
+    try:
+        assert CHECKER.main(["--check"]) == 1
+    finally:
+        del os.environ["DOCS_MAP_ROOT"]
+
+
+def test_a_heading_inside_a_code_fence_is_not_the_title(tmp_path: Path) -> None:
+    """Turns red if: ``_title`` stops skipping fenced blocks (no real doc
+    exercises that branch today, measured 2026-09-30 over all 128)."""
+    doc = tmp_path / "fenced.md"
+    doc.write_text("```\n# not the title\n```\n# Real\n", encoding="utf-8")
+    assert CHECKER._title(doc) == "Real"
+    tilde = tmp_path / "tilde.md"
+    tilde.write_text("~~~\n# not the title\n~~~\n# Real\n", encoding="utf-8")
+    assert CHECKER._title(tilde) == "Real"
 
 
 def test_check_flag_checks_and_never_writes(tmp_path: Path) -> None:
@@ -259,7 +284,10 @@ def test_the_gate_is_wired_into_make_validate() -> None:
         cwd=ROOT,
     )
     assert dry.returncode == 0, dry.stderr
-    assert "check_docs_map.py --check" in dry.stdout, (
+    # A whole line, not a substring: a look-alike target that merely ECHOES
+    # the string satisfied a substring check (measured 2026-09-30).
+    expected = f"{sys.executable} scripts/check_docs_map.py --check"
+    assert expected in dry.stdout.splitlines(), (
         "make validate would not run scripts/check_docs_map.py --check:\n" + dry.stdout
     )
     body = _recipe("docs-map-check")

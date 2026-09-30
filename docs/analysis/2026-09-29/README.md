@@ -17,6 +17,14 @@ lens reports stayed outside; the files here cite them by path.
 | `skills-tools-shortlist.md` | Tools and skills to adopt, defer, reject (was `skills-tools-research/shortlist.md`) | Choosing tools or skills |
 | `NEW-PRODUCT-STARTER-PROMPT.md` | The prompt for the new-product starter | After Quorum steps 0–2 are DONE |
 
+What differs from the outside originals: `NEXT-SESSION-PROMPT.md` and
+`OWNER-DISCUSSION-LOG.md` carry a note at the top (and the log two added status
+rows and the M23–M25 times); `ENGINEERING-REVIEW-2026-09-29.md` (one line) and
+`NEW-PRODUCT-STARTER-PROMPT.md` (four lines) reword citations of files that do
+not exist in this repository so the cited-paths gate reads them as prose;
+`README.md` replaces `INDEX.md`. `approach-synthesis.md`,
+`skills-tools-shortlist.md` and `owner-bugs-root-causes.md` are byte-identical.
+
 The decisions in these files are recorded as CHG-026 in
 `docs/19-change-control-log.md`; that row is the record, these files are the
 source it quotes. The research conclusions are PROPOSED until confirmed in plan
