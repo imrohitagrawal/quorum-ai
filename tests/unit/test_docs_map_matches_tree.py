@@ -36,11 +36,22 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from tests.repo_root import find_repo_root
 
-ROOT = Path(__file__).resolve().parents[2]
+#: The REAL repository root, not ``parents[2]``: mutmut runs this suite from
+#: inside ``./mutants/``, a copy with no ``.git``, where ``git ls-files`` lists
+#: nothing and the gate's floor refused — which killed stats collection on the
+#: first pull request that touched ``src/`` after the map landed (#528's
+#: advisory mutation job, 2026-09-30). See ``tests/repo_root.py``.
+ROOT = find_repo_root(Path(__file__))
 SCRIPT = ROOT / "scripts" / "check_docs_map.py"
 MAP = ROOT / "docs" / "README.md"
 MAKEFILE = ROOT / "Makefile"
+
+#: Drives git and make against the real repository and imports nothing from
+#: the application, so it can kill no ``src/`` mutant; deselected under mutmut
+#: by this marker (the pinned list is in test_mutation_test_set_integrity.py).
+pytestmark = pytest.mark.repo_introspection
 
 if (
     subprocess.run(

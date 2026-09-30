@@ -147,6 +147,15 @@ DESELECTED_FROM_THE_MUTANT_RUN = (
     # teardown), which every module in the suite pays and which no module kills
     # a mutant with. So it can register no `src/` kill of its own.
     "tests/unit/test_no_mutation_pragma_silences_a_survivor.py",
+    # #527's docs-map gate and reachability measurement. Both enumerate the
+    # repository with `git ls-files` and drive `make docs-map-check` and
+    # `make -n validate` against the real REPO_ROOT; inside `./mutants/` (no
+    # `.git`) the gate's floor refused and `-x` killed stats collection on the
+    # first pull request that touched `src/` afterwards (#528, 2026-09-30:
+    # "failed to collect stats", zero mutants scored). Neither imports
+    # `product_app`, so neither can kill a `src/` mutant.
+    "tests/unit/test_docs_map_matches_tree.py",
+    "tests/unit/test_measure_doc_reachability.py",
 )
 
 MARKER = "repo_introspection"
