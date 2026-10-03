@@ -163,7 +163,7 @@ from typing import Any
 
 import pytest
 
-from product_app import feedback_store, session_store, store_reconnect
+from product_app import costs, feedback_store, session_store, store_reconnect
 from product_app.auth import session_repository
 from product_app.google_signin import pending_sign_ins, sign_in_start_limiter
 from product_app.query_runs import (
@@ -281,6 +281,13 @@ def _reset_state() -> None:
     # and because every other process global above is reset here for exactly
     # the same reason.
     store_reconnect._reset_for_tests()
+    # W42. The in-memory cost ring is what ``_cumulative_spend_for`` sums, and
+    # a signed-in spend key is the same in every test of one process, so a
+    # charge left by one test was read by the next. Plain pytest order hid it;
+    # mutmut's clean run (tests in set order) did not, and its CI job stopped at
+    # stats collection on PR #528. Pinned by
+    # tests/unit/test_reset_state_clears_the_cost_ring.py.
+    costs.cost_event_recorder.clear()
 
 
 @pytest.fixture(autouse=True)
