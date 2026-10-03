@@ -10541,17 +10541,18 @@
       if (current) current.replaceWith(node);
       else panel.insertBefore(node, controls);
     };
-    // Signed out, or signed in as someone else, in another tab (rows 5, 6):
+    // Signed out, or signed in as someone else, elsewhere (rows 5, 6):
     // the rows go and one line asks for a reload. The page never reloads
     // itself and never asks for a new session.
     const showReload = () =>
       place(
         line(
           "account-history-reload",
-          "Your sign-in changed in another tab or window. Reload the page to see your history.",
+          "Your sign-in has changed (in another tab, window or device). Reload the page to see your history.",
         ),
       );
-    // A network or server error (row 10): the rows stay, and a line says so.
+    // A network or server error, a 503 included (row 10, decision 2a): the
+    // rows stay, and a line says so.
     const showError = () => {
       if (find("account-history-error")) return;
       const error = line("account-history-error", "Your history could not be refreshed just now.");

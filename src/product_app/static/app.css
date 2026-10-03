@@ -654,9 +654,15 @@ a { color: var(--accent); text-underline-offset: 2px; }
 
 /* ----- Toast region ---------------------------------------------------- */
 
+/* W33 slice D (review round 1): bottom right, not top right. At the top the
+   "Run started" / "Run completed" toasts sat over the top bar's History and
+   Sign out and took their clicks for the toast's 4.5 s (a click on History
+   landed after 5.02 s at 1440 px). The region itself stays pointer-transparent;
+   each toast, and its dismiss control, still takes clicks. Phones keep the
+   top (the 600px block below): their bottom edge holds the session trail. */
 .toast-region {
   position: fixed;
-  top: var(--space-5);
+  bottom: var(--space-5);
   right: var(--space-5);
   z-index: 2000;
   display: flex;
@@ -5141,7 +5147,13 @@ main:focus { outline: none; }
 
   .panel { padding: var(--space-4); }
   .brand-copy p { font-size: 0.8rem; }
-  .toast-region { left: var(--space-3); right: var(--space-3); max-width: none; }
+  .toast-region {
+    top: var(--space-5);
+    bottom: auto;
+    left: var(--space-3);
+    right: var(--space-3);
+    max-width: none;
+  }
 
   /* Mobile-only header fix (DESKTOP UNTOUCHED — this lives entirely inside the
      600px breakpoint). The top-bar actions row was a fixed 433px with

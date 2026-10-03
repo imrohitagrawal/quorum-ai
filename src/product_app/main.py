@@ -36,7 +36,13 @@ from fastapi.staticfiles import StaticFiles
 from prometheus_fastapi_instrumentator import Instrumentator
 from sentry_sdk.types import Event as SentryEvent
 
-from product_app import account_deletion, account_history, invite_links, session_exemptions
+from product_app import (
+    account_deletion,
+    account_history,
+    invite_links,
+    session_exemptions,
+    session_store,
+)
 from product_app.auth import (
     SessionContext,
     SessionMintCapExceeded,
@@ -932,7 +938,10 @@ def account_history_list(request: Request) -> JSONResponse:
 
     The account comes ONLY from the cookie session: no session (or one ended
     on another device) is 401; an anonymous, a sign-in-only (ADR-0139) or a
-    legacy ``X-Account-Id`` session is 403 ``NOT_SIGNED_IN``. Read-only, so
+    legacy ``X-Account-Id`` session is 403 ``NOT_SIGNED_IN``. A sessions store
+    that cannot say whether this session has an account (closed, gone, or a
+    failed read) is 503 ``HISTORY_UNAVAILABLE`` (decision 2a): never a 403,
+    which the page would show as "your sign-in has changed". Read-only, so
     no CSRF check, and it draws on no rate limiter: opening History must
     never block running a question. Every answer is ``no-store``.
     Failure modes: ``docs/analysis/2026-10-03-w33d-history-refresh-failure-modes.md``.
@@ -946,13 +955,26 @@ def account_history_list(request: Request) -> JSONResponse:
         raise HTTPException(
             status_code=exc.status_code, detail=exc.detail, headers=no_store
         ) from exc
-    account = (
-        None if session.legacy or session.sign_in_only else signed_in_account(session.account_id)
+    not_signed_in = HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail={"code": "NOT_SIGNED_IN", "message": "Sign in to see your history."},
+        headers=no_store,
     )
+    if session.legacy or session.sign_in_only:
+        raise not_signed_in
+    store = session_store.get_store()
+    account = None if store is None else store.account_for(session.account_id)
     if account is None:
+        # ``account_for`` answers ``None`` for an anonymous id AND on a failed
+        # read; only a store that says "certainly no account" earns the 403.
+        if store is not None and store.is_anonymous(session.account_id) is True:
+            raise not_signed_in
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail={"code": "NOT_SIGNED_IN", "message": "Sign in to see your history."},
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "HISTORY_UNAVAILABLE",
+                "message": "Your history could not be read just now.",
+            },
             headers=no_store,
         )
     return JSONResponse(

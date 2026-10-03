@@ -1135,9 +1135,10 @@ def cancel_query_run(
     refreshed = query_run_repository.get(query_run_id)
     response = _result_response(refreshed)
     # W33 slice D (ADR-0142, decision 4): the run is over for the person now,
-    # so its History row is written now, not when the worker exits (measured
-    # 903 ms later). Keyed by run id, so the worker's own write replaces this
-    # row rather than adding one. Best effort, as the worker's write is.
+    # so its History row is written now, not when the worker exits (903 ms
+    # later in a design-review probe whose pipeline stub slept 1 s). Keyed by
+    # run id, so the worker's own write replaces this row rather than adding
+    # one. Best effort, as the worker's write is.
     account_history.record_finished_run(refreshed)
     return response
 
