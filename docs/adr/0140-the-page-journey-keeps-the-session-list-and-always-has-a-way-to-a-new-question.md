@@ -112,10 +112,10 @@ before the code:
 - Calls taken by the session (the owner may overturn any of them): (i) "homepage"
   means the composer, not the landing page; (ii) the follow-up mode buttons are
   hidden until W37; (iii) the landing buttons keep their names; (iv) the hint's
-  exact wording — the real button names and the "(it still asks first …)" clause
-  — is the session's reply of 2026-09-30 05:12Z to M24's *"What do you
-  suggest?"*, which the owner has not answered; M24 itself asked for "click on
-  Estimate … or … click on Run".
+  real button names come from the session's reply of 2026-09-30 05:12Z to M24's
+  *"What do you suggest?"*, and the "(it still asks first …)" clause was added by
+  this session on 2026-10-03 (failure-mode row 20); the owner has answered
+  neither; M24 itself asked for "click on Estimate … or … click on Run".
 - Known limits, recorded rather than fixed here: after a run the page scrolls to
   the result heading, so the header's way home starts above the fold, and for a
   few seconds the run toasts can cover it; a landing example chip clicked during

@@ -51,7 +51,7 @@ every row above and still failed these:
 | 28 | The top-bar logo on the composer emptied a typed question (a 1,079-character question to 0 in one click). | Lost input. | The logo never deletes a question the user typed and has not run. |
 | 29 | A stopped, failed or timed-out run stays on the live-run view, which has no way home. | A dead end — bug 6 by another route. | "New question" shows there once the run is no longer in progress. |
 | 30 | The hint kept "four" after quick mode was turned on or a slot removed. | False copy (row 19 after the hand-off). | The hint recounts on every change of quick mode or the panel. |
-| 31 | The list's status and time text measure 3.2:1 (light) and 3.41:1 (dark) at 10.9 px; older than this change, but the kept list now puts it on every result. | Fails WCAG AA contrast. | Darker tokens for those two classes. |
+| 31 | The list's status and time text measure 3.2:1 (light) and 3.41:1 (dark) at 10.9 px; older than this change, but the kept list now puts it on every result. | Fails WCAG AA contrast. | Full opacity (the 0.72 opacity on muted entries was the cause), `--text-secondary` for the time text, and a dashed border with at least 3:1 contrast for a muted entry. |
 | 32 | The step marker the session proposed with the hint (2026-09-30 05:07Z), which the owner agreed to in M24, was not in the first design. | An agreed part of bug 10's fix missing. | Built: *Question → Models → Estimate and run* above the composer. |
 
 What this list cannot see: whether the owner means the empty composer or the landing
