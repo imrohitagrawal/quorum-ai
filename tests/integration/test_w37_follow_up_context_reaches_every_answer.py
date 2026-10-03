@@ -417,7 +417,9 @@ def test_the_context_is_not_written_to_the_run_history_the_ledger_or_the_logs(
 
         rows = history.iter_runs()
         assert rows, "the run-history store holds no row for the run"
-        events = list(get_store().iter_events())
+        ledger = get_store()
+        assert ledger is not None, "no feedback store is configured"
+        events = list(ledger.iter_events())
         assert events, "the ledger holds no events for the run"
         assert caplog.records, "the run wrote no log records"
 
