@@ -289,6 +289,11 @@
   // Screen 03 (cost gate) elements. ``renderCostGate`` fills these from
   // ``cost_estimate.breakdown``; the confirm button reuses ``proceedWithRun``.
   const gateHeading = el("cost-gate-heading");
+  const gateLede = el("cost-gate-lede");
+  // W33 slice C round 2: the template's approval heading and lede, kept so a
+  // later allow/confirm render restores them after a block replaced them.
+  const GATE_HEADING_APPROVAL = gateHeading ? gateHeading.textContent : "";
+  const GATE_LEDE_APPROVAL = gateLede ? gateLede.textContent : "";
   const gateQuestion = el("cost-gate-question");
   const gateTotal = el("cost-gate-total");
   const gateRange = el("cost-gate-range");
@@ -8077,8 +8082,12 @@
   // Format a USD amount for the gate's mono cells — reuses ``formatUsd``
   // (the single money-formatting source of truth) with the " USD" suffix
   // off so the compact table/total read as "$0.19", not "$0.19 USD".
+  // W33 slice C round 2: never fewer than two decimals, so a run costing
+  // exactly 0.4000 reads "$0.40", not the "$0.4" ``formatUsd``'s trimming
+  // gives. Only a lone tenths digit is padded; "$0.105" and "$0.0078" keep
+  // their places. Scoped to the gate's figures, not to ``formatUsd``.
   function gateUsd(usdAmount) {
-    return formatUsd(usdAmount, { suffix: false });
+    return formatUsd(usdAmount, { suffix: false }).replace(/^(\$\d+\.\d)$/, "$10");
   }
 
   // A fixed 2-decimal USD render for the presentational planning-range
@@ -8137,9 +8146,11 @@
   }
 
   // A cap always prints with two decimals ("$0.50", "$0.40"), never the
-  // trimmed "$0.5" that ``formatUsd`` gives (decision 5).
+  // trimmed "$0.5" that ``formatUsd`` gives (decision 5). A cap that is not a
+  // plain decimal gives "" — no figure — rather than an invented "$0.00"
+  // (round 2); callers word their sentence without it.
   function capUsd(value) {
-    return usdCents(value, "down") || gateUsd2dp(value);
+    return usdCents(value, "down");
   }
 
   // The daily cap's label for a response that does not carry the figure (the
@@ -8165,8 +8176,11 @@
   // ``estimatedUsd`` is the run's point estimate as the server sent it, or
   // undefined when unknown (the charge-time refusal carries none).
   function limitBlockCopy({ reason, allowance, estimatedUsd }) {
-    const capValue = (allowance && allowance.cap_usd) || DAILY_CAP_LABEL_USD;
+    // The response's own cap when it carries an allowance (shown only if it
+    // is a well-formed decimal); the label only when there is no allowance.
+    const capValue = allowance ? allowance.cap_usd : DAILY_CAP_LABEL_USD;
     const cap = capUsd(capValue);
+    const ofCap = cap ? `the ${cap}` : "what";
     const hardCap = capUsd(COST_HARD_LIMIT_USD);
     const runText = estimatedUsd === undefined ? "" : gateUsd(estimatedUsd);
     if (reason === "daily_cap") {
@@ -8184,18 +8198,25 @@
       }
       const spent = allowance ? usdCents(allowance.spent_usd, "up") : "";
       const used = spent
-        ? `You have used ${spent} of the ${cap} you can spend in the last 24 hours`
-        : `This run would take you past the ${cap} you can spend in the last 24 hours`;
+        ? `You have used ${spent} of ${ofCap} you can spend in the last 24 hours`
+        : `This run would take you past ${ofCap} you can spend in the last 24 hours`;
       const needs = spent && runText ? `, and this run needs about ${runText}` : "";
+      // Round 2: "used" only when the server says nothing is left; a block
+      // with some allowance left is "not enough left" for THIS run.
+      const nothingLeft =
+        allowance != null && /^\d+(\.\d*)?$/.test(String(allowance.remaining_usd)) &&
+        !/[1-9]/.test(String(allowance.remaining_usd));
       return {
         perRunFurniture: false,
         offerCheaper: false,
-        headline: "Daily allowance used — this run won't start",
+        headline: nothingLeft
+          ? "Daily allowance used — this run won't start"
+          : "Not enough allowance left — this run won't start",
         body:
           `${used}${needs}. Simulated runs count too. ` +
           "Spend frees up as each run turns 24 hours old.",
         announce:
-          `Run blocked by the ${cap} daily allowance. ` +
+          `Run blocked by ${cap ? `the ${cap}` : "the"} daily allowance. ` +
           "Spend frees up as each run turns 24 hours old.",
       };
     }
@@ -8244,7 +8265,8 @@
     if (allowance.bounded_by === "running_total") {
       return `${remaining} left before the ${capUsd(COST_HARD_LIMIT_USD)} running limit; ${uses}.`;
     }
-    return `${remaining} of ${capUsd(allowance.cap_usd)} left in the last 24 hours; ${uses}.`;
+    const cap = capUsd(allowance.cap_usd);
+    return `${remaining}${cap ? ` of ${cap}` : ""} left in the last 24 hours; ${uses}.`;
   }
 
   // Render a list of {label, usd} rows plus a bold Total row into a
@@ -8359,6 +8381,13 @@
       const maxCost = Number(ce.max_cost_usd);
       const ceiling = Number.isFinite(maxCost) && maxCost > total ? maxCost : total;
       if (gateBandLabel) gateBandLabel.textContent = copy.headline;
+      // A block approves nothing, so the gate's own heading and lede must not
+      // ask for approval (round 2).
+      if (gateHeading) gateHeading.textContent = "This run can't start";
+      if (gateLede) {
+        gateLede.textContent =
+          "Nothing has run and nothing has been charged. The card below names the limit that stopped it.";
+      }
       if (gateReason) {
         // Per-run cap: COPY-004 verbatim, then the server's reason(s). Every
         // other limit: the page's own words for that limit, never the prose.
@@ -8430,6 +8459,8 @@
     // NOT claim "your confirmation required" — nothing is being required; the
     // user asked to look. ``require_confirmation`` keeps the warning framing.
     const isAllowReview = action === "allow";
+    if (gateHeading) gateHeading.textContent = GATE_HEADING_APPROVAL;
+    if (gateLede) gateLede.textContent = GATE_LEDE_APPROVAL;
     if (gateBandLabel) {
       gateBandLabel.textContent = isAllowReview
         ? "Estimate ready — review and run"
