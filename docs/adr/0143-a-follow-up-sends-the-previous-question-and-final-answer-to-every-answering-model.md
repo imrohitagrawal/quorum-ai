@@ -27,7 +27,11 @@ both texts twice and sent each once. A quick request with context is refused
    one model. The previous question and the previous final answer go in the system
    message, after our own instructions, each fenced as data and flattened the way
    synthesis already treats `prior_synthesis`. The user message stays the new
-   question alone, so the web search is not handed the old answer.
+   question alone, so the web search is not handed the old answer. The previous
+   question is fenced in the one shared system-message builder that debate and
+   synthesis also use, so flattening it there flattens it in their prompts too.
+   That is intended: today a previous question can still start its own line inside
+   the fence.
 2. **Each call is priced for what it is sent**, in the typical figure and the
    ceiling: answer calls for the question and the answer; debate (the moderator, or
    each critic) for the question only, which is what it has always been sent;
@@ -41,7 +45,9 @@ both texts twice and sent each once. A quick request with context is refused
    says the models will see that question and its final answer; in Start fresh mode
    it says the next question is answered on its own. The box opens empty. A result
    with no final answer (stopped, failed, timed out) shows no mode buttons and the
-   on-its-own note.
+   on-its-own note. (Measured by the test designer: the page opens the result
+   view only when a final synthesis exists, so the reachable case is a synthesis
+   whose sections are all empty.)
 5. **"Review & run" in follow-up mode attaches the context** to the composer, which
    shows the same *Following up on* line with a **Start fresh** button that drops it.
    The estimate, the safety-warnings probe and the run are built from the same state,
@@ -49,7 +55,8 @@ both texts twice and sent each once. A quick request with context is refused
    question", the brand link, the landing page — clears it.
 6. **What is sent.** The previous question is the question of the result on screen.
    The previous final answer is, for a panel result, the five synthesis sections in
-   the order the page shows them, joined by blank lines, cut to the server's
+   the order the page shows them (consensus, disagreement, uncertainty,
+   recommendation, source support), joined by blank lines, cut to the server's
    60,117-character limit; for a quick result, its answer text. Only one step back:
    a follow-up to a follow-up carries the latest question and answer, not the chain.
 7. **"Start fresh" only switches the mode.** It does not empty the session list

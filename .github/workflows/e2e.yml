@@ -206,6 +206,7 @@ jobs:
           tests/invariants/quick-answer.spec.ts
           tests/invariants/page-journey.spec.ts
           tests/invariants/limit-messages.spec.ts
+          tests/invariants/follow-up-context.spec.ts
           --project=chromium
           --retries=0
 
@@ -451,6 +452,7 @@ jobs:
         run: >-
           npx playwright test
           tests/signed-in/history-refresh.spec.ts
+          tests/signed-in/follow-up-context.spec.ts
           --config=playwright.signed-in.config.ts
           --project=chromium
           --retries=0
