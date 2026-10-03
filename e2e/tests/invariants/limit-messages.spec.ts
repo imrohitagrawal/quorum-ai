@@ -46,6 +46,8 @@ const QUESTIONS = [
 // A cap printed with one decimal ("$0.5", "$0.4"): decision 5 says caps print
 // with two. Matches "$0.5" and "$0.4" not followed by another digit.
 const SHORT_CAP = /\$0\.[45](?!\d)/;
+// "$0.00" as a whole figure. NOT a substring check: real breakdown rows print "$0.0078".
+const ZERO_CAP = /\$0\.00(?!\d)/;
 // Wording that tells the person to wait for spend to free up (decision 7 must
 // never say it). Phrases, not sentences.
 const WAIT_PHRASES = [/frees up/i, /24 hours old/i, /window resets/i];
@@ -74,6 +76,44 @@ const footerNotice = (page: Page) => page.locator('[data-view="composer"] .compo
 
 /** The VISIBLE text of the cost card (innerText skips hidden nodes such as a hidden rail). */
 const cardText = (page: Page) => card(page).innerText();
+
+// Round 2: the gate's own heading and lede are approval copy; a block approves nothing.
+const APPROVAL_COPY = [/Approve before anything runs/, /Approving authorises/];
+/**
+ * The gate's heading plus its lede, as the person sees them. A node that is not rendered counts as
+ * "" (innerText of a display:none element falls back to its textContent, so it is checked first).
+ */
+const gateIntro = (page: Page) =>
+  page.evaluate(() => {
+    const view = document.querySelector('[data-view="cost-gate"]');
+    const nodes = [document.getElementById("cost-gate-heading"), ...Array.from(view?.querySelectorAll(".lede") ?? [])];
+    return nodes
+      .map((n) => (n && (n as HTMLElement).checkVisibility() ? (n as HTMLElement).innerText : ""))
+      .join(" \n ");
+  });
+
+/** A deep copy of a real server response with fields replaced (round 2's edge shapes). */
+function reshaped<T>(base: T, edit: (copy: any) => void): T {
+  const copy = structuredClone(base) as any;
+  edit(copy);
+  return copy as T;
+}
+
+/** Scale a real breakdown so both partitions re-sum to `total` exactly (the server's invariant). */
+function rescaleBreakdown(breakdown: any, total: string) {
+  const want = Math.round(Number(total) * 10_000);
+  for (const key of ["by_model", "by_stage"]) {
+    const rows = breakdown[key] as { usd: string }[];
+    const have = rows.reduce((sum, row) => sum + Math.round(Number(row.usd) * 10_000), 0);
+    let left = want;
+    rows.forEach((row, i) => {
+      const units = i === rows.length - 1 ? left : Math.round((Number(row.usd) * 10_000 * want) / have);
+      left -= units;
+      row.usd = (units / 10_000).toFixed(4);
+    });
+  }
+  breakdown.total = total;
+}
 
 const isEstimate = (r: Response) => r.url().includes("/v1/query-runs/estimate") && r.request().method() === "POST";
 
@@ -151,6 +191,15 @@ test.describe("W33 slice C — limit messages on the real backend (no page.route
     expect(text).toMatch(/simulated/i);
     expect(text).toMatch(/frees up as each run turns 24 hours old/i);
     expect(text).not.toMatch(SHORT_CAP);
+
+    // Round 2. RED-IF: a daily block that still has allowance left (the real fourth run: about
+    // $0.08) is headlined as if the allowance were used up, or the gate still asks for approval.
+    const remaining = body.cost_estimate.daily_allowance.remaining_usd as string;
+    expect(Number(remaining), "the partner: some allowance really is left").toBeGreaterThan(0);
+    await expect(headline(page)).toContainText("Not enough allowance left");
+    await expect(headline(page)).not.toContainText(/allowance used/i);
+    const intro = await gateIntro(page);
+    for (const phrase of APPROVAL_COPY) expect(intro).not.toMatch(phrase);
     expect(mocked(), "this test must NOT use page.route").toBe(false);
   });
 
@@ -176,6 +225,9 @@ test.describe("W33 slice C — limit messages on the real backend (no page.route
       centsDown(allowance.remaining_usd),
     );
     expect(Math.abs(Number(match![2]) - Number(body.cost_estimate.estimated_cost_usd))).toBeLessThan(0.01);
+    // Round 2's positive partner (green today): an estimate that CAN run keeps the approval copy.
+    const intro = await gateIntro(page);
+    for (const phrase of APPROVAL_COPY) expect(intro).toMatch(phrase);
     expect(mocked()).toBe(false);
   });
 
@@ -194,6 +246,18 @@ test.describe("W33 slice C — limit messages on the real backend (no page.route
     expect(before).toMatch(/simulated/i);
     expect(before).not.toMatch(SHORT_CAP);
     expect(after, "the footer must not carry a figure that moves with this session's spend").toBe(before);
+    expect(mocked()).toBe(false);
+  });
+
+  test("the composer footer says you can spend UP TO $0.40 in 24 hours", async ({ page }) => {
+    // RED-IF: the footer states the $0.40 as a flat amount; the running total can block earlier, so it
+    // must say "up to $0.40" (review round 2). Partner (green today): the footer names $0.40 at all.
+    const mocked = forbidRoutes(page);
+    await boot(page);
+    const footer = (await footerNotice(page).innerText()).trim();
+
+    expect(footer).toContain("$0.40");
+    expect(footer).toContain("up to $0.40");
     expect(mocked()).toBe(false);
   });
 });
@@ -364,5 +428,103 @@ test.describe("W33 slice C — limit messages for states a browser cannot reach 
     const figures = text.match(/\$\d+(?:\.\d+)?/g) ?? [];
     expect(figures.length, "the positive partner: the cap itself is printed").toBeGreaterThan(0);
     expect(new Set(figures)).toEqual(new Set(["$0.40"]));
+  });
+
+  // --- review round 2 ------------------------------------------------------------------
+
+  for (const [name, body] of [
+    ["per_run_cap", LIMIT_RESPONSES.perRunCap],
+    ["daily_cap", LIMIT_RESPONSES.dailyCap],
+    ["daily_cap, larger than a day", LIMIT_RESPONSES.dailyCapLargerThanADay],
+    ["account_running_total", LIMIT_RESPONSES.accountRunningTotal],
+    ["ledger_unavailable", LIMIT_RESPONSES.ledgerUnavailable],
+  ] as const) {
+    test(`a ${name} block card does not ask for approval`, async ({ page }) => {
+      // RED-IF: the gate's heading or lede still says "Approve before anything runs" / "Approving
+      // authorises" on a block card, where nothing can be approved. Its partner is the allow-band
+      // assertion in "before any block the estimate card shows …" above (green today).
+      await mockedEstimate(page, body);
+      await expect(card(page)).toHaveAttribute("data-band", "block");
+      await expect(page.locator("#cost-gate-heading")).toBeVisible();
+
+      const intro = await gateIntro(page);
+      for (const phrase of APPROVAL_COPY) expect(intro).not.toMatch(phrase);
+    });
+  }
+
+  test("a daily block with nothing left may say the allowance is used", async ({ page }) => {
+    // Partner of the real fourth-run block's "Not enough allowance left" (green today).
+    // Mocked from the real dailyCap response with spent 0.4100 and remaining 0.0000 — a live run
+    // reconciled above its estimate (failure-mode row 10); a browser cannot make that happen.
+    // RED-IF: the remaining-is-zero headline stops saying the allowance is used.
+    const body = reshaped(LIMIT_RESPONSES.dailyCap, (c) => {
+      c.cost_estimate.daily_allowance.spent_usd = "0.4100";
+      c.cost_estimate.daily_allowance.remaining_usd = "0.0000";
+    });
+    await mockedEstimate(page, body);
+    await expect(card(page)).toHaveAttribute("data-band", "block");
+
+    await expect(headline(page)).toContainText(/allowance used/i);
+    await expect(headline(page)).not.toContainText("Not enough allowance left");
+  });
+
+  test("a malformed cap_usd prints no cap figure, and never $0.00", async ({ page }) => {
+    // Mocked: the real server never sends a non-decimal cap; this pins the page's guard.
+    // RED-IF: `cap_usd: "bogus"` renders as "$0.00" (or any cap figure) on the daily-block card.
+    const body = reshaped(LIMIT_RESPONSES.dailyCap, (c) => {
+      c.cost_estimate.daily_allowance.cap_usd = "bogus";
+    });
+    await mockedEstimate(page, body);
+    await expect(card(page)).toHaveAttribute("data-band", "block");
+    // Partner: the card still says what was used (the spend figure is well formed).
+    const spent = body.cost_estimate.daily_allowance.spent_usd as string;
+    const text = await cardText(page);
+    expect(text).toContain(`$${centsUp(spent)}`);
+
+    expect(text).not.toMatch(ZERO_CAP);
+    expect(text, "no cap figure without a well-formed cap").not.toMatch(/\$0\.40(?!\d)/);
+  });
+
+  test("a malformed cap_usd prints no cap figure in the allowance line either", async ({ page }) => {
+    // Mocked as above, on an allow estimate whose allowance the daily cap set.
+    // RED-IF: the allowance line prints "of $0.00" (or any cap figure) for `cap_usd: "bogus"`.
+    const body = reshaped(LIMIT_RESPONSES.allowBoundedByRunningTotal, (c) => {
+      c.cost_estimate.daily_allowance = {
+        cap_usd: "bogus",
+        spent_usd: "0.1052",
+        remaining_usd: "0.2948",
+        bounded_by: "daily_cap",
+      };
+    });
+    await mockedEstimate(page, body);
+    await expect(card(page)).toHaveAttribute("data-band", "allow");
+    // Partner: the gate rendered this estimate (its run button names the price).
+    await expect(page.locator("#gate-confirm")).toBeVisible();
+
+    const text = await gateView(page).innerText();
+    expect(text).not.toMatch(ZERO_CAP);
+    expect(text, "no cap figure without a well-formed cap").not.toMatch(/\$0\.40(?!\d)/);
+  });
+
+  test("a daily block whose run costs exactly $0.40 prints the run's cost with two decimals", async ({ page }) => {
+    // Mocked from the real dailyCap response with the estimate set to 0.4000 (its breakdown rescaled to
+    // match) and 0.1052 already on the ledger; the live catalog cannot be steered to that figure.
+    // RED-IF: the run's own cost prints as "$0.4" anywhere on the card (decision 5's two decimals
+    // apply to the run's cost too, not only to the caps).
+    const body = reshaped(LIMIT_RESPONSES.dailyCap, (c) => {
+      c.cost_estimate.estimated_cost_usd = "0.4000";
+      c.cost_estimate.max_cost_usd = "0.4400";
+      rescaleBreakdown(c.cost_estimate.breakdown, "0.4000");
+      c.cost_estimate.daily_allowance.spent_usd = "0.1052";
+      c.cost_estimate.daily_allowance.remaining_usd = "0.2948";
+    });
+    await mockedEstimate(page, body);
+    await expect(card(page)).toHaveAttribute("data-band", "block");
+    // Partner (green today): the run's cost is rendered, in one form or the other.
+    const total = page.locator("#cost-gate-total");
+    await expect(total).toHaveText(/^\$0\.40?$/);
+
+    await expect(total).toHaveText("$0.40");
+    expect(await cardText(page)).not.toMatch(SHORT_CAP);
   });
 });
