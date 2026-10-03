@@ -284,8 +284,8 @@ def _reset_state() -> None:
     # W42. The in-memory cost ring is what ``_cumulative_spend_for`` sums, and
     # a signed-in spend key is the same in every test of one process, so a
     # charge left by one test was read by the next. Plain pytest order hid it;
-    # mutmut's clean run (tests in set order) did not, and its CI job stopped at
-    # stats collection on PR #528. Pinned by
+    # mutmut's clean-test step (tests in set order) did not, and its CI job
+    # stopped there on PR #528. Pinned by
     # tests/unit/test_reset_state_clears_the_cost_ring.py.
     costs.cost_event_recorder.clear()
 
