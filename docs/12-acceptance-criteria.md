@@ -445,3 +445,12 @@ Given a network whose address has opened its daily allowance of new anonymous se
 - Requirement: FR-019
 - Test: TEST-FR-019 (`tests/integration/test_session_cap_sign_in.py`, 37 tests, plus 4 in `tests/unit/test_capped_page_sign_in_block.py`; the first 28 written before the code, the rest after review round 1; the owner's own journey asserts the mint count at every step)
 - Decided by the product owner on 2026-09-29 (CHG-026 a: the limit applies to anonymous use only and must never stop anyone signing in); the sign-in-only session is the session's design (ADR-0139).
+
+## AC-055 A person can always reach a new question, and the page keeps what they asked
+
+Given a person who has asked questions in this tab, when they finish a run, open its debate, stop a run, or press the logo, a brand link, "New question" or the browser's Back button, then nothing but the "Clear" button empties the "This session" list, every finished run leaves the next-question box empty, a question they typed and have not run is never deleted, and an estimate that answers after they have gone home opens nothing and runs nothing; a run submits the question that was priced, and the cost confirmation describes that run. After a question on the landing page, the page lands on the models with a hint that names "See the estimate" and "Run now" and counts the models shown. An empty question box is not shown as an error until the person tries to submit it, and the empty list explains itself.
+
+- Requirement: FR-013
+- Test: TEST-FR-013 (`e2e/tests/invariants/page-journey.spec.ts`, real backend for the journey and a stated mock only where the real backend cannot reach the state; rewritten tests in `session-trail.spec.ts`, `parity-behavior.spec.ts`, `degraded-banner.spec.ts` and `quick-answer.spec.ts`; written before the code, and again before each review round's fix)
+- Reported by the product owner on 2026-09-29 and 2026-09-30 (bugs 1, 2, 6, 9, 10: M07, M23); the follow-up box and the hint decided in CHG-026 (g) and (m); the design and the calls the owner may overturn are in ADR-0140.
+
