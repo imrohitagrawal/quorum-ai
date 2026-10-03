@@ -247,7 +247,7 @@
                  the previous question as text, never HTML, and "Start fresh"
                  drops the context and keeps the typed question. -->
             <p id="follow-up-context" class="follow-up-context" hidden>
-              <span class="follow-up-context-text">Following up on: &ldquo;<span id="follow-up-context-question"></span>&rdquo; &mdash; the models will see that question and its final answer.</span>
+              <span class="follow-up-context-text">Following up on: &ldquo;<span id="follow-up-context-question"></span>&rdquo; &mdash; <span id="follow-up-context-audience">the models</span> will see that question and its final answer.</span>
               <button id="follow-up-context-drop" type="button" class="follow-up-context-drop">Start fresh</button>
             </p>
 
@@ -359,7 +359,7 @@
               </div>
             </div>
             <div class="composer-footer">
-              <p class="composer-footer-notice"><strong>See the estimate</strong> to review the itemized cost first, or <strong>Run now</strong> to start low-cost runs immediately — anything needing confirmation still pauses for your approval · the <span class="mono">$0.50</span>/run hard cap always applies · you can spend up to <span class="mono">$0.40</span> in any 24 hours, simulated runs included · one run at a time per session</p>
+              <p class="composer-footer-notice"><strong>See the estimate</strong> to check the cost first, or <strong>Run now</strong> to start straight away. If a run costs more than usual, it asks you first. The <span class="mono">$0.50</span>/run hard cap always applies · you can spend up to <span class="mono">$0.40</span> in any 24 hours, simulated runs included · one run at a time per session</p>
               <div class="composer-footer-actions">
                 <span id="composer-total-estimate" class="mono composer-total" aria-live="polite">—</span>
                 <button id="run-now" class="button button-secondary composer-cta" type="button" data-loading-text="Starting...">
@@ -422,6 +422,10 @@
               <span class="cost-gate-question-label">Your question</span>
               <div id="cost-gate-question" class="cost-gate-question-text"></div>
               <span id="cost-gate-question-meta" class="cost-gate-question-meta">4 models · 2 debate rounds · synthesis · sourced answers where search succeeds</span>
+              <!-- W37 (ADR-0143, review round 1): shown only when the priced run
+                   carries a follow-up's context; app.js writes the previous
+                   question as text, never HTML. -->
+              <span id="cost-gate-follow-up" class="cost-gate-question-meta" hidden>Following up on: &ldquo;<span id="cost-gate-follow-up-question"></span>&rdquo;</span>
             </div>
 
             <div id="cost-review-card" class="cost-review-card" data-band="require_confirmation">

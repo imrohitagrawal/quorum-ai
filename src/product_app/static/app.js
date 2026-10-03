@@ -477,10 +477,17 @@
     // to follow up: ``{prior_question, prior_synthesis}``, or null when it has
     // no final answer (row 11). ``followUpMode`` is the pressed mode button
     // under it ("followup" by default, or "fresh"). ``followUpContext`` is the
-    // context ATTACHED to the composer: set only by "Review & run" in
-    // follow-up mode, cleared by every other way to the composer (row 13),
-    // and read by the estimate, the warnings probes and the create alike
-    // (rows 5 and 6). Held in this tab only; never stored (row 17).
+    // context ATTACHED to the composer, read by the estimate, the warnings
+    // probes and the create alike (rows 5 and 6). Set only by "Review & run"
+    // in follow-up mode. Cleared (decision 5, row 13) by every way to the
+    // composer that starts something new: ``goToComposer`` (the landing and
+    // its chips, "New question", the brand links, example chips), the
+    // composer's own "Start fresh", and the "Start a new run", "Start your
+    // own query" and "Stop it & start new" card actions. Kept by the ways back
+    // to the question being worked on: "Back to the question" and the other
+    // fix-the-request card actions (``returnToComposer``), the cost
+    // confirmation's Back (``gateBackToComposer``) and browser Back/Forward
+    // (``applyViewHistoryEntry``). Held in this tab only; never stored (row 17).
     resultFollowUp: null,
     followUpMode: "followup",
     followUpContext: null,
@@ -681,6 +688,12 @@
   // W37 (ADR-0143 decision 4). The previous question as the note and the
   // composer line show it: shortened for display only (row 15); the request
   // carries it whole.
+  // W37 review round 1: one model is "the model". The next run's shape is
+  // the composer's quick-answer control.
+  function followUpAudience() {
+    return state.quickMode ? "the model" : "the models";
+  }
+
   function followUpQuestionLabel(question) {
     const text = String(question || "").replace(/\s+/g, " ").trim();
     return text.length > 140 ? `${text.slice(0, 139)}…` : text;
@@ -708,7 +721,7 @@
     const note = el("result-next-note-text");
     if (note) {
       note.textContent = following
-        ? `Following up on: “${followUpQuestionLabel(offer.prior_question)}” — the models will see that question and its final answer.`
+        ? `Following up on: “${followUpQuestionLabel(offer.prior_question)}” — ${followUpAudience()} will see that question and its final answer.`
         : "Your next question is answered on its own — the models won't see the question above or its answer.";
     }
   }
@@ -733,7 +746,17 @@
     const line = el("follow-up-context");
     const label = el("follow-up-context-question");
     if (label) label.textContent = context ? followUpQuestionLabel(context.prior_question) : "";
+    const audience = el("follow-up-context-audience");
+    if (audience) audience.textContent = followUpAudience();
     if (line) line.hidden = !context;
+  }
+
+  // W37 review round 1: a card action that starts something new ("Start a
+  // new run", "Start your own query") drops the follow-up context first
+  // (decision 5); "Back to the question" keeps it (``returnToComposer``).
+  function startNewFromCard() {
+    clearFollowUpContext();
+    returnToComposer("question");
   }
 
   // Drop the attached context. The high-stakes check reads the context, so
@@ -6787,6 +6810,10 @@
         // user's question is not.
         const question = entry.question ? String(entry.question) : "";
         state.liveQueryText = question;
+        // W37 review round 1: text typed for another result must not be sent
+        // as a follow-up to this one; the box opens empty, as after a run.
+        const nextQuestionBox = el("result-next-input");
+        if (nextQuestionBox) nextQuestionBox.value = "";
         renderResult(result);
         setView("result");
         focusResultHeading();
@@ -8455,6 +8482,15 @@
     };
     // Question echo.
     if (gateQuestion) gateQuestion.textContent = priced.queryText;
+    // W37 review round 1: say the priced run is a follow-up, and of what.
+    const gateFollowUp = el("cost-gate-follow-up");
+    const gateFollowUpQuestion = el("cost-gate-follow-up-question");
+    if (gateFollowUpQuestion) {
+      gateFollowUpQuestion.textContent = priced.context
+        ? followUpQuestionLabel(priced.context.prior_question)
+        : "";
+    }
+    if (gateFollowUp) gateFollowUp.hidden = !priced.context;
     // W4: the meta line names the requested panel size, not "4 models".
     const gateMeta = el("cost-gate-question-meta");
     const quickGate = priced.quick === true;
@@ -9584,6 +9620,8 @@
     stopPolling();
     state.currentRunId = null;
     setRunning(false);
+    // W37 (decision 5): "start new" drops the follow-up context.
+    clearFollowUpContext();
     returnToComposer();
   }
 
@@ -9649,7 +9687,7 @@
     const footer = supportId ? `Run ID ${supportId} — quote when reporting` : undefined;
 
     const actions = [
-      { label: "Start a new run", primary: true, action: () => returnToComposer("question") },
+      { label: "Start a new run", primary: true, action: startNewFromCard },
     ];
     // Only offer "Review available results" when a synthesis actually
     // exists (otherwise the button would open an empty result view).
@@ -9706,7 +9744,7 @@
           "ends — so we can't open it for you. That's the extent of what " +
           "we can say about it.",
         actions: [
-          { label: "Start your own query", primary: true, action: () => returnToComposer("question") },
+          { label: "Start your own query", primary: true, action: startNewFromCard },
           { label: "Start a session", action: retrySession },
         ],
         footer: "error 404 · no run details disclosed",
@@ -10477,6 +10515,10 @@
     if (note) note.hidden = !state.quickMode;
     // W33 (row 30): a hand-off hint on screen recounts (one model in quick mode).
     renderHandoffHint(false);
+    // W37: "the model" or "the models" follows the shape.
+    const audience = el("follow-up-context-audience");
+    if (audience) audience.textContent = followUpAudience();
+    renderFollowUpMode();
   }
 
   function initQuickMode() {

@@ -83,6 +83,7 @@ from product_app.untrusted_text import (
     UNTRUSTED_DATA_SYSTEM_RULE,
     fence,
     flatten_for_prompt,
+    neutralize_delimiters,
 )
 from product_app.visible_text import is_visible
 
@@ -242,6 +243,52 @@ _MAX_SOURCE_URL_LEN = MAX_SOURCE_URL_LEN
 #: already use, so the move is not also a rename.
 _LINE_BREAKING_CHARS = LINE_BREAKING_CHARS
 _flatten_for_prompt = flatten_for_prompt
+
+
+def _prior_synthesis_prompt_parts(context: dict[str, Any] | None) -> tuple[str, list[str]]:
+    """What a follow-up's ``prior_synthesis`` adds to a section's USER prompt:
+    one directive (outside the fence) and the lines that open the evidence
+    block (inside it). ``("", [])`` when there is no previous answer.
+
+    One builder for the prompt (``_user_prompt``) and for its price
+    (:func:`follow_up_user_prompt_extra_chars`), so the two cannot drift.
+
+    FLATTENED, like every other untrusted value in this prompt (WP-G2,
+    F-10). The fence stops it forging the evidence BOUNDARY, but not the
+    prompt's internal structure: with its newlines intact it can open its own
+    "Four model answers…" or "- round 1:" line and manufacture a consensus no
+    model produced (demonstrated in adversarial review). It also carries a
+    consumer-side cap, so the prompt stays sized even if the request-level
+    bound is ever loosened.
+    """
+    prior_synthesis = _flatten_for_prompt(
+        (context or {}).get("prior_synthesis") or "",
+        max_chars=FINAL_SYNTHESIS_MAX_CHARS,
+    ).strip()
+    if not prior_synthesis:
+        return "", []
+    directive = (
+        "The evidence block opens with the synthesis from the user's previous "
+        "question. Treat it as prior context for this follow-up, not as an "
+        "answer to restate."
+    )
+    return directive, ["Synthesis of the user's previous question:", prior_synthesis, ""]
+
+
+def follow_up_user_prompt_extra_chars(context: dict[str, Any] | None) -> int:
+    """How many characters a follow-up adds to EVERY section call's user prompt.
+
+    W37 review round 1: the cost layer prices each synthesis call for the
+    characters it is sent, so this is derived from the parts ``_user_prompt``
+    actually inserts: the directive (joined to the others by one newline) and
+    the opening lines (each followed by the newline that joins it to the next),
+    neutralised as the fence neutralises them. The previous answer is
+    flattened, so no delimiter can span the joins.
+    """
+    directive, lines = _prior_synthesis_prompt_parts(context)
+    if not directive:
+        return 0
+    return len("\n" + directive) + len(neutralize_delimiters("\n".join(lines) + "\n"))
 
 
 # W4 (ADR-0120 decision 5): the four section prompts that name the panel size
@@ -881,35 +928,16 @@ class SynthesisOrchestrationService:
                     revised_answers[critique.critic_slot_number] = critique.revised_answer
 
         # Untrusted from here down.
-        lines: list[str] = []
         # WP-G2 (F-10): the follow-up context. ``prior_question`` already
         # reaches every synthesis call through the SYSTEM prompt
         # (``providers._post_openrouter``); ``prior_synthesis`` belongs in the
-        # USER prompt, which is what ``costs.py`` has always priced it as and
-        # what nothing sent. It is client-supplied text from a previous run, so
-        # it goes INSIDE the fence with everything else provider-originated —
-        # never into the directives above it.
-        #
-        # FLATTENED, like every other untrusted value in this prompt. The fence
-        # stops it forging the evidence BOUNDARY, but not the prompt's internal
-        # structure: with its newlines intact it can open its own
-        # "Four model answers…" or "- round 1:" line and manufacture a
-        # consensus no model produced (demonstrated in adversarial review).
-        # It also carries a consumer-side cap, so the prompt stays sized even
-        # if the request-level bound is ever loosened.
-        prior_synthesis = _flatten_for_prompt(
-            (context or {}).get("prior_synthesis") or "",
-            max_chars=FINAL_SYNTHESIS_MAX_CHARS,
-        ).strip()
-        if prior_synthesis:
-            directives.append(
-                "The evidence block opens with the synthesis from the user's previous "
-                "question. Treat it as prior context for this follow-up, not as an "
-                "answer to restate."
-            )
-            lines.append("Synthesis of the user's previous question:")
-            lines.append(prior_synthesis)
-            lines.append("")
+        # USER prompt. It is client-supplied text from a previous run, so it
+        # goes INSIDE the fence with everything else provider-originated —
+        # never into the directives above it. Built by
+        # ``_prior_synthesis_prompt_parts``, which the cost layer also reads.
+        prior_directive, lines = _prior_synthesis_prompt_parts(context)
+        if prior_directive:
+            directives.append(prior_directive)
         lines.append(
             f"{panel_size_word(panel_size)} model answers (model name, status, first "
             f"{SYNTHESIS_ANSWER_EXCERPT_MAX_CHARS} chars):"
