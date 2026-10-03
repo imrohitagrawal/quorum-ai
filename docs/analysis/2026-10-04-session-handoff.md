@@ -1,4 +1,4 @@
-# Session handoff — 2026-10-03
+# Session handoff — 2026-10-03 to 2026-10-04
 
 This session built W42 and W33 (the owner's bugs 1, 2, 3, 4, 6, 8a, 9, 10 and W43)
 the way W34 was built. What merged is in `git log origin/main`; each pull request
