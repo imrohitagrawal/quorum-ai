@@ -8172,15 +8172,26 @@
     const breakdown = ce.breakdown || {};
     const reasons = Array.isArray(ce.reasons) ? ce.reasons : [];
 
-    // Question echo (from the composer).
-    if (gateQuestion) gateQuestion.textContent = queryTextarea.value.trim();
+    // W33 (ADR-0140 decision 5, review round 2): the gate describes the run
+    // that was PRICED — the question, panel and mode the estimate was asked
+    // for (``state.pricedRun``, set with ``currentEstimate``) — not whatever
+    // the composer holds when the answer lands. "Approve" submits that same
+    // priced run, so the page and the request now say the same thing. The live
+    // composer is only a fallback for a caller that rendered without one.
+    const priced = state.pricedRun || {
+      queryText: queryTextarea.value.trim(),
+      modelIds: getModelIds(),
+      quick: state.quickMode,
+    };
+    // Question echo.
+    if (gateQuestion) gateQuestion.textContent = priced.queryText;
     // W4: the meta line names the requested panel size, not "4 models".
     const gateMeta = el("cost-gate-question-meta");
-    const quickGate = state.quickMode === true;
+    const quickGate = priced.quick === true;
     if (gateMeta) {
       const stageRows = Array.isArray(breakdown.by_stage) ? breakdown.by_stage : [];
       const checkPriced = stageRows.some((row) => row && row.stage !== "initial_answers");
-      gateMeta.textContent = costGateMetaText(getModelIds().length, quickGate, checkPriced);
+      gateMeta.textContent = costGateMetaText(priced.modelIds.length, quickGate, checkPriced);
     }
 
     // Big mono total. The estimated range is band-specific and is set only
@@ -8534,6 +8545,15 @@
       state.submittingRun = false;
       setButtonLoading(estimateButton, false);
       setButtonLoading(runNowButton, false);
+    }
+    // An approval still in its warnings check has sent nothing that costs
+    // anything (callers never drop while ``createInFlight``): release its
+    // single-create latch so the next "Run now" is not blocked by it. The
+    // abandoned approval itself returns at its generation check and, being
+    // stale, leaves the latch to whichever flow holds it by then.
+    if (state.creatingRun && !state.createInFlight) {
+      state.creatingRun = false;
+      setButtonLoading(gateConfirmButton || proceedButton, false);
     }
     applyHighStakesGate();
   }
@@ -8919,14 +8939,19 @@
         await estimateRun();
         return;
       }
-      handleError(error);
+      // W33 row 26: no error card for a question the user has left.
+      if (generation === estimateGeneration) handleError(error);
     } finally {
       // Release the single-create latch. On the success path the run is now in
       // flight and ``setRunning(true)`` keeps every CTA disabled anyway; on the
-      // failure path this re-opens the create for a genuine retry.
-      state.creatingRun = false;
-      state.createInFlight = false;
-      setButtonLoading(confirmBtn, false);
+      // failure path this re-opens the create for a genuine retry. A dropped
+      // approval's latch was already released by dropInFlightEstimate, and a
+      // newer flow may hold it now, so a stale one leaves it alone.
+      if (generation === estimateGeneration) {
+        state.creatingRun = false;
+        state.createInFlight = false;
+        setButtonLoading(confirmBtn, false);
+      }
     }
   }
 

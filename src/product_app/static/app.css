@@ -1056,12 +1056,14 @@ select {
 /* W33 (ADR-0140 decision 8): the hint directly above the model slots after a
    landing question. Same calm accent treatment as the hand-off note above it,
    so the two read as one message continued on the next page. It takes focus
-   programmatically, which does not match :focus-visible, so the page-wide
-   ``:focus:not(:focus-visible) { outline: none; }`` rule below draws NO ring on
-   it — deliberately, as for the view-entry headings that take focus the same
-   way. The cue for a sighted user is the hint's own bordered box, scrolled
-   into view, and the step marker moving to Models; a screen reader reads the
-   hint because focus is on it. */
+   programmatically, and whether a ring shows follows the browser's
+   :focus-visible heuristic (measured in Chromium by the round-1 prose
+   audit): after a MOUSE or touch hand-off it does not match, so the
+   page-wide ``:focus:not(:focus-visible) { outline: none; }`` rule below
+   draws no ring; after a KEYBOARD hand-off it matches and the page's normal
+   focus ring shows. No rule here changes either. Without a ring the cue is
+   the hint's own bordered box, scrolled into view, and the step marker
+   moving to Models; a screen reader reads the hint because focus is on it. */
 .handoff-hint {
   margin: 0;
   padding: var(--space-3) var(--space-4);
@@ -6341,10 +6343,15 @@ html[data-theme="dark"] .landing-preview { background: var(--accent-soft); }
    which faded the small status and time text to 3.2:1 (light) and 3.41:1
    (dark) — under WCAG AA's 4.5:1. The entry now keeps full opacity, its text
    stays on the AA tokens, and the muted state is carried by a dashed border
-   and the status pill instead. */
+   and the status pill instead. The border uses --muted so the dashes meet
+   WCAG 1.4.11's 3:1 non-text contrast against the panel in both themes
+   (#5F6570 on #FFFFFF, #8A9099 on #191C22); the --line border every entry
+   has is ~1.1:1, so a dashed --line border would carry nothing. */
 .session-trail-entry--muted {
   border-style: dashed;
+  border-color: var(--muted);
 }
+.session-trail-entry--muted:hover { border-color: var(--muted); }
 .session-trail-entry--muted .session-trail-status {
   color: var(--text-secondary);
   border-color: var(--line);
