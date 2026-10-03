@@ -10558,9 +10558,22 @@
         window.clearTimeout(idleTimer);
         idleTimer = window.setTimeout(fn, ms);
       };
+      // W33 slice D (review round 2): on wide screens the reminder shares the
+      // toasts' bottom-right corner, so while it shows the toasts sit above it
+      // (app.css reads --idle-reminder-lift). Measured each time, because its
+      // height changes with its text and the width.
+      const liftToasts = () => {
+        const height = idleBox.hidden ? 0 : idleBox.getBoundingClientRect().height;
+        document.documentElement.style.setProperty(
+          "--idle-reminder-lift",
+          height ? `calc(${Math.ceil(height)}px + var(--space-3))` : "0px",
+        );
+      };
+      if (typeof ResizeObserver === "function") new ResizeObserver(liftToasts).observe(idleBox);
       const hideReminder = () => {
         idleBox.hidden = true;
         idleText.textContent = "";
+        liftToasts();
       };
       // Shown first, text second, so the polite announcement is heard.
       const showReminder = (text, expired) => {
@@ -10568,8 +10581,10 @@
         stay.hidden = expired;
         leave.hidden = expired;
         reload.hidden = !expired;
+        liftToasts();
         window.setTimeout(() => {
           idleText.textContent = text;
+          liftToasts();
         }, 50);
       };
       const showExpired = () => {

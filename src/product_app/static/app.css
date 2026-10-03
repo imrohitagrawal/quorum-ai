@@ -659,10 +659,13 @@ a { color: var(--accent); text-underline-offset: 2px; }
    Sign out and took their clicks for the toast's 4.5 s (a click on History
    landed after 5.02 s at 1440 px). The region itself stays pointer-transparent;
    each toast, and its dismiss control, still takes clicks. Phones keep the
-   top (the 600px block below): their bottom edge holds the session trail. */
+   top (the 600px block below): their bottom edge holds the session trail.
+   The idle reminder (ADR-0138) shares this corner: while it shows, app.js
+   sets --idle-reminder-lift to its height plus a gap, so the toasts sit above
+   it and neither covers the other (review round 2). */
 .toast-region {
   position: fixed;
-  bottom: var(--space-5);
+  bottom: calc(var(--space-5) + var(--idle-reminder-lift, 0px));
   right: var(--space-5);
   z-index: 2000;
   display: flex;
