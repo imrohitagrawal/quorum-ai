@@ -143,6 +143,7 @@ ways, so the record shows what was believed on a date and what replaced it.
 | [ADR-0138](adr/0138-idle-expiry-for-signed-in-sessions-with-a-keep-active-reminder.md) | Idle expiry for signed-in sessions, with a keep-active reminder | Architecture | Accepted — 2026-09-28, board row W7, part 3 of 3, second of two pull |
 | [ADR-0139](adr/0139-a-capped-network-gets-a-sign-in-only-session-never-a-dead-end.md) | A network that has used its anonymous sessions gets a sign-in-only session, never a dead end | Architecture | Accepted — 2026-09-30, board row W34 |
 | [ADR-0140](adr/0140-the-page-journey-keeps-the-session-list-and-always-has-a-way-to-a-new-question.md) | The page keeps the session list, opens an empty question box, and always has a way to a new question | Architecture | Accepted — 2026-10-03, board row W33 (slice A) and W43 |
+| [ADR-0141](adr/0141-a-blocked-run-names-the-limit-it-hit-and-the-allowance-left.md) | A blocked run names the limit it hit, and the estimate shows the allowance left | Architecture | Accepted — 2026-10-03, board row W33 (slice C) |
 | [ADR-0142](adr/0142-the-history-panel-asks-the-server-each-time-it-opens.md) | The History panel asks the server for its list each time it opens | Architecture | Accepted — 2026-10-03, board row W33 (slice D) |
 
 **This index was itself stale** until 2026-07-30: ADR-0002 had existed since

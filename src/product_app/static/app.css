@@ -1339,6 +1339,9 @@ select {
 
 /* Threshold rail. */
 .cost-rail { display: flex; flex-direction: column; gap: var(--space-2); }
+/* ``display: flex`` above overrides the UA ``[hidden]`` rule, so a hidden
+   rail would still be drawn (W33 slice C: the rail is for the per-run cap only). */
+.cost-rail[hidden] { display: none; }
 .cost-rail-track {
   position: relative;
   display: flex;
@@ -1428,6 +1431,15 @@ select {
   line-height: 1.6;
   color: var(--body);
 }
+
+/* W33 slice C (ADR-0141 decision 6): the daily allowance left. */
+.cost-gate-allowance {
+  margin: 0;
+  font-size: 0.8rem;
+  line-height: 1.6;
+  color: var(--ink);
+}
+.cost-gate-allowance[hidden] { display: none; }
 
 .cost-gate-actions {
   display: flex;

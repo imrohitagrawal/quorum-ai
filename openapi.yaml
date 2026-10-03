@@ -626,6 +626,20 @@ components:
           type: boolean
           title: Spend Metering Unavailable
           default: false
+        block_reason:
+          anyOf:
+          - type: string
+            enum:
+            - per_run_cap
+            - account_running_total
+            - ledger_unavailable
+            - daily_cap
+          - type: 'null'
+          title: Block Reason
+        daily_allowance:
+          anyOf:
+          - $ref: '#/components/schemas/DailyAllowance'
+          - type: 'null'
       type: object
       required:
       - estimated_cost_usd
@@ -676,6 +690,56 @@ components:
       - require_confirmation
       - block
       title: CostThresholdAction
+    DailyAllowance:
+      properties:
+        cap_usd:
+          type: string
+          pattern: ^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$
+          title: Cap Usd
+        spent_usd:
+          type: string
+          pattern: ^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$
+          title: Spent Usd
+        remaining_usd:
+          type: string
+          pattern: ^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$
+          title: Remaining Usd
+        bounded_by:
+          type: string
+          enum:
+          - daily_cap
+          - running_total
+          title: Bounded By
+      type: object
+      required:
+      - cap_usd
+      - spent_usd
+      - remaining_usd
+      - bounded_by
+      title: DailyAllowance
+      description: 'What is left of the account''s rolling 24-hour cap (ADR-0141 decision 2).
+
+
+        Computed on the server, never on the page, from the same
+
+        ``FeedbackStore.daily_spend_for`` read the daily cap uses. ``cap_usd`` is
+
+        ``DAILY_CAP_USD`` as the constant prints it;
+
+        ``spent_usd`` and ``remaining_usd`` carry four decimal places
+
+        (``COST_DISPLAY_QUANTUM``), spent rounded up and remaining rounded down, so
+
+        rounding never makes the two add up to more than the cap (spent itself can
+
+        be above the cap, when remaining is clamped to 0).
+
+
+        ``bounded_by`` says which limit set ``remaining_usd``. When it is
+
+        ``running_total`` the figure is not "of the cap in the last 24 hours" and
+
+        does not free up as runs age, so the page must not word it that way.'
     DebateOutput:
       properties:
         round_number:
