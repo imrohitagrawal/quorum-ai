@@ -41,7 +41,7 @@ repository):
 | 13 | The whole panel is replaced. | "Sign out everywhere" and the three-step delete lose their listeners and their step. | Only the list (or its empty or unavailable line) is replaced. |
 | 14 | Two renderers drift (server on load, browser on refresh). | Different markup for the same rows; existing ids lost. | One server builder for both; a test pins the page's list and the route's list byte-identical for the same rows. |
 | 15 | The answer is cached. | The next person at a shared computer, or a proxy, sees the questions. | `Cache-Control: no-store` on every answer the route gives (200, 401, 403, 503); the framework's 405 and 307 carry no data. |
-| 16 | The route draws on the 30-a-minute account limiter that estimate, create and warnings share. | Opening History blocks running a question. | The route does not draw on it. |
+| 16 | The route draws on the 30-a-minute account limiter that estimate, create, warnings and cancel share. | Opening History blocks running a question. | The route does not draw on it. |
 | 17 | Question text reaches the page as HTML. | Script injection. | The server escapes, as today; the browser only parses server markup. |
 | 18 | The anonymous page changes. | Breaks ADR-0135 decision 5 (byte-identical). | No new markup; the browser code runs only when the History panel exists. |
 | 19 | The route is hidden from the OpenAPI contract (`include_in_schema=False`, as other account routes are), so the Schemathesis gate never calls it. | Its 200, 401 and 403 shapes could drift unseen. | Its own integration tests pin each status, code and header. |

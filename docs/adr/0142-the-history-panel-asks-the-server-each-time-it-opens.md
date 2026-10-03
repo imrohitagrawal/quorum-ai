@@ -37,7 +37,7 @@ modes were listed before the code:
    `NOT_SIGNED_IN`. The account comes only from the session. Every answer the
    route itself gives (200, 401, 403, 503) is `Cache-Control: no-store`; the
    framework's own 405 and 307 answers carry no data. It does not draw on the
-   per-account request limiter that estimate, create and warnings share. Like
+   per-account request limiter that estimate, create, warnings and cancel share. Like
    every authenticated request, it resets the idle clock (ADR-0138) — once per
    opening, plus at most one re-ask.
 2a. **When the sessions store cannot say who is signed in**, the route answers
