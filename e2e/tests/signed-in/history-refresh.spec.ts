@@ -14,7 +14,8 @@ import { test, expect, type APIResponse, type BrowserContext, type Page, type Re
  * the real backend. Six tests add ONE more mock each, on
  * `/v1/account/history` only, and say so in the test: rows 10 and 11, row
  * 12's two re-ask tests, row 6 (another account's email) and row 9 / decision
- * 2a (a 503).
+ * 2a (a 503). The two idle-reminder tests (review round 2) mock
+ * `/v1/session/idle` and `/v1/session/keep-active` instead, and say so.
  *
  * Rows are those of docs/analysis/2026-10-03-w33d-history-refresh-failure-modes.md.
  *
@@ -342,8 +343,8 @@ test.describe("signed-in History refresh (W33 slice D)", () => {
 
   test("an answer missing this tab's latest question is asked for once more", async ({ page }) => {
     // Row 12's backstop (ADR-0142 decision 4). The window it covers (the
-    // row written up to about a second after the result shows) does not
-    // open locally, so the ONE extra mock stands in for it: the first open
+    // row written after the result shows: 511.6 ms with a 0.5 s judge
+    // stand-in, a design-review probe) does not open locally, so the ONE extra mock stands in for it: the first open
     // after the run is answered with the list as it was BEFORE the run
     // (fetched for real earlier). RED-IF: the panel does not ask once more
     // when this tab's latest finished question is missing, asks at once
@@ -542,6 +543,101 @@ test.describe("signed-in History refresh (W33 slice D)", () => {
     await toastNow.locator(".toast-close").click({ timeout: 1000 });
     await expect(toastNow).toHaveCount(0);
   });
+
+  for (const width of [1440, 700]) {
+    test(`at ${width} px the idle reminder does not hide the toast its own failure shows`, async ({ page }) => {
+      // Review round 2: round 1 moved the toasts to the bottom right, where
+      // the idle reminder (ADR-0138) also sits; the break-it reviewer
+      // measured the "Could not keep you signed in" toast 96% covered at
+      // 1440 and 700 px. RED-IF: with the reminder showing, the toast's
+      // centre or any corner is covered by something else, or its close
+      // control cannot be clicked. Partner: the reminder's own "Stay signed
+      // in" and "Sign out now" stay clickable.
+      //
+      // How the reminder is reached, stated: the page's real timer and its
+      // real showReminder. A fake clock (installed, then the page reloaded,
+      // so the idle timer is scheduled on it) is jumped past the first idle
+      // check, and that check's answer is the real `/v1/session/idle` body
+      // with `idle_seconds_left` set to 240 (MOCK 1). "Stay signed in" then
+      // gets a 500 from `/v1/session/keep-active` (MOCK 2), which is what
+      // shows the toast.
+      test.setTimeout(120000);
+      await page.setViewportSize({ width, height: 900 });
+      const account = freshAccount(`idle-${width}`);
+      await signIn(page, account);
+
+      await page.route(
+        (url) => url.pathname === "/v1/session/idle",
+        async (route) => {
+          const real = await route.fetch();
+          const body = await real.json();
+          expect(body.signed_in, "the real idle answer is for a signed-in session").toBe(true);
+          await route.fulfill({ response: real, json: { ...body, idle_seconds_left: 240 } });
+        },
+      );
+      let keepActive = 0;
+      await page.route(
+        (url) => url.pathname === "/v1/session/keep-active",
+        async (route) => {
+          keepActive += 1;
+          await route.fulfill({
+            status: 500,
+            json: { detail: { code: "INTERNAL_ERROR", message: "Internal error." } },
+          });
+        },
+      );
+      await page.clock.install();
+      await page.reload({ waitUntil: "domcontentloaded" });
+      await expect(page.locator("#account-email")).toHaveText(account.email);
+      const reminder = page.locator("#idle-reminder");
+      await expect(reminder).toBeHidden();
+      await page.clock.fastForward("02:00:00");
+      await expect(reminder).toBeVisible();
+      await expect(page.locator("#idle-reminder-text")).toHaveText(
+        "You will be signed out in about 4 minutes because nothing has happened on this page. Stay signed in?",
+      );
+
+      await page.locator("#idle-stay").click();
+      const failed = page.locator(".toast", { hasText: "Could not keep you signed in. Please try again." });
+      await expect(failed).toBeVisible();
+      await failed.evaluate((el) => Promise.all(el.getAnimations().map((a) => a.finished)));
+      expect(keepActive).toBe(1);
+
+      const uncovered = await failed.evaluate((toastEl) => {
+        const box = toastEl.getBoundingClientRect();
+        // Past the rounded corner: hit-testing follows border-radius, so a
+        // point closer than ~0.3 r to a corner is outside the toast itself.
+        const radius = parseFloat(getComputedStyle(toastEl).borderTopLeftRadius) || 0;
+        const inset = Math.ceil(radius * 0.3) + 2;
+        const points: Array<[string, number, number]> = [
+          ["centre", box.left + box.width / 2, box.top + box.height / 2],
+          ["top-left", box.left + inset, box.top + inset],
+          ["top-right", box.right - inset, box.top + inset],
+          ["bottom-left", box.left + inset, box.bottom - inset],
+          ["bottom-right", box.right - inset, box.bottom - inset],
+        ];
+        return points.map(([name, x, y]) => {
+          const top = document.elementFromPoint(x, y);
+          return `${name}: ${top && toastEl.contains(top) ? "toast" : top ? top.id || top.className : "nothing"}`;
+        });
+      });
+      expect(uncovered, "every point of the toast must be the toast").toEqual([
+        "centre: toast",
+        "top-left: toast",
+        "top-right: toast",
+        "bottom-left: toast",
+        "bottom-right: toast",
+      ]);
+
+      // Partner: the reminder is still up and its own buttons take clicks.
+      await expect(reminder).toBeVisible();
+      await page.locator("#idle-stay").click({ trial: true, timeout: 1000 });
+      await page.locator("#idle-sign-out").click({ trial: true, timeout: 1000 });
+
+      await failed.locator(".toast-close").click({ timeout: 1000 });
+      await expect(failed).toHaveCount(0);
+    });
+  }
 
   test("the anonymous page has no History panel and never asks for one", async ({ browser }) => {
     // Row 18. RED-IF: the anonymous page gains a History panel, or the
