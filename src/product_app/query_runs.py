@@ -20,6 +20,7 @@ from uuid import UUID, uuid4
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field, model_validator
 
+from product_app import account_history
 from product_app.auth import (
     SessionContext,
     enforce_csrf,
@@ -1132,7 +1133,13 @@ def cancel_query_run(
         allow_terminal=True,
     )
     refreshed = query_run_repository.get(query_run_id)
-    return _result_response(refreshed)
+    response = _result_response(refreshed)
+    # W33 slice D (ADR-0142, decision 4): the run is over for the person now,
+    # so its History row is written now, not when the worker exits (measured
+    # 903 ms later). Keyed by run id, so the worker's own write replaces this
+    # row rather than adding one. Best effort, as the worker's write is.
+    account_history.record_finished_run(refreshed)
+    return response
 
 
 # -- pipeline ----------------------------------------------------------------

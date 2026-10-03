@@ -28,7 +28,7 @@ from typing import Annotated, Any
 from uuid import UUID
 
 import sentry_sdk
-from fastapi import Depends, FastAPI, Request, status
+from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response
@@ -90,7 +90,7 @@ from product_app.readiness import (
 from product_app.request_id import RequestIdMiddleware
 from product_app.run_history_store import RunHistoryStore
 from product_app.run_history_store import configure as configure_run_history_store
-from product_app.session_store import SessionStore
+from product_app.session_store import HistoryEntry, SessionStore
 from product_app.session_store import configure as configure_session_store
 from product_app.telemetry_sink import install_telemetry_sinks
 
@@ -873,34 +873,40 @@ def _signed_in_lede() -> str:
     )
 
 
-def _history_html(account_id: UUID) -> str:
-    """The signed-in account's history, as a disclosure in the top bar (W7,
-    ADR-0135). Every stored value is escaped; the question is the visitor's
-    own text."""
-    entries = account_history.history_for(account_id)
+def _history_list_html(entries: list[HistoryEntry] | None) -> str:
+    """The History panel's list, or its empty or unavailable line (W7,
+    ADR-0135). The ONE builder for the page and for
+    ``GET /v1/account/history`` (ADR-0142), so the two never drift. Every
+    stored value is escaped; the question is the visitor's own text."""
     if entries is None:
-        body = (
+        return (
             '<p class="history-empty" id="account-history-unavailable">'
             "Your history could not be loaded just now.</p>"
         )
-    elif entries:
-        items = "".join(
-            '<li class="history-item"><span class="history-question">'
-            + escape(entry.question)
-            + '</span><span class="history-meta">'
-            + escape(
-                f"{entry.completed_at.astimezone(UTC):%Y-%m-%d %H:%M} UTC · "
-                f"{entry.status.replace('_', ' ')} · "
-                f"{'quick answer' if entry.mode == 'quick' else f'{entry.model_count} models'}"
-                + (f" · {entry.verdict}" if entry.verdict else "")
-                + f" · estimated ${entry.cost_usd}"
-            )
-            + "</span></li>"
-            for entry in entries
+    if not entries:
+        return '<p class="history-empty" id="account-history-empty">No questions yet.</p>'
+    items = "".join(
+        '<li class="history-item"><span class="history-question">'
+        + escape(entry.question)
+        + '</span><span class="history-meta">'
+        + escape(
+            f"{entry.completed_at.astimezone(UTC):%Y-%m-%d %H:%M} UTC · "
+            f"{entry.status.replace('_', ' ')} · "
+            f"{'quick answer' if entry.mode == 'quick' else f'{entry.model_count} models'}"
+            + (f" · {entry.verdict}" if entry.verdict else "")
+            + f" · estimated ${entry.cost_usd}"
         )
-        body = '<ol class="history-list" id="account-history-list">' + items + "</ol>"
-    else:
-        body = '<p class="history-empty" id="account-history-empty">No questions yet.</p>'
+        + "</span></li>"
+        for entry in entries
+    )
+    return '<ol class="history-list" id="account-history-list">' + items + "</ol>"
+
+
+def _history_html(account_id: UUID) -> str:
+    """The signed-in account's history, as a disclosure in the top bar (W7,
+    ADR-0135): the note, the shared list (:func:`_history_list_html`) and the
+    account controls. ``app.js`` replaces only the list when the panel opens
+    (ADR-0142)."""
     return (
         '<details class="account-history" id="account-history">'
         '<summary class="topbar-howitworks">History</summary>'
@@ -914,10 +920,59 @@ def _history_html(account_id: UUID) -> str:
             f"{settings.history_keep_days} days. Answers are not kept."
         )
         + "</p>"
-        + body
+        + _history_list_html(account_history.history_for(account_id))
         + _account_delete_html()
         + "</div></details>"
     )
+
+
+def account_history_list(request: Request) -> JSONResponse:
+    """``GET /v1/account/history`` (W33 slice D, ADR-0142): the signed-in
+    account's History list, as the page renders it, and its email.
+
+    The account comes ONLY from the cookie session: no session (or one ended
+    on another device) is 401; an anonymous, a sign-in-only (ADR-0139) or a
+    legacy ``X-Account-Id`` session is 403 ``NOT_SIGNED_IN``. Read-only, so
+    no CSRF check, and it draws on no rate limiter: opening History must
+    never block running a question. Every answer is ``no-store``.
+    Failure modes: ``docs/analysis/2026-10-03-w33d-history-refresh-failure-modes.md``.
+    """
+    # On EVERY answer, the refusals too (row 15): a 200 holds an account's
+    # questions, and a refusal says whose session this is not.
+    no_store = {"Cache-Control": "no-store"}
+    try:
+        session = require_session(request)
+    except HTTPException as exc:
+        raise HTTPException(
+            status_code=exc.status_code, detail=exc.detail, headers=no_store
+        ) from exc
+    account = (
+        None if session.legacy or session.sign_in_only else signed_in_account(session.account_id)
+    )
+    if account is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"code": "NOT_SIGNED_IN", "message": "Sign in to see your history."},
+            headers=no_store,
+        )
+    return JSONResponse(
+        {
+            "html": _history_list_html(account_history.history_for(account.account_id)),
+            "email": account.email,
+        },
+        headers=no_store,
+    )
+
+
+# No decorator: the decorated-function cap is full (ADR-0142). Hidden from the
+# OpenAPI schema like the other account routes; its integration tests carry
+# its contract.
+app.add_api_route(
+    "/v1/account/history",
+    account_history_list,
+    methods=["GET"],
+    include_in_schema=False,
+)
 
 
 def _idle_reminder_html() -> str:
