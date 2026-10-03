@@ -31,7 +31,7 @@ card for all of them.
 | # | Failure mode | Consequence | Design answer |
 |---|---|---|---|
 | 1 | Every kind is shown as "Over the hard cap" with "up to $X is over the $0.5 hard cap" (bug 3). | A daily block tells the user to pick cheaper models; the sentence is false. | A machine-readable `block_reason` (`per_run_cap`, `account_running_total`, `ledger_unavailable`, `daily_cap`) set at each block; the page chooses headline, note, actions and the rail picture from it, never from prose. |
-| 2 | The per-run cap and the daily cap fire together; the daily-cap return replaces the per-run reason (measured: a 12,000-character question on an expensive panel, estimate 0.4628, worst case 0.6109, reasons said "spent 0.0000"). | The user is told to wait for a run that can never start. | `per_run_cap` wins whenever the run's worst case is above $0.50, and its reason is kept. |
+| 2 | The per-run cap and the daily cap fire together; the daily-cap return replaces the per-run reason (reproduced by the design reviewer on an expensive panel, reasons saying "spent 0.0000"; its figures are not in the repository — `test_the_per_run_cap_wins_over_the_daily_cap_and_keeps_its_reason` pins the case). | The user is told to wait for a run that can never start. | `per_run_cap` wins whenever the run's worst case is above $0.50, and its reason is kept. |
 | 3 | The running-total rail has no 24-hour window, so an allowance from the ledger alone can read "$0.29 left" while the server blocks (measured after moving ledger rows back 25 hours). | A false figure. | The remaining figure is the smaller of the two rails when the in-memory total is above 0. Giving that rail a real window is a rail change with its own ADR, not this slice. |
 | 4 | The running-total reason says "Worst-case cost is above the USD 0.50 hard limit", which is not what fired. | A false sentence. | The reason says the account's recent spend has reached the $0.50 running limit. |
 | 5 | The ledger cannot be read (default posture: allow, `spend_metering_unavailable`, the run is simulated, ADR-0016). | Showing "$0.40 left" would be invented. | The allowance is `null`; the page says the allowance cannot be checked right now. |
@@ -47,11 +47,20 @@ card for all of them.
 | 15 | New response fields change the OpenAPI contract. | `make openapi-check` and the Schemathesis gate go red. | Optional fields with a closed enum and a `null` default; the contract regenerated with `scripts/export_openapi.py`. |
 | 16 | The decorated-function cap (`tests/unit/test_mutation_test_set_integrity.py`) is full at 55. | A new route or a `@computed_field` turns it red. | Plain fields set at the return sites; no route, no decorator. |
 | 17 | The allowance read writes something, or counts a run twice (rule 6b). | A money meter that moves on a read. | The read writes nothing: N estimates give exactly N preview events and 0 charges; remaining = cap − the sum of exactly n charges. |
-| 18 | An extra ledger read per estimate under SQLite's single writer (ADR-0002). | More contention. | One ledger read per estimate serves both the block and the allowance; nothing is added to `/v1/session`. |
+| 18 | An extra ledger read per estimate under SQLite's single writer (ADR-0002). | More contention. | One `daily_spend_for` read per estimate serves both the block and the allowance (the site-wide `global_daily_spend` read was already there); nothing is added to `/v1/session`. |
 | 19 | "Today's" suggests a reset at midnight; the window is a rolling 24 hours. | The user expects the wrong time. | The copy says "in the last 24 hours" and that it frees up as each run turns 24 hours old. |
 | 20 | The rail picture (marker at estimate ÷ $0.50) and the "cheaper models" / "shorten" buttons appear on a daily block. | The picture contradicts the label; the buttons barely help. | The rail and those buttons only for `per_run_cap`. |
 | 21 | A sign-in-only session (ADR-0139) reads an allowance before it is refused. | A figure for a session that cannot spend. | The 403 from `spend_key_for` stays ahead of any allowance read. |
 | 22 | Stale requirement text: COPY-004's trigger in `docs/33-content-design.md` says USD 0.25; AC-010 in `docs/12` says 0.15/0.25. | Requirements drift from the code. | Corrected in the same pull request; a new acceptance criterion with its FR trace (`make fr-completeness`). |
+
+Added by review round 1 (2026-10-03: a break-it reviewer comparing the old and new
+`estimate()` over 4,080 input combinations — no allow/block decision changed — and Codex):
+
+| # | Failure mode | Consequence | Design answer |
+|---|---|---|---|
+| 23 | A run whose estimate alone is above the $0.40 daily cap (worst case under $0.50) is told spend "frees up as each run turns 24 hours old" (reproduced: 12,000 characters on the confirm-band panel, estimate 0.4013, nothing spent). | Told to wait for a run that can never start. | ADR-0141 decision 7: the message says it is larger than a whole day's allowance. |
+| 24 | The charge-time allowance read raises (reproduced by injecting `sqlite3.OperationalError`): the 402 became a 500, and the cookie path wrote a `cost_charge_voided` row for a charge that never happened. | A false ledger row and an error instead of the refusal. | Decision 8: the refusal is built with `daily_allowance: null` and nothing is voided. |
+| 25 | When the running total lowers the remainder, "spent" and "remaining" no longer add up to $0.40 and the figure does not free with time (reproduced: spent 0.1052, remaining 0.0792). | "$X of $0.40 left in the last 24 hours" would be false. | Decision 2: `bounded_by` tells the page which limit set the figure. |
 
 What this list cannot see: which limit the owner actually hit at "$0.136" (production logs
 for that estimate would settle it), and how often production keeps the in-memory total

@@ -19,8 +19,9 @@ $0.50 with this run), a ledger fault (only when `daily_cap_fail_closed` is on), 
 the daily cap (ledger spend in the last 24 hours plus this run, above $0.40). All
 four return `threshold_action: "block"` with prose reasons only, and the page
 shows the same "Over the hard cap" card with "up to $X is over the $0.5 hard cap"
-for every one. With the default models the only block a visitor can reach is the
-daily cap: about three simulated runs a day, since simulated runs are charged in
+for every one. With the default models the block a visitor reaches is almost
+always the daily cap (the running total can fire instead only when one server
+process has stayed up for more than 24 hours): about three simulated runs a day, since simulated runs are charged in
 full (ADR-0074). The failure modes were listed before the code:
 `docs/analysis/2026-10-03-w33c-limit-messages-failure-modes.md`.
 
@@ -32,10 +33,13 @@ full (ADR-0074). The failure modes were listed before the code:
    `per_run_cap` whatever else also fires, and its reason text is kept: that run
    can never start, so waiting is the wrong advice.
 2. **`CostEstimate.daily_allowance`**: `{cap_usd, spent_usd, remaining_usd}` as
-   decimal strings, computed on the server from the same ledger read the daily
-   cap uses (one read per estimate). `remaining_usd` is `cap − spent`, lowered to
-   `0.50 − running total` when the in-memory total is above 0 and that is
-   smaller, and clamped to `[0, cap]`. It is `null` when the ledger cannot be
+   decimal strings, plus `bounded_by` (`daily_cap` or `running_total`, saying
+   which limit set the remaining figure), computed on the server from the same
+   `daily_spend_for` read the daily cap uses (one such read per estimate).
+   `remaining_usd` is `cap − spent`, lowered to `0.50 − running total` when the
+   in-memory total is above 0 and that is smaller (then `bounded_by` is
+   `running_total`, and the page must not call the figure "of $0.40 in the last
+   24 hours"), and clamped to `[0, cap]`. It is `null` when the ledger cannot be
    metered (ADR-0016's degrade path) or the estimate has no spend key. It is
    computed only from the requesting session's own spend key; the key itself is
    never sent.
@@ -58,7 +62,15 @@ full (ADR-0074). The failure modes were listed before the code:
    in the last 24 hours; this run uses about $Y". When the allowance is `null` it
    says the allowance cannot be checked right now. The composer footer names the
    rule in one fixed sentence (no personal number).
-7. **Stale requirement text is corrected** in the same pull request (COPY-004 in
+7. **A run larger than the whole daily allowance says so.** When the run's
+   estimate alone is above $0.40 (and its worst case is not above $0.50), the
+   reason stays `daily_cap`, but the message says this run is larger than a
+   whole day's allowance and will not fit however long the person waits; it
+   never says that spend frees up.
+8. **The charge-time refusal never turns into an error.** If the fresh
+   allowance read fails, the 402 is still sent, with `daily_allowance: null`,
+   and nothing is voided for a charge that was never made.
+9. **Stale requirement text is corrected** in the same pull request (COPY-004 in
    `docs/33`, AC-010 in `docs/12`), and a new acceptance criterion records this
    behaviour with its FR trace.
 
@@ -87,12 +99,19 @@ full (ADR-0074). The failure modes were listed before the code:
 ## Consequences
 
 - Two optional response fields; the OpenAPI contract is regenerated. No setting,
-  constant, schema or stored datum changes; `docs/48` is unchanged.
+  constant, database schema or stored datum changes; `docs/48` is unchanged.
 - **Owner question, recorded and not designed away:** after signing out, the next
   anonymous session starts with a fresh $0.40 (an anonymous session is metered on
   its own id), so a signed-in person can spend less in a day than someone who
   signs out. Allow-listed networks, which skip the session cap, can likewise open
   fresh anonymous allowances (read from the code, not reproduced).
+- Recorded, not fixed: the charge-time 402's fresh read runs after the refused
+  charge and outside the store lock, so a charge reconciled by another tab in
+  that moment can make the 402's allowance look larger than its message implies;
+  a running-total block now waits for the store lock like an allowed estimate
+  (the old code returned before reading the ledger); a run blocked by both the
+  per-run cap and the running total on an unmeterable ledger now also carries
+  `spend_metering_unavailable: true`.
 - The running total still has no time window; the allowance accounts for it, but
   the rail itself is unchanged.
 - CHG-026 (h) says "today's" allowance; the window is a rolling 24 hours, and the
