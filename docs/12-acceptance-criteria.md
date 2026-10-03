@@ -462,3 +462,11 @@ Given a person who has asked questions in this tab, when they finish a run, open
 - Test: TEST-FR-013 (`e2e/tests/invariants/page-journey.spec.ts`, real backend for the journey and a stated mock only where the real backend cannot reach the state; rewritten tests in `session-trail.spec.ts`, `parity-behavior.spec.ts`, `degraded-banner.spec.ts` and `quick-answer.spec.ts`; written before the code, and again before each review round's fix)
 - Reported by the product owner on 2026-09-29 and 2026-09-30 (bugs 1, 2, 6, 9, 10: M07, M23); the follow-up box and the hint decided in CHG-026 (g) and (m); the design and the calls the owner may overturn are in ADR-0140.
 
+## AC-056 The History panel shows the current list each time it is opened
+
+Given a signed-in person who asks questions in a tab, when they open History without reloading the page, then the list holds what the server keeps (the question just asked, newest first, a stopped run at once), drawn from the same server markup the page renders; when the session has ended or changed (another tab, window or device), the rows go and one line asks for a reload, and the page never reloads itself; when the history cannot be read, the rows stay and a line says it could not be refreshed. `GET /v1/account/history` answers only a signed-in cookie session (401 with none; 403 `NOT_SIGNED_IN` for anonymous, sign-in-only and legacy-header sessions; 503 `HISTORY_UNAVAILABLE` when the sessions store cannot say who is signed in), always with `Cache-Control: no-store`.
+
+- Requirement: FR-019
+- Test: TEST-FR-019 (`tests/integration/test_account_history_route.py`, `tests/unit/test_history_markup.py`; the signed-in browser lane `e2e/tests/signed-in/history-refresh.spec.ts`, its own blocking step in `e2e.yml`; written before the code, and again before each review round's fix)
+- Reported by the product owner on 2026-09-29 (M07 point 8: *"The history is shown when the user signs out and then signs in"*); the cause is the session's probe (root causes, Item 8a); the design is the session's (ADR-0142). Opening a row is W36 (CHG-026 i).
+

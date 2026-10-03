@@ -30,7 +30,7 @@ it updates the Status column and names the PR or commit.
 | M07.5, M08, M10, M11 | Why testing missed these; the process | Engineering review + prevention plan | ENGINEERING-REVIEW-2026-09-29.md | PLAN PROPOSED |
 | M07.6 | No way home from a result | Bug; logo link + back | inv-results.md | DONE — W33 slice A (ADR-0140, AC-055) |
 | M07.7, M08.8 | Starter questions | Six audience groups × four full questions, wider high-stakes list | NEXT-SESSION-PROMPT | DECIDED, not built |
-| M07.8, M08.7, M09 | History clickable, full results, continue chat | Store full result; 20 conversations / 30 days; open read-only; "Continue this conversation" | NEXT-SESSION-PROMPT | DECIDED, not built |
+| M07.8, M08.7, M09 | History clickable, full results, continue chat | Store full result; 20 conversations / 30 days; open read-only; "Continue this conversation" | NEXT-SESSION-PROMPT | PARTLY DONE — the History list refreshes without a reload (W33 slice D, ADR-0142); opening a row, full results, the 20 / 30-day keep and Continue are W36 |
 | M07.9 | Empty session panel | Bug; proper empty state | inv-results.md | DONE — W33 slice A (ADR-0140, AC-055) |
 | M08.5 | Follow-up context to the models | Send previous question + final answer to all four models | NEXT-SESSION-PROMPT | DECIDED, not built |
 | M09, M10 | Simulated runs deduct like live | Yes; the banner already says simulated | NEXT-SESSION-PROMPT | DECIDED, not built |

@@ -6,7 +6,7 @@ original, because a gate and an offline agent can read it and cannot read `gh`.
 
 Verified at: `b1209b5a785e95fb208c55c4303ada85065aeb54`
 
-The board holds **44** rows, **12** of them unpinned.
+The board holds **44** rows, **11** of them unpinned.
 
 `scripts/check_open_work.py --check` reads every row's evidence off disk and
 refuses if a claim is false. It runs inside `make validate`, and
@@ -127,7 +127,7 @@ caught by any automated check and 10 of 16 by adversarial review
 | W30 | The per-network session limits count every visitor as the app's ingress address (CHG-022): take the visitor's address from what Fly's proxy forwards, measured first; the cap value stays 2 | DONE | `ABSENT src/product_app/auth.py :: def client_ip_of(` | — | — |
 | W31 | An allow-list of named, dated addresses or ranges (at most /24 IPv4, /48 IPv6) exempt from the per-network session limits only, never the spend limits (CHG-022) | DONE | `ABSENT src/product_app/config.py :: session_cap_exempt_networks` | — | W30 |
 | W32 | An invite link that lifts the session limit for whoever opens it, from any network, until an end date (CHG-022; planned now, not deferred) | DONE | `ABSENT src/product_app/config.py :: invite_link_signing_key` | — | W30 |
-| W33 | The owner's bugs 1–10 of 2026-09-29 (root causes: `docs/analysis/2026-09-29/owner-bugs-root-causes.md`; CHG-026 h, m): Start fresh wipes the session list; the old follow-up stays in the box; the block card names the hard cap instead of the daily cap; limits unclear; no way home from a result; empty session panel; History stale and not clickable; the composer lands on the question, not the models. Failing tests first, thin slices | UNPINNED | `—` | — | — |
+| W33 | The owner's bugs 1–10 of 2026-09-29 (root causes: `docs/analysis/2026-09-29/owner-bugs-root-causes.md`; CHG-026 h, m): Start fresh wipes the session list; the old follow-up stays in the box; the block card names the hard cap instead of the daily cap; limits unclear; no way home from a result; empty session panel; History stale (opening a row is W36); the composer lands on the question, not the models. Failing tests first, thin slices (built in three slices: A #532 ADR-0140, C #533 ADR-0141, D ADR-0142) | DONE | `ABSENT src/product_app/main.py :: "/v1/account/history",` | — | — |
 | W34 | The daily session cap counts anonymous use only and must never stop anyone signing in; today, sign-out after two sign-ins on one network locks it out with "This network has reached its session limit" (CHG-026 a; ADR-0138 records the mechanism; built: ADR-0139, AC-053) | DONE | `ABSENT src/product_app/auth.py :: sign_in_only` | — | — |
 | W35 | "Sign out everywhere" during a run asks first: "Yes" stops the run and signs out everywhere; "No" signs out everywhere except the running session (CHG-026 b) | UNPINNED | `—` | — | W34 |
 | W36 | History keeps the full result (answers, debate, synthesis) for signed-in accounts, 20 conversations for 30 days, delete one / delete all; a row opens read-only with "Continue this conversation" (CHG-026 i; supersedes the 5-question keep of CHG-023 when built) | UNPINNED | `—` | — | W33 |
