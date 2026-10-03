@@ -27,6 +27,7 @@ from __future__ import annotations
 import threading
 from collections.abc import Iterator
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Any
 from uuid import uuid4
 
@@ -430,3 +431,240 @@ def test_the_context_is_not_written_to_the_run_history_the_ledger_or_the_logs(
     for marker in (PRIOR_Q_MARK, PRIOR_S_MARK):
         assert marker not in stored, f"{marker} was written to a store"
         assert marker not in logged, f"{marker} was written to a log record"
+
+
+# ---------------------------------------------------------------------------
+# Review round 1: each debate and synthesis call is priced for what it is SENT.
+# ---------------------------------------------------------------------------
+
+#: The break-it reviewer's shape: a 49-character question, an 8,000-character
+#: answer. Plain text with no line breaks or fence markers, so flattening and
+#: neutralising leave both lengths unchanged.
+MONEY_QUESTION = "Which database should a two-person team pick now?"
+MONEY_ANSWER = ("Managed Postgres is the sound default for a small team. " * 143)[:8000]
+MONEY_CONTEXT = {"prior_question": MONEY_QUESTION, "prior_synthesis": MONEY_ANSWER}
+
+#: One price for every model, chosen so that any whole number of characters
+#: (a multiple of a quarter token) costs an exact multiple of the $0.0001
+#: display quantum: 0.25 tokens x $0.4 / 1K = $0.0001. Each displayed stage
+#: line then moves by exactly its calls' extra input, so the extra tokens a
+#: stage is PRICED for can be read back exactly from the estimate.
+FLAT_PRICE = (Decimal("0.4"), Decimal("0.4"))
+#: Four characters to a token, from first principles (rule 7a).
+CHARS_PER_TOKEN_LITERAL = Decimal(4)
+
+
+def _sent_chars(call: Call) -> int:
+    return sum(len(m["content"]) for m in call.messages)
+
+
+def _priced_extra_tokens_per_call(
+    monkeypatch: pytest.MonkeyPatch, *, model_ids: list[str], calls_per_stage: dict[str, int]
+) -> dict[str, Decimal]:
+    """Extra input tokens the estimate prices for ONE call of each stage when
+    ``MONEY_CONTEXT`` is attached: the stage line's rise, divided by the flat
+    input price and by the number of calls that stage makes (counted from the
+    run, not from a constant)."""
+    from product_app.costs import cost_estimation_service
+    from product_app.model_slots import ModelSlot, openrouter_model_catalog_service
+
+    priced: dict[str, Decimal] = {}
+    with monkeypatch.context() as mp:
+        everyone = [*model_ids, DEBATE_MODEL, SYNTHESIS_MODEL, JUDGE_MODEL]
+        mp.setattr(
+            openrouter_model_catalog_service,
+            "price_index",
+            lambda: dict.fromkeys(everyone, FLAT_PRICE),
+        )
+        slots = [ModelSlot(slot_number=i + 1, model_id=m) for i, m in enumerate(model_ids)]
+
+        def stages(context: dict[str, str] | None) -> dict[str, Decimal]:
+            est = cost_estimation_service.estimate(
+                query_text=NEW_QUESTION, model_slots=slots, context=context
+            )
+            assert est.breakdown is not None
+            return {line.stage: line.usd for line in est.breakdown.by_stage}
+
+        fresh, follow_up = stages(None), stages(MONEY_CONTEXT)
+    for stage, n_calls in calls_per_stage.items():
+        rise = follow_up[stage] - fresh[stage]
+        priced[stage] = rise * Decimal(1000) / FLAT_PRICE[0] / Decimal(n_calls)
+    return priced
+
+
+def _pair_by(calls: list[Call], key: Any) -> dict[Any, list[Call]]:
+    grouped: dict[Any, list[Call]] = {}
+    for call in calls:
+        grouped.setdefault(key(call), []).append(call)
+    return grouped
+
+
+@pytest.mark.parametrize("peer", [False, True], ids=["moderator", "peer-critique"])
+def test_every_debate_and_synthesis_call_is_priced_for_the_characters_it_is_sent(
+    _live_stubbed: list[Call], monkeypatch: pytest.MonkeyPatch, peer: bool
+) -> None:
+    """RED IF: a debate or synthesis call is sent more follow-up text than the
+    estimate prices it for. On ``b67922a`` the break-it reviewer measured, for
+    this exact shape, debate sent +150 characters and priced +49, synthesis
+    sent +8,379 and priced +8,079: the labels, fences and the synthesis
+    directive that wrap the texts are sent on every call and priced on none.
+
+    Method: one fresh run and one follow-up run of the same question, every
+    provider call recorded; each debate call and each synthesis section call of
+    the follow-up is paired with its fresh twin, and the extra characters SENT
+    (all messages), divided by four, must equal the extra tokens PRICED for one
+    call of that stage (the stage line's rise at a flat price, divided by the
+    number of calls the stage made).
+
+    Positive partners: the call counts are pinned (2 moderator calls, or 8
+    critic calls; 5 section calls) and every paired call was sent MORE with
+    context than without, so the comparison runs over real, changed calls.
+    """
+    monkeypatch.setattr(settings, "peer_critique_enabled", peer)
+    fresh = _run(_live_stubbed, model_ids=FOUR, mode="panel", context=None)
+    follow_up = _run(_live_stubbed, model_ids=FOUR, mode="panel", context=MONEY_CONTEXT)
+
+    def debate_calls(calls: list[Call]) -> list[Call]:
+        if peer:
+            # Critics run on the slots' own models, under the bare id; the
+            # answer calls use ":online" (search is on for every slot here).
+            return [c for c in calls if c.model_id in FOUR]
+        return [c for c in calls if c.bare_model == DEBATE_MODEL]
+
+    def synthesis_calls(calls: list[Call]) -> list[Call]:
+        return [c for c in calls if c.bare_model == SYNTHESIS_MODEL]
+
+    expected_debate_calls = 8 if peer else 2
+    assert len(debate_calls(fresh)) == len(debate_calls(follow_up)) == expected_debate_calls
+    assert len(synthesis_calls(fresh)) == len(synthesis_calls(follow_up)) == 5
+
+    priced = _priced_extra_tokens_per_call(
+        monkeypatch,
+        model_ids=FOUR,
+        calls_per_stage={
+            "debate_round_1": expected_debate_calls // 2,
+            "debate_round_2": expected_debate_calls // 2,
+            "synthesis": 5,
+        },
+    )
+
+    mismatches: list[str] = []
+    # Debate: pair by model and order (round 1 before round 2 for each model).
+    fresh_debate = _pair_by(debate_calls(fresh), lambda c: c.model_id)
+    for model_id, calls in _pair_by(debate_calls(follow_up), lambda c: c.model_id).items():
+        assert len(calls) == len(fresh_debate[model_id]) == 2, model_id
+        for round_no, (with_ctx, without) in enumerate(
+            zip(calls, fresh_debate[model_id], strict=True), 1
+        ):
+            extra_chars = _sent_chars(with_ctx) - _sent_chars(without)
+            assert extra_chars > 0, f"debate {model_id} round {round_no} was sent no follow-up text"
+            sent_tokens = Decimal(extra_chars) / CHARS_PER_TOKEN_LITERAL
+            if sent_tokens != priced[f"debate_round_{round_no}"]:
+                mismatches.append(
+                    f"debate {model_id} round {round_no}: sent +{extra_chars} chars "
+                    f"(+{sent_tokens} tokens), priced +{priced[f'debate_round_{round_no}']} tokens"
+                )
+    # Synthesis: pair by section (the section instruction opens the system message).
+    fresh_synth = _pair_by(synthesis_calls(fresh), lambda c: c.role("system")[:80])
+    for section, calls in _pair_by(
+        synthesis_calls(follow_up), lambda c: c.role("system")[:80]
+    ).items():
+        assert section in fresh_synth, f"no fresh twin for synthesis section {section!r}"
+        extra_chars = _sent_chars(calls[0]) - _sent_chars(fresh_synth[section][0])
+        assert extra_chars > 0, f"synthesis section {section[:40]!r} was sent no follow-up text"
+        sent_tokens = Decimal(extra_chars) / CHARS_PER_TOKEN_LITERAL
+        if sent_tokens != priced["synthesis"]:
+            mismatches.append(
+                f"synthesis {section[:40]!r}: sent +{extra_chars} chars (+{sent_tokens} tokens), "
+                f"priced +{priced['synthesis']} tokens"
+            )
+    assert not mismatches, "calls priced for less (or more) than they are sent:\n" + "\n".join(
+        mismatches
+    )
+
+
+def test_the_answer_calls_are_priced_for_both_texts_and_their_fixed_words_fit_the_flat_allowance(
+    _live_stubbed: list[Call], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A GUARD on the answer calls, which ADR-0143 prices differently from
+    debate and synthesis: the two texts per call, plus the fixed words (a
+    sentence, the untrusted-data rule, labels, fences) inside the flat system
+    allowance every answer call is already priced for.
+
+    RED IF: the answer calls stop being priced for exactly the two texts, or
+    the fixed words grow until the follow-up system message, without the two
+    texts, no longer fits the flat 350 tokens.
+    """
+    assert settings.cost_system_prompt_tokens == 350  # the flat allowance, pinned as a literal
+    calls = _run(_live_stubbed, model_ids=FOUR, mode="panel", context=MONEY_CONTEXT)
+    answers = _answer_calls(calls, FOUR)
+    assert len(answers) == 4
+    priced = _priced_extra_tokens_per_call(
+        monkeypatch, model_ids=FOUR, calls_per_stage={"initial_answers": 4}
+    )
+    texts = len(MONEY_QUESTION) + len(MONEY_ANSWER)
+    assert priced["initial_answers"] == Decimal(texts) / CHARS_PER_TOKEN_LITERAL
+    for call in answers:
+        system = call.role("system")
+        assert MONEY_ANSWER[:200] in system  # positive partner: the text is really there
+        fixed_tokens = Decimal(len(system) - texts) / CHARS_PER_TOKEN_LITERAL
+        assert fixed_tokens <= Decimal(350), (
+            f"{call.model_id}: fixed system text is {fixed_tokens} tokens"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Review round 1: a question with no answer must not promise one.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("empty_answer", [None, ""], ids=["null-answer", "empty-answer"])
+def test_a_question_only_context_does_not_promise_a_final_answer(
+    _live_stubbed: list[Call], empty_answer: str | None
+) -> None:
+    """RED IF: for an API-only context with a question and a null or empty
+    ``prior_synthesis``, the answer call's system message still says "the
+    final answer it received" is below (on ``b67922a`` the follow-up sentence
+    is written whenever an answer call has context, answer or not).
+
+    Structure, not wording: exactly ONE fenced block (the question's), and no
+    mention of a final answer anywhere in what the follow-up adds. Positive
+    partners: the question IS carried in that one fence, and the full shape
+    (next test) carries two fences and does mention the final answer.
+    """
+    calls = _run(
+        _live_stubbed,
+        model_ids=FOUR[:2],
+        mode="panel",
+        context={"prior_question": PRIOR_QUESTION, "prior_synthesis": empty_answer},
+    )
+    answers = _answer_calls(calls, FOUR[:2])
+    assert len(answers) == 2
+    for call in answers:
+        system = call.role("system")
+        added = system[len(DEFAULT_ANSWER_SYSTEM) :]
+        assert system.startswith(DEFAULT_ANSWER_SYSTEM)
+        assert PRIOR_Q_MARK in added and _inside_a_fence(system, PRIOR_Q_MARK)
+        fences = [line for line in system.splitlines() if line == UNTRUSTED_BEGIN]
+        assert len(fences) == 1, (
+            f"{call.model_id}: {len(fences)} fenced blocks for a question-only context"
+        )
+        assert "final answer" not in added.lower(), (
+            f"{call.model_id}: promises a final answer that is not there: {added[:300]!r}"
+        )
+
+
+def test_positive_partner_the_full_context_carries_two_fences_and_names_the_final_answer(
+    _live_stubbed: list[Call],
+) -> None:
+    """The partner of the test above, green on ``b67922a``: with both texts the
+    answer call carries two fenced blocks and does mention the final answer.
+    RED IF the answer fence or its label is dropped."""
+    calls = _run(_live_stubbed, model_ids=FOUR[:2], mode="panel", context=CONTEXT)
+    answers = _answer_calls(calls, FOUR[:2])
+    assert len(answers) == 2
+    for call in answers:
+        system = call.role("system")
+        fences = [line for line in system.splitlines() if line == UNTRUSTED_BEGIN]
+        assert len(fences) == 2
+        assert "final answer" in system[len(DEFAULT_ANSWER_SYSTEM) :].lower()

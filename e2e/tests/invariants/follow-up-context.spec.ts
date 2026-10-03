@@ -428,3 +428,270 @@ test.describe("W37 — a result with no final answer (mocked, with the reason)",
     await expect(nextNote(page)).not.toContainText(/Following up on/);
   });
 });
+
+// ---------------------------------------------------------------------------
+// ADR-0143 decision 5 (as reworded after review round 1): which ways back to
+// the composer CLEAR the attached context and which KEEP it.
+// ---------------------------------------------------------------------------
+
+const errorCard = (page: Page) => page.locator("#error-region");
+const cardAction = (page: Page, name: string) => errorCard(page).getByRole("button", { name, exact: true });
+const json = (body: unknown, status = 200) => ({ status, contentType: "application/json", body: JSON.stringify(body) });
+
+/** Real Q1 run, then Follow up → Review & run with Q2 typed: the context is attached. */
+async function attachFollowUp(page: Page) {
+  await boot(page);
+  await askReal(page, Q1);
+  await page.locator("#result-next-input").fill(Q2);
+  await page.locator("#result-next-run").click();
+  await expect(composerView(page)).toBeVisible();
+  // Positive partner for every "line gone" check below: it is on screen now.
+  await expect(composerFollowLine(page)).toHaveCount(1);
+  await expect(composerFollowLine(page)).toContainText(Q1);
+}
+
+/** After a card action: no Following up line, and the next estimate has no context. */
+async function expectContextCleared(page: Page, sent: Sent[]) {
+  await expect(composerView(page)).toBeVisible();
+  await expect(composerFollowLine(page)).toHaveCount(0);
+  await page.locator("#query-text").fill(Q3);
+  const body = await seeTheEstimate(page, sent);
+  expect(body.query_text).toBe(Q3);
+  expect(body.context, "a card action that starts something new sends no context").toBeUndefined();
+}
+
+/** After a way BACK to the question: the line is still there and the estimate carries Q1's context. */
+async function expectContextKept(page: Page, sent: Sent[]) {
+  await expect(composerView(page)).toBeVisible();
+  await expect(composerFollowLine(page)).toHaveCount(1);
+  await expect(composerFollowLine(page)).toContainText(Q1);
+  const body = await seeTheEstimate(page, sent);
+  expect(body.context?.prior_question).toBe(Q1);
+  expect((body.context?.prior_synthesis ?? "").length).toBeGreaterThan(0);
+}
+
+test.describe("W37 — card actions clear the context; ways back keep it (decision 5)", () => {
+  test.skip(({ browserName }) => browserName !== "chromium", "reference run is chromium-only");
+
+  test("a failed follow-up run: Start a new run clears the context (mocked failed poll)", async ({ page }) => {
+    // RED-IF: the provider-failure card's "Start a new run" (returnToComposer) leaves the follow-up context attached.
+    // Mocked poll only: the real LOCAL failure phrase ("force provider failure")
+    // ends the run "partial", never "failed" (measured on b67922a: "4 stages
+    // failed · 3 missing", list entry "partial"), and only a "failed" run gets
+    // this card. The create is real, so its body is the page's own.
+    const sent = recordRunRequests(page);
+    await attachFollowUp(page);
+    await page.route(/\/v1\/query-runs\/[0-9a-f-]{36}$/, (r) => {
+      if (r.request().method() !== "GET") return r.continue();
+      const id = new URL(r.request().url()).pathname.split("/").pop();
+      const golden = goldenCompletedResp();
+      return r.fulfill(
+        json({
+          ...golden,
+          query_run_id: id,
+          status: "failed",
+          failed_steps: ["initial_answers"],
+          missing_steps: ["debate_round_1", "debate_round_2", "synthesis"],
+          provider_failure_notices: ["The model provider returned an error."],
+          result: { ...golden.result, final_synthesis: null },
+        }),
+      );
+    });
+    await page.locator("#estimate-run").click();
+    await expect(page.locator("#gate-confirm")).toBeVisible({ timeout: 15000 });
+    await page.locator("#gate-confirm").click();
+    await expect(cardAction(page, "Start a new run")).toBeVisible({ timeout: 30000 });
+    const create = lastOf(sent, "create");
+    expect(create?.body.context?.prior_question, "the failed run was a follow-up").toBe(Q1);
+    await cardAction(page, "Start a new run").click();
+    await expectContextCleared(page, sent);
+  });
+
+  test("one run at a time: Stop it & start new clears the context (mocked 409)", async ({ page }) => {
+    // RED-IF: the busy card's "Stop it & start new" (stopActiveRunAndCompose → returnToComposer) leaves the context attached.
+    // Mocked: a simulated run finishes in tens of milliseconds, so the real
+    // backend never has a run still active when the next create arrives.
+    const sent = recordRunRequests(page);
+    await attachFollowUp(page);
+    await page.route(/\/v1\/query-runs$/, (r) =>
+      r.request().method() === "POST"
+        ? r.fulfill(json({ detail: { code: "ACTIVE_QUERY_EXISTS", message: "A query is already running." } }, 409))
+        : r.continue(),
+    );
+    await page.locator("#run-now").click();
+    await expect(cardAction(page, "Stop it & start new")).toBeVisible({ timeout: 15000 });
+    await cardAction(page, "Stop it & start new").click();
+    await expectContextCleared(page, sent);
+  });
+
+  test("a run this session cannot open: Start your own query clears the context (mocked 404)", async ({ page }) => {
+    // RED-IF: the wrong-session card's "Start your own query" (returnToComposer) leaves the context attached.
+    // Mocked: the real backend answers QUERY_RUN_NOT_FOUND only for a run of
+    // another session (or one gone from memory); here the session list's own
+    // entry is answered 404 so the page shows that card.
+    const sent = recordRunRequests(page);
+    await attachFollowUp(page);
+    await page.route(/\/v1\/query-runs\/[0-9a-f-]{36}$/, (r) =>
+      r.request().method() === "GET"
+        ? r.fulfill(json({ detail: { code: "QUERY_RUN_NOT_FOUND", message: "Query run not found." } }, 404))
+        : r.continue(),
+    );
+    await trailEntries(page).filter({ hasText: Q1 }).first().click();
+    await expect(cardAction(page, "Start your own query")).toBeVisible({ timeout: 15000 });
+    await cardAction(page, "Start your own query").click();
+    await expectContextCleared(page, sent);
+  });
+
+  test("a create refused for the daily allowance: Back to the question KEEPS the context (mocked 402)", async ({ page }) => {
+    // RED-IF: "Back to the question" clears the context it should keep (decision 5: a way back to the question being worked on).
+    // Mocked: reaching the allowance for real takes about four simulated runs,
+    // and the estimate would then block before the create is ever sent.
+    const sent = recordRunRequests(page);
+    await attachFollowUp(page);
+    await page.route(/\/v1\/query-runs$/, (r) =>
+      r.request().method() === "POST"
+        ? r.fulfill(
+            json(
+              {
+                detail: {
+                  code: "COST_LIMIT_EXCEEDED",
+                  message: "Daily allowance used.",
+                  block_reason: "daily_cap",
+                  daily_allowance: { cap_usd: "0.40", spent_usd: "0.40", remaining_usd: "0.00" },
+                },
+              },
+              402,
+            ),
+          )
+        : r.continue(),
+    );
+    await page.locator("#estimate-run").click();
+    await expect(page.locator("#gate-confirm")).toBeVisible({ timeout: 15000 });
+    await page.locator("#gate-confirm").click();
+    await expect(cardAction(page, "Back to the question")).toBeVisible({ timeout: 15000 });
+    await cardAction(page, "Back to the question").click();
+    await expectContextKept(page, sent);
+  });
+
+  test("the cost confirmation's Back, then browser Back and Forward, KEEP the context", async ({ page }) => {
+    // RED-IF: gateBackToComposer or the popstate handler clears the context (decision 5: ways back keep it).
+    const mocked = forbidRoutes(page);
+    const sent = recordRunRequests(page);
+    await attachFollowUp(page);
+    await page.locator("#estimate-run").click();
+    await expect(page.locator("#gate-back")).toBeVisible({ timeout: 15000 });
+    await page.locator("#gate-back").click();
+    await expectContextKept(page, sent);
+    await page.locator("#gate-back").click();
+    // Browser Back to the result, then Forward to the composer.
+    await page.goBack();
+    await expect(resultView(page)).toBeVisible();
+    await expect(page.locator("#result-question")).toHaveText(Q1);
+    await page.goForward();
+    await expectContextKept(page, sent);
+    expect(mocked()).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Product review of 83a1d62 (items 6-9 of the review-round-1 test job).
+// ---------------------------------------------------------------------------
+
+const costGateView = (page: Page) => page.locator('[data-view="cost-gate"]');
+const gateFollowLine = (page: Page) => costGateView(page).getByText(/Following up on: /).filter({ visible: true });
+const OWNER_FOOTER =
+  "See the estimate to check the cost first, or Run now to start straight away. If a run costs more than usual, it asks you first.";
+
+test.describe("W37 — product review: re-opened results, the cost confirmation, the footer, one model", () => {
+  test.skip(({ browserName }) => browserName !== "chromium", "reference run is chromium-only");
+
+  test("re-opening an older result from the session list empties the box and offers to follow up THAT result", async ({ page }) => {
+    // RED-IF: restoreTrailRun leaves text typed for another result in #result-next-input, so Review & run sends Q1 as context with a question typed to be fresh.
+    const mocked = forbidRoutes(page);
+    const sent = recordRunRequests(page);
+    const typedFresh = "A fresh question about caching layers?";
+    await boot(page);
+    await askReal(page, Q1);
+    await resultView(page).getByRole("button", { name: "New question", exact: true }).click();
+    await askReal(page, Q2);
+    await startFreshButton(page).click();
+    await page.locator("#result-next-input").fill(typedFresh);
+    await page.locator("#result-next-run").click();
+    await expect(page.locator("#query-text")).toHaveValue(typedFresh);
+    await seeTheEstimate(page, sent);
+    await page.locator("#gate-back").click();
+    await expect(composerView(page)).toBeVisible();
+    // Open Q1 from the session list.
+    await trailEntries(page).filter({ hasText: Q1 }).first().click();
+    await expect(page.locator("#result-question")).toHaveText(Q1);
+    // Positive partners: the box and the offer are on screen, for Q1.
+    await expect(page.locator("#result-next-input")).toBeVisible();
+    await expect(followUpButton(page)).toHaveAttribute("aria-pressed", "true");
+    await expect(nextNote(page)).toContainText(followingUpOn(Q1));
+    await expect(page.locator("#result-next-input"), "the box must open empty on a re-opened result").toHaveValue("");
+    expect(mocked()).toBe(false);
+  });
+
+  test("the cost confirmation says the question is a follow-up, and only when it is", async ({ page }) => {
+    // RED-IF: the estimate review screen shows no "Following up on: " line (with the previous question, as text) while context is attached, or shows one when none is.
+    const mocked = forbidRoutes(page);
+    const sent = recordRunRequests(page);
+    const hostile = "Is <b>bold</b> faster than plain?";
+    await boot(page);
+    await askReal(page, hostile);
+    await page.locator("#result-next-input").fill(Q2);
+    await page.locator("#result-next-run").click();
+    const attached = await seeTheEstimate(page, sent);
+    expect(attached.context?.prior_question).toBe(hostile);
+    await expect(costGateView(page)).toBeVisible();
+    await expect(page.locator("#cost-gate-question")).toHaveText(Q2);
+    await expect(gateFollowLine(page)).toHaveCount(1);
+    await expect(gateFollowLine(page)).toContainText("<b>bold</b>");
+    await expect(costGateView(page).locator("b")).toHaveCount(0);
+    // Without context: no such line.
+    await page.locator("#gate-back").click();
+    await composerStartFresh(page).click();
+    const fresh = await seeTheEstimate(page, sent);
+    expect(fresh.context).toBeUndefined();
+    await expect(costGateView(page)).toBeVisible();
+    await expect(page.locator("#cost-gate-question")).toHaveText(Q2);
+    await expect(gateFollowLine(page)).toHaveCount(0);
+    expect(mocked()).toBe(false);
+  });
+
+  test("the composer footer uses the owner's wording for the two buttons (CHG-027 d)", async ({ page }) => {
+    // RED-IF: .composer-footer-notice still reads "…to review the itemized cost first, or Run now to start low-cost runs immediately — anything needing confirmation still pauses…".
+    await boot(page);
+    const footer = composerView(page).locator(".composer-footer-notice");
+    await expect(footer).toBeVisible();
+    await expect(footer).toContainText(OWNER_FOOTER);
+    await expect(footer).not.toContainText("start low-cost runs immediately");
+    await expect(footer).not.toContainText("still pauses for your approval");
+  });
+
+  test("with one model (quick) the note and the composer line say the model, singular; a panel says the models", async ({ page }) => {
+    // RED-IF: the follow-up note or the composer line says "the models will see…" for a quick answer's one model (or loses the plural on a panel).
+    const mocked = forbidRoutes(page);
+    await boot(page);
+    // Panel: plural (positive partner for the singular checks below).
+    await askReal(page, Q1);
+    await expect(nextNote(page)).toContainText(/\bthe models\b/);
+    // Quick: singular.
+    await resultView(page).getByRole("button", { name: "New question", exact: true }).click();
+    await page.locator("#quick-mode-input").check();
+    await page.locator("#query-text").fill(Q2);
+    await page.locator("#run-now").click();
+    await expect(page.locator("#result-quick:visible, #gate-confirm:visible").first()).toBeVisible({ timeout: 30000 });
+    if (await page.locator("#gate-confirm").isVisible()) await page.locator("#gate-confirm").click();
+    await expect(page.locator("#result-quick")).toBeVisible({ timeout: 30000 });
+    await expect(nextNote(page)).toContainText(followingUpOn(Q2));
+    await expect(nextNote(page)).toContainText(/\bthe model\b/);
+    await expect(nextNote(page)).not.toContainText(/\bthe models\b/);
+    await page.locator("#result-next-input").fill(Q3);
+    await page.locator("#result-next-run").click();
+    await expect(composerFollowLine(page)).toContainText(Q2);
+    await expect(composerFollowLine(page)).toContainText(/\bthe model\b/);
+    await expect(composerFollowLine(page)).not.toContainText(/\bthe models\b/);
+    expect(mocked()).toBe(false);
+  });
+});
