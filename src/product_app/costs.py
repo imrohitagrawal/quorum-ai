@@ -387,21 +387,32 @@ class CostThresholdAction(StrEnum):
 #: any other string where a ``BlockReason`` is expected.
 BlockReason = Literal["per_run_cap", "account_running_total", "ledger_unavailable", "daily_cap"]
 
+#: Which limit set ``DailyAllowance.remaining_usd`` (ADR-0141 decision 2): the
+#: 24-hour cap, or the in-memory running total, which has no 24-hour window. A
+#: Literal for the same reason as ``BlockReason``.
+AllowanceBound = Literal["daily_cap", "running_total"]
+
 
 class DailyAllowance(BaseModel):
     """What is left of the account's rolling 24-hour cap (ADR-0141 decision 2).
 
-    Computed on the server, never on the page, from the same ledger read the
-    daily cap uses. ``cap_usd`` is ``DAILY_CAP_USD`` as the constant prints it;
+    Computed on the server, never on the page, from the same
+    ``FeedbackStore.daily_spend_for`` read the daily cap uses. ``cap_usd`` is
+    ``DAILY_CAP_USD`` as the constant prints it;
     ``spent_usd`` and ``remaining_usd`` carry four decimal places
     (``COST_DISPLAY_QUANTUM``), spent rounded up and remaining rounded down, so
     rounding never makes the two add up to more than the cap (spent itself can
     be above the cap, when remaining is clamped to 0).
+
+    ``bounded_by`` says which limit set ``remaining_usd``. When it is
+    ``running_total`` the figure is not "of the cap in the last 24 hours" and
+    does not free up as runs age, so the page must not word it that way.
     """
 
     cap_usd: Decimal
     spent_usd: Decimal
     remaining_usd: Decimal
+    bounded_by: AllowanceBound
 
 
 def daily_allowance_from(*, already_spent: Decimal, cumulative: Decimal) -> DailyAllowance:
@@ -409,19 +420,23 @@ def daily_allowance_from(*, already_spent: Decimal, cumulative: Decimal) -> Dail
 
     ``remaining`` is ``DAILY_CAP_USD - already_spent``, lowered to
     ``HARD_LIMIT_USD - cumulative`` when the running total is above 0 and that
-    is the smaller rail (it has no 24-hour window, so the ledger alone can read
-    "$0.29 left" while the server blocks), and clamped to ``[0, DAILY_CAP_USD]``
+    is STRICTLY the smaller rail (it has no 24-hour window, so the ledger alone
+    can read "$0.29 left" while the server blocks; a tie stays ``daily_cap``),
+    and clamped to ``[0, DAILY_CAP_USD]``
     (a live run reconciled above its estimate can put the ledger above the cap).
     Pure arithmetic: it reads and writes nothing.
     """
     remaining = DAILY_CAP_USD - already_spent
-    if cumulative > 0:
-        remaining = min(remaining, HARD_LIMIT_USD - cumulative)
+    bounded_by: AllowanceBound = "daily_cap"
+    if cumulative > 0 and HARD_LIMIT_USD - cumulative < remaining:
+        remaining = HARD_LIMIT_USD - cumulative
+        bounded_by = "running_total"
     remaining = min(max(remaining, Decimal("0")), DAILY_CAP_USD)
     return DailyAllowance(
         cap_usd=DAILY_CAP_USD,
         spent_usd=already_spent.quantize(COST_DISPLAY_QUANTUM, rounding=ROUND_CEILING),
         remaining_usd=remaining.quantize(COST_DISPLAY_QUANTUM, rounding=ROUND_FLOOR),
+        bounded_by=bounded_by,
     )
 
 
@@ -561,7 +576,7 @@ class CostEstimate(BaseModel):
     #: ``@computed_field``, which could not know which branch fired.
     block_reason: BlockReason | None = None
     #: ADR-0141 decision 2: what is left of the rolling 24-hour cap, from the
-    #: same ledger read the daily cap uses. ``None`` when the ledger cannot be
+    #: same ``daily_spend_for`` read the daily cap uses. ``None`` when the ledger cannot be
     #: metered (ADR-0016) or trusted, or the estimate has no spend key. The
     #: spend key itself is never sent.
     daily_allowance: DailyAllowance | None = None
@@ -865,8 +880,8 @@ class CostEstimationService:
         # ADR-0141: each rail below is TESTED here and DECIDED after the ledger
         # read, not returned from on the spot, for two reasons. The per-run cap
         # must win over every other rail (decision 1), and every block must
-        # carry the allowance, which needs the one ledger read below even when
-        # the running total is what fired (decision 2).
+        # carry the allowance, which needs the one ``daily_spend_for`` read
+        # below even when the running total is what fired (decision 2).
         cumulative = Decimal("0")
         running_total_fires = False
         if meter_key is not None and cost_event_recorder is not None:
@@ -1020,7 +1035,8 @@ class CostEstimationService:
                 daily_cap_fires = already_spent + estimated > DAILY_CAP_USD
         # ADR-0141 decision 2: the allowance comes from the ledger figure read
         # above — the ONE ``daily_spend_for`` call this estimate makes (ADR-0002:
-        # no second read under SQLite's single writer). ``None`` when nothing
+        # no second one under SQLite's single writer; the site-wide
+        # ``global_daily_spend`` read below is separate and older). ``None`` when nothing
         # was read: no spend key, a condemned ledger, or one that cannot be
         # metered (ADR-0016), since a figure with no ledger behind it is invented.
         daily_allowance = (
@@ -1080,6 +1096,18 @@ class CostEstimationService:
                         "USD in the last 24 hours; spend frees up as each run "
                         "turns 24 hours old."
                     ),
+                ]
+                # Decision 7: a run whose estimate ALONE is above the cap will
+                # not fit however long the person waits, so it is never told
+                # that spend frees up. Same ``daily_cap`` reason.
+                if estimated <= DAILY_CAP_USD
+                else [
+                    (
+                        f"This run's estimate of {estimated} USD is larger than the "
+                        f"account's whole USD {DAILY_CAP_USD} allowance for 24 hours, "
+                        "so it will not fit however long you wait."
+                    ),
+                    "Choose lower-cost models or shorten the question.",
                 ],
             )
         if block is not None:

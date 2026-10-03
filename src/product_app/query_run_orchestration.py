@@ -2050,6 +2050,8 @@ def _estimate_reasons(estimate: CostEstimate) -> list[str]:
             "blocked. This is a storage fault, not a limit this account has reached."
         ]
     if estimate.block_reason == "daily_cap":
+        # Says nothing about waiting, so it is true for a run larger than a
+        # whole day's allowance too (decision 7); no separate wording needed.
         return [
             f"This run would take the account past its USD {DAILY_CAP_USD} cap "
             "for the last 24 hours and is blocked."
@@ -2057,11 +2059,20 @@ def _estimate_reasons(estimate: CostEstimate) -> list[str]:
     return [f"Estimated cost exceeds USD {HARD_LIMIT_USD} and is blocked for this slice."]
 
 
-def _block_message(reason: BlockReason | None) -> str:
+def _larger_than_a_day(estimate: CostEstimate) -> bool:
+    """ADR-0141 decision 7: the run's estimate ALONE is above the daily cap, so
+    waiting cannot help and the create message must not say that spend frees
+    up. The same test ``CostEstimationService.estimate`` words its own reasons
+    by."""
+    return estimate.estimated_cost_usd > DAILY_CAP_USD
+
+
+def _block_message(reason: BlockReason | None, *, larger_than_a_day: bool = False) -> str:
     """The ``message`` of the create route's ``COST_LIMIT_EXCEEDED`` 402s,
     worded from the limit that was hit (ADR-0141 decision 3) rather than one
     "exceeds the hard ceiling" sentence for every block. ``None`` keeps the
-    per-run wording, as :func:`_estimate_reasons` does."""
+    per-run wording, as :func:`_estimate_reasons` does. ``larger_than_a_day``
+    (decision 7) words a daily block whose run can never fit."""
     if reason == "account_running_total":
         return (
             "This run would take the account's recent spend past its "
@@ -2071,6 +2082,12 @@ def _block_message(reason: BlockReason | None) -> str:
         return (
             "The daily spend ledger cannot be verified right now; this is a "
             "storage fault, not a limit this account has reached."
+        )
+    if reason == "daily_cap" and larger_than_a_day:
+        return (
+            f"This run is larger than the account's whole USD {DAILY_CAP_USD} "
+            "allowance for 24 hours, so it will not fit however long you wait; "
+            "choose lower-cost models or shorten the question."
         )
     if reason == "daily_cap":
         return (
