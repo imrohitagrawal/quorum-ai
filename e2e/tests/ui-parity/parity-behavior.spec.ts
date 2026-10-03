@@ -1,5 +1,6 @@
 import { test, expect, Page } from "@playwright/test";
 import { waitForComposerReady } from "../../fixtures/stabilize";
+import { LIMIT_RESPONSES } from "../../fixtures/limit-responses";
 
 /**
  * Behavioural regression suite for the design-comp parity change.
@@ -39,11 +40,13 @@ const costEstimate = (total: string, action: string) => ({
   // the real point→bound span (0.190 → ~0.23).
   max_cost_usd: (Number(total) * 1.2).toFixed(4),
   currency: "USD", threshold_action: action, confirmation_token: "tok-abc123",
-  reasons: action === "block" ? ["Estimated spend exceeds the $0.25 hard cap."] : [], breakdown: breakdown(total),
+  // No block branch (W33 slice C): a $0.30 total under a "$0.25 hard cap" was a
+  // shape the server cannot send. Blocks use LIMIT_RESPONSES (real responses).
+  reasons: [], breakdown: breakdown(total),
 });
 const estimateResp = (total: string, action: string) => ({
   correlation_id: "corr-est-0001", cost_estimate: costEstimate(total, action), model_slots: SLOTS,
-  reasons: action === "block" ? ["Estimated spend exceeds the $0.25 hard cap."] : [],
+  reasons: [],
 });
 // ``sources`` overridable so the security test can inject a hostile URL.
 const answer = (i: number, sources?: unknown[]) => ({
@@ -192,7 +195,8 @@ test.describe("UI parity — behaviour", () => {
 
   test("cost-gate block band shows recovery buttons; confirm hidden", async ({ page }) => {
     await boot(page);
-    await page.route("**/v1/query-runs/estimate", (r) => r.fulfill(fulfil(estimateResp("0.300", "block"))));
+    // The per-run cap, as the real server sends it (worst case 0.6228 > $0.50).
+    await page.route("**/v1/query-runs/estimate", (r) => r.fulfill(fulfil(LIMIT_RESPONSES.perRunCap)));
     await page.route("**/v1/query-runs/warnings", (r) => r.fulfill(fulfil({ warnings: [] })));
     await fill(page); await clickEstimate(page);
     await expect(page.locator('#cost-review-card[data-band="block"]')).toBeVisible();

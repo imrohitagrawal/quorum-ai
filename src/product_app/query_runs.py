@@ -33,6 +33,7 @@ from product_app.costs import (
     CostEstimate,
     CostGuardrailDecision,
     CostThresholdAction,
+    DailyAllowance,
     cost_estimation_service,
 )
 from product_app.feedback_store import ChargeOutcome
@@ -108,6 +109,7 @@ from product_app.query_run_orchestration import (
     _abandon_unstarted_run as _abandon_unstarted_run,
 )
 from product_app.query_run_orchestration import _actual_cost as _actual_cost
+from product_app.query_run_orchestration import _block_message as _block_message
 from product_app.query_run_orchestration import (
     _degrade_run_for_deadline as _degrade_run_for_deadline,
 )
@@ -160,6 +162,7 @@ from product_app.query_run_orchestration import (
     _judge_verdict_memo_clear_for_tests as _judge_verdict_memo_clear_for_tests,
 )
 from product_app.query_run_orchestration import _JudgeOutcome as _JudgeOutcome
+from product_app.query_run_orchestration import _larger_than_a_day as _larger_than_a_day
 from product_app.query_run_orchestration import (
     _log_estimate_accuracy as _log_estimate_accuracy,
 )
@@ -722,7 +725,11 @@ def create_query_run(
             status_code=status.HTTP_402_PAYMENT_REQUIRED,
             detail={
                 "code": "COST_LIMIT_EXCEEDED",
-                "message": "Estimated query cost exceeds the hard ceiling for this slice.",
+                # ADR-0141 decision 3: worded from the limit that was hit.
+                "message": _block_message(
+                    cost_estimate.block_reason,
+                    larger_than_a_day=_larger_than_a_day(cost_estimate),
+                ),
                 "cost_estimate": cost_estimate.model_dump(mode="json"),
             },
         )
@@ -809,6 +816,40 @@ def create_query_run(
         raise
 
 
+def _over_daily_cap_detail(spend_key: UUID) -> dict[str, object]:
+    """The body of the charge-time ``OVER_DAILY_CAP`` 402 (ADR-0141 decision 3).
+
+    That body has no ``cost_estimate``, so it carries the reason and the
+    allowance at the top level of ``detail``. The allowance is read AFRESH:
+    the estimate this request ran is out of date by the time the atomic charge
+    refuses, since another request for the same key charged in between. ONE
+    builder for both paths (legacy and cookie), which are kept in step.
+
+    Decision 8: the refusal never turns into an error. If the fresh read
+    raises, the 402 still goes out with ``daily_allowance: None``. Catching it
+    HERE matters on the cookie path: this runs inside the ``try`` whose
+    ``except BaseException`` voids the run's billing, and a charge that was
+    refused was never made, so a void row would be false (measured: a 500 and a
+    ``cost_charge_voided`` row).
+    """
+    allowance: DailyAllowance | None
+    try:
+        allowance = cost_estimation_service.daily_allowance_for(spend_key)
+    except Exception:  # noqa: BLE001 - the refusal must still be sent
+        logger.warning(
+            "query_runs: the daily allowance could not be read for a charge-time "
+            "refusal; sending the 402 without it",
+            exc_info=True,
+        )
+        allowance = None
+    return {
+        "code": "COST_LIMIT_EXCEEDED",
+        "message": _block_message("daily_cap"),
+        "block_reason": "daily_cap",
+        "daily_allowance": None if allowance is None else allowance.model_dump(mode="json"),
+    }
+
+
 def _start_reserved_query_run(
     *,
     payload: QueryRunCreateRequest,
@@ -880,13 +921,7 @@ def _start_reserved_query_run(
             _abandon_unstarted_run(query_run.query_run_id)
             raise HTTPException(
                 status_code=status.HTTP_402_PAYMENT_REQUIRED,
-                detail={
-                    "code": "COST_LIMIT_EXCEEDED",
-                    "message": (
-                        "Account has reached its daily spend cap; no further "
-                        "queries can be accepted until the window resets."
-                    ),
-                },
+                detail=_over_daily_cap_detail(spend_key),
             )
         if charge is ChargeOutcome.OVER_GLOBAL_CEILING:
             query_run = query_run_repository.mark_global_ceiling_reached(query_run.query_run_id)
@@ -938,13 +973,7 @@ def _start_reserved_query_run(
             _abandon_unstarted_run(query_run.query_run_id)
             raise HTTPException(
                 status_code=status.HTTP_402_PAYMENT_REQUIRED,
-                detail={
-                    "code": "COST_LIMIT_EXCEEDED",
-                    "message": (
-                        "Account has reached its daily spend cap; no further "
-                        "queries can be accepted until the window resets."
-                    ),
-                },
+                detail=_over_daily_cap_detail(spend_key),
             )
         if charge is ChargeOutcome.OVER_GLOBAL_CEILING:
             # The deployment-wide ceiling degrades rather than blocks. Mark the

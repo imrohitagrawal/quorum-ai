@@ -21,7 +21,7 @@ These NFRs apply to the Release 1 MVP query workflow and supporting browser-sess
 ## NFR-002 Cost per completed query
 
 - Category: Cost and FinOps.
-- Target: Average completed query cost <= USD 0.05; normal acceptable max <= USD 0.15; execution above USD 0.25 estimated cost is blocked or requires explicit approved confirmation path.
+- Target: Average completed query cost <= USD 0.05; normal acceptable max <= USD 0.15; a run whose worst-case cost is above USD 0.30 requires explicit confirmation, and above USD 0.50 is blocked (thresholds moved by ADR-0102 on 2026-09-07; the 0.25 this line named until 2026-10-03 was stale, ADR-0141).
 - Measurement: Sum of model, search, debate, and synthesis provider cost estimates and actual usage records per query.
 - Owner: Product owner.
 - Priority: Must.

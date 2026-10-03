@@ -64,13 +64,13 @@ These requirements cover Release 1 MVP for the public AI cross-validation workfl
 
 - Actor: Authenticated user.
 - Trigger: The user submits a query with selected models.
-- Behavior: The system estimates query cost before execution, allows normal execution within the approved budget, requires explicit confirmation above USD 0.15 estimated cost, and blocks or requires a product-approved path above USD 0.25 estimated cost.
+- Behavior: The system estimates query cost before execution, allows normal execution within the approved budget, requires explicit confirmation when the run's worst-case cost is above USD 0.30, and blocks it when the worst-case cost is above USD 0.50. A blocked estimate names the limit it hit and an estimate shows the allowance left when it can be read (ADR-0141).
 - Outcome: Users and operators avoid surprise provider spend.
 - Source: `docs/114-success-metrics.md`, `docs/115-release-scope.md`.
 - Owner: Product owner.
 - Priority: Must.
 - Rationale: The two-round debate workflow can be expensive, especially with user-selected models.
-- Acceptance criteria: AC-009, AC-010.
+- Acceptance criteria: AC-009, AC-010, AC-054.
 - Tests: TEST-FR-005.
 - Jira: Not created.
 

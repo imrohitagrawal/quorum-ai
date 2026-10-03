@@ -289,6 +289,11 @@
   // Screen 03 (cost gate) elements. ``renderCostGate`` fills these from
   // ``cost_estimate.breakdown``; the confirm button reuses ``proceedWithRun``.
   const gateHeading = el("cost-gate-heading");
+  const gateLede = el("cost-gate-lede");
+  // W33 slice C round 2: the template's approval heading and lede, kept so a
+  // later allow/confirm render restores them after a block replaced them.
+  const GATE_HEADING_APPROVAL = gateHeading ? gateHeading.textContent : "";
+  const GATE_LEDE_APPROVAL = gateLede ? gateLede.textContent : "";
   const gateQuestion = el("cost-gate-question");
   const gateTotal = el("cost-gate-total");
   const gateRange = el("cost-gate-range");
@@ -300,6 +305,7 @@
   const gateReason = el("cost-gate-reason");
   const gateBlockNote = el("cost-gate-block-note");
   const gateBlockFooter = el("cost-gate-block-footer");
+  const gateAllowance = el("cost-gate-allowance");
   const gateBandLabel = el("cost-review-band-label");
   const gateCard = el("cost-review-card");
   const gateConfirmButton = el("gate-confirm");
@@ -688,6 +694,7 @@
   // slot suggestions, or "why" reasons.
   function showError({
     code,
+    title: titleOverride,
     message,
     hint,
     fieldErrors,
@@ -697,7 +704,9 @@
     footer,
     actions,
   } = {}) {
-    const title = (code && ERROR_TITLES[code]) || "Something went wrong";
+    // ``title`` lets an edge state word its heading from the response (W33
+    // slice C: a COST_LIMIT_EXCEEDED is not always the hard cap).
+    const title = titleOverride || (code && ERROR_TITLES[code]) || "Something went wrong";
     const sev = severity || "error";
     errorRegion.dataset.severity = sev;
     if (errorIcon) {
@@ -8073,8 +8082,12 @@
   // Format a USD amount for the gate's mono cells — reuses ``formatUsd``
   // (the single money-formatting source of truth) with the " USD" suffix
   // off so the compact table/total read as "$0.19", not "$0.19 USD".
+  // W33 slice C round 2: never fewer than two decimals, so a run costing
+  // exactly 0.4000 reads "$0.40", not the "$0.4" ``formatUsd``'s trimming
+  // gives. Only a lone tenths digit is padded; "$0.105" and "$0.0078" keep
+  // their places. Scoped to the gate's figures, not to ``formatUsd``.
   function gateUsd(usdAmount) {
-    return formatUsd(usdAmount, { suffix: false });
+    return formatUsd(usdAmount, { suffix: false }).replace(/^(\$\d+\.\d)$/, "$10");
   }
 
   // A fixed 2-decimal USD render for the presentational planning-range
@@ -8115,6 +8128,145 @@
     const num = Number(usdAmount);
     if (!Number.isFinite(num)) return "$0.00";
     return `$${num.toFixed(decimals)}`;
+  }
+
+  // W33 slice C (ADR-0141 decision 5): a server decimal string ("0.3156",
+  // "0.40") rounded to whole cents for display, UP or DOWN, by integer
+  // arithmetic on its digits — never float arithmetic on money. Spent rounds
+  // up and remaining rounds down, so the page never shows more left than the
+  // server computed. Returns "" for anything that is not a plain non-negative
+  // decimal, so a malformed figure is dropped rather than invented.
+  function usdCents(value, direction) {
+    const match = /^(\d+)(?:\.(\d*))?$/.exec(String(value == null ? "" : value).trim());
+    if (!match) return "";
+    const fraction = (match[2] || "").padEnd(2, "0");
+    let cents = Number(match[1]) * 100 + Number(fraction.slice(0, 2));
+    if (direction === "up" && /[1-9]/.test(fraction.slice(2))) cents += 1;
+    return `$${Math.floor(cents / 100)}.${String(cents % 100).padStart(2, "0")}`;
+  }
+
+  // A cap always prints with two decimals ("$0.50", "$0.40"), never the
+  // trimmed "$0.5" that ``formatUsd`` gives (decision 5). A cap that is not a
+  // plain decimal gives "" — no figure — rather than an invented "$0.00"
+  // (round 2); callers word their sentence without it.
+  function capUsd(value) {
+    return usdCents(value, "down");
+  }
+
+  // The daily cap's label for a response that does not carry the figure (the
+  // charge-time refusal whose allowance read failed). ``daily_allowance``
+  // carries the server's own ``cap_usd`` whenever there is one. A label only:
+  // the page never decides a limit from it.
+  const DAILY_CAP_LABEL_USD = "0.40";
+
+  // W33 slice C (ADR-0141 decisions 5 and 7): the words for a block, chosen
+  // from ``block_reason`` and never from the prose ``reasons``. Pure (no DOM).
+  //   * ``per_run_cap`` (and a block with no reason, as an older server
+  //     sends): the hard-cap headline, note, rail and the "cheaper models" /
+  //     "shorten" actions — the one block where they are the right advice.
+  //   * ``daily_cap``: what was used of the $0.40 in the last 24 hours, that
+  //     simulated runs count, and that spend frees up as each run turns 24
+  //     hours old. A run whose estimate ALONE is above the cap (decision 7)
+  //     never hears that: it can never fit, so it gets the cheaper/shorter
+  //     actions (the only remedy, and what the server's own reason says) but
+  //     no rail and no hard-cap headline.
+  //   * ``account_running_total``: the $0.50 running limit and no 24-hour
+  //     claim (that total has no 24-hour window).
+  //   * ``ledger_unavailable``: a storage fault, not a limit reached.
+  // ``estimatedUsd`` is the run's point estimate as the server sent it, or
+  // undefined when unknown (the charge-time refusal carries none).
+  function limitBlockCopy({ reason, allowance, estimatedUsd }) {
+    // The response's own cap when it carries an allowance (shown only if it
+    // is a well-formed decimal); the label only when there is no allowance.
+    const capValue = allowance ? allowance.cap_usd : DAILY_CAP_LABEL_USD;
+    const cap = capUsd(capValue);
+    const ofCap = cap ? `the ${cap}` : "what";
+    const hardCap = capUsd(COST_HARD_LIMIT_USD);
+    const runText = estimatedUsd === undefined ? "" : gateUsd(estimatedUsd);
+    if (reason === "daily_cap") {
+      if (estimatedUsd !== undefined && Number(estimatedUsd) > Number(capValue)) {
+        return {
+          perRunFurniture: false,
+          offerCheaper: true,
+          headline: "Larger than a day's allowance — this run won't start",
+          body:
+            `This run is estimated at ${runText}, more than the whole ${cap} ` +
+            "you can spend in 24 hours, so it will not fit however long you " +
+            "wait. Choose lower-cost models or shorten the question.",
+          announce: `Run blocked. Estimated ${runText} is more than the whole ${cap} daily allowance.`,
+        };
+      }
+      const spent = allowance ? usdCents(allowance.spent_usd, "up") : "";
+      const used = spent
+        ? `You have used ${spent} of ${ofCap} you can spend in the last 24 hours`
+        : `This run would take you past ${ofCap} you can spend in the last 24 hours`;
+      const needs = spent && runText ? `, and this run needs about ${runText}` : "";
+      // Round 2: "used" only when the server says nothing is left; a block
+      // with some allowance left is "not enough left" for THIS run.
+      const nothingLeft =
+        allowance != null && /^\d+(\.\d*)?$/.test(String(allowance.remaining_usd)) &&
+        !/[1-9]/.test(String(allowance.remaining_usd));
+      return {
+        perRunFurniture: false,
+        offerCheaper: false,
+        headline: nothingLeft
+          ? "Daily allowance used — this run won't start"
+          : "Not enough allowance left — this run won't start",
+        body:
+          `${used}${needs}. Simulated runs count too. ` +
+          "Spend frees up as each run turns 24 hours old.",
+        announce:
+          `Run blocked by ${cap ? `the ${cap}` : "the"} daily allowance. ` +
+          "Spend frees up as each run turns 24 hours old.",
+      };
+    }
+    if (reason === "account_running_total") {
+      return {
+        perRunFurniture: false,
+        offerCheaper: false,
+        headline: "Running limit reached — this run won't start",
+        body:
+          `Your recent runs${runText ? ` and this one (about ${runText})` : ""} ` +
+          `add up to more than the ${hardCap} running limit. Simulated runs count too.`,
+        announce: `Run blocked by the ${hardCap} running limit.`,
+      };
+    }
+    if (reason === "ledger_unavailable") {
+      return {
+        perRunFurniture: false,
+        offerCheaper: false,
+        headline: "Spending can't be checked — this run won't start",
+        body:
+          "The spend ledger cannot be verified right now, so no run can start. " +
+          "This is a storage fault on our side, not a limit you have reached. " +
+          "Please try again later.",
+        announce: "Run blocked: the spend ledger cannot be verified right now.",
+      };
+    }
+    return {
+      perRunFurniture: true,
+      offerCheaper: true,
+      headline: "Over the hard cap — this run won't start",
+      body: COPY_004_COST_BLOCK,
+      announce: "",
+    };
+  }
+
+  // W33 slice C (ADR-0141 decision 6): the allowance line on an allow or
+  // confirm estimate, from ``daily_allowance`` as the server computed it.
+  // Remaining rounds DOWN to cents. When the running total set the figure
+  // (``bounded_by: "running_total"``) it is not "of $0.40 in the last 24
+  // hours" and does not free up with time, so it is worded against the
+  // running limit instead (decision 2).
+  function allowanceLineText(allowance, estimatedUsd) {
+    const remaining = allowance ? usdCents(allowance.remaining_usd, "down") : "";
+    if (!remaining) return "Your daily allowance cannot be checked right now.";
+    const uses = `this run uses about ${gateUsd(estimatedUsd)}`;
+    if (allowance.bounded_by === "running_total") {
+      return `${remaining} left before the ${capUsd(COST_HARD_LIMIT_USD)} running limit; ${uses}.`;
+    }
+    const cap = capUsd(allowance.cap_usd);
+    return `${remaining}${cap ? ` of ${cap}` : ""} left in the last 24 hours; ${uses}.`;
   }
 
   // Render a list of {label, usd} rows plus a bold Total row into a
@@ -8212,33 +8364,43 @@
     renderCostRows(gateByStage, partitions.byStage, partitions.total);
 
     if (action === "block") {
-      // BLOCK (> $0.50, ADR-0102) — Slice 6 (07 cost-blocked · AC-010 · COPY-004).
-      // First-class honest treatment: COPY-004 VERBATIM, the itemized
-      // estimate (rendered above), the hard-cap disclosure, an honest
-      // "nothing ran / nothing charged", and the server ``reasons[]`` (the
-      // real "why" — NEVER a fabricated "4 premium slots · 14,600-char
-      // question"). Footer surfaces ``threshold_action: blocked`` + the
-      // estimate correlation_id. No proceed path exists.
-      if (gateBandLabel) gateBandLabel.textContent = "Over the hard cap — this run won't start";
+      // BLOCK — Slice 6 (07 cost-blocked · AC-010 · COPY-004), and since W33
+      // slice C (ADR-0141 decision 5) worded from ``block_reason``: the
+      // server can block on four different limits, and only the per-run cap
+      // is "over the hard cap". The itemized estimate (rendered above), an
+      // honest "nothing ran / nothing charged", and a footer quoting
+      // ``threshold_action: blocked`` + the estimate correlation_id are shown
+      // for every one. No proceed path exists.
+      const copy = limitBlockCopy({
+        reason: ce.block_reason,
+        allowance: ce.daily_allowance,
+        estimatedUsd: ce.estimated_cost_usd,
+      });
+      // The block note names the worst case (max_cost_usd), which can exceed
+      // the cap even when the typical estimate shown above is under it.
+      const maxCost = Number(ce.max_cost_usd);
+      const ceiling = Number.isFinite(maxCost) && maxCost > total ? maxCost : total;
+      if (gateBandLabel) gateBandLabel.textContent = copy.headline;
+      // A block approves nothing, so the gate's own heading and lede must not
+      // ask for approval (round 2).
+      if (gateHeading) gateHeading.textContent = "This run can't start";
+      if (gateLede) {
+        gateLede.textContent =
+          "Nothing has run and nothing has been charged. The card below names the limit that stopped it.";
+      }
       if (gateReason) {
-        // COPY-004 verbatim, then the server's honest reason(s) if present.
-        const serverReasons = reasons.length ? ` ${reasons.join(" ")}` : "";
-        gateReason.textContent = `${COPY_004_COST_BLOCK}${serverReasons}`;
+        // Per-run cap: COPY-004 verbatim, then the server's reason(s). Every
+        // other limit: the page's own words for that limit, never the prose.
+        const serverReasons =
+          copy.perRunFurniture && reasons.length ? ` ${reasons.join(" ")}` : "";
+        gateReason.textContent = `${copy.body}${serverReasons}`;
       }
       if (gateBlockNote) {
-        // The guardrail blocks on the WORST-CASE (max_cost_usd), which can
-        // exceed the cap even when the typical estimate shown above is
-        // under it — so the note names the worst case, not the point estimate.
-        const maxCost = Number(ce.max_cost_usd);
-        const ceiling = Number.isFinite(maxCost) && maxCost > total ? maxCost : total;
-        // ADR-0102: DERIVED from COST_HARD_LIMIT_USD, never a typed literal.
-        // These three strings said "$0.25" after the ladder moved to
-        // 0.30/0.40/0.50 and no gate caught it, so a screen-reader user was
-        // told a different cap from the one on the rail beside them.
-        gateBlockNote.textContent =
-          `This run's worst-case cost (up to ${gateUsd(ceiling)}) is over the ` +
-          `${gateUsd(COST_HARD_LIMIT_USD)} hard cap and no override exists in ` +
-          "this release. Nothing ran and nothing was charged.";
+        gateBlockNote.textContent = copy.perRunFurniture
+          ? `This run's worst-case cost (up to ${gateUsd(ceiling)}) is over the ` +
+            `${capUsd(COST_HARD_LIMIT_USD)} hard cap and no override exists in ` +
+            "this release. Nothing ran and nothing was charged."
+          : "Nothing ran and nothing was charged.";
         gateBlockNote.hidden = false;
       }
       if (gateBlockFooter) {
@@ -8246,24 +8408,28 @@
         gateBlockFooter.textContent = `threshold_action: blocked${corr ? ` · ${corr}` : ""}`;
         gateBlockFooter.hidden = false;
       }
-      // Actions: swap the confirm/change-models pair for the two honest
-      // recovery paths (both return to the composer — real, no fabrication).
+      // The rail pictures the estimate against the $0.50 per-run scale, so it
+      // is drawn only for the per-run cap; for any other limit it would
+      // contradict the headline (failure-mode row 20).
+      if (gateRail) gateRail.hidden = !copy.perRunFurniture;
+      if (gateAllowance) gateAllowance.hidden = true;
+      // Actions: no proceed path. "Choose cheaper models" / "Shorten the
+      // question" only where they are the remedy; every other block keeps
+      // "Back to edit" so the person is never stranded.
       if (gateConfirmButton) gateConfirmButton.hidden = true;
-      if (gateBackButton) gateBackButton.hidden = true;
-      if (gateBlockModelsButton) gateBlockModelsButton.hidden = false;
-      if (gateBlockShortenButton) gateBlockShortenButton.hidden = false;
+      if (gateBackButton) gateBackButton.hidden = copy.offerCheaper;
+      if (gateBlockModelsButton) gateBlockModelsButton.hidden = !copy.offerCheaper;
+      if (gateBlockShortenButton) gateBlockShortenButton.hidden = !copy.offerCheaper;
       if (gateCapNote) gateCapNote.hidden = true;
       // Ctrl+Enter confirms nothing in the block band — hide that hint.
       if (gateHintConfirm) gateHintConfirm.hidden = true;
       // No planning range for a run that will not execute.
       if (gateRangeWrap) gateRangeWrap.hidden = true;
+      if (!copy.perRunFurniture) return copy.announce;
       // The BOUND is what the rail blocks on, so announce the bound — the
       // old line announced the POINT estimate against the cap, which could
       // read "Estimated $0.1984 is above the $0.25 hard cap": false on its face.
-      const announceMax = Number(ce.max_cost_usd);
-      const announceCeiling =
-        Number.isFinite(announceMax) && announceMax > total ? announceMax : total;
-      return `Run blocked. Worst case ${gateUsd(announceCeiling)} is above the ${gateUsd(COST_HARD_LIMIT_USD)} hard cap. ${COPY_004_COST_BLOCK}`;
+      return `Run blocked. Worst case ${gateUsd(ceiling)} is above the ${capUsd(COST_HARD_LIMIT_USD)} hard cap. ${COPY_004_COST_BLOCK}`;
     }
 
     // REQUIRE_CONFIRMATION ($0.30–$0.50, ADR-0102).
@@ -8293,6 +8459,8 @@
     // NOT claim "your confirmation required" — nothing is being required; the
     // user asked to look. ``require_confirmation`` keeps the warning framing.
     const isAllowReview = action === "allow";
+    if (gateHeading) gateHeading.textContent = GATE_HEADING_APPROVAL;
+    if (gateLede) gateLede.textContent = GATE_LEDE_APPROVAL;
     if (gateBandLabel) {
       gateBandLabel.textContent = isAllowReview
         ? "Estimate ready — review and run"
@@ -8313,8 +8481,15 @@
           : `Confirm & run · ${gateUsd(total)}`;
       }
     }
+    // W33 slice C (ADR-0141 decision 6): what is left of the allowance,
+    // before any block, as the server computed it.
+    if (gateAllowance) {
+      gateAllowance.textContent = allowanceLineText(ce.daily_allowance, ce.estimated_cost_usd);
+      gateAllowance.hidden = false;
+    }
     // Reset the block-only surfaces so a prior block render never bleeds
     // into the confirm band.
+    if (gateRail) gateRail.hidden = false;
     if (gateBackButton) gateBackButton.hidden = false;
     if (gateBlockModelsButton) gateBlockModelsButton.hidden = true;
     if (gateBlockShortenButton) gateBlockShortenButton.hidden = true;
@@ -9447,21 +9622,51 @@
     }
 
     // AC-010 Cost blocked (defensive create-time 402; the estimate gate is
-    // the primary surface — see ``renderCostGate``). COPY-004 verbatim.
+    // the primary surface — see ``renderCostGate``). W33 slice C (ADR-0141
+    // decision 3): worded from the reason the server names — on the re-run
+    // estimate's ``cost_estimate``, or at the top level of ``detail`` for the
+    // charge-time refusal, which has no estimate. Only the per-run cap keeps
+    // COPY-004 and the hard-cap row.
     if (code === "COST_LIMIT_EXCEEDED") {
+      const detail = (error.partial && error.partial.detail) || {};
+      const blocked = detail.cost_estimate || null;
+      const reason = detail.block_reason || (blocked && blocked.block_reason) || null;
+      const allowance = blocked ? blocked.daily_allowance : detail.daily_allowance;
+      const copy = limitBlockCopy({
+        reason,
+        allowance: allowance || null,
+        estimatedUsd: blocked ? blocked.estimated_cost_usd : undefined,
+      });
+      const footer = `threshold_action: blocked${error.correlationId ? ` · ${error.correlationId}` : ""}`;
+      if (copy.perRunFurniture) {
+        return {
+          code,
+          severity: "error",
+          acTag: "Cost blocked · AC-010 · COPY-004",
+          message: `${COPY_004_COST_BLOCK} Nothing ran and nothing was charged.`,
+          detailRows: [
+            { label: "Hard cap", value: `${capUsd(COST_HARD_LIMIT_USD)} · no override`, mono: true },
+          ],
+          actions: [
+            { label: "Choose cheaper models", primary: true, action: () => returnToComposer("slot") },
+            { label: "Shorten the question", action: () => returnToComposer("question") },
+          ],
+          footer,
+        };
+      }
       return {
         code,
+        title: copy.headline,
         severity: "error",
-        acTag: "Cost blocked · AC-010 · COPY-004",
-        message: `${COPY_004_COST_BLOCK} Nothing ran and nothing was charged.`,
-        detailRows: [
-          { label: "Hard cap", value: `${gateUsd(COST_HARD_LIMIT_USD)} · no override`, mono: true },
-        ],
-        actions: [
-          { label: "Choose cheaper models", primary: true, action: () => returnToComposer("slot") },
-          { label: "Shorten the question", action: () => returnToComposer("question") },
-        ],
-        footer: `threshold_action: blocked${error.correlationId ? ` · ${error.correlationId}` : ""}`,
+        acTag: "Cost blocked · AC-054",
+        message: `${copy.body} Nothing ran and nothing was charged.`,
+        actions: copy.offerCheaper
+          ? [
+              { label: "Choose cheaper models", primary: true, action: () => returnToComposer("slot") },
+              { label: "Shorten the question", action: () => returnToComposer("question") },
+            ]
+          : [{ label: "Back to the question", primary: true, action: () => returnToComposer("question") }],
+        footer,
       };
     }
 

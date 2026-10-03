@@ -64,14 +64,14 @@ Given an authenticated user selects valid OpenRouter-supported model identifiers
 
 ## AC-009 Normal-cost query proceeds
 
-Given an authenticated user submits a valid query with estimated cost at or below USD 0.15, when the estimate is calculated, then the system can proceed without extra cost confirmation.
+Given an authenticated user submits a valid query whose worst-case cost (`max_cost_usd`) is at or below USD 0.30, when the estimate is calculated, then the system can proceed without extra cost confirmation.
 
 - Requirement: FR-005, NFR-002
 - Test: TEST-FR-005, TEST-NFR-002
 
 ## AC-010 High-cost query requires confirmation or block
 
-Given an authenticated user submits a query with estimated cost above USD 0.15, when the estimate is calculated, then the system requires explicit confirmation, and if the estimate is above USD 0.25 the system blocks execution or follows a product-approved override path.
+Given an authenticated user submits a query whose worst-case cost (`max_cost_usd`) is above USD 0.30, when the estimate is calculated, then the system requires explicit confirmation, and if the worst-case cost is above USD 0.50 the system blocks execution. (Corrected 2026-10-03 to the live thresholds, ADR-0102 and ADR-0141 decision 9; this read 0.15 / 0.25 on the point estimate.)
 
 - Requirement: FR-005, NFR-002
 - Test: TEST-FR-005, TEST-NFR-002
@@ -445,6 +445,14 @@ Given a network whose address has opened its daily allowance of new anonymous se
 - Requirement: FR-019
 - Test: TEST-FR-019 (`tests/integration/test_session_cap_sign_in.py`, 37 tests, plus 4 in `tests/unit/test_capped_page_sign_in_block.py`; the first 28 written before the code, the rest after review round 1; the owner's own journey asserts the mint count at every step)
 - Decided by the product owner on 2026-09-29 (CHG-026 a: the limit applies to anonymous use only and must never stop anyone signing in); the sign-in-only session is the session's design (ADR-0139).
+
+## AC-054 A blocked run names the limit it hit, and the estimate shows the allowance left
+
+Given an estimate that blocks, when it is returned, then `cost_estimate.block_reason` names the limit that fired — `per_run_cap` (worst case above USD 0.50), `account_running_total` (the in-memory running total plus this run above USD 0.50), `ledger_unavailable` (the fail-closed ledger fault) or `daily_cap` (ledger spend in the last 24 hours plus this run above USD 0.40) — and is `null` when nothing blocks; when the worst case is above USD 0.50 the reason is `per_run_cap` whatever else also fires, and the per-run reasons are kept. Every estimate with a spend key carries `daily_allowance` `{cap_usd, spent_usd, remaining_usd, bounded_by}`, the first three as decimal strings (`"0.40"`, then four places), computed on the server from the same single `FeedbackStore.daily_spend_for` read the daily cap uses, writing nothing: remaining is the cap minus spent, lowered to USD 0.50 minus the running total when that total is above 0 and strictly smaller (then `bounded_by` is `running_total`, otherwise `daily_cap`, a tie included), and clamped to between 0 and the cap; it is `null` when the ledger cannot be metered or trusted, and it reflects only the requesting session's own spend key, which is never sent. The create route's re-run-estimate 402 carries the same fields, and its charge-time `OVER_DAILY_CAP` 402 carries `block_reason: "daily_cap"` and a freshly read `daily_allowance` at the top level of `detail`; if that read fails, the 402 is still sent with `daily_allowance: null` and nothing is voided. A run whose estimate alone is above USD 0.40 (worst case not above USD 0.50) is still `daily_cap`, but no reason or message says spend frees up: it says the run is larger than a whole day's allowance, while an ordinary daily block says spend frees up as each run turns 24 hours old. The create message and the top-level `reasons` are worded from the reason — a daily-cap or ledger block never says "hard ceiling" or "exceeds USD 0.50" — and the running-total reason says the account's recent spend would pass its running limit, not that the worst case is above it. A sign-in-only session is refused before any allowance is read. On the page, the block card and the create-time banner choose their headline, note, rail and actions from `block_reason`; an estimate that is not blocked shows the allowance left (or says it cannot be checked); and the composer footer names the rule in one fixed sentence (ADR-0141 decisions 5 and 6, `e2e/tests/invariants/limit-messages.spec.ts`).
+
+- Requirement: FR-005
+- Test: TEST-FR-005 (`tests/integration/test_block_reason_and_daily_allowance.py`, 25 tests written before the code and 6 more before the review-round-1 fix; the two "exactly one field differs" tests in `tests/integration/test_feedback_store_locked_database.py` and `tests/integration/test_feedback_store_write_failures.py` assert the allowance follows the ADR-0016 degrade in both directions)
+- Decided by the product owner on 2026-09-29 (CHG-026 h: messages name the limit actually hit and show the remaining allowance, the session's wording accepted in M10); the fields and copy are the session's design (ADR-0141).
 
 ## AC-055 A person can always reach a new question, and the page keeps what they asked
 

@@ -26,7 +26,7 @@ it updates the Status column and names the PR or commit.
 | M04, M21 | #511 retest | Steps 1–3 confirmed; sign-out after a reload still to check | NEXT-SESSION-PROMPT | OWNER: 1-minute check |
 | M07.1 | Start fresh wipes the session list | Bug; a blocking test pins the wrong behaviour | inv-results.md | DONE — W33 slice A (ADR-0140, AC-055): only Clear empties the list |
 | M07.2 | Old follow-up stays in the box | Bug; box opens empty with "Following up on: …" | inv-results.md | PARTLY DONE — W33 slice A (ADR-0140): the box opens empty; "Following up on: …" waits for W37, which sends the context |
-| M07.3–4 | Wrong cap in the error; limits unclear | Bug; message names the limit hit and today's allowance | inv-results.md | OPEN, step 3 |
+| M07.3–4 | Wrong cap in the error; limits unclear | Bug; message names the limit hit and today's allowance | inv-results.md | DONE — W33 slice C (ADR-0141, AC-054): the card names the limit that fired; estimates show the allowance left in the last 24 hours |
 | M07.5, M08, M10, M11 | Why testing missed these; the process | Engineering review + prevention plan | ENGINEERING-REVIEW-2026-09-29.md | PLAN PROPOSED |
 | M07.6 | No way home from a result | Bug; logo link + back | inv-results.md | DONE — W33 slice A (ADR-0140, AC-055) |
 | M07.7, M08.8 | Starter questions | Six audience groups × four full questions, wider high-stakes list | NEXT-SESSION-PROMPT | DECIDED, not built |

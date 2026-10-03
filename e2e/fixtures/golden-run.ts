@@ -295,7 +295,10 @@ const breakdown = (total = "0.190") => ({ by_model: BY_MODEL, by_stage: BY_STAGE
 const costEstimate = (total: string, action: string) => ({
   estimated_cost_usd: total, currency: "USD", threshold_action: action,
   confirmation_token: "tok-abc123",
-  reasons: action === "block" ? ["Estimated spend exceeds the $0.25 hard cap."] : [],
+  // No block branch: a block here would be a shape the server cannot send
+  // (W33 slice C, failure-mode row 14). Block estimates come from
+  // `fixtures/limit-responses.ts`, which holds real server responses.
+  reasons: [],
   breakdown: breakdown(total),
 });
 const goldenAnswer = (i: number) => ({
