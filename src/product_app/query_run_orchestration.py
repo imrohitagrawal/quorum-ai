@@ -56,6 +56,7 @@ from product_app.costs import (
     GLOBAL_DAILY_CEILING_USD,
     HARD_LIMIT_USD,
     SOFT_THRESHOLD_USD,
+    BlockReason,
     CostBreakdown,
     CostEstimate,
     CostGuardrailDecision,
@@ -2026,6 +2027,11 @@ def _estimate_reasons(estimate: CostEstimate) -> list[str]:
     "could exceed USD 0.30". Nothing pinned it, which is why it shipped.
     ``tests/integration/test_estimate_reasons_quote_the_live_thresholds.py``
     pins it now, over real HTTP and in both directions.
+
+    ADR-0141 decision 3: a BLOCK is worded from ``estimate.block_reason``, so a
+    daily-cap or ledger block no longer says "exceeds USD 0.50". A BLOCK with no
+    reason (an estimate built by hand) gets the per-run wording, the one limit
+    every BLOCK estimate used to be described by.
     """
     if estimate.threshold_action is CostThresholdAction.ALLOW:
         return ["Estimated cost is within the normal execution band."]
@@ -2033,7 +2039,45 @@ def _estimate_reasons(estimate: CostEstimate) -> list[str]:
         return [
             f"Estimated cost exceeds USD {SOFT_THRESHOLD_USD} and requires explicit confirmation."
         ]
+    if estimate.block_reason == "account_running_total":
+        return [
+            "This run would take the account's recent spend past its "
+            f"USD {HARD_LIMIT_USD} running limit and is blocked."
+        ]
+    if estimate.block_reason == "ledger_unavailable":
+        return [
+            "The daily spend ledger cannot be verified right now, so this run is "
+            "blocked. This is a storage fault, not a limit this account has reached."
+        ]
+    if estimate.block_reason == "daily_cap":
+        return [
+            f"This run would take the account past its USD {DAILY_CAP_USD} cap "
+            "for the last 24 hours and is blocked."
+        ]
     return [f"Estimated cost exceeds USD {HARD_LIMIT_USD} and is blocked for this slice."]
+
+
+def _block_message(reason: BlockReason | None) -> str:
+    """The ``message`` of the create route's ``COST_LIMIT_EXCEEDED`` 402s,
+    worded from the limit that was hit (ADR-0141 decision 3) rather than one
+    "exceeds the hard ceiling" sentence for every block. ``None`` keeps the
+    per-run wording, as :func:`_estimate_reasons` does."""
+    if reason == "account_running_total":
+        return (
+            "This run would take the account's recent spend past its "
+            f"USD {HARD_LIMIT_USD} running limit."
+        )
+    if reason == "ledger_unavailable":
+        return (
+            "The daily spend ledger cannot be verified right now; this is a "
+            "storage fault, not a limit this account has reached."
+        )
+    if reason == "daily_cap":
+        return (
+            f"This run would take the account past its USD {DAILY_CAP_USD} cap "
+            "for the last 24 hours; spend frees up as each run turns 24 hours old."
+        )
+    return f"This run's worst-case cost is above the USD {HARD_LIMIT_USD} per-run cap."
 
 
 #: Per-run memo of the Layer-B judge verdict (P1 / FR-015 wiring). The judge

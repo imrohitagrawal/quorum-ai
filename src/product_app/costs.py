@@ -45,10 +45,10 @@ from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass
 from dataclasses import replace as dataclass_replace
 from datetime import UTC, datetime, timedelta
-from decimal import ROUND_FLOOR, ROUND_HALF_UP, Decimal
+from decimal import ROUND_CEILING, ROUND_FLOOR, ROUND_HALF_UP, Decimal
 from enum import StrEnum
 from threading import RLock
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field
@@ -374,6 +374,57 @@ class CostThresholdAction(StrEnum):
     BLOCK = "block"
 
 
+#: Which limit a BLOCK estimate hit (ADR-0141 decision 1).
+#:
+#: Set at the return that blocks, so the page and API readers choose their
+#: words from this field and never from the prose ``reasons``. When the run's
+#: worst case is above ``HARD_LIMIT_USD`` the reason is ``per_run_cap``
+#: whatever else also fires: that run can never start, so the advice to wait
+#: that the other three carry would be wrong.
+#:
+#: A closed ``Literal``, not a ``StrEnum``: the values are a wire format, and
+#: ``openapi.yaml`` publishes them as an ``enum`` either way, and mypy rejects
+#: any other string where a ``BlockReason`` is expected.
+BlockReason = Literal["per_run_cap", "account_running_total", "ledger_unavailable", "daily_cap"]
+
+
+class DailyAllowance(BaseModel):
+    """What is left of the account's rolling 24-hour cap (ADR-0141 decision 2).
+
+    Computed on the server, never on the page, from the same ledger read the
+    daily cap uses. ``cap_usd`` is ``DAILY_CAP_USD`` as the constant prints it;
+    ``spent_usd`` and ``remaining_usd`` carry four decimal places
+    (``COST_DISPLAY_QUANTUM``), spent rounded up and remaining rounded down, so
+    rounding never makes the two add up to more than the cap (spent itself can
+    be above the cap, when remaining is clamped to 0).
+    """
+
+    cap_usd: Decimal
+    spent_usd: Decimal
+    remaining_usd: Decimal
+
+
+def daily_allowance_from(*, already_spent: Decimal, cumulative: Decimal) -> DailyAllowance:
+    """The allowance left, from one ledger figure and the in-memory running total.
+
+    ``remaining`` is ``DAILY_CAP_USD - already_spent``, lowered to
+    ``HARD_LIMIT_USD - cumulative`` when the running total is above 0 and that
+    is the smaller rail (it has no 24-hour window, so the ledger alone can read
+    "$0.29 left" while the server blocks), and clamped to ``[0, DAILY_CAP_USD]``
+    (a live run reconciled above its estimate can put the ledger above the cap).
+    Pure arithmetic: it reads and writes nothing.
+    """
+    remaining = DAILY_CAP_USD - already_spent
+    if cumulative > 0:
+        remaining = min(remaining, HARD_LIMIT_USD - cumulative)
+    remaining = min(max(remaining, Decimal("0")), DAILY_CAP_USD)
+    return DailyAllowance(
+        cap_usd=DAILY_CAP_USD,
+        spent_usd=already_spent.quantize(COST_DISPLAY_QUANTUM, rounding=ROUND_CEILING),
+        remaining_usd=remaining.quantize(COST_DISPLAY_QUANTUM, rounding=ROUND_FLOOR),
+    )
+
+
 class CostLineByModel(BaseModel):
     model_id: str
     display_name: str
@@ -505,6 +556,15 @@ class CostEstimate(BaseModel):
     #: atomic half of this work is ADR-0004's own recommendation taken up, not
     #: a new idea.
     spend_metering_unavailable: bool = False
+    #: ADR-0141 decision 1: which limit a BLOCK estimate hit; ``None`` when
+    #: nothing blocks. A plain field set at the return that blocks — not a
+    #: ``@computed_field``, which could not know which branch fired.
+    block_reason: BlockReason | None = None
+    #: ADR-0141 decision 2: what is left of the rolling 24-hour cap, from the
+    #: same ledger read the daily cap uses. ``None`` when the ledger cannot be
+    #: metered (ADR-0016) or trusted, or the estimate has no spend key. The
+    #: spend key itself is never sent.
+    daily_allowance: DailyAllowance | None = None
 
 
 class CostConfirmation(BaseModel):
@@ -802,6 +862,13 @@ class CostEstimationService:
         # signed-in account is not its id; the confirmation token below stays
         # bound to the id (it checks who asked, not how much was spent).
         meter_key = spend_key if spend_key is not None else account_id
+        # ADR-0141: each rail below is TESTED here and DECIDED after the ledger
+        # read, not returned from on the spot, for two reasons. The per-run cap
+        # must win over every other rail (decision 1), and every block must
+        # carry the allowance, which needs the one ledger read below even when
+        # the running total is what fired (decision 2).
+        cumulative = Decimal("0")
+        running_total_fires = False
         if meter_key is not None and cost_event_recorder is not None:
             cumulative = self._cumulative_spend_for(meter_key)
             # UNITS: ``cumulative`` is a sum of RECORDED point estimates, so the
@@ -815,27 +882,16 @@ class CostEstimationService:
             # single call, which is what issue #16 rec #2/#3 asked for. These
             # accumulation rails are a different question and must match their
             # meter. See tests/unit/test_cost_rail_units.py.
-            if cumulative > 0 and cumulative + estimated > HARD_LIMIT_USD:
-                return CostEstimate(
-                    estimated_cost_usd=estimated,
-                    max_cost_usd=bound,
-                    threshold_action=CostThresholdAction.BLOCK,
-                    confirmation_token=None,
-                    breakdown=breakdown,
-                    reasons=[
-                        "Worst-case cost is above the USD 0.50 hard limit for this account.",
-                        (
-                            "Cumulative spend for this account is "
-                            f"{cumulative.quantize(COST_DISPLAY_QUANTUM)} USD; "
-                            "no further queries can be accepted until the window resets."
-                        ),
-                    ],
-                )
+            running_total_fires = cumulative > 0 and cumulative + estimated > HARD_LIMIT_USD
         # Set by the bypass branch below when the ledger cannot be metered, and
         # carried onto the returned estimate so the run degrades to simulation
         # (ADR-0016). Initialised HERE, outside the ``account_id is not None``
         # block, because the field is on every estimate this method returns.
         spend_metering_unavailable = False
+        # Set by the ledger branch below and decided after it (ADR-0141).
+        ledger_condemned = False
+        already_spent: Decimal | None = None
+        daily_cap_fires = False
         # Daily-cap guard. Defense-in-depth: even if a user stays
         # under the per-call thresholds AND under the in-memory
         # cumulative check, a patient attacker could trickle out one
@@ -891,22 +947,9 @@ class CostEstimationService:
                 and not ledger_is_trustworthy
             ):
                 self._log_daily_cap_blocked()
-                return CostEstimate(
-                    estimated_cost_usd=estimated,
-                    max_cost_usd=bound,
-                    threshold_action=CostThresholdAction.BLOCK,
-                    confirmation_token=None,
-                    breakdown=breakdown,
-                    reasons=[
-                        (
-                            "The daily spend ledger is not writable and a reconnect "
-                            "attempt has already been made without restoring it, so "
-                            "no account's 24h cap can be verified right now. This is "
-                            "a storage fault on the shared ledger, not a limit this "
-                            "account has reached."
-                        ),
-                    ],
-                )
+                # Decided below, after the per-run cap; nothing is read from a
+                # ledger nobody can trust, so the allowance stays ``None``.
+                ledger_condemned = True
             # METER ONLY WHAT WE CAN TRUST — and this line is the whole of a
             # measured, LIVE money leak that predates this batch.
             #
@@ -935,7 +978,7 @@ class CostEstimationService:
             # Keying the meter on ``trustworthy`` closes it, and makes the
             # money decision a pure function of the handle rather than of a
             # process-global flag written by two thread classes.
-            if not feedback_ledger_may_be_metered(store):
+            elif not feedback_ledger_may_be_metered(store):
                 # LOUD, AND SPENDING NOTHING (ADR-0016, superseding ADR-0004).
                 # The request is still NOT denied and ``threshold_action`` is
                 # NOT changed — ``daily_cap_fail_closed`` above still selects
@@ -974,32 +1017,83 @@ class CostEstimationService:
                 # unusable — and any run whose BOUND alone exceeded the cap was
                 # BLOCKed with a null confirmation token even on an account that
                 # had spent nothing, which killed the confirmation band outright.
-                if already_spent + estimated > DAILY_CAP_USD:
-                    return CostEstimate(
-                        estimated_cost_usd=estimated,
-                        max_cost_usd=bound,
-                        threshold_action=CostThresholdAction.BLOCK,
-                        confirmation_token=None,
-                        breakdown=breakdown,
-                        reasons=[
-                            # Says what it MEASURES. The comparison two lines
-                            # above is ``already_spent + estimated``, both
-                            # point estimates against a ledger of measured
-                            # actuals (#255) — it is not a worst-case figure,
-                            # and calling it one told the operator the rail
-                            # was stricter than it is.
-                            (
-                                f"This run would take the account past its USD "
-                                f"{DAILY_CAP_USD} daily cap."
-                            ),
-                            (
-                                "Account has spent "
-                                f"{already_spent.quantize(COST_DISPLAY_QUANTUM)} "
-                                "USD in the last 24 hours; no further queries "
-                                "can be accepted until the window resets."
-                            ),
-                        ],
-                    )
+                daily_cap_fires = already_spent + estimated > DAILY_CAP_USD
+        # ADR-0141 decision 2: the allowance comes from the ledger figure read
+        # above — the ONE ``daily_spend_for`` call this estimate makes (ADR-0002:
+        # no second read under SQLite's single writer). ``None`` when nothing
+        # was read: no spend key, a condemned ledger, or one that cannot be
+        # metered (ADR-0016), since a figure with no ledger behind it is invented.
+        daily_allowance = (
+            None
+            if already_spent is None
+            else daily_allowance_from(already_spent=already_spent, cumulative=cumulative)
+        )
+        # ADR-0141 decision 1: which limit blocks. The per-run cap wins whatever
+        # else fires and keeps its own reasons (that run can never start, so
+        # "wait" is the wrong advice); it is returned by the final return below.
+        # The other three keep the order they were always tested in.
+        block: tuple[BlockReason, list[str]] | None = None
+        if threshold_action is CostThresholdAction.BLOCK:
+            pass
+        elif running_total_fires:
+            # Decision 4: says what fired — the running total, not the worst case.
+            block = (
+                "account_running_total",
+                [
+                    (
+                        "This run would take the account's recent spend past its "
+                        f"USD {HARD_LIMIT_USD} running limit."
+                    ),
+                    (
+                        "Cumulative spend for this account is "
+                        f"{cumulative.quantize(COST_DISPLAY_QUANTUM)} USD."
+                    ),
+                ],
+            )
+        elif ledger_condemned:
+            block = (
+                "ledger_unavailable",
+                [
+                    (
+                        "The daily spend ledger is not writable and a reconnect "
+                        "attempt has already been made without restoring it, so "
+                        "no account's 24h cap can be verified right now. This is "
+                        "a storage fault on the shared ledger, not a limit this "
+                        "account has reached."
+                    ),
+                ],
+            )
+        elif daily_cap_fires:
+            assert already_spent is not None  # ``daily_cap_fires`` is only set beside it
+            block = (
+                "daily_cap",
+                [
+                    # Says what it MEASURES. The comparison is
+                    # ``already_spent + estimated``, both point estimates
+                    # against a ledger of measured actuals (#255) — it is not a
+                    # worst-case figure, and calling it one told the operator
+                    # the rail was stricter than it is.
+                    f"This run would take the account past its USD {DAILY_CAP_USD} daily cap.",
+                    (
+                        "Account has spent "
+                        f"{already_spent.quantize(COST_DISPLAY_QUANTUM)} "
+                        "USD in the last 24 hours; spend frees up as each run "
+                        "turns 24 hours old."
+                    ),
+                ],
+            )
+        if block is not None:
+            block_reason, block_reasons = block
+            return CostEstimate(
+                estimated_cost_usd=estimated,
+                max_cost_usd=bound,
+                threshold_action=CostThresholdAction.BLOCK,
+                confirmation_token=None,
+                breakdown=breakdown,
+                reasons=block_reasons,
+                block_reason=block_reason,
+                daily_allowance=daily_allowance,
+            )
         # Issue #100: the deployment-wide ceiling. Independent of
         # ``account_id`` (it sums across every account) and independent of
         # ``threshold_action`` (it degrades, never blocks — see the
@@ -1046,6 +1140,29 @@ class CostEstimationService:
             breakdown=breakdown,
             global_ceiling_reached=global_ceiling_reached,
             spend_metering_unavailable=spend_metering_unavailable,
+            # Only the per-run cap blocks on this return (decision 1).
+            block_reason=("per_run_cap" if threshold_action is CostThresholdAction.BLOCK else None),
+            daily_allowance=daily_allowance,
+        )
+
+    def daily_allowance_for(self, spend_key: UUID) -> DailyAllowance | None:
+        """A FRESH read of the allowance, for the charge-time ``OVER_DAILY_CAP``
+        402 (ADR-0141 decision 3).
+
+        The estimate that create ran is stale by then — another request for the
+        same key charged between it and the refused charge — so the figure is
+        read again. One ``daily_spend_for`` call and nothing written. ``None``
+        when the ledger cannot be metered, as on the estimate.
+        """
+        from product_app.feedback_store import get_store  # local import to avoid cycles
+        from product_app.store_reconnect import feedback_ledger_may_be_metered
+
+        store = get_store()
+        if store is None or not feedback_ledger_may_be_metered(store):
+            return None
+        return daily_allowance_from(
+            already_spent=store.daily_spend_for(spend_key),
+            cumulative=self._cumulative_spend_for(spend_key),
         )
 
     def _log_daily_cap_bypassed(self) -> None:

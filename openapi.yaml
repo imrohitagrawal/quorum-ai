@@ -626,6 +626,20 @@ components:
           type: boolean
           title: Spend Metering Unavailable
           default: false
+        block_reason:
+          anyOf:
+          - type: string
+            enum:
+            - per_run_cap
+            - account_running_total
+            - ledger_unavailable
+            - daily_cap
+          - type: 'null'
+          title: Block Reason
+        daily_allowance:
+          anyOf:
+          - $ref: '#/components/schemas/DailyAllowance'
+          - type: 'null'
       type: object
       required:
       - estimated_cost_usd
@@ -676,6 +690,40 @@ components:
       - require_confirmation
       - block
       title: CostThresholdAction
+    DailyAllowance:
+      properties:
+        cap_usd:
+          type: string
+          pattern: ^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$
+          title: Cap Usd
+        spent_usd:
+          type: string
+          pattern: ^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$
+          title: Spent Usd
+        remaining_usd:
+          type: string
+          pattern: ^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$
+          title: Remaining Usd
+      type: object
+      required:
+      - cap_usd
+      - spent_usd
+      - remaining_usd
+      title: DailyAllowance
+      description: 'What is left of the account''s rolling 24-hour cap (ADR-0141 decision 2).
+
+
+        Computed on the server, never on the page, from the same ledger read the
+
+        daily cap uses. ``cap_usd`` is ``DAILY_CAP_USD`` as the constant prints it;
+
+        ``spent_usd`` and ``remaining_usd`` carry four decimal places
+
+        (``COST_DISPLAY_QUANTUM``), spent rounded up and remaining rounded down, so
+
+        rounding never makes the two add up to more than the cap (spent itself can
+
+        be above the cap, when remaining is clamped to 0).'
     DebateOutput:
       properties:
         round_number:
