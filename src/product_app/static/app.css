@@ -1053,11 +1053,15 @@ select {
 }
 .landing-handoff-note[hidden] { display: none; }
 
-/* W33 (ADR-0140 decision 7): the hint directly above the model slots after a
+/* W33 (ADR-0140 decision 8): the hint directly above the model slots after a
    landing question. Same calm accent treatment as the hand-off note above it,
    so the two read as one message continued on the next page. It takes focus
-   programmatically, which does not trigger :focus-visible, so the focus ring
-   is drawn on plain :focus here. */
+   programmatically, which does not match :focus-visible, so the page-wide
+   ``:focus:not(:focus-visible) { outline: none; }`` rule below draws NO ring on
+   it — deliberately, as for the view-entry headings that take focus the same
+   way. The cue for a sighted user is the hint's own bordered box, scrolled
+   into view, and the step marker moving to Models; a screen reader reads the
+   hint because focus is on it. */
 .handoff-hint {
   margin: 0;
   padding: var(--space-3) var(--space-4);
@@ -1069,10 +1073,6 @@ select {
   line-height: 1.5;
 }
 .handoff-hint[hidden] { display: none; }
-.handoff-hint:focus {
-  outline: 2px solid var(--focus-ring);
-  outline-offset: 2px;
-}
 .landing-handoff-note-icon {
   display: flex;
   align-items: center;
@@ -1948,6 +1948,25 @@ html[data-theme="dark"] .landing-preview-caption {
 }
 
 .live-stop[hidden] {
+  display: none;
+}
+
+/* W33 (ADR-0140 decision 4, row 29): "New question" once the run is over —
+   a plain ink outline, the same weight as the result header's actions. */
+.live-new-question {
+  min-height: 34px;
+  padding: 0 var(--space-4);
+  border-radius: var(--radius-btn);
+  border: 1px solid var(--line-strong);
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+.live-new-question:hover {
+  background: var(--paper);
+}
+.live-new-question[hidden] {
   display: none;
 }
 
@@ -5357,6 +5376,35 @@ main:focus { outline: none; }
 
 .composer { gap: var(--space-5); }
 .composer-head { display: grid; gap: var(--space-2); }
+
+/* W33 (ADR-0140 decision 8, failure-mode row 32): the step marker,
+   "Question → Models → Estimate and run". Small secondary text; the current
+   step is ink and bold, so the difference does not rest on colour alone. The
+   arrow is pseudo-content with empty alternative text. */
+.composer-steps {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+.composer-steps li {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.composer-steps li + li::before {
+  content: "→" / "";
+  color: var(--text-secondary);
+}
+.composer-steps li[aria-current="step"] {
+  color: var(--ink);
+  font-weight: 650;
+}
 .composer .composer-head h1 {
   font-family: var(--font-serif);
   font-size: 1.85rem; /* ~30px Newsreader display */
@@ -6239,7 +6287,7 @@ html[data-theme="dark"] .landing-preview { background: var(--accent-soft); }
   color: var(--text-secondary);
 }
 
-/* W33 (ADR-0140 decisions 1, 6): the empty-list line and the cap line. */
+/* W33 (ADR-0140 decisions 1, 7): the empty-list line and the cap line. */
 .session-trail-note {
   margin: 0;
   font-size: 0.84rem;
@@ -6288,12 +6336,17 @@ html[data-theme="dark"] .landing-preview { background: var(--accent-soft); }
 .session-trail-entry:hover { background: var(--overlay-inset); border-color: var(--line-strong-2); }
 .session-trail-entry:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 
-/* Muted treatment for degraded / simulated / failed / timed-out / cancelled / partial. */
+/* Muted treatment for degraded / simulated / failed / timed-out / cancelled / partial.
+   W33 (ADR-0140 decision 7, failure-mode row 31): this was ``opacity: 0.72``,
+   which faded the small status and time text to 3.2:1 (light) and 3.41:1
+   (dark) — under WCAG AA's 4.5:1. The entry now keeps full opacity, its text
+   stays on the AA tokens, and the muted state is carried by a dashed border
+   and the status pill instead. */
 .session-trail-entry--muted {
-  opacity: 0.72;
+  border-style: dashed;
 }
 .session-trail-entry--muted .session-trail-status {
-  color: var(--muted);
+  color: var(--text-secondary);
   border-color: var(--line);
 }
 
@@ -6323,7 +6376,10 @@ html[data-theme="dark"] .landing-preview { background: var(--accent-soft); }
 .session-trail-time {
   flex-shrink: 0;
   font-size: 0.72rem;
-  color: var(--muted);
+  /* W33 (row 31): --text-secondary has more contrast than --muted against
+     the panel in both themes (#565C66 vs #5F6570 on white; #9AA0AA vs
+     #8A9099 on #191C22), for this 11.5 px text. */
+  color: var(--text-secondary);
 }
 
 @media (max-width: 600px) {
@@ -6344,7 +6400,7 @@ html[data-theme="dark"] .landing-preview { background: var(--accent-soft); }
     padding: var(--space-2) var(--space-2);
     gap: var(--space-2);
   }
-  /* W33 (ADR-0140 decision 6, failure-mode rows 13-14): an EMPTY list is not
+  /* W33 (ADR-0140 decision 7, failure-mode rows 13-14): an EMPTY list is not
      pinned over the page. Measured before the change at 390 px: the fixed bar
      covered the question box the landing hand-off had just focused, while
      showing nothing but its heading. It sits in the page flow like the

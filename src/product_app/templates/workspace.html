@@ -203,6 +203,17 @@
         <div data-view="composer">
         <section class="panel composer" aria-labelledby="composer-heading">
           <div class="composer-head">
+            <!-- W33 (ADR-0140 decision 8, failure-mode row 32): where the user
+                 is in the three steps. app.js (setComposerStep) moves
+                 aria-current="step": Question on a plain load, Models after a
+                 landing question. The arrows are CSS pseudo-content with empty
+                 alternative text, so a screen reader reads the three steps
+                 and not the arrows. -->
+            <ol id="composer-steps" class="composer-steps" aria-label="Steps">
+              <li data-step="question" aria-current="step">Question</li>
+              <li data-step="models">Models</li>
+              <li data-step="estimate">Estimate and run</li>
+            </ol>
             <h1 id="composer-heading">Ask the panel</h1>
             <p class="lede">Results are ephemeral. Cost is shown before each run; nothing executes without your confirmation.</p>
           </div>
@@ -259,7 +270,7 @@
                 </label>
                 <p id="quick-mode-note" class="muted quick-mode-note" hidden>four models by default, 2 debates and 1 sourced answer</p>
               </div>
-              <!-- W33 (ADR-0140 decision 7): after a landing question the page
+              <!-- W33 (ADR-0140 decision 8): after a landing question the page
                    lands HERE, directly above the model slots, and this hint takes
                    focus. Shown only on that hand-off; app.js writes the text
                    (handoffHintHtml) so it counts the models actually shown and
@@ -487,6 +498,11 @@
               <div class="live-run-header-meta">
                 <span id="live-elapsed" class="live-elapsed mono" aria-hidden="true">0.0s elapsed</span>
                 <button id="live-stop" class="button live-stop" type="button">Stop run</button>
+                <!-- W33 (ADR-0140 decision 4, failure-mode row 29): once the run
+                     is no longer in progress (stopped, failed, timed out) this
+                     view would be a dead end, so it offers the way home. Hidden
+                     while the run is in progress, when Stop is the only control. -->
+                <button id="live-new-question" class="button live-new-question" type="button" data-new-question hidden>New question</button>
                 <!-- PR1/#6: see the result-header toggle for why this is
                      in-header rather than a fixed floating control. -->
                 <button id="theme-toggle-live" class="toggle" data-theme-toggle type="button" aria-label="Toggle dark mode">&#9680;</button>
@@ -549,7 +565,7 @@
               </div>
               <div class="result-header-actions">
                 <!-- W33 (ADR-0140 decision 4): the way to a new question. -->
-                <button id="result-new-question" type="button" class="button result-action result-action-new">New question</button>
+                <button id="result-new-question" type="button" class="button result-action result-action-new" data-new-question>New question</button>
                 <button id="result-copy" type="button" class="button result-action">Copy</button>
                 <button id="result-export" type="button" class="button result-action">Export</button>
                 <!-- PR1/#6: in-header toggle. A fixed floating control would
@@ -693,7 +709,7 @@
                 </div>
                 <p class="result-next-note">
                   <span class="result-next-dot" aria-hidden="true"></span>
-                  <span>For now each question is answered on its own: the models do not see this question or its answer. Results are ephemeral — export this one first if you need to keep it.</span>
+                  <span>Your next question is answered on its own — the models won't see the question above or its answer.</span>
                 </p>
                 <textarea
                   id="result-next-input"
@@ -981,7 +997,7 @@
            the aside). Rendered by app.js (renderSessionTrail); only the
            "Clear" button empties it (ADR-0140 decision 1). The region is named
            by its visible title, and an empty list says what will appear here
-           (decision 6). ``data-trail-empty`` lets app.css leave an empty panel
+           (decision 7). ``data-trail-empty`` lets app.css leave an empty panel
            unpinned at phone width. -->
       <div class="session-trail-panel" role="region" aria-labelledby="session-trail-heading" data-trail-empty="true">
         <div class="session-trail-head">
