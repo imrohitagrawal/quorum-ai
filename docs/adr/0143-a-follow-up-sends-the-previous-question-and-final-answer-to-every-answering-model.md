@@ -2,12 +2,14 @@
 
 ## Status
 
-Accepted — 2026-10-04, board row W37. The product owner decided the behaviour:
-CHG-026 (g) (*"send the previous question and final answer to all four models; the
-next-question box opens empty with 'Following up on: …'"*, from M08 point 5), their
-2026-07-23 decision (*"prior question + final synthesis in the prompts"*), and on
-2026-10-04 (CHG-027) *"In W37 bring back both 'Follow up on this' and 'Start fresh'"*,
-the landing rename and the hint wording. The shape below is the session's design; the
+Accepted — 2026-10-04, board row W37. The product owner decided the behaviour in
+their message of 2026-10-04 (CHG-027), build item 1: *"W37: follow-up context — the
+previous question and final answer go to all four models; the next-question box opens
+empty with "Following up on: …"; bring back both follow-up buttons; plus the landing
+rename and the hint wording."* and *"In W37 bring back both "Follow up on this" and
+"Start fresh"."* It was first decided as CHG-026 (g), from M08 point 5 and M10's
+*"Rest, I agree with all your suggestions"*, and before that on 2026-07-23, as a
+session recorded it: *"prior question + final synthesis in the prompts"*. The shape below is the session's design; the
 points that are the session's own calls are listed under Consequences so the owner can
 overturn them. Failure modes, listed before the code:
 `docs/analysis/2026-10-04-w37-follow-up-context-failure-modes.md`.
@@ -45,14 +47,18 @@ both texts twice and sent each once. A quick request with context is refused
    says the models will see that question and its final answer; in Start fresh mode
    it says the next question is answered on its own. The box opens empty. A result
    with no final answer (stopped, failed, timed out) shows no mode buttons and the
-   on-its-own note. (Measured by the test designer: the page opens the result
-   view only when a final synthesis exists, so the reachable case is a synthesis
-   whose sections are all empty.)
+   on-its-own note. (A finished panel run on the real backend always has the five
+   sections, so the empty-answer case is tested with a mocked payload; a failed,
+   stopped or timed-out run re-opened from the session list reaches the result view
+   with no synthesis and also offers no follow-up.)
 5. **"Review & run" in follow-up mode attaches the context** to the composer, which
    shows the same *Following up on* line with a **Start fresh** button that drops it.
    The estimate, the safety-warnings probe and the run are built from the same state,
-   so all three carry the same context. Every other way to the composer — "New
-   question", the brand link, the landing page — clears it.
+   so all three carry the same context. Every way to the composer that starts something
+   new clears it: "New question", the brand link, the landing page, and the "Start a
+   new run", "Start your own query" and "Stop it & start new" actions on a failure or
+   busy card. The ways that go back to the question being worked on keep it: "Back to
+   the question", the cost confirmation's Back, and browser Back and Forward.
 6. **What is sent.** The previous question is the question of the result on screen.
    The previous final answer is, for a panel result, the five synthesis sections in
    the order the page shows them (consensus, disagreement, uncertainty,
@@ -76,7 +82,8 @@ both texts twice and sent each once. A quick request with context is refused
   OpenRouter builds the search query is unverified); the system message avoids the
   question.
 - **Send the previous answer to debate too.** More spend for calls the owner did not
-  name; the moderator is not one of the four models.
+  name: the moderator call is not one of the four answer calls (in production it runs
+  slot 2's model), and under peer critique each critic gets the question only.
 - **Keep debate and synthesis over-priced** as a safety margin. The typical figure
   is what the daily allowance is charged, so every follow-up would pay for text
   never sent.
@@ -86,10 +93,11 @@ both texts twice and sent each once. A quick request with context is refused
 ## Consequences
 
 - Measured with `uv run python scripts/proofs/w37_follow_up_cost_sweep.py` (built-in
-  price table, live catalog disabled, no call made; default four models; judge
-  `openai/gpt-4.1-mini`; peer critique off, production's posture on 2026-10-04).
+  price table, live catalog disabled, no call made; default four models; judge on
+  and peer critique off as production's `/status` reported on 2026-10-04; judge model
+  `openai/gpt-4.1-mini` per the 2026-09-10 telemetry, since `/status` does not report it).
   "Before" is the unchanged tree `4ba35ce` as if a client had sent the context; the
-  page sent none, so no user ever paid it. The last column is how many runs at that
+  page sent none, so no follow-up from the page was ever priced this way. The last column is how many runs at that
   typical figure fit in the $0.40 day.
 
   | Final answer (chars) | Before: typical / ceiling | After: typical / ceiling | Runs a day after |
@@ -121,4 +129,18 @@ both texts twice and sent each once. A quick request with context is refused
   context; (ii) debate is sent the previous question only; (iii) the composer line
   and its Start fresh button; (iv) "New question" and the brand link clear the
   context; (v) the full final answer up to the server limit, no smaller trim;
-  (vi) one step back only.
+  (vi) one step back only; (vii) both texts go in the system message and the user
+  message stays the new question; (viii) debate and synthesis are re-priced to what
+  they are sent, which lowers the charge for every follow-up; (ix) the previous
+  question is now flattened for debate and synthesis too; (x) the server trusts the
+  client's text rather than looking up the previous run; (xi) a result with no final
+  answer offers no follow-up; (xii) the previous answer is the five sections in
+  display order joined by blank lines, taken from the result on screen; (xiii) "all
+  four models" is read as the answer calls, so under peer critique the critics get the
+  question only; (xiv) which ways to the composer keep or clear the context
+  (decision 5).
+- The price assumes four characters a token, an average rather than a bound
+  (ADR-0095). A follow-up now sends up to 80,117 characters of client text to each
+  of up to four answer calls at the slot's own price, so text that tokenizes worse
+  than average (code, some non-English scripts) can cost more than the ceiling says.
+  How much worse is unmeasured: no tokenizer is installed here.

@@ -33,11 +33,13 @@ models understand that this is a follow-up question?"*), and their 2026-07-23 de
 `uv run python scripts/proofs/w37_follow_up_cost_sweep.py` on the unchanged tree
 (`4ba35ce`): built-in price table, live catalog disabled, no network, no paid call. Default
 four models, the question "How should a small team choose between Postgres and MySQL?",
-judge `openai/gpt-4.1-mini`, peer critique off — production's posture on `/status`,
-2026-10-04 (live execution off, so production runs are simulated, and simulated runs
+judge on and peer critique off — production's posture on `/status`, 2026-10-04 (judge
+model `openai/gpt-4.1-mini` per the 2026-09-10 telemetry; `/status` does not report it;
+live execution off, so production runs are simulated, and simulated runs
 deduct from the daily allowance like live ones, CHG-026 h). Real final answers in
 production telemetry (`docs/analysis/2026-09-10-telemetry-tokens.jsonl`, synthesis stage,
-three runs) total 9,338 / 9,663 / 9,693 completion tokens, about 38,000 characters.
+three runs) total 9,338 / 9,663 / 9,693 completion tokens, about 38,000 characters at four characters a token (the telemetry
+keeps no character count).
 
 | Final answer (chars) | Typical | Ceiling | Band | Runs in the $0.40 day at that typical |
 |---|---|---|---|---|
@@ -60,7 +62,7 @@ calls (row 1); ADR-0143 re-measures with the same script after the change.
 | 4 | Synthesis prices the context twice; it is sent once. | Same as 3. | Price it once per section call. |
 | 5 | The estimate and create bodies carry different context. | A confirm-band follow-up loops on "the cost changed" (the token is bound to cost). | One builder makes both bodies and the warnings probe body from the same state. |
 | 6 | The warnings probe gets no context while create does. | The probe says no acknowledgement is needed and create refuses (issue #155). | The probe body carries the same context. |
-| 7 | The prior answer is client-supplied text placed in a system message. | A crafted "previous answer" instructs the model. | Fenced as data and flattened, after our own instructions, as `prior_question` is today. |
+| 7 | The prior answer is client-supplied text placed in a system message. | A crafted "previous answer" instructs the model. | Fenced as data and flattened, after our own instructions. `prior_question` is fenced there today but not flattened; flattening it too is ADR-0143 decision 1. |
 | 8 | Context placed in the user message. | The web-search request may be built from the user message; 38,000 characters would be searched. (How OpenRouter builds the search query is UNVERIFIED; this design does not depend on it.) | Context goes in the system message; the user message stays the new question. |
 | 9 | The page composes a prior answer longer than 60,117 characters (headings added to five full sections). | A 422 on the follow-up; the user cannot ask it. | The page sends the five section texts joined without added headings, cut to the limit; the server limit is unchanged. |
 | 10 | Context from the wrong result: the session list re-opens an older result. | The models get a different conversation from the one on screen. | Context is taken from the result on screen when "Review & run" is pressed. |
