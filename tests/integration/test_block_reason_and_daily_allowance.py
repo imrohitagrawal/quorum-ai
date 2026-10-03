@@ -13,15 +13,18 @@ places open; these are the choices, made here so the builder has one target):
   ``"account_running_total"``, ``"ledger_unavailable"``, ``"daily_cap"``, or
   JSON ``null`` when ``threshold_action`` is not ``"block"``. The key is always
   present.
-* ``cost_estimate.daily_allowance``: an object with EXACTLY three keys, or JSON
+* ``cost_estimate.daily_allowance``: an object with EXACTLY four keys, or JSON
   ``null``. ``cap_usd`` is the daily cap as the constant prints it, ``"0.40"``.
   ``spent_usd`` and ``remaining_usd`` always carry FOUR decimal places — the
   same ``COST_DISPLAY_QUANTUM`` as ``estimated_cost_usd`` and the existing
   "Account has spent 0.0000 USD" reason — so a fresh session reads
-  ``{"cap_usd": "0.40", "spent_usd": "0.0000", "remaining_usd": "0.4000"}`` and
-  a clamped one reads ``"remaining_usd": "0.0000"``. Four places, not two,
-  because decision 5 has the PAGE round spent up and remaining down, which
-  needs the unrounded figure.
+  ``{"cap_usd": "0.40", "spent_usd": "0.0000", "remaining_usd": "0.4000",
+  "bounded_by": "daily_cap"}`` and a clamped one reads ``"remaining_usd":
+  "0.0000"``. ``bounded_by`` (review round 1) is ``"daily_cap"`` or
+  ``"running_total"``: which limit set the remaining figure. The running total
+  sets it only when ``0.50 - total`` is STRICTLY smaller than ``0.40 - spent``.
+  Four places, not two, because decision 5 has the PAGE round spent up and
+  remaining down, which needs the unrounded figure.
 * The charge-time ``OVER_DAILY_CAP`` 402 carries ``detail.block_reason`` and
   ``detail.daily_allowance`` (top level of ``detail``; that body has no
   ``cost_estimate``).
@@ -32,6 +35,7 @@ running limit ``"0.50"``, never ``DAILY_CAP_USD`` / ``HARD_LIMIT_USD``.
 
 from __future__ import annotations
 
+import sqlite3
 from collections.abc import Callable, Iterator
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -64,6 +68,7 @@ from product_app.costs import CostThresholdAction, cost_estimation_service, cost
 from product_app.feedback_store import (
     COST_ACCEPTED_EVENT,
     COST_ACCEPTED_SIMULATED_EVENT,
+    ChargeOutcome,
     FeedbackStore,
     configure_for_tests,
 )
@@ -84,7 +89,12 @@ PER_RUN_ONLY_QUERY = "x" * 2_000
 #: and, on an account that has spent nothing, the daily cap fire — failure-mode
 #: row 2's shape (the design reviewer measured 0.4628 / 0.6109 at 12,000).
 BOTH_CAPS_QUERY = "x" * 8_000
-FRESH = {"cap_usd": "0.40", "spent_usd": "0.0000", "remaining_usd": "0.4000"}
+FRESH = {
+    "cap_usd": "0.40",
+    "spent_usd": "0.0000",
+    "remaining_usd": "0.4000",
+    "bounded_by": "daily_cap",
+}
 CHARGE_TYPES = frozenset({COST_ACCEPTED_EVENT, COST_ACCEPTED_SIMULATED_EVENT})
 
 
@@ -416,7 +426,7 @@ def test_the_per_run_cap_wins_over_the_running_total() -> None:
 
 def test_a_fresh_session_has_the_whole_allowance() -> None:
     """RED-IF: the estimate carries no ``daily_allowance``, or a fresh session's
-    is anything but exactly the three strings pinned in the module docstring."""
+    is anything but exactly the four strings pinned in the module docstring."""
     with configure_for_tests():
         client = TestClient(app)
         csrf = _boot(client)
@@ -442,6 +452,7 @@ def test_the_allowance_falls_by_exactly_the_runs_charged() -> None:
             "cap_usd": "0.40",
             "spent_usd": _money(spent),
             "remaining_usd": _money(Decimal("0.40") - spent),
+            "bounded_by": "daily_cap",
         }
         # Spelled out once at today's unit price, so the arithmetic above is
         # checked against a literal too (0.1052 per run, pinned elsewhere).
@@ -466,6 +477,7 @@ def test_the_allowance_is_clamped_at_zero_when_spend_exceeds_the_cap() -> None:
             "cap_usd": "0.40",
             "spent_usd": "0.4500",
             "remaining_usd": "0.0000",
+            "bounded_by": "daily_cap",
         }
 
 
@@ -491,11 +503,13 @@ def test_the_running_total_lowers_the_remainder_when_it_is_the_smaller_rail() ->
             "cap_usd": "0.40",
             "spent_usd": "0.3156",
             "remaining_usd": "0.0844",
+            "bounded_by": "daily_cap",
         }
         assert _allowance(after) == {
             "cap_usd": "0.40",
             "spent_usd": "0.0000",
             "remaining_usd": "0.1844",
+            "bounded_by": "running_total",
         }
 
 
@@ -515,6 +529,7 @@ def test_the_lowered_remainder_is_clamped_at_zero_too() -> None:
             "cap_usd": "0.40",
             "spent_usd": "0.0000",
             "remaining_usd": "0.0000",
+            "bounded_by": "running_total",
         }
 
 
@@ -696,6 +711,7 @@ def test_the_create_routes_estimate_402_names_the_daily_cap() -> None:
             "cap_usd": "0.40",
             "spent_usd": "0.3900",
             "remaining_usd": "0.0100",
+            "bounded_by": "daily_cap",
         }
         assert "hard ceiling" not in detail["message"], detail["message"]
 
@@ -750,6 +766,7 @@ def _assert_the_charge_time_402(detail: dict[str, Any], store: FeedbackStore, ke
         "cap_usd": "0.40",
         "spent_usd": "0.3500",
         "remaining_usd": "0.0500",
+        "bounded_by": "daily_cap",
     }
 
 
@@ -866,3 +883,223 @@ def test_a_sign_in_only_session_is_refused_before_the_ledger_is_read(
     served = _post_estimate(other, {"X-CSRF-Token": _boot(other)})
     assert len(reads) == 1
     assert _allowance(served["cost_estimate"]) == FRESH
+
+
+# --- review round 1 -------------------------------------------------------------------
+#
+# Rows 23-25 of the failure-mode list, ADR-0141 decisions 7, 8 and 2 (bounded_by).
+
+#: Under the pinned catalog: point 0.4013, worst case 0.4278 (reproduced by the
+#: round-1 reviewer, and asserted below as the premise): the run alone is above
+#: the $0.40 daily cap while its worst case is under the $0.50 per-run cap.
+LARGER_THAN_A_DAY_QUERY = "x" * 12_000
+#: Wording that tells the person to wait. Matched as phrases, not sentences
+#: (rule 8). "wait" alone is NOT here: decision 7's own message may say the run
+#: will not fit "however long the person waits".
+WAIT_PHRASES = ("frees up", "24 hours old", "window resets")
+
+
+def _says_wait(texts: list[str]) -> list[str]:
+    return [text for text in texts if any(phrase in text for phrase in WAIT_PHRASES)]
+
+
+def test_a_run_larger_than_a_whole_day_is_not_told_to_wait() -> None:
+    """RED-IF: a run whose estimate ALONE is above $0.40 (worst case not above
+    $0.50, nothing spent) is labelled anything but ``daily_cap``, or any of its
+    estimate reasons, top-level reasons or create-402 message tells the person
+    that spend frees up (row 23, decision 7). Also red if its create message is
+    the ordinary daily-cap message (decision 7 words it differently). Partner:
+    the premise holds (point > 0.40, worst case <= 0.50, spent 0.0000)."""
+    with configure_for_tests():
+        client = TestClient(app)
+        account = uuid4()
+        body = _post_estimate(
+            client, _legacy(account), models=CONFIRM_MODEL_IDS, query=LARGER_THAN_A_DAY_QUERY
+        )
+        estimate = body["cost_estimate"]
+        created = client.post(
+            RUNS,
+            json=acknowledged_request(LARGER_THAN_A_DAY_QUERY, CONFIRM_MODEL_IDS),
+            headers=_legacy(account),
+        )
+        ordinary_account = uuid4()
+        for _ in range(3):
+            _legacy_run(client, ordinary_account)
+        ordinary = _create_402(client, _legacy(ordinary_account))
+
+    assert Decimal(estimate["estimated_cost_usd"]) > Decimal("0.40")
+    assert Decimal(estimate["max_cost_usd"]) <= Decimal("0.50")
+    assert estimate["daily_allowance"]["spent_usd"] == "0.0000"
+    assert _block_reason(estimate) == "daily_cap"
+    assert created.status_code == 402, created.text
+    detail = created.json()["detail"]
+    assert detail["code"] == "COST_LIMIT_EXCEEDED"
+    assert _says_wait(estimate["reasons"]) == []
+    assert _says_wait(body["reasons"]) == []
+    assert _says_wait([detail["message"]]) == []
+    assert detail["message"] != ordinary["message"]
+
+
+def test_an_ordinary_daily_block_still_says_it_frees_up() -> None:
+    """Positive partner of the test above: the ordinary daily block (three runs,
+    then a fourth) still says spend frees up as each run turns 24 hours old, in
+    its estimate reasons and its create-402 message (decision 5's rule).
+    RED-IF the fix for row 23 drops that wording from every daily block."""
+    with configure_for_tests():
+        client = TestClient(app)
+        account = uuid4()
+        for _ in range(3):
+            _legacy_run(client, account)
+        estimate = _post_estimate(client, _legacy(account))["cost_estimate"]
+        detail = _create_402(client, _legacy(account))
+
+    assert Decimal(estimate["estimated_cost_usd"]) <= Decimal("0.40")
+    assert _block_reason(estimate) == "daily_cap"
+    assert any("frees up" in reason and "24 hours old" in reason for reason in estimate["reasons"])
+    assert "frees up" in detail["message"] and "24 hours old" in detail["message"]
+
+
+class _FailingAllowanceRead:
+    """Book ``amount`` between the create's estimate and its charge (another
+    tab), let the REAL atomic charge refuse, and from then on make the ledger
+    read (``FeedbackStore.daily_spend_for``) raise ``sqlite3.OperationalError``
+    — so only the charge-time allowance read fails, never the estimate's."""
+
+    def __init__(self, monkeypatch: pytest.MonkeyPatch, store: FeedbackStore, amount: str) -> None:
+        self.armed = False
+        self.raised = 0
+        self.outcomes: list[object] = []
+        real_read = FeedbackStore.daily_spend_for
+        real_charge: Callable[..., Any] = cost_estimation_service.try_record_run_charge
+
+        def read(this: FeedbackStore, account_id: UUID, **kwargs: Any) -> Decimal:
+            if self.armed:
+                self.raised += 1
+                raise sqlite3.OperationalError("disk I/O error")
+            return real_read(this, account_id, **kwargs)
+
+        def charge(**kwargs: Any) -> Any:
+            _book(store, kwargs["account_id"], amount)
+            outcome = real_charge(**kwargs)
+            self.outcomes.append(outcome)
+            self.armed = True
+            return outcome
+
+        monkeypatch.setattr(FeedbackStore, "daily_spend_for", read)
+        monkeypatch.setattr(cost_estimation_service, "try_record_run_charge", charge)
+
+
+def _assert_a_refusal_without_an_allowance(
+    response: Any, fault: _FailingAllowanceRead, rows_before: list[str], rows_after: list[str]
+) -> None:
+    # Partners: the real charge refused, and the injected fault really fired.
+    assert fault.outcomes == [ChargeOutcome.OVER_DAILY_CAP]
+    assert fault.raised >= 1
+    # Cardinality (rule 6b): the only new row is the other tab's charge. No
+    # ``cost_charge_voided`` for a charge this request never made.
+    assert rows_after == [*rows_before, COST_ACCEPTED_SIMULATED_EVENT], rows_after
+    assert response.status_code == 402, response.text
+    detail = response.json()["detail"]
+    assert detail["code"] == "COST_LIMIT_EXCEEDED"
+    assert detail.get("block_reason", "MISSING") == "daily_cap"
+    assert "daily_allowance" in detail
+    assert detail["daily_allowance"] is None
+
+
+def test_a_failed_allowance_read_on_the_cookie_path_still_refuses_with_a_402(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """RED-IF: on the cookie path, the charge-time allowance read raising turns
+    the refusal into a 500, or writes a ``cost_charge_voided`` row for a charge
+    that never happened (row 24, decision 8; the reviewer measured STATUS 500
+    and rows ['cost_guardrail_accepted_simulated', 'cost_charge_voided'])."""
+    with configure_for_tests() as store, isolated_run_semaphore(1):
+        client = TestClient(app, raise_server_exceptions=False)
+        csrf = _boot(client)
+        key = _spend_key_of(client)
+        rows_before = _rows(store, key)
+        fault = _FailingAllowanceRead(monkeypatch, store, "0.3500")
+
+        response = client.post(
+            RUNS, json=acknowledged_request(QUERY), headers={"X-CSRF-Token": csrf}
+        )
+        fault.armed = False
+
+        rows_after = _rows(store, key)
+        assert query_run_repository.get_active_for_account(key) is None
+        _assert_a_refusal_without_an_allowance(response, fault, rows_before, rows_after)
+
+
+def test_a_failed_allowance_read_on_the_legacy_path_still_refuses_with_a_402(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """RED-IF: the legacy (inline) path's copy of the same refusal turns into a
+    500 when the allowance read raises, or writes any row but the other tab's
+    charge (row 24; the two paths are kept in step)."""
+    with configure_for_tests() as store:
+        client = TestClient(app, raise_server_exceptions=False)
+        account = uuid4()
+        rows_before = _rows(store, account)
+        fault = _FailingAllowanceRead(monkeypatch, store, "0.3500")
+
+        response = client.post(RUNS, json=acknowledged_request(QUERY), headers=_legacy(account))
+        fault.armed = False
+
+        rows_after = _rows(store, account)
+        assert query_run_repository.get_active_for_account(account) is None
+        _assert_a_refusal_without_an_allowance(response, fault, rows_before, rows_after)
+
+
+def test_the_running_total_sets_bounded_by_in_the_reviewers_case() -> None:
+    """RED-IF: ``bounded_by`` is missing, or is not ``"running_total"`` when the
+    running total set the figure (row 25). The reviewer's case: three runs,
+    their ledger rows aged 25 h, a fourth run — ledger 0.1052, ring 0.4208, so
+    remaining is 0.50 - 0.4208 = 0.0792, not 0.40 - 0.1052 = 0.2948. Partner:
+    the ledger and ring hold exactly those sums."""
+    with configure_for_tests() as store:
+        client = TestClient(app)
+        account = uuid4()
+        for _ in range(3):
+            _legacy_run(client, account)
+        _age_ledger(store, account, hours=25)
+        _legacy_run(client, account)
+
+        estimate = _post_estimate(client, _legacy(account))["cost_estimate"]
+
+        assert store.daily_spend_for(account) == Decimal("0.1052")
+        assert cost_estimation_service._cumulative_spend_for(account) == Decimal("0.4208")  # noqa: SLF001
+        assert _allowance(estimate) == {
+            "cap_usd": "0.40",
+            "spent_usd": "0.1052",
+            "remaining_usd": "0.0792",
+            "bounded_by": "running_total",
+        }
+
+
+def test_bounded_by_switches_only_when_the_running_total_is_strictly_smaller() -> None:
+    """RED-IF: the boundary moves. With nothing on the ledger, a ring total of
+    exactly 0.1000 leaves both limits at 0.4000 — a tie, which stays
+    ``daily_cap`` (decision 2 lowers the figure only when the running-total
+    figure "is smaller"); 0.1001 makes it 0.3999 and ``running_total``. Literals
+    on both sides of the line (rule 8b)."""
+    with configure_for_tests():
+        client = TestClient(app)
+        tie, over = uuid4(), uuid4()
+        _ring(tie, "0.1000")
+        _ring(over, "0.1001")
+
+        at_tie = _post_estimate(client, _legacy(tie))["cost_estimate"]
+        past_it = _post_estimate(client, _legacy(over))["cost_estimate"]
+
+    assert _allowance(at_tie) == {
+        "cap_usd": "0.40",
+        "spent_usd": "0.0000",
+        "remaining_usd": "0.4000",
+        "bounded_by": "daily_cap",
+    }
+    assert _allowance(past_it) == {
+        "cap_usd": "0.40",
+        "spent_usd": "0.0000",
+        "remaining_usd": "0.3999",
+        "bounded_by": "running_total",
+    }
