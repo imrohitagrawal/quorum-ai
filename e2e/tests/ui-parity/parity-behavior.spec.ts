@@ -325,7 +325,12 @@ test.describe("UI parity — behaviour", () => {
     }
     await expect(synth.locator(".result-synth-body").first()).toContainText("The models agree on the primary recommendation.");
     await expect(page.locator(".result-next")).toBeVisible();
-    await expect(page.locator("#result-followup")).toHaveAttribute("aria-pressed", "true");
+    // ADR-0140 decision 3: the Follow up / Start fresh mode buttons are hidden
+    // until W37 sends the previous question and answer to the models.
+    // RED-IF: either mode button is shown again before W37.
+    await expect(page.locator("#result-next-input")).toBeVisible();
+    await expect(page.locator("#result-followup")).toBeHidden();
+    await expect(page.locator("#result-startfresh")).toBeHidden();
     await expect(page.locator(".result-footer")).toContainText(/Ephemeral/);
     // Legacy scaffolding stays hidden on the result screen too.
     for (const s of await page.locator(".panel-section").all()) await expect(s).toBeHidden();
@@ -549,23 +554,24 @@ test.describe("UI parity — behaviour", () => {
     await expect(runNow).not.toHaveClass(/button-ghost/);
   });
 
-  test("next-question: Start fresh clears, Follow up prefills, and Review & run lands on page B with editable models (no auto-estimate)", async ({ page }) => {
+  test("next-question: Review & run with an empty box lands on page B EMPTY with editable models (no pre-fill, no auto-estimate)", async ({ page }) => {
+    // ADR-0140 decision 2 (bug 2, M07 point 2): the composer opens EMPTY; it
+    // used to pre-fill the answered question, which this test pinned.
+    // RED-IF: the empty-box branch of the #result-next-run handler copies state.liveQueryText again.
     await driveToResult(page, completedResp());
     const nextInput = page.locator("#result-next-input");
-    await nextInput.fill("a refinement");
-    await page.locator("#result-startfresh").click();
-    await expect(page.locator("#result-startfresh")).toHaveAttribute("aria-pressed", "true");
+    await expect(nextInput).toBeVisible();
     await expect(nextInput).toHaveValue("");
-    // Follow up + Review & run drops the user back on the composer (page B) with
-    // the question pre-filled and the four model slots visible/editable — and it
-    // must NOT auto-fire an estimate, so the user can change models before
-    // running (they click See the estimate / Run now themselves).
+    // Review & run drops the user back on the composer (page B) with the four
+    // model slots visible/editable — and it must NOT auto-fire an estimate, so
+    // the user can change models before running (they click See the estimate /
+    // Run now themselves).
     let estimateFired = false;
     page.on("request", (r) => { if (r.url().includes("/v1/query-runs/estimate")) estimateFired = true; });
-    await page.locator("#result-followup").click();
     await page.locator("#result-next-run").click();
     await expect(page.locator('[data-view="composer"]')).toBeVisible();
-    await expect(page.locator("#query-text")).toHaveValue(QUESTION);
+    await expect(page.locator("#query-text")).toBeVisible();
+    await expect(page.locator("#query-text")).toHaveValue("");
     // The four model slots are present and enabled on page B.
     const slots = page.locator("[data-model-slot]");
     await expect(slots).toHaveCount(4);
@@ -694,10 +700,13 @@ test.describe("UI parity — behaviour", () => {
   });
 
   test("next-question: Estimate & run with an empty box is a no-op (no estimate fired)", async ({ page }) => {
+    // ADR-0140: the box is empty after every finished run and nothing pre-fills
+    // the composer, so no "Start fresh" click is needed (that button is hidden).
+    // RED-IF: an empty Review & run pre-fills the composer or fires an estimate.
     await driveToResult(page, completedResp());
     let estimatesAfter = 0;
     page.on("request", (r) => { if (r.url().includes("/v1/query-runs/estimate")) estimatesAfter++; });
-    await page.locator("#result-startfresh").click(); // clears box + follow-up off
+    await expect(page.locator("#result-next-input")).toBeVisible();
     await expect(page.locator("#result-next-input")).toHaveValue("");
     await page.locator("#result-next-run").click();
     await expect(page.locator('[data-view="composer"]')).toBeVisible();
@@ -1493,7 +1502,7 @@ test.describe("UI parity — behaviour", () => {
     // Scroll to the follow-up block near the bottom of the (long) result view.
     const nextRun = page.locator("#result-next-run");
     await nextRun.scrollIntoViewIfNeeded();
-    await page.locator("#result-followup").click();
+    // No mode click: ADR-0140 hides the Follow up / Start fresh buttons until W37.
     await page.locator("#result-next-input").fill("What about hardware security keys?");
     await nextRun.click();
     await expect(page.locator('[data-view="composer"]')).toBeVisible();

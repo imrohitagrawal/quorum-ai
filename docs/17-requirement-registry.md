@@ -14,7 +14,7 @@
 | FR-010 | Functional | Timeout and partial-result recovery | `docs/114-success-metrics.md`; `docs/115-release-scope.md` | Engineering lead | Must | AC-021, AC-022 | TEST-FR-010 | Not created | Not published | Draft |
 | FR-011 | Functional | Server-side provider key handling | `docs/01-product-brief.md`; `docs/115-release-scope.md` | Engineering lead | Must | AC-023, AC-024 | TEST-FR-011 | Not created | Not published | Draft |
 | FR-012 | Functional | Optional bring-your-own OpenRouter key | `docs/01-product-brief.md`; `docs/115-release-scope.md` | Product owner | Should | AC-025, AC-026 | TEST-FR-012 | Not created | Not published | Draft |
-| FR-013 | Functional | Query result presentation | `docs/01-product-brief.md`; `docs/114-success-metrics.md`; `docs/115-release-scope.md` | Product owner | Must | AC-027, AC-028 | TEST-FR-013 | Not created | Not published | Draft |
+| FR-013 | Functional | Query result presentation | `docs/01-product-brief.md`; `docs/114-success-metrics.md`; `docs/115-release-scope.md` | Product owner | Must | AC-027, AC-028, AC-055 | TEST-FR-013 | Not created | Not published | Draft |
 | NFR-001 | Non-functional | End-to-end query latency | `docs/114-success-metrics.md` | Engineering lead | Must | AC-021, AC-029 | TEST-NFR-001 | Not created | Not published | Draft |
 | NFR-002 | Non-functional | Cost per completed query | `docs/114-success-metrics.md` | Product owner | Must | AC-009, AC-010, AC-030 | TEST-NFR-002 | Not created | Not published | Draft |
 | NFR-003 | Non-functional | Citation coverage | `docs/114-success-metrics.md` | Product owner | Must | AC-011, AC-018, AC-031 | TEST-NFR-003 | Not created | Not published | Draft |

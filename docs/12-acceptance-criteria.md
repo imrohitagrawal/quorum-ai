@@ -453,3 +453,12 @@ Given an estimate that blocks, when it is returned, then `cost_estimate.block_re
 - Requirement: FR-005
 - Test: TEST-FR-005 (`tests/integration/test_block_reason_and_daily_allowance.py`, 25 tests written before the code; the two "exactly one field differs" tests in `tests/integration/test_feedback_store_locked_database.py` and `tests/integration/test_feedback_store_write_failures.py` assert the allowance follows the ADR-0016 degrade in both directions)
 - Decided by the product owner on 2026-09-29 (CHG-026 h: messages name the limit actually hit and show the remaining allowance, the session's wording accepted in M10); the fields and copy are the session's design (ADR-0141).
+
+## AC-055 A person can always reach a new question, and the page keeps what they asked
+
+Given a person who has asked questions in this tab, when they finish a run, open its debate, stop a run, or press the logo, a brand link, "New question" or the browser's Back button, then nothing but the "Clear" button empties the "This session" list, every finished run leaves the next-question box empty, a question they typed and have not run is never deleted, and an estimate that answers after they have gone home opens nothing and runs nothing; a run submits the question that was priced, and the cost confirmation describes that run. After a question on the landing page, the page lands on the models with a hint that names "See the estimate" and "Run now" and counts the models shown. An empty question box is not shown as an error until the person tries to submit it, and the empty list explains itself.
+
+- Requirement: FR-013
+- Test: TEST-FR-013 (`e2e/tests/invariants/page-journey.spec.ts`, real backend for the journey and a stated mock only where the real backend cannot reach the state; rewritten tests in `session-trail.spec.ts`, `parity-behavior.spec.ts`, `degraded-banner.spec.ts` and `quick-answer.spec.ts`; written before the code, and again before each review round's fix)
+- Reported by the product owner on 2026-09-29 and 2026-09-30 (bugs 1, 2, 6, 9, 10: M07, M23); the follow-up box and the hint decided in CHG-026 (g) and (m); the design and the calls the owner may overturn are in ADR-0140.
+

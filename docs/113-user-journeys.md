@@ -100,3 +100,22 @@ A person on a network (an office, a home, a VPN) whose address has opened its da
 - No reachable state locks a person out of signing in (tested as a property over session states and events).
 - The sign-in-only session that carried the sign-in is never counted as a new session and can spend nothing.
 - Decided by the product owner on 2026-09-29 (CHG-026 a); design ADR-0139; acceptance AC-053.
+
+## Journey J-006: Asking several questions in one visit
+
+### Trigger
+
+A person asks a question, reads the result, and wants to ask another — from the result, from the debate, after stopping a run, or with the browser's Back button.
+
+### Steps
+
+1. From the landing page they type a question; the page lands on the models with a hint naming "See the estimate" and "Run now".
+2. They run it. On the result, the next-question box is empty; they type a new question there, or press "New question" or the logo.
+3. Every question they asked in this tab stays in "This session" until they press "Clear"; Back returns to the view they left.
+
+### Success Criteria
+
+- No route to a new question deletes the list, and none deletes a question they typed and have not run.
+- What the cost confirmation describes is what runs and is charged.
+- Reported by the product owner on 2026-09-29 and 2026-09-30 (M07, M23); design ADR-0140; acceptance AC-055.
+
