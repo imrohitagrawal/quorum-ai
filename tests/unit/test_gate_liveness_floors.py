@@ -571,11 +571,12 @@ def test_the_e2e_floors_are_wired_into_the_workflow() -> None:
     executes every test regardless of platform-specific baseline
     availability, without touching the committed *-chromium-linux.png files
     the real gate compares against) — alongside the pre-existing invariants
-    and axe + parity lanes.
+    and axe + parity lanes. 5 since W33 slice D (ADR-0142) added the signed-in
+    History lane with its own floor.
     """
     workflow = (REPO_ROOT / ".github" / "workflows" / "e2e.yml").read_text(encoding="utf-8")
 
-    assert workflow.count("scripts/check_e2e_executed.py") == 4, (
+    assert workflow.count("scripts/check_e2e_executed.py") == 5, (
         "e2e.yml must invoke the executed-count floor once per blocking lane; "
         f"found {workflow.count('scripts/check_e2e_executed.py')}"
     )

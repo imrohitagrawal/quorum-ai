@@ -433,6 +433,36 @@ jobs:
         run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 51 --lane "workspace/accessibility/api-mocking/navigation lane"
 
       - name: Clear the previous lane's JUnit report
+        run: rm -f e2e/results.xml
+
+      # W33 slice D (ADR-0142): the first SIGNED-IN browser lane. Its own
+      # config and its own server, on its own port (18096): a TEST-ONLY
+      # launcher (e2e/servers/signed_in_server.py) starts the real app with
+      # Google sign-in on against a loopback token stub set IN-PROCESS — never
+      # through an environment variable, which ADR-0142 rejects as a critical
+      # risk — with fresh temporary databases and live execution off ($0). The
+      # spec catches Google's consent page with page.route and redirects to the
+      # local callback; everything after that is the real backend.
+      - name: Run the signed-in History lane (BLOCKING)
+        working-directory: e2e
+        env:
+          CI: "true"
+        run: >-
+          npx playwright test
+          tests/signed-in/history-refresh.spec.ts
+          --config=playwright.signed-in.config.ts
+          --project=chromium
+          --retries=0
+
+      # EXECUTED-COUNT FLOOR, same reasoning as the lanes above. 9 is the
+      # spec's whole test count, MEASURED 2026-10-03 as "9 passed" with the
+      # invocation above on a scratch reference build of slice D (the real
+      # build did not exist yet; on 10c4fd0 the lane is red by design, 7 of 9
+      # failing). Re-measure on the real build before merging.
+      - name: "signed-in History lane: floor on tests actually executed"
+        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 9 --lane "signed-in History lane"
+
+      - name: Clear the previous lane's JUnit report
         # Adversarial review (#162/#166): without this, a Playwright run that
         # exits 0 having genuinely written nothing (the exact "all-skipped"
         # or "matched nothing" shape every floor in this file exists to
