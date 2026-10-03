@@ -85,11 +85,33 @@ both texts twice and sent each once. A quick request with context is refused
 
 ## Consequences
 
-- Measured after the change with `scripts/proofs/w37_follow_up_cost_sweep.py`
-  (built-in price table, production's posture): see the table in the pull request
-  that carries this ADR; before the change, the failure-modes document has the same
-  table. A typical follow-up (a 38,000-character final answer) costs more than a
-  fresh question, so the $0.40 day holds fewer runs when some are follow-ups.
+- Measured with `uv run python scripts/proofs/w37_follow_up_cost_sweep.py` (built-in
+  price table, live catalog disabled, no call made; default four models; judge
+  `openai/gpt-4.1-mini`; peer critique off, production's posture on 2026-10-04).
+  "Before" is the unchanged tree `4ba35ce` as if a client had sent the context; the
+  page sent none, so no user ever paid it. The last column is how many runs at that
+  typical figure fit in the $0.40 day.
+
+  | Final answer (chars) | Before: typical / ceiling | After: typical / ceiling | Runs a day after |
+  |---|---|---|---|
+  | none (fresh question) | 0.1134 / 0.1927 | 0.1134 / 0.1927 | 3 |
+  | 8,000 | 0.1224 / 0.2018 | 0.1189 / 0.1983 | 3 |
+  | 38,000 (typical) | 0.1562 / 0.2355 | 0.1396 / 0.2189 | 2 |
+  | 60,117 (the limit) | 0.1811 / 0.2604 | 0.1548 / 0.2341 | 2 |
+
+  Every row is `allow`. With peer critique on, the 60,117 row moves from
+  `require_confirmation` (0.3142) to `allow` (0.2729), and the 38,000 row is
+  0.1593 / 0.2577. A follow-up is cheaper than the old pricing quoted because debate
+  and synthesis are no longer priced for text they are not sent; that saving is larger
+  than the new price of the four answer calls. It still costs more than a fresh
+  question: at a typical final answer, two runs fit in the day instead of three.
+- The fixed text this change adds to each answer call's system message (a follow-up
+  sentence, the untrusted-data rule, labels and fences) brings the default answer
+  system prompt to 1,175 characters, 293.75 tokens, inside the flat 350 tokens
+  already priced for it (measured by the builder; recorded in
+  `providers._follow_up_system_suffix`).
+- This supersedes ADR-0126 decision 5a and ADR-0140 decision 3; both ADRs are left as
+  written.
 - Personal text is not stored anywhere new: no new store, log field or history
   column; `docs/48` is unchanged.
 - A model whose context window is smaller than question + search context + previous

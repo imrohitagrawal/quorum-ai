@@ -365,7 +365,7 @@ jobs:
         # MEASURED, not added: the 19-spec lane run as the step above runs it,
         # plus the two local overrides, reported "308 passed (6.2m)" on
         # 2026-09-25.
-        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 308 --lane "invariants lane"
+        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 317 --lane "invariants lane"
 
       - name: Clear the previous lane's JUnit report
         run: rm -f e2e/results.xml
@@ -467,7 +467,7 @@ jobs:
       # 700 px): against b552d37's code the lane gave "12 passed", "2 failed",
       # red by design until their fix. Re-measure when that fix lands.
       - name: "signed-in History lane: floor on tests actually executed"
-        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 14 --lane "signed-in History lane"
+        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 15 --lane "signed-in History lane"
 
       - name: Clear the previous lane's JUnit report
         # Adversarial review (#162/#166): without this, a Playwright run that
