@@ -260,8 +260,19 @@ test.describe("W37 — follow-up context on the real backend (no page.route)", (
     await askReal(page, Q1);
     await page.locator("#result-next-input").fill(Q2);
     await page.locator("#result-next-run").click();
-    // Positive partner: the context IS attached before the button is pressed.
+    // Positive partners, BEFORE the button is pressed: exactly one Following up
+    // line is on screen (partner of the toHaveCount(0) below), and an estimate
+    // sent now DOES carry the context (partner of the toBeUndefined below), so
+    // both absence checks examine something that was present.
+    await expect(composerFollowLine(page)).toHaveCount(1);
     await expect(composerFollowLine(page)).toContainText(Q1);
+    const attached = await seeTheEstimate(page, sent);
+    expect(attached.context?.prior_question).toBe(Q1);
+    expect((attached.context?.prior_synthesis ?? "").length).toBeGreaterThan(0);
+    // "Back to edit" returns to the composer with the context still attached.
+    await page.locator("#gate-back").click();
+    await expect(composerView(page)).toBeVisible();
+    await expect(composerFollowLine(page)).toHaveCount(1);
     await composerStartFresh(page).click();
     await expect(composerFollowLine(page)).toHaveCount(0);
     await expect(page.locator("#query-text"), "dropping the context keeps the typed question").toHaveValue(Q2);
