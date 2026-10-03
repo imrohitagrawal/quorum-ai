@@ -199,16 +199,42 @@ async function releaseEstimates(page: Page) {
   await page.waitForTimeout(1500);
 }
 
+type CreateBody = { query_text?: string; model_slots?: unknown[]; mode?: string };
+
 /** Every POST that creates a run (path exactly /v1/query-runs), with its body. */
-function recordRunCreates(page: Page): { query_text?: string }[] {
-  const creates: { query_text?: string }[] = [];
+function recordRunCreates(page: Page): CreateBody[] {
+  const creates: CreateBody[] = [];
   page.on("request", (r) => {
     if (r.method() === "POST" && new URL(r.url()).pathname === "/v1/query-runs") {
-      creates.push((r.postDataJSON() ?? {}) as { query_text?: string });
+      creates.push((r.postDataJSON() ?? {}) as CreateBody);
     }
   });
   return creates;
 }
+
+/**
+ * Delay every /v1/query-runs/warnings RESPONSE by `window.__warningsDelayMs`
+ * (read when the request is sent; 0 = no delay). Same mechanism as
+ * holdEstimates: an init-script fetch wrapper over the REAL server, not page.route.
+ */
+async function delayWarnings(page: Page) {
+  await page.addInitScript(() => {
+    const w = window as unknown as { __warningsDelayMs: number };
+    const orig = window.fetch.bind(window);
+    w.__warningsDelayMs = 0;
+    window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      const pending = orig(input, init);
+      const delay = w.__warningsDelayMs;
+      if (!/\/v1\/query-runs\/warnings(\?|$)/.test(url) || delay <= 0) return pending;
+      return pending.then((res) => new Promise<Response>((r) => window.setTimeout(() => r(res), delay)));
+    };
+  });
+}
+const setWarningsDelay = (page: Page, ms: number) =>
+  page.evaluate((v) => {
+    (window as unknown as { __warningsDelayMs: number }).__warningsDelayMs = v;
+  }, ms);
 
 /** Wait until the page has SENT the (held) estimate request. */
 async function estimateSent(page: Page) {
@@ -550,6 +576,161 @@ test.describe("W33 slice A — the page journey on the real backend (no page.rou
     await releaseEstimates(page);
     await expect.poll(() => creates.length, { timeout: 15000 }).toBe(1);
     expect(creates[0].query_text, "the run must submit the priced question, not the edit").toBe(Q1);
+    expect(mocked()).toBe(false);
+  });
+
+  // Round 2 (REQUIRED): the cost confirmation must describe the run that was
+  // PRICED, not whatever the composer holds when the estimate lands.
+  test("edit the question AND turn quick mode on while the estimate is held: the gate shows the priced question and four models", async ({ page }) => {
+    // RED-IF: the cost gate renders the composer's current text / quick mode / slot count instead of the priced run's.
+    const mocked = forbidRoutes(page);
+    await holdEstimates(page);
+    const creates = recordRunCreates(page);
+    await boot(page);
+    await expect(page.locator("select[data-model-slot]")).toHaveCount(4);
+    await page.locator("#query-text").fill(Q1);
+    const sent = estimateSent(page);
+    await page.locator("#estimate-run").click();
+    await sent;
+    await page.locator("#query-text").fill(Q2);
+    await page.locator("#quick-mode-input").check();
+    await releaseEstimates(page);
+
+    // Positive partner: the gate did open.
+    await expect(page.locator('[data-view="cost-gate"]')).toBeVisible();
+    // Soft, so one run reports the question line AND the panel line, and still
+    // reaches the Approve partner below.
+    await expect.soft(page.locator("#cost-gate-question"), "the gate names the priced question").toHaveText(Q1);
+    const meta = page.locator("#cost-gate-question-meta");
+    await expect.soft(meta, "the gate describes the priced four-model panel").toContainText(/\b4 models\b/);
+    await expect.soft(meta, "not the quick shape the composer switched to").not.toContainText(/no debate/i);
+
+    // Positive partner (already true): Approve sends the priced run.
+    await page.locator("#gate-confirm").click();
+    await expect.poll(() => creates.length, { timeout: 15000 }).toBe(1);
+    expect(creates[0].query_text).toBe(Q1);
+    expect(creates[0].model_slots?.length).toBe(4);
+    expect(creates[0].mode, "a four-model run is not sent as quick").toBeUndefined();
+    expect(mocked()).toBe(false);
+  });
+
+  test("edit only the question while the estimate is held: the gate shows the priced question", async ({ page }) => {
+    // RED-IF: the cost gate's question line echoes #query-text at render time.
+    const mocked = forbidRoutes(page);
+    await holdEstimates(page);
+    await boot(page);
+    await page.locator("#query-text").fill(Q1);
+    const sent = estimateSent(page);
+    await page.locator("#estimate-run").click();
+    await sent;
+    await page.locator("#query-text").fill(Q2);
+    await releaseEstimates(page);
+    await expect(page.locator('[data-view="cost-gate"]')).toBeVisible();
+    await expect(page.locator("#cost-gate-question"), "the gate names the priced question").toHaveText(Q1);
+    await expect(page.locator("#cost-gate-question-meta")).toContainText(/\b4 models\b/);
+    expect(mocked()).toBe(false);
+  });
+
+  // Round 2 (ADVISORY): going home during Approve's warnings check must not
+  // leave the next Run now dead.
+  test("Approve, then the top-bar logo while its warnings check is slow, then one Run now click: the run starts", async ({ page }) => {
+    // RED-IF: going home during Approve's warnings check leaves a run latch (e.g. state.creatingRun) set, so the next Run now does nothing.
+    const mocked = forbidRoutes(page);
+    await delayWarnings(page);
+    const creates = recordRunCreates(page);
+    const estimateTimes: number[] = [];
+    page.on("request", (r) => {
+      if (new URL(r.url()).pathname === "/v1/query-runs/estimate") estimateTimes.push(Date.now());
+    });
+    await boot(page);
+    await page.locator("#query-text").fill(Q1);
+    await page.locator("#estimate-run").click();
+    await expect(page.locator("#gate-confirm")).toBeVisible({ timeout: 15000 });
+
+    await setWarningsDelay(page, 2500);
+    const warningsSent = page.waitForRequest((r) => new URL(r.url()).pathname === "/v1/query-runs/warnings");
+    await page.locator("#gate-confirm").click();
+    await warningsSent;
+    await topbarLogoLink(page).click();
+    await expect(composerView(page)).toBeVisible();
+    await setWarningsDelay(page, 0);
+    // A different question now, so a stale Approve (which would send Q1) cannot pass for the new run.
+    await page.locator("#query-text").fill(Q2);
+    const clickedAt = Date.now();
+    await page.locator("#run-now").click();
+
+    await expect.poll(() => creates.length, { timeout: 10000, message: "one Run now click must start a run" }).toBe(1);
+    expect(creates[0].query_text, "the run is for the composer's question at the click").toBe(Q2);
+    expect(estimateTimes.some((t) => t >= clickedAt), "via a fresh estimate, as usual").toBe(true);
+    await settleRealRun(page);
+    await page.waitForTimeout(3000);
+    expect(creates.length, "and only one run").toBe(1);
+    expect(mocked()).toBe(false);
+  });
+
+  // Round 2 (ADVISORY): a muted list entry must be visibly bordered.
+  // CHOICE: WCAG 1.4.11 non-text contrast (>= 3:1) of the entry's border
+  // colour, composited over the panel background, against that background —
+  // a published threshold, rather than an alpha floor picked for this test.
+  test("a muted (simulated) list entry has a dashed border with at least 3:1 contrast in both themes", async ({ page }) => {
+    // RED-IF: .session-trail-entry--muted loses border-style: dashed, or its border colour stays near-transparent (rgba alpha 0.07).
+    const mocked = forbidRoutes(page);
+    await page.setViewportSize(DESKTOP);
+    await boot(page);
+    await askReal(page, Q1);
+    const entry = trailEntries(page).first();
+    // Positive partner: a real simulated run gives a muted entry.
+    await expect(entry).toHaveClass(/session-trail-entry--muted/);
+    const measured: Record<string, { style: string; ratio: number; border: string; background: string }> = {};
+    for (const theme of ["light", "dark"] as const) {
+      await page.evaluate((t) => document.documentElement.setAttribute("data-theme", t), theme);
+      await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
+      await page.waitForTimeout(250);
+      measured[theme] = await entry.evaluate((node) => {
+        const parse = (s: string) => {
+          const m = s.match(/rgba?\(([^)]+)\)/);
+          const p = m ? m[1].split(/[,\s/]+/).filter(Boolean).map(Number) : [0, 0, 0, 0];
+          return { r: p[0], g: p[1], b: p[2], a: p.length > 3 ? p[3] : 1 };
+        };
+        // The first ancestor with a non-transparent background is what the border sits on.
+        let host: Element | null = node.parentElement;
+        let bg = { r: 255, g: 255, b: 255, a: 1 };
+        while (host) {
+          const c = parse(getComputedStyle(host).backgroundColor);
+          if (c.a > 0) {
+            bg = c;
+            break;
+          }
+          host = host.parentElement;
+        }
+        const cs = getComputedStyle(node);
+        const fg = parse(cs.borderTopColor);
+        const mix = (f: number, b: number) => f * fg.a + b * (1 - fg.a);
+        const comp = { r: mix(fg.r, bg.r), g: mix(fg.g, bg.g), b: mix(fg.b, bg.b) };
+        const lum = (c: { r: number; g: number; b: number }) => {
+          const ch = [c.r, c.g, c.b].map((v) => {
+            const x = v / 255;
+            return x <= 0.03928 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4);
+          });
+          return 0.2126 * ch[0] + 0.7152 * ch[1] + 0.0722 * ch[2];
+        };
+        const [hi, lo] = [lum(comp), lum(bg)].sort((a, b) => b - a);
+        return {
+          style: cs.borderTopStyle,
+          ratio: Math.round(((hi + 0.05) / (lo + 0.05)) * 100) / 100,
+          border: cs.borderTopColor,
+          background: `rgb(${bg.r}, ${bg.g}, ${bg.b})`,
+        };
+      });
+    }
+    for (const theme of ["light", "dark"] as const) {
+      expect(measured[theme].style, `[${theme}] muted border style`).toBe("dashed");
+    }
+    // Both themes in one assertion, so one red run shows both ratios.
+    expect(
+      { light: measured.light.ratio >= 3, dark: measured.dark.ratio >= 3 },
+      `muted-entry border contrast vs the panel background: ${JSON.stringify(measured)}`,
+    ).toEqual({ light: true, dark: true });
     expect(mocked()).toBe(false);
   });
 
