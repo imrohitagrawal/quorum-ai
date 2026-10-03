@@ -205,6 +205,7 @@ jobs:
           tests/invariants/panel-size.spec.ts
           tests/invariants/quick-answer.spec.ts
           tests/invariants/page-journey.spec.ts
+          tests/invariants/limit-messages.spec.ts
           --project=chromium
           --retries=0
 

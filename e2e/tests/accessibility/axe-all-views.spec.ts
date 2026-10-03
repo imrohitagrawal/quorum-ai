@@ -7,6 +7,7 @@ import {
   goldenCreateResp,
 } from "../../fixtures/golden-run";
 import { freeze, waitForComposerReady } from "../../fixtures/stabilize";
+import { LIMIT_RESPONSES } from "../../fixtures/limit-responses";
 
 /**
  * AC-035 accessibility gate — a REAL axe-core drive over every SPA view in
@@ -49,12 +50,13 @@ const breakdown = (total = "0.190") => ({ by_model: BY_MODEL, by_stage: BY_STAGE
 const costEstimate = (total: string, action: string) => ({
   estimated_cost_usd: total, currency: "USD", threshold_action: action,
   confirmation_token: "tok-abc123",
-  reasons: action === "block" ? ["Estimated spend exceeds the $0.25 hard cap."] : [],
+  // No block branch (W33 slice C): blocks use LIMIT_RESPONSES (real responses).
+  reasons: [],
   breakdown: breakdown(total),
 });
 const estimateResp = (total: string, action: string) => ({
   correlation_id: "corr-est-0001", cost_estimate: costEstimate(total, action), model_slots: SLOTS,
-  reasons: action === "block" ? ["Estimated spend exceeds the $0.25 hard cap."] : [],
+  reasons: [],
 });
 const answer = (i: number, status = "completed") => ({
   slot_number: i + 1, model_id: SLOTS[i].model_id,
@@ -249,12 +251,31 @@ test.describe("AC-035 — axe over every view (both themes)", () => {
   });
 
   test("cost-gate — block", async ({ page }) => {
+    // The per-run cap, as the real server sends it (W33 slice C: the old
+    // $0.30-under-a-$0.25-cap fixture was a shape the server cannot send).
     await boot(page);
-    await page.route("**/v1/query-runs/estimate", (r) => r.fulfill(fulfil(estimateResp("0.300", "block"))));
+    await page.route("**/v1/query-runs/estimate", (r) => r.fulfill(fulfil(LIMIT_RESPONSES.perRunCap)));
     await fill(page); await clickEstimate(page);
     await expect(page.locator('#cost-review-card[data-band="block"]')).toBeVisible();
     await scanBothThemes(page, "cost-gate-block");
   });
+
+  // W33 slice C (ADR-0141 decision 5): every other limit the server names gets
+  // its own card copy, so each is scanned too. Real server responses.
+  for (const [name, body] of [
+    ["daily-cap", LIMIT_RESPONSES.dailyCap],
+    ["daily-cap-larger-than-a-day", LIMIT_RESPONSES.dailyCapLargerThanADay],
+    ["running-total", LIMIT_RESPONSES.accountRunningTotal],
+    ["ledger-unavailable", LIMIT_RESPONSES.ledgerUnavailable],
+  ] as const) {
+    test(`cost-gate — block (${name})`, async ({ page }) => {
+      await boot(page);
+      await page.route("**/v1/query-runs/estimate", (r) => r.fulfill(fulfil(body)));
+      await fill(page); await clickEstimate(page);
+      await expect(page.locator('#cost-review-card[data-band="block"]')).toBeVisible();
+      await scanBothThemes(page, `cost-gate-block-${name}`);
+    });
+  }
 
   test("live-run — running", async ({ page }) => {
     await boot(page); await routeRun(page, runningResp());
