@@ -377,6 +377,10 @@
     // is CLEARED (never runs after the run ends) and frozen at the final
     // elapsed on any terminal transition.
     liveQueryText: null,
+    // W33 slice D (ADR-0142): the question of this tab's latest FINISHED run,
+    // so the History panel can tell an answer that does not list it yet (the
+    // row can be written a moment after the result shows) and ask once more.
+    historyLatestQuestion: null,
     lastLiveStatus: null,
     // Slice 4a (05 Result): the plain-text summary (question + verdict +
     // agreement line) built ONCE by ``renderResult`` at the terminal
@@ -9278,6 +9282,7 @@
       } else if (result.status === "cancelled") {
         toast({ message: "Run cancelled.", tone: "info" });
       }
+      noteFinishedQuestion(state.liveQueryText);
       // PR8: record the terminal run in the session trail.
       const demoMode = !!(result.demo_mode || (result.result && result.result.demo_mode));
       const liveCount = Number(result.live_count ?? (result.result && result.result.live_count) ?? 0);
@@ -9337,6 +9342,7 @@
       finalizeRunTime(result.result_generated_at_utc);
       stopPolling();
       setRunning(false);
+      noteFinishedQuestion(state.liveQueryText);
       // Slice 4a (05 Result): cancelled runs almost always have no synthesis, so
       // we stay on the live-run view. Transition only if one somehow exists.
       if (result.result && result.result.final_synthesis) {
@@ -10552,9 +10558,22 @@
         window.clearTimeout(idleTimer);
         idleTimer = window.setTimeout(fn, ms);
       };
+      // W33 slice D (review round 2): on wide screens the reminder shares the
+      // toasts' bottom-right corner, so while it shows the toasts sit above it
+      // (app.css reads --idle-reminder-lift). Measured each time, because its
+      // height changes with its text and the width.
+      const liftToasts = () => {
+        const height = idleBox.hidden ? 0 : idleBox.getBoundingClientRect().height;
+        document.documentElement.style.setProperty(
+          "--idle-reminder-lift",
+          height ? `calc(${Math.ceil(height)}px + var(--space-3))` : "0px",
+        );
+      };
+      if (typeof ResizeObserver === "function") new ResizeObserver(liftToasts).observe(idleBox);
       const hideReminder = () => {
         idleBox.hidden = true;
         idleText.textContent = "";
+        liftToasts();
       };
       // Shown first, text second, so the polite announcement is heard.
       const showReminder = (text, expired) => {
@@ -10562,8 +10581,10 @@
         stay.hidden = expired;
         leave.hidden = expired;
         reload.hidden = !expired;
+        liftToasts();
         window.setTimeout(() => {
           idleText.textContent = text;
+          liftToasts();
         }, 50);
       };
       const showExpired = () => {
@@ -10625,6 +10646,7 @@
       document.addEventListener("click", (event) => {
         if (history.open && !history.contains(event.target)) history.open = false;
       });
+      initHistoryRefresh(history);
     }
     // W7 (ADR-0136): delete the account in three steps (CHG-021 f): a
     // reminder, the typed email, a last "Delete permanently".
@@ -10686,6 +10708,123 @@
         }
       });
     }
+  }
+
+  // W33 slice D (ADR-0142): the run just finished, as History should list it.
+  function noteFinishedQuestion(queryText) {
+    const question = queryText ? String(queryText).trim() : "";
+    if (question) state.historyLatestQuestion = question;
+  }
+
+  // W33 slice D (ADR-0142): the History panel asks the server for its list
+  // each time it is OPENED — never on a timer, which would keep the session
+  // alive past its idle expiry (ADR-0138). Only the list, or its empty,
+  // unavailable or reload line, is replaced: the account controls beside it
+  // keep their elements, listeners and step. The server builds the markup
+  // (one builder for the page and the route) and escapes every value; this
+  // only parses it. Failure modes:
+  // docs/analysis/2026-10-03-w33d-history-refresh-failure-modes.md.
+  const HISTORY_ROUTE = "/v1/account/history";
+  const HISTORY_REASK_MS = 2000;
+  const HISTORY_SLOT_IDS = [
+    "account-history-list",
+    "account-history-empty",
+    "account-history-unavailable",
+    "account-history-reload",
+  ];
+
+  function initHistoryRefresh(history) {
+    // Every lookup is scoped to the panel: the list and its lines are the
+    // only nodes this touches, and most of them exist only once it has run.
+    const panel = history.querySelector(".account-history-panel");
+    const find = (id) => panel.querySelector("#" + id);
+    const controls = find("account-delete");
+    // Each refresh is numbered; only the newest one's answer is applied, so
+    // an older answer arriving last never replaces a newer list (row 11).
+    let newest = 0;
+    let reaskTimer = null;
+    const slot = () => HISTORY_SLOT_IDS.map(find).find(Boolean) || null;
+    const line = (id, text) => {
+      const p = document.createElement("p");
+      p.className = "history-empty";
+      p.id = id;
+      p.textContent = text;
+      return p;
+    };
+    const clearError = () => {
+      const error = find("account-history-error");
+      if (error) error.remove();
+    };
+    const place = (node) => {
+      clearError();
+      const current = slot();
+      if (current) current.replaceWith(node);
+      else panel.insertBefore(node, controls);
+    };
+    // Signed out, or signed in as someone else, elsewhere (rows 5, 6):
+    // the rows go and one line asks for a reload. The page never reloads
+    // itself and never asks for a new session.
+    const showReload = () =>
+      place(
+        line(
+          "account-history-reload",
+          "Your sign-in has changed (in another tab, window or device). Reload the page to see your history.",
+        ),
+      );
+    // A network or server error, a 503 included (row 10, decision 2a): the
+    // rows stay, and a line says so.
+    const showError = () => {
+      if (find("account-history-error")) return;
+      const error = line("account-history-error", "Your history could not be refreshed just now.");
+      error.setAttribute("role", "status");
+      const current = slot();
+      panel.insertBefore(error, current ? current.nextSibling : controls);
+    };
+    const lists = (node, question) =>
+      Array.from(node.querySelectorAll(".history-question")).some(
+        (q) => q.textContent.trim() === question,
+      );
+    const refresh = async (mayAskAgain) => {
+      newest += 1;
+      const mine = newest;
+      window.clearTimeout(reaskTimer);
+      let body;
+      try {
+        body = await api(HISTORY_ROUTE);
+      } catch (err) {
+        if (mine !== newest) return;
+        if (err && (err.status === 401 || err.status === 403)) showReload();
+        else showError();
+        return;
+      }
+      if (mine !== newest) return;
+      // The top bar's email, beside the panel (rendered with it, signed in).
+      const pageEmail = document.querySelector("#account-email");
+      if (!body || !pageEmail || body.email !== pageEmail.textContent) {
+        showReload();
+        return;
+      }
+      const template = document.createElement("template");
+      template.innerHTML = String(body.html || "");
+      const node = template.content.firstElementChild;
+      if (!node || !HISTORY_SLOT_IDS.includes(node.id)) {
+        showError();
+        return;
+      }
+      place(node);
+      // The row is written when the run ends, which can trail the result the
+      // page showed (row 12): ask ONCE more, a little later, while open.
+      const latest = state.historyLatestQuestion;
+      if (mayAskAgain && latest && !lists(node, latest)) {
+        reaskTimer = window.setTimeout(() => {
+          if (history.open) refresh(false);
+        }, HISTORY_REASK_MS);
+      }
+    };
+    history.addEventListener("toggle", () => {
+      if (history.open) refresh(true);
+      else window.clearTimeout(reaskTimer);
+    });
   }
 
   // W7 part 3 (ADR-0138): the idle reminder. The page's timer only decides

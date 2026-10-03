@@ -1,4 +1,5 @@
-"""W7, 2a — the exact history markup and signed-in lede (ADR-0135).
+"""W7, 2a — the exact history markup and signed-in lede (ADR-0135; the list
+builder is shared with ``GET /v1/account/history`` since ADR-0142).
 
 Pinned whole, so a change to any tag, class, word or the time shown turns
 this red (CI's mutation job found fragment checks let markup mutants live).
@@ -45,46 +46,66 @@ def _entries() -> list[HistoryEntry]:
     ]
 
 
-def test_the_history_markup_is_exact(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Turns red if any tag, class, id, word, separator or the UTC time in
-    the history box changes."""
-    monkeypatch.setattr(account_history, "history_for", lambda _id: _entries())
-    assert main._history_html(uuid4()) == (
-        '<details class="account-history" id="account-history">'
-        '<summary class="topbar-howitworks">History</summary>'
-        '<div class="account-history-panel" tabindex="0" role="region" '
-        'aria-label="Your question history">'
-        '<p class="history-note">Your last 5 questions, kept 30 days. Answers are not kept.</p>'
-        '<ol class="history-list" id="account-history-list">'
-        '<li class="history-item"><span class="history-question">Why &lt;this&gt;?</span>'
-        '<span class="history-meta">2026-09-26 12:00 UTC · timed out · 4 models · '
-        "3 of 4 opening positions carried into the final answer · estimated $0.0412</span></li>"
-        '<li class="history-item"><span class="history-question">Quick one</span>'
-        '<span class="history-meta">2026-09-25 09:05 UTC · completed · quick answer · '
-        "estimated $0.0100</span></li>"
-        "</ol>" + main._account_delete_html() + "</div></details>"
-    )
+#: The rows' markup, pinned with a literal (W33 slice D, ADR-0142: one builder
+#: for the page and for ``GET /v1/account/history``).
+_LIST = (
+    '<ol class="history-list" id="account-history-list">'
+    '<li class="history-item"><span class="history-question">Why &lt;this&gt;?</span>'
+    '<span class="history-meta">2026-09-26 12:00 UTC · timed out · 4 models · '
+    "3 of 4 opening positions carried into the final answer · estimated $0.0412</span></li>"
+    '<li class="history-item"><span class="history-question">Quick one</span>'
+    '<span class="history-meta">2026-09-25 09:05 UTC · completed · quick answer · '
+    "estimated $0.0100</span></li>"
+    "</ol>"
+)
+_EMPTY = '<p class="history-empty" id="account-history-empty">No questions yet.</p>'
+_UNAVAILABLE = (
+    '<p class="history-empty" id="account-history-unavailable">'
+    "Your history could not be loaded just now.</p>"
+)
+_PANEL_OPEN = (
+    '<details class="account-history" id="account-history">'
+    '<summary class="topbar-howitworks">History</summary>'
+    '<div class="account-history-panel" tabindex="0" role="region" '
+    'aria-label="Your question history">'
+    '<p class="history-note">Your last 5 questions, kept 30 days. Answers are not kept.</p>'
+)
+
+
+def test_the_history_markup_is_exact() -> None:
+    """RED-IF: any tag, class, id, word, separator or the UTC time the shared
+    list builder ``main._history_list_html`` writes changes (ADR-0142: the
+    page and the route both use it)."""
+    assert main._history_list_html(_entries()) == _LIST
 
 
 @pytest.mark.parametrize(
     ("entries", "body"),
-    [
-        ([], '<p class="history-empty" id="account-history-empty">No questions yet.</p>'),
-        (
-            None,
-            '<p class="history-empty" id="account-history-unavailable">'
-            "Your history could not be loaded just now.</p>",
-        ),
-    ],
+    [([], _EMPTY), (None, _UNAVAILABLE)],
     ids=["empty", "unavailable"],
 )
 def test_the_empty_and_unavailable_states_are_exact(
+    entries: list[HistoryEntry] | None, body: str
+) -> None:
+    """RED-IF: either state's markup or words change in the shared builder."""
+    assert main._history_list_html(entries) == body
+
+
+@pytest.mark.parametrize(
+    ("entries", "body"),
+    [(_entries(), _LIST), ([], _EMPTY), (None, _UNAVAILABLE)],
+    ids=["rows", "empty", "unavailable"],
+)
+def test_the_page_panel_wraps_exactly_the_shared_list(
     monkeypatch: pytest.MonkeyPatch, entries: list[HistoryEntry] | None, body: str
 ) -> None:
-    """Turns red if either state's markup or words change."""
+    """Row 14 (ADR-0142). RED-IF: the page's History panel stops being the
+    note, then EXACTLY the shared builder's list, then the account controls:
+    a second renderer, or a changed wrapper, turns this red."""
     monkeypatch.setattr(account_history, "history_for", lambda _id: entries)
-    html = main._history_html(uuid4())
-    assert html.endswith(body + main._account_delete_html() + "</div></details>")
+    assert main._history_html(uuid4()) == (
+        _PANEL_OPEN + body + main._account_delete_html() + "</div></details>"
+    )
 
 
 def test_the_signed_in_lede_is_exact() -> None:

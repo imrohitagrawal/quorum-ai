@@ -434,6 +434,40 @@ jobs:
         run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 51 --lane "workspace/accessibility/api-mocking/navigation lane"
 
       - name: Clear the previous lane's JUnit report
+        run: rm -f e2e/results.xml
+
+      # W33 slice D (ADR-0142): the first SIGNED-IN browser lane. Its own
+      # config and its own server, on its own port (18096): a TEST-ONLY
+      # launcher (e2e/servers/signed_in_server.py) starts the real app with
+      # Google sign-in on against a loopback token stub set IN-PROCESS — never
+      # through an environment variable, which ADR-0142 rejects as a critical
+      # risk — with fresh temporary databases and live execution off ($0). The
+      # spec catches Google's consent page with page.route and redirects to the
+      # local callback; everything after that is the real backend.
+      - name: Run the signed-in History lane (BLOCKING)
+        working-directory: e2e
+        env:
+          CI: "true"
+        run: >-
+          npx playwright test
+          tests/signed-in/history-refresh.spec.ts
+          --config=playwright.signed-in.config.ts
+          --project=chromium
+          --retries=0
+
+      # EXECUTED-COUNT FLOOR, same reasoning as the lanes above. 14 is the
+      # spec's whole test count. MEASURED 2026-10-03 with the invocation above:
+      # the first nine tests were red by design on 087dbb9 (7 of 9 failing) and
+      # gave "9 passed" on 25b8867; review round 1 added three, and a35b77c's
+      # tests against 8927df9's code gave "11 passed", "1 failed" (the toasts
+      # over History, red by design until its fix); "12 passed" on 392f173.
+      # Review round 2 added two (the idle reminder over a toast, at 1440 and
+      # 700 px): against b552d37's code the lane gave "12 passed", "2 failed",
+      # red by design until their fix. Re-measure when that fix lands.
+      - name: "signed-in History lane: floor on tests actually executed"
+        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 14 --lane "signed-in History lane"
+
+      - name: Clear the previous lane's JUnit report
         # Adversarial review (#162/#166): without this, a Playwright run that
         # exits 0 having genuinely written nothing (the exact "all-skipped"
         # or "matched nothing" shape every floor in this file exists to

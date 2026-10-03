@@ -6,7 +6,7 @@ original, because a gate and an offline agent can read it and cannot read `gh`.
 
 Verified at: `b1209b5a785e95fb208c55c4303ada85065aeb54`
 
-The board holds **44** rows, **12** of them unpinned.
+The board holds **45** rows, **12** of them unpinned.
 
 `scripts/check_open_work.py --check` reads every row's evidence off disk and
 refuses if a claim is false. It runs inside `make validate`, and
@@ -127,7 +127,7 @@ caught by any automated check and 10 of 16 by adversarial review
 | W30 | The per-network session limits count every visitor as the app's ingress address (CHG-022): take the visitor's address from what Fly's proxy forwards, measured first; the cap value stays 2 | DONE | `ABSENT src/product_app/auth.py :: def client_ip_of(` | — | — |
 | W31 | An allow-list of named, dated addresses or ranges (at most /24 IPv4, /48 IPv6) exempt from the per-network session limits only, never the spend limits (CHG-022) | DONE | `ABSENT src/product_app/config.py :: session_cap_exempt_networks` | — | W30 |
 | W32 | An invite link that lifts the session limit for whoever opens it, from any network, until an end date (CHG-022; planned now, not deferred) | DONE | `ABSENT src/product_app/config.py :: invite_link_signing_key` | — | W30 |
-| W33 | The owner's bugs 1–10 of 2026-09-29 (root causes: `docs/analysis/2026-09-29/owner-bugs-root-causes.md`; CHG-026 h, m): Start fresh wipes the session list; the old follow-up stays in the box; the block card names the hard cap instead of the daily cap; limits unclear; no way home from a result; empty session panel; History stale and not clickable; the composer lands on the question, not the models. Failing tests first, thin slices | UNPINNED | `—` | — | — |
+| W33 | The owner's bugs 1–10 of 2026-09-29 (root causes: `docs/analysis/2026-09-29/owner-bugs-root-causes.md`; CHG-026 h, m): Start fresh wipes the session list; the old follow-up stays in the box; the block card names the hard cap instead of the daily cap; limits unclear; no way home from a result; empty session panel; History stale (opening a row is W36); the composer lands on the question, not the models. Failing tests first, thin slices (built in three slices: A #532 ADR-0140, C #533 ADR-0141, D ADR-0142) | DONE | `ABSENT src/product_app/main.py :: "/v1/account/history",` | — | — |
 | W34 | The daily session cap counts anonymous use only and must never stop anyone signing in; today, sign-out after two sign-ins on one network locks it out with "This network has reached its session limit" (CHG-026 a; ADR-0138 records the mechanism; built: ADR-0139, AC-053) | DONE | `ABSENT src/product_app/auth.py :: sign_in_only` | — | — |
 | W35 | "Sign out everywhere" during a run asks first: "Yes" stops the run and signs out everywhere; "No" signs out everywhere except the running session (CHG-026 b) | UNPINNED | `—` | — | W34 |
 | W36 | History keeps the full result (answers, debate, synthesis) for signed-in accounts, 20 conversations for 30 days, delete one / delete all; a row opens read-only with "Continue this conversation" (CHG-026 i; supersedes the 5-question keep of CHG-023 when built) | UNPINNED | `—` | — | W33 |
@@ -140,6 +140,7 @@ caught by any automated check and 10 of 16 by adversarial review
 | W43 | The empty question box is already red with "Question is required." on one plain load of `/ui` right after signing in, before anything is typed (four browser runs on 2026-09-30, W34's product review) (built in W33 slice A, ADR-0140 decision 9) | DONE | `ABSENT src/product_app/static/app.js :: const isInvalid = isEmpty && !!state.submissionAttempted;` | — | W33 |
 | W44 | Locally (macOS), `make mutation-baseline` on PR #528's head recorded 201 mutants as "segfault" in `test_context_carry.py::test_non_string_context_value_is_rejected_not_crashed`, a test that passes when run directly with a mutant on; mutmut 3.6 files exit -9 (SIGKILL, e.g. its own hard CPU limit) under the same label, so the cause is unmeasured. A fork reproduction outside mutmut, run by this session's investigator on 2026-10-03, did not crash (its scripts were not kept). Do not run mutmut locally until a runaway `gcloud` process chain is explained: it filled the user's process table twice on 2026-10-03, both times while a local mutmut run was in progress; the link is not proven and nothing in this repository calls `gcloud` | UNPINNED | `—` | — | W42 |
 | W45 | Every `GET /v1/session` rotates the session's CSRF token, so with two tabs of one browser the tab that loaded first gets 403 `CSRF_INVALID` on its next run or on sign-out (measured on 2026-10-03 by two agents independently: two calls gave different tokens and sign-out with the first was refused; a second `/ui` tab made the first tab's run fail). Same class as #511 ("a page GET must not rotate a token") | UNPINNED | `—` | — | — |
+| W46 | Between 601 and 837 px wide the signed-in top bar is wider than the screen (`scrollWidth` 838), so History and Sign out sit partly or fully off-screen at 601–700 px; measured identically on `290d8c5` by W33 slice D's break-it reviewer (2026-10-03). Nothing limits how many toasts stack, so with the idle reminder showing, about 7 toasts within 4.5 s reach the top bar at 720 px tall | UNPINNED | `—` | — | — |
 
 **STOP** marks a row that cannot be finished without a human decision — a money,
 cost or safety guardrail value that only real measurement could justify. Do not
@@ -760,7 +761,7 @@ forever with the defect closed (trap 12, measured on W12/#379). It now pins
 `ABSENT … :: if len(stance) < 2:`, verified absent on `origin/main` and present
 after.
 
-**W33–W43 — the 2026-09-28..30 owner session, added 2026-09-30** (W42 and W43 found by W34's reviews; W44 split from W42 on 2026-10-03; W45 found by W33's reviews). Added
+**W33–W43 — the 2026-09-28..30 owner session, added 2026-09-30** (W42 and W43 found by W34's reviews; W44 split from W42 on 2026-10-03; W45 and W46 found by W33's reviews). Added
 unpinned: each is built in its own pull request, and that pull request pins
 the row (W34 first, pinned by ADR-0139's pull request) with the needle its change adds or deletes (memory of this repo:
 "pin a needle the fix must add or delete", not a line the fix edits around).

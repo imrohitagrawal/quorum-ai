@@ -2,6 +2,9 @@ import { defineConfig, devices } from "@playwright/test";
 
 export default defineConfig({
   testDir: "./tests",
+  // The signed-in lane (W33 slice D) needs its own test-only server; it runs
+  // only under playwright.signed-in.config.ts, never against this one.
+  testIgnore: ["**/signed-in/**"],
   timeout: 60000,
   expect: {
     timeout: 10000,
