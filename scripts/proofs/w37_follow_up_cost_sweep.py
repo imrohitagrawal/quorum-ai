@@ -23,9 +23,12 @@ os.environ.setdefault("QUORUM_EVAL_JUDGE_API_KEY", "dummy-no-call-is-made")
 os.environ.setdefault("QUORUM_EVAL_JUDGE_MODEL_ID", "openai/gpt-4.1-mini")
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
-from product_app import costs, evaluation  # noqa: E402
+from product_app import (  # noqa: E402
+    costs,
+    evaluation,
+    model_slots,  # noqa: E402
+)
 from product_app.config import settings  # noqa: E402
-from product_app import model_slots  # noqa: E402
 from product_app.model_slots import DEFAULT_MODEL_IDS, ModelSlot  # noqa: E402
 
 
