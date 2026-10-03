@@ -37,9 +37,10 @@ import {
 const DESKTOP = { width: 1440, height: 900 };
 const PHONE = { width: 390, height: 844 };
 
-// ADR-0140 decision 8, verbatim (the bold marks are <strong>, not asterisks).
+// ADR-0140 decision 8 with its last part replaced by the owner's wording
+// (ADR-0143 decision 8, W37), verbatim (the bold marks are <strong>, not asterisks).
 const HINT_FOUR =
-  "Your four models are picked for you — change any if you like. Then press See the estimate to check the cost first, or Run now to start straight away (it still asks first if the cost needs your approval).";
+  "Your four models are picked for you — change any if you like. Press See the estimate to check the cost first, or Run now to start straight away. If a run costs more than usual, it asks you first.";
 // ADR-0140 decision 7, verbatim.
 const EMPTY_LINE = "Questions you ask in this tab appear here.";
 
@@ -335,25 +336,29 @@ test.describe("W33 slice A — the page journey on the real backend (no page.rou
   });
 
   // ---------------------------------------------------------------------------
-  // Decision 3 — the follow-up mode buttons are hidden until W37.
+  // Decision 3, superseded by ADR-0143 decision 4 (W37): the follow-up mode
+  // buttons are back on a result that has a final answer. The full follow-up
+  // journey is e2e/tests/invariants/follow-up-context.spec.ts.
   // ---------------------------------------------------------------------------
-  test("Follow up / Start fresh are hidden until W37 and the note says each question is answered on its own", async ({ page }) => {
-    // RED-IF: #result-followup or #result-startfresh is visible again, or the note keeps promising a pre-fill (row 6).
+  test("Follow up / Start fresh show on a result with a final answer; Follow up is pressed and the note names the question", async ({ page }) => {
+    // RED-IF: #result-followup or #result-startfresh stays hidden (ADR-0143 decision 4), or Follow up is not the default, or the note does not name the previous question.
     const mocked = forbidRoutes(page);
     await boot(page);
     await askReal(page, Q1);
-    // Positive partners: the block itself is on screen.
     await expect(page.locator("#result-next-input")).toBeVisible();
-    await expect(page.locator("#result-next-run")).toBeVisible();
-    await expect(page.locator("#result-followup")).toBeHidden();
-    await expect(page.locator("#result-startfresh")).toBeHidden();
+    await expect(page.locator("#result-next-input")).toHaveValue("");
+    await expect(page.locator("#result-followup")).toBeVisible();
+    await expect(page.locator("#result-startfresh")).toBeVisible();
+    await expect(page.locator("#result-followup")).toHaveAttribute("aria-pressed", "true");
     const note = page.locator(".result-next-note");
     await expect(note).toBeVisible();
-    // Wording left open by the ADR: key phrase only.
-    await expect(note).toContainText(/on its own/i);
+    await expect(note).toContainText("Following up on: ");
+    await expect(note).toContainText(Q1);
     await expect(note).not.toContainText(/pre-filled/i);
-    // No "Following up on: …" line may claim context the page does not send.
-    await expect(page.getByText(/Following up on/i).filter({ visible: true })).toHaveCount(0);
+    // Start fresh switches the note to the on-its-own wording (key phrase only).
+    await page.locator("#result-startfresh").click();
+    await expect(note).toContainText(/on its own/i);
+    await expect(note).not.toContainText(/Following up on/);
     expect(mocked()).toBe(false);
   });
 

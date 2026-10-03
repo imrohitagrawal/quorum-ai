@@ -329,12 +329,13 @@ test.describe("UI parity — behaviour", () => {
     }
     await expect(synth.locator(".result-synth-body").first()).toContainText("The models agree on the primary recommendation.");
     await expect(page.locator(".result-next")).toBeVisible();
-    // ADR-0140 decision 3: the Follow up / Start fresh mode buttons are hidden
-    // until W37 sends the previous question and answer to the models.
-    // RED-IF: either mode button is shown again before W37.
+    // ADR-0143 decision 4 (W37, superseding ADR-0140 decision 3): a result
+    // with a final answer shows Follow up on this (pressed) and Start fresh.
+    // RED-IF: either mode button is hidden on this result, or Follow up is not the default.
     await expect(page.locator("#result-next-input")).toBeVisible();
-    await expect(page.locator("#result-followup")).toBeHidden();
-    await expect(page.locator("#result-startfresh")).toBeHidden();
+    await expect(page.locator("#result-followup")).toBeVisible();
+    await expect(page.locator("#result-startfresh")).toBeVisible();
+    await expect(page.locator("#result-followup")).toHaveAttribute("aria-pressed", "true");
     await expect(page.locator(".result-footer")).toContainText(/Ephemeral/);
     // Legacy scaffolding stays hidden on the result screen too.
     for (const s of await page.locator(".panel-section").all()) await expect(s).toBeHidden();
@@ -705,7 +706,7 @@ test.describe("UI parity — behaviour", () => {
 
   test("next-question: Estimate & run with an empty box is a no-op (no estimate fired)", async ({ page }) => {
     // ADR-0140: the box is empty after every finished run and nothing pre-fills
-    // the composer, so no "Start fresh" click is needed (that button is hidden).
+    // the composer, so no "Start fresh" click is needed.
     // RED-IF: an empty Review & run pre-fills the composer or fires an estimate.
     await driveToResult(page, completedResp());
     let estimatesAfter = 0;
@@ -1506,7 +1507,7 @@ test.describe("UI parity — behaviour", () => {
     // Scroll to the follow-up block near the bottom of the (long) result view.
     const nextRun = page.locator("#result-next-run");
     await nextRun.scrollIntoViewIfNeeded();
-    // No mode click: ADR-0140 hides the Follow up / Start fresh buttons until W37.
+    // No mode click: Follow up on this is the default (ADR-0143 decision 4).
     await page.locator("#result-next-input").fill("What about hardware security keys?");
     await nextRun.click();
     await expect(page.locator('[data-view="composer"]')).toBeVisible();
