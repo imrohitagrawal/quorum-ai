@@ -1,4 +1,6 @@
 import { test, expect, Page } from "@playwright/test";
+import AxeBuilder from "@axe-core/playwright";
+import { freeze } from "../../fixtures/stabilize";
 import {
   boot,
   goldenCreateResp,
@@ -10,9 +12,11 @@ import {
  * W33 slice A + W43 — the page journey (ADR-0140).
  *
  * The owner asked that the final feature testing use the REAL system, not
- * mocks (OWNER-DISCUSSION-LOG M07/M08). So the first describe below drives the
- * real FastAPI app that Playwright's webServer starts (live execution off: a
- * simulated run takes about 0.1 s server-side), with NO `page.route` — the same
+ * mocks (OWNER-DISCUSSION-LOG M18 point 5 and M22). So the first describe below
+ * drives the real FastAPI app that Playwright's webServer starts (live
+ * execution off: measured 2026-10-03 over three simulated runs, the server
+ * reported 15-19 ms elapsed at completion, and the page's poll saw "completed"
+ * about 0.76 s after the create), with NO `page.route` — the same
  * guard `real-integration-smoke.spec.ts` uses fails the test if one is added.
  *
  * ANONYMOUS ONLY. No e2e lane can sign in today, so every journey here is an
@@ -33,10 +37,10 @@ import {
 const DESKTOP = { width: 1440, height: 900 };
 const PHONE = { width: 390, height: 844 };
 
-// ADR-0140 decision 7, verbatim (the bold marks are <strong>, not asterisks).
+// ADR-0140 decision 8, verbatim (the bold marks are <strong>, not asterisks).
 const HINT_FOUR =
   "Your four models are picked for you — change any if you like. Then press See the estimate to check the cost first, or Run now to start straight away (it still asks first if the cost needs your approval).";
-// ADR-0140 decision 6, verbatim.
+// ADR-0140 decision 7, verbatim.
 const EMPTY_LINE = "Questions you ask in this tab appear here.";
 
 const Q1 = "What are the key metrics for measuring SaaS customer retention?";
@@ -139,6 +143,87 @@ async function hintGeometry(page: Page) {
   });
 }
 
+/**
+ * Hold every estimate RESPONSE until the test releases it. The request still
+ * goes to the REAL server (it prices the question and returns a real
+ * confirmation token); only its arrival in the page is delayed. This is a
+ * fetch wrapper installed by an init script, NOT `page.route`, so the
+ * no-mocks guard stays meaningful. `app.js` calls `fetch` for every API call.
+ */
+async function holdEstimates(page: Page) {
+  await page.addInitScript(() => {
+    const w = window as unknown as {
+      __estimateAnswered: number;
+      __releaseEstimates: () => void;
+    };
+    const orig = window.fetch.bind(window);
+    // Re-armable: a release frees only the estimates already SENT, and the
+    // next one is held again.
+    let release: () => void = () => {};
+    let gate = Promise.resolve();
+    const arm = () => {
+      gate = new Promise<void>((r) => (release = r));
+    };
+    arm();
+    w.__estimateAnswered = 0;
+    w.__releaseEstimates = () => {
+      const free = release;
+      arm();
+      free();
+    };
+    window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      const pending = orig(input, init);
+      if (!/\/v1\/query-runs\/estimate(\?|$)/.test(url)) return pending;
+      const myGate = gate;
+      return pending.then((res) =>
+        myGate.then(() => {
+          w.__estimateAnswered += 1;
+          return res;
+        }),
+      );
+    };
+  });
+}
+
+const estimatesAnswered = (page: Page) =>
+  page.evaluate(() => (window as unknown as { __estimateAnswered: number }).__estimateAnswered);
+
+/** Release the held estimates and wait until one more has reached the page. */
+async function releaseEstimates(page: Page) {
+  const before = await estimatesAnswered(page);
+  await page.evaluate(() => (window as unknown as { __releaseEstimates: () => void }).__releaseEstimates());
+  await expect.poll(() => estimatesAnswered(page)).toBeGreaterThanOrEqual(before + 1);
+  // Give a late answer the time it would need to open a gate or create a run
+  // (a real create answers in tens of milliseconds here).
+  await page.waitForTimeout(1500);
+}
+
+/** Every POST that creates a run (path exactly /v1/query-runs), with its body. */
+function recordRunCreates(page: Page): { query_text?: string }[] {
+  const creates: { query_text?: string }[] = [];
+  page.on("request", (r) => {
+    if (r.method() === "POST" && new URL(r.url()).pathname === "/v1/query-runs") {
+      creates.push((r.postDataJSON() ?? {}) as { query_text?: string });
+    }
+  });
+  return creates;
+}
+
+/** Wait until the page has SENT the (held) estimate request. */
+async function estimateSent(page: Page) {
+  await page.waitForRequest((r) => new URL(r.url()).pathname === "/v1/query-runs/estimate", { timeout: 10000 });
+}
+
+// Contract chosen by the test designer (the ADR names no element): an element
+// #composer-steps, shown with the composer, holding three list items in order
+// and exactly one item with aria-current="step".
+const stepMarker = (page: Page) => page.locator("#composer-steps");
+const stepLabels = async (page: Page) =>
+  (await stepMarker(page).getByRole("listitem").allTextContents()).map((t) =>
+    t.replace(/[→›>]/g, " ").replace(/\s+/g, " ").trim(),
+  );
+
 test.describe("W33 slice A — the page journey on the real backend (no page.route)", () => {
   test.skip(({ browserName }) => browserName !== "chromium", "reference run is chromium-only");
 
@@ -146,7 +231,7 @@ test.describe("W33 slice A — the page journey on the real backend (no page.rou
   // The owner's journey, end to end (M07 points 1, 2, 6, 9).
   // ---------------------------------------------------------------------------
   test("the owner's journey: ask, New question keeps the list, ask again, Back, then Clear", async ({ page }) => {
-    // RED-IF: any step of ADR-0140 decisions 1, 2, 4, 5 or 6 regresses — the first broken step names itself.
+    // RED-IF: any step of ADR-0140 decisions 1, 2, 4, 6 or 7 regresses — the first broken step names itself.
     const mocked = forbidRoutes(page);
     await page.setViewportSize(DESKTOP);
     await boot(page);
@@ -170,13 +255,13 @@ test.describe("W33 slice A — the page journey on the real backend (no page.rou
     expect(questions.some((q) => q.includes(Q1.slice(0, 40)))).toBe(true);
     expect(questions.some((q) => q.includes(Q2.slice(0, 40)))).toBe(true);
 
-    // Decision 5: browser Back from the result stays in the page.
+    // Decision 6: browser Back from the result stays in the page.
     await page.goBack();
     await expect(composerView(page)).toBeVisible();
     expect(new URL(page.url()).pathname).toBe("/ui");
     await expect(trailEntries(page)).toHaveCount(2);
 
-    // Decision 6: Clear empties the list and the panel explains itself.
+    // Decision 7: Clear empties the list and the panel explains itself.
     await page.locator("#session-trail-clear").click();
     await expect(trailEntries(page)).toHaveCount(0);
     await expect(emptyLine(page)).toBeVisible();
@@ -295,8 +380,9 @@ test.describe("W33 slice A — the page journey on the real backend (no page.rou
     expect(mocked()).toBe(false);
   });
 
-  test("the top-bar logo is a link to /ui; from the cost gate it closes the estimate and opens an empty composer (row 10)", async ({ page }) => {
-    // RED-IF: the top-bar brand is not a link, or going home leaves the cost gate / cost confirmation open.
+  test("the top-bar logo is a link to /ui; from the cost gate it closes the estimate and KEEPS the question (rows 10, 28)", async ({ page }) => {
+    // RED-IF: the top-bar brand is not a link, going home leaves the cost gate open, or the logo deletes a question that has not run (decision 4).
+    // This test asserted an EMPTY composer in round 0; ADR-0140 decision 4 now keeps an un-run question.
     const mocked = forbidRoutes(page);
     await boot(page);
     await page.locator("#query-text").fill(Q1);
@@ -312,13 +398,288 @@ test.describe("W33 slice A — the page journey on the real backend (no page.rou
     await expect(composerView(page)).toBeVisible();
     await expect(page.locator('[data-view="cost-gate"]')).toBeHidden();
     await expect(page.locator("#cost-confirmation")).toBeHidden();
-    await expect(page.locator("#query-text")).toHaveValue("");
+    await expect(page.locator("#query-text"), "the logo keeps a question that has not run").toHaveValue(Q1);
+    expect(await windowMark(page)).toBe(1);
+    expect(mocked()).toBe(false);
+  });
+
+  test("on the composer the top-bar logo keeps a typed question (row 28)", async ({ page }) => {
+    // RED-IF: the logo's click handler empties #query-text on the composer (a 1,079-character question to 0 in one click).
+    const mocked = forbidRoutes(page);
+    await boot(page);
+    const long = `${Q1} ${"Please weigh cost, latency and team skills. ".repeat(24)}`.trim();
+    await page.locator("#query-text").fill(long);
+    await expect(page.locator("#query-text")).toHaveValue(long);
+    await markWindow(page);
+    await topbarLogoLink(page).click();
+    await expect(composerView(page)).toBeVisible();
+    await expect(page.locator("#query-text"), "a typed, un-run question survives the logo").toHaveValue(long);
     expect(await windowMark(page)).toBe(1);
     expect(mocked()).toBe(false);
   });
 
   // ---------------------------------------------------------------------------
-  // Decision 5 — browser Back and Forward stay inside the page.
+  // Decision 5 — going home drops anything still in flight (row 26).
+  // The estimate is delayed by holdEstimates (an init-script fetch wrapper that
+  // holds the REAL server's answer), not by page.route.
+  // ---------------------------------------------------------------------------
+  test("See the estimate, then the top-bar logo before it answers: the late answer opens nothing, runs nothing, shows no error", async ({ page }) => {
+    // RED-IF: the estimate's .then still opens the cost confirmation / gate after the user has gone home.
+    const mocked = forbidRoutes(page);
+    await holdEstimates(page);
+    const creates = recordRunCreates(page);
+    await boot(page);
+    await page.locator("#query-text").fill(Q1);
+    const sent = estimateSent(page);
+    await page.locator("#estimate-run").click();
+    await sent;
+    await topbarLogoLink(page).click();
+    await expect(composerView(page)).toBeVisible();
+
+    await releaseEstimates(page);
+    await expect(page.locator('[data-view="cost-gate"]'), "a late estimate must not open the gate").toBeHidden();
+    await expect(page.locator("#cost-confirmation")).toBeHidden();
+    await expect(page.locator("#error-region")).toBeHidden();
+    expect(creates.length, "no run may be created").toBe(0);
+    await expect(composerView(page)).toBeVisible();
+    expect(mocked()).toBe(false);
+  });
+
+  test("See the estimate, then a result's brand link before it answers: the late answer opens nothing, runs nothing, shows no error", async ({ page }) => {
+    // RED-IF: going home from a result does not cancel the estimate the composer started.
+    const mocked = forbidRoutes(page);
+    await holdEstimates(page);
+    const creates = recordRunCreates(page);
+    await boot(page);
+    // Run 1 passes its held estimate straight through.
+    await page.locator("#query-text").fill(Q1);
+    let sent = estimateSent(page);
+    await page.locator("#run-now").click();
+    await sent;
+    await page.evaluate(() => (window as unknown as { __releaseEstimates: () => void }).__releaseEstimates());
+    await settleRealRun(page);
+    expect(creates.length, "precondition: run 1 was created").toBe(1);
+    await newQuestionButton(page).click();
+    await expect(composerView(page)).toBeVisible();
+
+    await page.locator("#query-text").fill(Q2);
+    sent = estimateSent(page);
+    await page.locator("#estimate-run").click();
+    await sent;
+    // While that estimate is held: open the earlier result, then go home by its brand link.
+    await page.locator(".session-trail-entry").first().click();
+    await expect(verdictVisible(page)).toBeVisible();
+    await resultBrandLink(page).click();
+    await expect(composerView(page)).toBeVisible();
+
+    await releaseEstimates(page);
+    await expect(page.locator('[data-view="cost-gate"]'), "a late estimate must not open the gate").toBeHidden();
+    await expect(page.locator("#error-region")).toBeHidden();
+    expect(creates.length, "only run 1 was ever created").toBe(1);
+    expect(mocked()).toBe(false);
+  });
+
+  test("Run now, go home and type a new question before the estimate answers: no run is created", async ({ page }) => {
+    // RED-IF: the Run-now estimate's continuation calls proceedWithRun after the user has gone home.
+    const mocked = forbidRoutes(page);
+    await holdEstimates(page);
+    const creates = recordRunCreates(page);
+    await boot(page);
+    await page.locator("#query-text").fill(Q1);
+    const sent = estimateSent(page);
+    await page.locator("#run-now").click();
+    await sent;
+    await topbarLogoLink(page).click();
+    await expect(composerView(page)).toBeVisible();
+    await page.locator("#query-text").fill(Q2);
+
+    await releaseEstimates(page);
+    expect(creates.length, "a late estimate must not start a run").toBe(0);
+    await expect(page.locator('[data-view="live-run"]')).toBeHidden();
+    await expect(page.locator("#error-region")).toBeHidden();
+    await expect(composerView(page)).toBeVisible();
+    await expect(page.locator("#query-text"), "the new question is still in the box").toHaveValue(Q2);
+    expect(mocked()).toBe(false);
+  });
+
+  test("positive partner: without going home, a delayed See the estimate still opens the gate", async ({ page }) => {
+    // RED-IF: the in-flight guard drops EVERY late estimate, not only one the user has left.
+    const mocked = forbidRoutes(page);
+    await holdEstimates(page);
+    const creates = recordRunCreates(page);
+    await boot(page);
+    await page.locator("#query-text").fill(Q1);
+    const sent = estimateSent(page);
+    await page.locator("#estimate-run").click();
+    await sent;
+    await releaseEstimates(page);
+    await expect(page.locator('[data-view="cost-gate"]')).toBeVisible();
+    await expect(page.locator("#gate-confirm")).toBeVisible();
+    expect(creates.length, "See the estimate creates nothing until approved").toBe(0);
+    expect(mocked()).toBe(false);
+  });
+
+  test("positive partner: without going home, a delayed Run now still starts exactly one run", async ({ page }) => {
+    // RED-IF: the in-flight guard drops a Run-now estimate the user never left.
+    const mocked = forbidRoutes(page);
+    await holdEstimates(page);
+    const creates = recordRunCreates(page);
+    await boot(page);
+    await page.locator("#query-text").fill(Q1);
+    const sent = estimateSent(page);
+    await page.locator("#run-now").click();
+    await sent;
+    await releaseEstimates(page);
+    await settleRealRun(page);
+    expect(creates.length, "exactly one run").toBe(1);
+    expect(creates[0].query_text).toBe(Q1);
+    expect(mocked()).toBe(false);
+  });
+
+  test("Run now, then edit the box before the estimate answers: the run submits the question that was priced", async ({ page }) => {
+    // RED-IF: proceedWithRun reads #query-text at create time instead of the text the estimate priced.
+    const mocked = forbidRoutes(page);
+    await holdEstimates(page);
+    const creates = recordRunCreates(page);
+    await boot(page);
+    await page.locator("#query-text").fill(Q1);
+    const sent = estimateSent(page);
+    await page.locator("#run-now").click();
+    await sent;
+    await page.locator("#query-text").fill(Q2);
+    await releaseEstimates(page);
+    await expect.poll(() => creates.length, { timeout: 15000 }).toBe(1);
+    expect(creates[0].query_text, "the run must submit the priced question, not the edit").toBe(Q1);
+    expect(mocked()).toBe(false);
+  });
+
+  // ---------------------------------------------------------------------------
+  // Decision 6 / row 27 — going home from a result or transcript is a history
+  // entry of its own, so Back returns to where the user was.
+  // ---------------------------------------------------------------------------
+  test("result → New question → Back returns to the same result, list intact (row 27)", async ({ page }) => {
+    // RED-IF: New question steps history back (history.go(-1)) instead of pushing an entry, so the next Back leaves the site.
+    const mocked = forbidRoutes(page);
+    await boot(page);
+    await askReal(page, Q1);
+    await newQuestionButton(page).click();
+    await expect(composerView(page)).toBeVisible();
+
+    await page.goBack();
+    await expect(verdictVisible(page), "Back returns to the result the user came from").toBeVisible();
+    await expect(page.locator("#result-question")).toHaveText(Q1);
+    await expect(trailEntries(page)).toHaveCount(1);
+    expect(new URL(page.url()).pathname).toBe("/ui");
+    expect(mocked()).toBe(false);
+  });
+
+  test("transcript → brand link → Back returns to the transcript, list intact (row 27)", async ({ page }) => {
+    // RED-IF: going home from the transcript does not push its own entry, so Back skips the transcript or leaves the site.
+    const mocked = forbidRoutes(page);
+    await boot(page);
+    await askReal(page, Q1);
+    await page.locator("#result-transcript-link").click();
+    await expect(page.locator('[data-view="transcript"]')).toBeVisible();
+    await transcriptBrandLink(page).click();
+    await expect(composerView(page)).toBeVisible();
+
+    await page.goBack();
+    await expect(page.locator('[data-view="transcript"]'), "Back returns to the transcript the user left").toBeVisible();
+    await expect(trailEntries(page)).toHaveCount(1);
+    expect(new URL(page.url()).pathname).toBe("/ui");
+    expect(mocked()).toBe(false);
+  });
+
+  // ---------------------------------------------------------------------------
+  // Decision 8 / row 30 — the hint recounts; the step marker.
+  // ---------------------------------------------------------------------------
+  test("after the hand-off, turning quick mode on recounts the hint to one model (row 30)", async ({ page }) => {
+    // RED-IF: renderHandoffHint is not re-run when quick mode changes.
+    const mocked = forbidRoutes(page);
+    await landingHandoff(page, "Compare two database options for a small team");
+    const hint = handoffHint(page);
+    // Positive partner: before the change it said four.
+    await expect(hint).toHaveText(HINT_FOUR);
+    await page.locator("#quick-mode-input").check();
+    await expect(hint).toContainText(/\bone\b|\byour model\b/i);
+    await expect(hint).not.toContainText(/\bfour\b/i);
+    expect(mocked()).toBe(false);
+  });
+
+  test("after the hand-off, removing a slot recounts the hint to three (row 30)", async ({ page }) => {
+    // RED-IF: renderHandoffHint is not re-run when the panel size changes.
+    const mocked = forbidRoutes(page);
+    await landingHandoff(page, "Compare two database options for a small team");
+    const hint = handoffHint(page);
+    await expect(hint).toHaveText(HINT_FOUR);
+    await page.locator("[data-slot-remove]").first().click();
+    await expect(page.locator("select[data-model-slot]")).toHaveCount(3);
+    await expect(hint).toContainText(/Your three models are picked for you/);
+    expect(mocked()).toBe(false);
+  });
+
+  test("the composer's step marker reads Question → Models → Estimate and run, with Question current on a plain load (row 32)", async ({ page }) => {
+    // RED-IF: #composer-steps is missing, its three labels change or reorder, or not exactly one step carries aria-current="step".
+    const mocked = forbidRoutes(page);
+    await boot(page);
+    await expect(stepMarker(page)).toBeVisible();
+    expect(await stepLabels(page)).toEqual(["Question", "Models", "Estimate and run"]);
+    const current = stepMarker(page).locator('[aria-current="step"]');
+    await expect(current).toHaveCount(1);
+    await expect(current).toHaveText(/Question/);
+    expect(mocked()).toBe(false);
+  });
+
+  test("after the landing hand-off the step marker's current step is Models (row 32)", async ({ page }) => {
+    // RED-IF: the hand-off does not move aria-current="step" to Models.
+    const mocked = forbidRoutes(page);
+    await landingHandoff(page, "Compare two database options for a small team");
+    await expect(stepMarker(page)).toBeVisible();
+    const current = stepMarker(page).locator('[aria-current="step"]');
+    await expect(current).toHaveCount(1);
+    await expect(current).toHaveText(/Models/);
+    expect(mocked()).toBe(false);
+  });
+
+  // ---------------------------------------------------------------------------
+  // Decision 7 / row 31 — the list's small text meets WCAG AA in both themes.
+  // ---------------------------------------------------------------------------
+  test("the session list with entries passes axe color-contrast (WCAG 2 AA) in both themes on the result view (row 31)", async ({ page }) => {
+    // RED-IF: .session-trail-status / .session-trail-time go back to tokens under 4.5:1 (measured 3.2:1 light, 3.41:1 dark).
+    const mocked = forbidRoutes(page);
+    await page.setViewportSize(DESKTOP);
+    await boot(page);
+    await askReal(page, Q1);
+    // Positive partners: the small text axe must judge is on screen.
+    await expect(trailEntries(page)).toHaveCount(1);
+    await expect(page.locator(".session-trail-time").first()).toBeVisible();
+    await expect(page.locator(".session-trail-status").first()).toBeVisible();
+    const violations: Record<string, string[]> = {};
+    const incomplete: Record<string, number> = {};
+    for (const theme of ["light", "dark"] as const) {
+      await page.evaluate((t) => document.documentElement.setAttribute("data-theme", t), theme);
+      await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
+      await page.waitForTimeout(150);
+      await freeze(page);
+      const results = await new AxeBuilder({ page })
+        .include(".session-trail-panel")
+        .withRules(["color-contrast"])
+        .analyze();
+      const judged = [...results.passes, ...results.violations].reduce((n, r) => n + r.nodes.length, 0);
+      expect(judged, `[${theme}] axe must have judged some text in the panel`).toBeGreaterThan(0);
+      violations[theme] = results.violations
+        .map((v) => v.nodes.map((n) => `${n.target.join(" ")}: ${n.any.map((c) => c.message).join(" ")}`))
+        .flat();
+      incomplete[theme] = results.incomplete.filter((r) => r.id === "color-contrast").length;
+    }
+    // Both themes are reported together, so one red run shows every failing pair.
+    expect(violations, "color-contrast violations in the session list, by theme").toEqual({ light: [], dark: [] });
+    expect(incomplete, '"axe could not tell" is not a pass').toEqual({ light: 0, dark: 0 });
+    expect(mocked()).toBe(false);
+  });
+
+  // ---------------------------------------------------------------------------
+  // Decision 6 — browser Back and Forward stay inside the page.
   // ---------------------------------------------------------------------------
   test("entering the result adds exactly one history entry (the cost gate and live run add none); Back → composer, Forward → result", async ({ page }) => {
     // RED-IF: setView("result") stops pushing a history entry, or the cost gate / live run push one too (row 11).
@@ -387,7 +748,7 @@ test.describe("W33 slice A — the page journey on the real backend (no page.rou
   });
 
   // ---------------------------------------------------------------------------
-  // Decision 6 — the empty list explains itself.
+  // Decision 7 — the empty list explains itself.
   // ---------------------------------------------------------------------------
   for (const [label, viewport] of [["1440", DESKTOP], ["390", PHONE]] as const) {
     test(`an empty session list explains itself, hides Clear, and is named by its title (${label} px, bug 9)`, async ({ page }) => {
@@ -451,7 +812,7 @@ test.describe("W33 slice A — the page journey on the real backend (no page.rou
   });
 
   // ---------------------------------------------------------------------------
-  // Decision 7 — after a landing question the page lands on the models.
+  // Decision 8 — after a landing question the page lands on the models.
   // ---------------------------------------------------------------------------
   for (const [label, viewport] of [["1440", DESKTOP], ["390", PHONE]] as const) {
     test(`after a landing question the hint above the models takes focus and is in view (${label} px, bug 10)`, async ({ page }) => {
@@ -528,7 +889,7 @@ test.describe("W33 slice A — the page journey on the real backend (no page.rou
   });
 
   // ---------------------------------------------------------------------------
-  // Decision 8 (W43) — the empty box is not an error until a submit attempt.
+  // Decision 9 (W43) — the empty box is not an error until a submit attempt.
   // ---------------------------------------------------------------------------
   test("a plain load does not mark the empty box invalid; an empty submit does (W43)", async ({ page }) => {
     // RED-IF: boot runs the validator and marks length 0 aria-invalid again (row 22).
@@ -605,8 +966,9 @@ test.describe("W33 slice A — states the real backend cannot reach (mocked, wit
   test.skip(({ browserName }) => browserName !== "chromium", "reference run is chromium-only");
 
   test("the live-run view has no home control; the result it finishes into has both (row 9)", async ({ page }) => {
-    // MOCKED because a real simulated run finishes in about 0.1 s, so the
-    // live-run view cannot be held open long enough to inspect it.
+    // MOCKED because a real simulated run completes in 15-19 ms server-side
+    // and the live-run view shows for one poll (about 0.76 s, measured
+    // 2026-10-03), so it cannot be held open long enough to inspect it.
     // RED-IF: a brand link / New question appears on the live-run view, or the result view lacks them.
     let finished = false;
     await boot(page);
@@ -635,6 +997,45 @@ test.describe("W33 slice A — states the real backend cannot reach (mocked, wit
     await expect(verdictVisible(page)).toBeVisible({ timeout: 20000 });
     await expect(newQuestionButton(page)).toBeVisible();
     await expect(resultBrandLink(page)).toBeVisible();
+  });
+
+  test("a stopped run shows New question on the live-run view, and it goes home (row 29)", async ({ page }) => {
+    // MOCKED because a real simulated run completes in 15-19 ms server-side,
+    // so Stop cannot reach it while it is still running. The poll answers
+    // "running" until the DELETE (what Stop sends) answers "cancelled".
+    // RED-IF: the live-run view keeps no way home once the run is no longer in progress.
+    let cancelled = false;
+    await boot(page);
+    await Promise.all([
+      page.route("**/v1/query-runs/estimate", (r) => r.fulfill(fulfil(costEstimateEnvelope()))),
+      page.route("**/v1/query-runs/warnings", (r) => r.fulfill(fulfil({ warnings: [] }))),
+      page.route("**/v1/query-runs/active", (r) => r.fulfill(fulfil({ query_run_id: null }))),
+    ]);
+    await page.route(/\/v1\/query-runs\/[0-9a-f-]{36}$/, (r) => {
+      if (r.request().method() === "DELETE") cancelled = true;
+      const body = goldenRunningResp(2000);
+      return r.fulfill(fulfil(cancelled ? { ...body, status: "cancelled" } : body));
+    });
+    await page.route(/\/v1\/query-runs$/, (r) =>
+      r.request().method() === "POST" ? r.fulfill(fulfil(goldenCreateResp())) : r.continue(),
+    );
+    await page.locator("#query-text").fill(Q1);
+    await page.locator("#run-now").click();
+
+    const live = page.locator('[data-view="live-run"]');
+    await expect(live).toBeVisible({ timeout: 20000 });
+    const liveNewQuestion = live.getByRole("button", { name: "New question", exact: true });
+    // While it runs: Stop alone (row 9).
+    await expect(page.locator("#live-stop")).toBeVisible();
+    await expect(liveNewQuestion).toHaveCount(0);
+
+    await page.locator("#live-stop").click();
+    await expect.poll(() => cancelled).toBe(true);
+    await expect(live, "a cancelled run stays on the live-run view").toBeVisible();
+    await expect(liveNewQuestion).toBeVisible();
+    await liveNewQuestion.click();
+    await expect(composerView(page)).toBeVisible();
+    await expect(live).toBeHidden();
   });
 
   test("going home from the result clears an error card (row 10)", async ({ page }) => {
