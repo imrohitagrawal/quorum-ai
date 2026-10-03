@@ -40,6 +40,20 @@ session's scratchpad, not in the repository.
 | 24 | The full-page result and transcript screenshots (`visual-snapshots.spec.ts`, blocking) change with the header and the next-question block. | A red blocking lane that cannot be re-seeded locally (AGENTS.md rules 13d, 13e). | Re-seed through `seed-visual-baselines.yml` on the branch and check the new images by eye; prove the rest of the page unchanged with an `outerHTML` diff. |
 | 25 | Existing blocking specs pin the bugs: `session-trail.spec.ts` (Start fresh clears the list), `parity-behavior.spec.ts` (the pre-fill), and `degraded-banner.spec.ts` and `quick-answer.spec.ts` rely on the pre-fill without saying so. | Fixing the bug turns them red. | The test designer rewrites them to assert the fixed behaviour, in the same pull request; the builder does not touch them. |
 
+Added by review round 1 (2026-10-03: a break-it reviewer and a product reviewer, both
+driving the real server in Chromium, and Codex reading the diff). The first build met
+every row above and still failed these:
+
+| # | Failure mode | Consequence | Design answer |
+|---|---|---|---|
+| 26 | Going home while an estimate is still loading: the late answer still acts (Codex and the break-it reviewer, reproduced). | A charged run of half-typed text; the cost confirmation reopening over an empty box; a false "Question is required" card. Editing the box during a "Run now" estimate already ran the edited text before this change. | Going home drops any estimate still in flight; a run submits only the question that was priced. |
+| 27 | "New question" stepped history back, so the next Back left the site and a Forward reloaded with an empty list. | The list lost by the Back gesture — row 11 by another route. | Going home from a result or transcript adds a history entry. |
+| 28 | The top-bar logo on the composer emptied a typed question (a 1,079-character question to 0 in one click). | Lost input. | The logo never deletes a question the user typed and has not run. |
+| 29 | A stopped, failed or timed-out run stays on the live-run view, which has no way home. | A dead end — bug 6 by another route. | "New question" shows there once the run is no longer in progress. |
+| 30 | The hint kept "four" after quick mode was turned on or a slot removed. | False copy (row 19 after the hand-off). | The hint recounts on every change of quick mode or the panel. |
+| 31 | The list's status and time text measure 3.2:1 (light) and 3.41:1 (dark) at 10.9 px; older than this change, but the kept list now puts it on every result. | Fails WCAG AA contrast. | Darker tokens for those two classes. |
+| 32 | The step marker the session proposed with the hint (2026-09-30 05:07Z), which the owner agreed to in M24, was not in the first design. | An agreed part of bug 10's fix missing. | Built: *Question → Models → Estimate and run* above the composer. |
+
 What this list cannot see: whether the owner means the empty composer or the landing
 page by "homepage" (M07 point 6). The design takes the composer, because a returning
 visitor's `/ui` opens there and "How it works" stays one click away in its top bar.
