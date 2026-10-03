@@ -64,7 +64,7 @@ These requirements cover Release 1 MVP for the public AI cross-validation workfl
 
 - Actor: Authenticated user.
 - Trigger: The user submits a query with selected models.
-- Behavior: The system estimates query cost before execution, allows normal execution within the approved budget, requires explicit confirmation when the run's worst-case cost is above USD 0.30, and blocks it when the worst-case cost is above USD 0.50. A blocked estimate names the limit it hit and every estimate shows the allowance left in the last 24 hours (ADR-0141).
+- Behavior: The system estimates query cost before execution, allows normal execution within the approved budget, requires explicit confirmation when the run's worst-case cost is above USD 0.30, and blocks it when the worst-case cost is above USD 0.50. A blocked estimate names the limit it hit and an estimate shows the allowance left when it can be read (ADR-0141).
 - Outcome: Users and operators avoid surprise provider spend.
 - Source: `docs/114-success-metrics.md`, `docs/115-release-scope.md`.
 - Owner: Product owner.

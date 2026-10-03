@@ -20,8 +20,10 @@ the daily cap (ledger spend in the last 24 hours plus this run, above $0.40). Al
 four return `threshold_action: "block"` with prose reasons only, and the page
 shows the same "Over the hard cap" card with "up to $X is over the $0.5 hard cap"
 for every one. With the default models the block a visitor reaches is almost
-always the daily cap (the running total can fire instead only when one server
-process has stayed up for more than 24 hours): about three simulated runs a day, since simulated runs are charged in
+always the daily cap (the running total can fire first when it holds charges
+the 24-hour ledger no longer counts — a process up for more than 24 hours, or,
+with live execution on, runs settled below their estimate — or when the ledger
+cannot be metered, ADR-0016, and the daily cap is not checked): about three simulated runs a day, since simulated runs are charged in
 full (ADR-0074). The failure modes were listed before the code:
 `docs/analysis/2026-10-03-w33c-limit-messages-failure-modes.md`.
 
@@ -52,8 +54,10 @@ full (ADR-0074). The failure modes were listed before the code:
    reached the $0.50 running limit — not "worst-case cost is above the hard
    limit".
 5. **The page chooses its words from `block_reason`**, never from prose. The
-   hard-cap headline, the "over the $0.50 hard cap" note, the cost rail picture
-   and the "cheaper models" / "shorten" actions appear only for `per_run_cap`.
+   hard-cap headline, the "over the $0.50 hard cap" note and the cost rail
+   picture appear only for `per_run_cap`; the "cheaper models" / "shorten"
+   actions appear for `per_run_cap` and for decision 7's larger-than-a-day
+   case, and every other block offers "Back to edit".
    A `daily_cap` block says how much of the $0.40 was used in the last 24 hours,
    that simulated runs count too, and that it frees up as each run turns 24 hours
    old. Caps print with two decimals ("$0.50", "$0.40"); spent rounds up and
@@ -66,7 +70,9 @@ full (ADR-0074). The failure modes were listed before the code:
    estimate alone is above $0.40 (and its worst case is not above $0.50), the
    reason stays `daily_cap`, but the message says this run is larger than a
    whole day's allowance and will not fit however long the person waits; it
-   never says that spend frees up.
+   never says that spend frees up. It offers "Choose cheaper models" and
+   "Shorten the question" — the only remedy — but no rail and no hard-cap
+   headline (the session's call, made during the build).
 8. **The charge-time refusal never turns into an error.** If the fresh
    allowance read fails, the 402 is still sent, with `daily_allowance: null`,
    and nothing is voided for a charge that was never made.
