@@ -1,10 +1,11 @@
 # W33 slice D — History shows the current list without a reload: failure modes before the code
 
 Written 2026-10-03 before the change (AGENTS.md rule 16e: signed-in data and privacy).
-Slice D of board row W33 fixes the owner's bug 8a (M07 point 8: *"The history is shown
-when the user signs out and then signs in"*): the signed-in History panel says "No
-questions yet" right after a question is asked, because it is built on the server once,
-when `/ui` loads. Root cause: `docs/analysis/2026-09-29/owner-bugs-root-causes.md`, Item
+Slice D of board row W33 fixes bug 8a. The owner reported (M07 point 8: *"The history is
+shown when the user signs out and then signs in"*) that History appeared only after
+signing out and back in; the session's probe traced it to the panel being built on the
+server once, when `/ui` loads, so it says "No questions yet" right after a question is
+asked. Root cause: `docs/analysis/2026-09-29/owner-bugs-root-causes.md`, Item
 8a. Opening a row (8b), the 20-conversation keep and "Continue this conversation" are
 board row W36 (CHG-026 i), not this slice. Design: ADR-0142.
 
@@ -33,14 +34,14 @@ repository):
 | 6 | Another tab signed in as a different account. | One account's email over another's questions. | The answer carries the account's email; if it differs from the one on the page, no rows and the reload line. |
 | 7 | The account was deleted (ADR-0136), or "sign out everywhere" ran (ADR-0137), on another device. | Rows served after the account is gone. | Already refused: those sessions answer 401, and deletion removes the rows. |
 | 8 | A refresh on a timer keeps the session alive. | Idle expiry (ADR-0138) never fires. | The refresh runs only when the person opens the panel. |
-| 9 | The history store is unavailable. | "No questions yet" would be untrue (ADR-0135 says so instead). | The same server builder returns the "unavailable" line. |
+| 9 | The history store is unavailable. | "No questions yet" would be untrue (ADR-0135 says so instead). | A failed history read: the same server builder returns the "unavailable" line. A sessions store that cannot say who is signed in: 503 `HISTORY_UNAVAILABLE`, and the page keeps its rows and says it could not refresh (found by review round 1: it answered 403 and the page said the sign-in had changed). |
 | 10 | The request fails on the network. | The list is wiped for no reason. | The rows stay; a line says the history could not be refreshed. |
 | 11 | Answers arrive out of order (open, close, open). | An older list replaces a newer one. | Each refresh is numbered; a stale answer is ignored. |
-| 12 | The panel opens in the window before the row is written (measured above). | The owner's exact bug, in a narrower window. | The cancel route writes the row too (a second write replaces it, keyed by run id); and when this tab's latest finished question is missing from the answer, the panel asks once more after about 2 seconds. |
+| 12 | The panel opens in the window before the row is written (measured above). | Bug 8a again, in a narrower window. | The cancel route writes the row too (a second write replaces it, keyed by run id); and when this tab's latest finished question is missing from the answer, the panel asks once more after about 2 seconds. |
 | 13 | The whole panel is replaced. | "Sign out everywhere" and the three-step delete lose their listeners and their step. | Only the list (or its empty or unavailable line) is replaced. |
 | 14 | Two renderers drift (server on load, browser on refresh). | Different markup for the same rows; existing ids lost. | One server builder for both; a test pins the page's list and the route's list byte-identical for the same rows. |
-| 15 | The answer is cached. | The next person at a shared computer, or a proxy, sees the questions. | `Cache-Control: no-store` on every status. |
-| 16 | The route draws on the 30-a-minute account limiter that estimate and create share. | Opening History blocks running a question. | The route does not draw on it. |
+| 15 | The answer is cached. | The next person at a shared computer, or a proxy, sees the questions. | `Cache-Control: no-store` on every answer the route gives (200, 401, 403, 503); the framework's 405 and 307 carry no data. |
+| 16 | The route draws on the 30-a-minute account limiter that estimate, create and warnings share. | Opening History blocks running a question. | The route does not draw on it. |
 | 17 | Question text reaches the page as HTML. | Script injection. | The server escapes, as today; the browser only parses server markup. |
 | 18 | The anonymous page changes. | Breaks ADR-0135 decision 5 (byte-identical). | No new markup; the browser code runs only when the History panel exists. |
 | 19 | The route is hidden from the OpenAPI contract (`include_in_schema=False`, as other account routes are), so the Schemathesis gate never calls it. | Its 200, 401 and 403 shapes could drift unseen. | Its own integration tests pin each status, code and header. |
@@ -52,8 +53,8 @@ No e2e lane can sign in today. The design reviewer showed that a test-only launc
 start the real app with the loopback Google token stub set in-process (the token
 endpoint is a module constant read at call time) and that a browser test can catch the
 Google consent page and fulfil a redirect to the local callback (measured with Python
-Playwright 1.60; the Node version used by the e2e lane is UNVERIFIED). The launcher lives
-under `e2e/` and never ships (the Dockerfile copies only `src`).
+Playwright 1.60; the Node lane later passed 9 of 9 with the same method). The launcher lives
+under `e2e/` and never ships (the Dockerfile copies `src`, `pyproject.toml` and `uv.lock`, nothing under `e2e/`).
 
 **Rejected, critical risk:** letting an environment variable set the Google token
 endpoint. The ID token's signature is not checked — trust rests on TLS to Google — so
