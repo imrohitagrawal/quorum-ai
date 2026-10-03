@@ -639,12 +639,23 @@ def test_a_bypassed_cap_changes_exactly_one_field_on_the_returned_estimate(
 
     without_store = service.estimate(query_text=_QUERY, model_slots=_SLOTS, account_id=account_id)
 
-    ignore = {"confirmation_token", "spend_metering_unavailable"}
+    # ``daily_allowance`` (ADR-0141) is excluded too: it is the SAME decision
+    # as the degrade flag seen from the page — a ledger nobody can meter has
+    # no allowance to show — so it must differ, and is asserted below.
+    ignore = {"confirmation_token", "spend_metering_unavailable", "daily_allowance"}
     assert without_store.model_dump(exclude=ignore) == with_store.model_dump(exclude=ignore)
     # The one field that MUST differ, asserted in both directions so the
     # exclusion above cannot hide a flag that never gets set (rule 7).
     assert with_store.spend_metering_unavailable is False
     assert without_store.spend_metering_unavailable is True
+    # ADR-0141 decision 2. RED IF the allowance stops following the degrade:
+    # a figure with no ledger behind it is invented (W33c failure-mode row 5).
+    assert with_store.model_dump(mode="json").get("daily_allowance") == {
+        "cap_usd": "0.40",
+        "spent_usd": "0.0000",
+        "remaining_usd": "0.4000",
+    }
+    assert without_store.model_dump(mode="json").get("daily_allowance", "MISSING") is None
     assert without_store.confirmation_token is not None
 
 

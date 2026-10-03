@@ -989,8 +989,18 @@ def test_the_lost_write_signal_changes_exactly_one_field_on_the_estimate(
         if broken is not None:
             broken.close()
 
-    ignore = {"confirmation_token", "spend_metering_unavailable"}
+    # ``daily_allowance`` (ADR-0141) follows the degrade flag, so it is
+    # excluded from the comparison and asserted in both directions below.
+    ignore = {"confirmation_token", "spend_metering_unavailable", "daily_allowance"}
     assert degraded.model_dump(exclude=ignore) == control.model_dump(exclude=ignore)
+    # ADR-0141 decision 2. RED IF the allowance is shown off a ledger that
+    # swallowed charges (W33c failure-mode row 5), or vanishes from a healthy one.
+    assert control.model_dump(mode="json").get("daily_allowance") == {
+        "cap_usd": "0.40",
+        "spent_usd": "0.0000",
+        "remaining_usd": "0.4000",
+    }
+    assert degraded.model_dump(mode="json").get("daily_allowance", "MISSING") is None
     # ADR-0016 (superseding ADR-0004): a failing ledger no longer leaves the
     # estimate untouched. It flags the run for degrade-to-simulation, so the
     # unmeasurable window costs $0. Asserted in both directions so the
