@@ -81,7 +81,10 @@
     <main id="main-content" class="shell" tabindex="-1">
       <header class="topbar">
         <div class="brand">
-          <div class="brand-mark" aria-label="Quorum AI logo" role="img">Q</div>
+          <!-- W33 (ADR-0140 decision 4): the logo is a real link to /ui. app.js
+               turns a plain click into an in-page move to an empty composer, so
+               the session list is kept; a modified click opens /ui as usual. -->
+          <a class="brand-mark brand-home" href="/ui" data-home-link aria-label="Quorum AI, ask a new question">Q</a>
           <div class="brand-copy">
             <span class="wordmark">Quorum</span>
             <p class="brand-lede">Four AI models, one sourced answer.</p>
@@ -200,6 +203,17 @@
         <div data-view="composer">
         <section class="panel composer" aria-labelledby="composer-heading">
           <div class="composer-head">
+            <!-- W33 (ADR-0140 decision 8, failure-mode row 32): where the user
+                 is in the three steps. app.js (setComposerStep) moves
+                 aria-current="step": Question on a plain load, Models after a
+                 landing question. The arrows are CSS pseudo-content with empty
+                 alternative text, so a screen reader reads the three steps
+                 and not the arrows. -->
+            <ol id="composer-steps" class="composer-steps" aria-label="Steps">
+              <li data-step="question" aria-current="step">Question</li>
+              <li data-step="models">Models</li>
+              <li data-step="estimate">Estimate and run</li>
+            </ol>
             <h1 id="composer-heading">Ask the panel</h1>
             <p class="lede">Results are ephemeral. Cost is shown before each run; nothing executes without your confirmation.</p>
           </div>
@@ -256,6 +270,12 @@
                 </label>
                 <p id="quick-mode-note" class="muted quick-mode-note" hidden>four models by default, 2 debates and 1 sourced answer</p>
               </div>
+              <!-- W33 (ADR-0140 decision 8): after a landing question the page
+                   lands HERE, directly above the model slots, and this hint takes
+                   focus. Shown only on that hand-off; app.js writes the text
+                   (handoffHintHtml) so it counts the models actually shown and
+                   names the acknowledgement first when the high-stakes gate shows. -->
+              <p id="handoff-hint" class="handoff-hint" tabindex="-1" hidden></p>
               <div id="model-inputs" class="model-slot-grid">
                 <label class="inline" data-model-slot="1">
                   <span>Slot 1</span>
@@ -478,6 +498,11 @@
               <div class="live-run-header-meta">
                 <span id="live-elapsed" class="live-elapsed mono" aria-hidden="true">0.0s elapsed</span>
                 <button id="live-stop" class="button live-stop" type="button">Stop run</button>
+                <!-- W33 (ADR-0140 decision 4, failure-mode row 29): once the run
+                     is no longer in progress (stopped, failed, timed out) this
+                     view would be a dead end, so it offers the way home. Hidden
+                     while the run is in progress, when Stop is the only control. -->
+                <button id="live-new-question" class="button live-new-question" type="button" data-new-question hidden>New question</button>
                 <!-- PR1/#6: see the result-header toggle for why this is
                      in-header rather than a fixed floating control. -->
                 <button id="theme-toggle-live" class="toggle" data-theme-toggle type="button" aria-label="Toggle dark mode">&#9680;</button>
@@ -525,10 +550,13 @@
           <section class="panel result" role="region" aria-labelledby="result-heading">
             <div class="result-header">
               <div class="result-header-lead">
-                <span class="result-brand">
+                <!-- W33 (ADR-0140 decision 4): the brand is a link to /ui; a plain
+                     click goes to an empty composer without a reload, so the
+                     session list is kept. -->
+                <a class="result-brand result-brand-link" href="/ui" data-home-link>
                   <span class="result-brand-tile" aria-hidden="true">Q</span>
                   <span class="result-brand-name">Quorum</span>
-                </span>
+                </a>
                 <span class="result-header-divider" aria-hidden="true"></span>
                 <span class="result-completion">
                   <span class="result-completion-dot" aria-hidden="true"></span>
@@ -536,6 +564,8 @@
                 </span>
               </div>
               <div class="result-header-actions">
+                <!-- W33 (ADR-0140 decision 4): the way to a new question. -->
+                <button id="result-new-question" type="button" class="button result-action result-action-new" data-new-question>New question</button>
                 <button id="result-copy" type="button" class="button result-action">Copy</button>
                 <button id="result-export" type="button" class="button result-action">Export</button>
                 <!-- PR1/#6: in-header toggle. A fixed floating control would
@@ -661,21 +691,25 @@
                 hidden
               ></div>
 
-              <!-- Ask your next question (design parity, screen 05). Follow-up
-                   returns to the composer with the question pre-filled; results
-                   are ephemeral so there is no server-side context carry (that
-                   remains a backend follow-up). Honest copy only. -->
+              <!-- Ask your next question (design parity, screen 05). "Review &
+                   run" returns to the composer with whatever is typed here; an
+                   empty box opens an empty composer (ADR-0140 decision 2). The
+                   browser sends no context, so each question is answered on its
+                   own, and the note says so. The "Follow up on this" / "Start
+                   fresh" mode buttons are hidden until W37 sends the previous
+                   question and answer (ADR-0140 decision 3); with no pre-fill
+                   they would do the same thing. -->
               <div class="result-next" role="region" aria-label="Ask your next question">
                 <div class="result-next-head">
                   <h2 class="result-next-title">Ask your next question</h2>
-                  <div class="result-next-modes" role="group" aria-label="Follow-up mode">
+                  <div class="result-next-modes" role="group" aria-label="Follow-up mode" hidden>
                     <button id="result-followup" type="button" class="result-next-mode result-next-mode-active" aria-pressed="true">Follow up on this</button>
                     <button id="result-startfresh" type="button" class="result-next-mode" aria-pressed="false">Start fresh</button>
                   </div>
                 </div>
                 <p class="result-next-note">
                   <span class="result-next-dot" aria-hidden="true"></span>
-                  <span><strong>Follow up</strong> takes you back to the composer with this question pre-filled so you can refine it. <strong>Start fresh</strong> clears the box for a new question. Either way results are ephemeral — export this one first if you need to keep it.</span>
+                  <span>Your next question is answered on its own — the models won't see the question above or its answer.</span>
                 </p>
                 <textarea
                   id="result-next-input"
@@ -708,6 +742,13 @@
           <section class="panel transcript" role="region" aria-labelledby="transcript-heading">
             <div class="transcript-header">
               <div class="transcript-header-lead">
+                <!-- W33 (ADR-0140 decision 4): the brand links to /ui, as on the
+                     result view; a plain click opens an empty composer in place. -->
+                <a class="result-brand result-brand-link transcript-brand" href="/ui" data-home-link>
+                  <span class="result-brand-tile" aria-hidden="true">Q</span>
+                  <span class="result-brand-name">Quorum</span>
+                </a>
+                <span class="transcript-header-divider" aria-hidden="true"></span>
                 <button id="transcript-back" type="button" class="transcript-back">&larr; Back to verdict</button>
                 <span class="transcript-header-divider" aria-hidden="true"></span>
                 <span class="transcript-header-title">The debate</span>
@@ -953,13 +994,20 @@
 
       <!-- PR8 — Conversation trail (ephemeral). Full-width panel below the
            two-column layout so it is visible on every view (not hidden with
-           the aside). Rendered by app.js; cleared by "Start fresh". -->
-      <div class="session-trail-panel" role="region" aria-label="Conversation trail">
+           the aside). Rendered by app.js (renderSessionTrail); only the
+           "Clear" button empties it (ADR-0140 decision 1). The region is named
+           by its visible title, and an empty list says what will appear here
+           (decision 7). ``data-trail-empty`` lets app.css leave an empty panel
+           unpinned at phone width. -->
+      <div class="session-trail-panel" role="region" aria-labelledby="session-trail-heading" data-trail-empty="true">
         <div class="session-trail-head">
-          <span class="session-trail-title">This session</span>
+          <h2 id="session-trail-heading" class="session-trail-title" tabindex="-1">This session</h2>
           <button id="session-trail-clear" type="button" class="session-trail-clear" hidden>Clear</button>
         </div>
+        <p id="session-trail-empty" class="session-trail-note">Questions you ask in this tab appear here.</p>
         <div id="session-trail-list" class="session-trail-list" hidden></div>
+        <p id="session-trail-cap" class="session-trail-note" hidden></p>
+        <p id="session-trail-live" class="sr-only" role="status" aria-live="polite"></p>
       </div>
 
       <section class="panel panel-section">

@@ -156,6 +156,16 @@ a { color: var(--accent); text-underline-offset: 2px; }
   flex-shrink: 0;
 }
 
+/* W33 (ADR-0140 decision 4): the top-bar mark is a link to /ui. It keeps the
+   tile's look; only the underline a link would add is removed. */
+.brand-home {
+  text-decoration: none;
+}
+.brand-home:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
 .brand-copy {
   min-width: 0;
   display: flex;
@@ -1042,6 +1052,29 @@ select {
   line-height: 1.5;
 }
 .landing-handoff-note[hidden] { display: none; }
+
+/* W33 (ADR-0140 decision 8): the hint directly above the model slots after a
+   landing question. Same calm accent treatment as the hand-off note above it,
+   so the two read as one message continued on the next page. It takes focus
+   programmatically, and whether a ring shows follows the browser's
+   :focus-visible heuristic (measured in Chromium by the round-1 prose
+   audit): after a MOUSE or touch hand-off it does not match, so the
+   page-wide ``:focus:not(:focus-visible) { outline: none; }`` rule below
+   draws no ring; after a KEYBOARD hand-off it matches and the page's normal
+   focus ring shows. No rule here changes either. Without a ring the cue is
+   the hint's own bordered box, scrolled into view, and the step marker
+   moving to Models; a screen reader reads the hint because focus is on it. */
+.handoff-hint {
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-md);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent);
+  color: var(--ink);
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+.handoff-hint[hidden] { display: none; }
 .landing-handoff-note-icon {
   display: flex;
   align-items: center;
@@ -1920,6 +1953,25 @@ html[data-theme="dark"] .landing-preview-caption {
   display: none;
 }
 
+/* W33 (ADR-0140 decision 4, row 29): "New question" once the run is over —
+   a plain ink outline, the same weight as the result header's actions. */
+.live-new-question {
+  min-height: 34px;
+  padding: 0 var(--space-4);
+  border-radius: var(--radius-btn);
+  border: 1px solid var(--line-strong);
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+.live-new-question:hover {
+  background: var(--paper);
+}
+.live-new-question[hidden] {
+  display: none;
+}
+
 .live-corr {
   padding: var(--space-2) var(--space-6) 0;
   font-size: 0.72rem;
@@ -2472,6 +2524,23 @@ html[data-theme="dark"] .landing-preview-caption {
   gap: var(--space-2);
 }
 
+/* W33 (ADR-0140 decision 4): on the result and transcript views the brand is
+   a link to /ui (an empty composer, in place). Ink, not link blue, so the
+   header looks as it did; the underline appears on hover as the link cue. */
+.result-brand-link {
+  color: var(--ink);
+  text-decoration: none;
+  border-radius: var(--radius-xs);
+}
+.result-brand-link:hover .result-brand-name {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.result-brand-link:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
 .result-brand-tile {
   display: grid;
   place-items: center;
@@ -2517,6 +2586,7 @@ html[data-theme="dark"] .landing-preview-caption {
 
 .result-header-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: var(--space-2);
 }
 
@@ -3791,6 +3861,9 @@ a.result-source-chip:hover { border-color: var(--info); color: var(--info); }
   background: var(--accent-soft);
   border: 1px solid var(--line-2);
 }
+/* W33 (ADR-0140 decision 3): hidden until W37 sends the previous question and
+   answer; the display above would otherwise override the attribute. */
+.result-next-modes[hidden] { display: none; }
 .result-next-mode {
   min-height: 34px;
   padding: 0 var(--space-4);
@@ -5305,6 +5378,35 @@ main:focus { outline: none; }
 
 .composer { gap: var(--space-5); }
 .composer-head { display: grid; gap: var(--space-2); }
+
+/* W33 (ADR-0140 decision 8, failure-mode row 32): the step marker,
+   "Question → Models → Estimate and run". Small secondary text; the current
+   step is ink and bold, so the difference does not rest on colour alone. The
+   arrow is pseudo-content with empty alternative text. */
+.composer-steps {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+.composer-steps li {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.composer-steps li + li::before {
+  content: "→" / "";
+  color: var(--text-secondary);
+}
+.composer-steps li[aria-current="step"] {
+  color: var(--ink);
+  font-weight: 650;
+}
 .composer .composer-head h1 {
   font-family: var(--font-serif);
   font-size: 1.85rem; /* ~30px Newsreader display */
@@ -6175,12 +6277,25 @@ html[data-theme="dark"] .landing-preview { background: var(--accent-soft); }
 }
 
 .session-trail-title {
+  /* W33: an <h2> now (the region's name and the focus target after "Clear"),
+     styled exactly as the <span> it replaced. */
+  margin: 0;
+  font-family: inherit;
+  line-height: inherit;
   font-size: 0.82rem;
   font-weight: 650;
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: var(--text-secondary);
 }
+
+/* W33 (ADR-0140 decisions 1, 7): the empty-list line and the cap line. */
+.session-trail-note {
+  margin: 0;
+  font-size: 0.84rem;
+  color: var(--text-secondary);
+}
+.session-trail-note[hidden] { display: none; }
 
 .session-trail-clear {
   font: inherit;
@@ -6223,12 +6338,22 @@ html[data-theme="dark"] .landing-preview { background: var(--accent-soft); }
 .session-trail-entry:hover { background: var(--overlay-inset); border-color: var(--line-strong-2); }
 .session-trail-entry:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 
-/* Muted treatment for degraded / simulated / failed / timed-out / cancelled / partial. */
+/* Muted treatment for degraded / simulated / failed / timed-out / cancelled / partial.
+   W33 (ADR-0140 decision 7, failure-mode row 31): this was ``opacity: 0.72``,
+   which faded the small status and time text to 3.2:1 (light) and 3.41:1
+   (dark) — under WCAG AA's 4.5:1. The entry now keeps full opacity, its text
+   stays on the AA tokens, and the muted state is carried by a dashed border
+   and the status pill instead. The border uses --muted so the dashes meet
+   WCAG 1.4.11's 3:1 non-text contrast against the panel in both themes
+   (#5F6570 on #FFFFFF, #8A9099 on #191C22); the --line border every entry
+   has is ~1.1:1, so a dashed --line border would carry nothing. */
 .session-trail-entry--muted {
-  opacity: 0.72;
+  border-style: dashed;
+  border-color: var(--muted);
 }
+.session-trail-entry--muted:hover { border-color: var(--muted); }
 .session-trail-entry--muted .session-trail-status {
-  color: var(--muted);
+  color: var(--text-secondary);
   border-color: var(--line);
 }
 
@@ -6258,7 +6383,10 @@ html[data-theme="dark"] .landing-preview { background: var(--accent-soft); }
 .session-trail-time {
   flex-shrink: 0;
   font-size: 0.72rem;
-  color: var(--muted);
+  /* W33 (row 31): --text-secondary has more contrast than --muted against
+     the panel in both themes (#565C66 vs #5F6570 on white; #9AA0AA vs
+     #8A9099 on #191C22), for this 11.5 px text. */
+  color: var(--text-secondary);
 }
 
 @media (max-width: 600px) {
@@ -6278,5 +6406,20 @@ html[data-theme="dark"] .landing-preview { background: var(--accent-soft); }
     font-size: 0.84rem;
     padding: var(--space-2) var(--space-2);
     gap: var(--space-2);
+  }
+  /* W33 (ADR-0140 decision 7, failure-mode rows 13-14): an EMPTY list is not
+     pinned over the page. Measured before the change at 390 px: the fixed bar
+     covered the question box the landing hand-off had just focused, while
+     showing nothing but its heading. It sits in the page flow like the
+     desktop panel until the first entry arrives; a list WITH entries keeps
+     the bottom bar (a known limit in ADR-0140). The attribute selector
+     outranks both fixed-position rules above. */
+  .session-trail-panel[data-trail-empty="true"] {
+    position: static;
+    max-height: none;
+    border-radius: var(--radius-md);
+    box-shadow: none;
+    z-index: auto;
+    overflow-y: visible;
   }
 }

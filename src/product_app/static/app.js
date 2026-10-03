@@ -85,13 +85,48 @@
 
   // CHG-011 D6. The landing-to-composer message names the panel the visitor
   // is about to review: the slots the composer holds right now.
+  // W33 (ADR-0140, failure-mode row 19): quick mode shows ONE model, so the
+  // message says "your model" rather than "your 1 models".
   function landingHandoffCopy(kind, slotCount) {
     const words = { 2: "two", 3: "three", 4: "four" };
     const n = Number(slotCount);
     const word = words[n] || String(n);
+    const panel = n === 1 ? "model" : `${word} models`;
     return kind === "estimate"
-      ? `Got your question. Taking you to review your ${word} models and see the itemized cost before anything runs…`
-      : `Got your question. Taking you to review your ${word} models, then we'll price it and run once you approve…`;
+      ? `Got your question. Taking you to review your ${panel} and see the itemized cost before anything runs…`
+      : `Got your question. Taking you to review your ${panel}, then we'll price it and run once you approve…`;
+  }
+
+  // W33 (ADR-0140 decision 8). The hint above the model slots after a landing
+  // question, as text parts; ``strong: true`` parts are the button names. It
+  // counts the models actually shown (one in quick mode) and, while the
+  // high-stakes acknowledgement is showing, says to tick it first, because
+  // the two buttons it names stay disabled until then. Self-contained.
+  function handoffHintParts(slotCount, highStakes) {
+    const words = { 2: "two", 3: "three", 4: "four" };
+    const n = Number(slotCount);
+    const lead =
+      n === 1
+        ? "Your model is picked for you — change it if you like. "
+        : `Your ${words[n] || String(n)} models are picked for you — change any if you like. `;
+    if (highStakes) {
+      return [
+        { text: lead + "First tick " },
+        { text: "I understand this is not professional advice", strong: true },
+        { text: " above, then press " },
+        { text: "See the estimate", strong: true },
+        { text: " to check the cost first, or " },
+        { text: "Run now", strong: true },
+        { text: " to start straight away (it still asks first if the cost needs your approval)." },
+      ];
+    }
+    return [
+      { text: lead + "Then press " },
+      { text: "See the estimate", strong: true },
+      { text: " to check the cost first, or " },
+      { text: "Run now", strong: true },
+      { text: " to start straight away (it still asks first if the cost needs your approval)." },
+    ];
   }
   // W5 (ADR-0128). The body of an estimate or create request. A panel body is
   // byte-identical to the pre-W5 one: no `mode` key, the same key order. A
@@ -429,6 +464,11 @@
     if (landingQ) landingQ.setAttribute("aria-invalid", "false");
     const landingNote = el("landing-handoff-note");
     if (landingNote) landingNote.hidden = true;
+    // W33 (ADR-0140 decision 8): the hand-off hint above the model slots is
+    // one-shot too. The landing hand-off shows it again AFTER its setView.
+    const handoffHint = el("handoff-hint");
+    if (handoffHint) handoffHint.hidden = true;
+    setComposerStep("question");
     for (const view of views) {
       view.hidden = view !== target;
     }
@@ -440,6 +480,168 @@
     // ``#status-meta`` render targets remain valid.
     const shell = document.getElementById("main-content");
     if (shell) shell.dataset.activeView = name;
+    syncViewHistory(name);
+  }
+
+  // ---------------------------------------------------------------------------
+  // W33 (ADR-0140 decision 6) — browser Back and Forward inside the page
+  // ---------------------------------------------------------------------------
+  //
+  // The page is one URL (/ui), so without this a Back from a result left the
+  // app (measured: about:blank). Every in-page move between the composer, a
+  // result and a transcript is one history entry: entering a result or a
+  // transcript, and going home from one ("New question", the brand links,
+  // "Review & run"). So Back after "New question" returns to the result the
+  // user left, not off the site (failure-mode row 27: stepping history back
+  // instead made the NEXT Back leave the page). A move that stays on the same
+  // kind of view (the logo on the composer, a trail click on a result) only
+  // re-labels the current entry. The cost confirmation, the live run and the
+  // landing are never entries, so Back cannot reopen a spent estimate and a
+  // run cannot be re-entered.
+  const VIEW_HISTORY_VIEWS = new Set(["composer", "result", "transcript"]);
+  let viewHistoryReady = false; // set by initViewHistory, after boot's first setView
+  let viewHistoryApplying = false; // true while a popstate is being applied
+
+  function viewHistoryEntry() {
+    const current = window.history ? window.history.state : null;
+    return current && typeof current.quorumView === "string" ? current : null;
+  }
+
+  function resultRunIdOf(result) {
+    return result ? result.query_run_id || result.correlation_id || null : null;
+  }
+
+  function syncViewHistory(name) {
+    if (!viewHistoryReady || viewHistoryApplying) return;
+    if (!VIEW_HISTORY_VIEWS.has(name)) return; // cost gate, live run, landing: never an entry
+    const entry = viewHistoryEntry();
+    const record = { quorumView: name, runId: resultRunIdOf(state.lastResult) };
+    const url = window.location.href;
+    if (entry && entry.quorumView === name) {
+      window.history.replaceState(record, "", url);
+    } else {
+      window.history.pushState(record, "", url);
+    }
+  }
+
+  // Apply an entry the user reached with Back or Forward.
+  function applyViewHistoryEntry(entry) {
+    if (!entry || typeof entry.quorumView !== "string") return;
+    // A run in flight keeps its own view: a Forward to an older result must
+    // never pull the user off the live run (the entry is re-written when the
+    // run finishes into its result).
+    if (state.isRunning || state.creatingRun) return;
+    // Leaving the composer by Back/Forward while its estimate loads leaves that
+    // question, exactly as going home does (decision 5, row 26).
+    if (state.submittingRun) dropInFlightEstimate();
+    const inMemory =
+      !!state.lastResult && (!entry.runId || entry.runId === resultRunIdOf(state.lastResult));
+    let view = entry.quorumView;
+    // A Forward to a result that is no longer in memory (after a reload, say)
+    // shows the composer, never an empty result view.
+    if ((view === "result" || view === "transcript") && !inMemory) view = "composer";
+    viewHistoryApplying = true;
+    try {
+      clearError();
+      if (view === "transcript") {
+        renderTranscript(state.lastResult);
+        setView("transcript");
+        focusTranscriptHeading();
+      } else if (view === "result") {
+        setView("result");
+        focusResultHeading();
+      } else {
+        setView("composer");
+        window.scrollTo(0, 0);
+        if (queryTextarea) queryTextarea.focus({ preventScroll: true });
+      }
+    } finally {
+      viewHistoryApplying = false;
+    }
+    if (view !== entry.quorumView) {
+      window.history.replaceState({ quorumView: view, runId: null }, "", window.location.href);
+    }
+  }
+
+  function initViewHistory() {
+    if (!window.history || typeof window.history.pushState !== "function") return;
+    // The page moves the scroll position itself on every view change (top of
+    // the composer, the result heading); the browser restoring an entry's old
+    // offset on top of that would leave a just-focused field off-screen.
+    try {
+      window.history.scrollRestoration = "manual";
+    } catch (_) {
+      // Read-only in some embedded browsers; the page still works.
+    }
+    // A reload keeps the entry's state, but not the result it pointed at: the
+    // page always boots on the composer or the landing, so the entry it boots
+    // on is a composer entry.
+    window.history.replaceState({ quorumView: "composer", runId: null }, "", window.location.href);
+    window.addEventListener("popstate", (event) => applyViewHistoryEntry(event.state));
+    viewHistoryReady = true;
+  }
+
+  // ---------------------------------------------------------------------------
+  // W33 (ADR-0140 decision 8) — the hint above the model slots
+  // ---------------------------------------------------------------------------
+
+  // The number of models the composer SHOWS: one in quick mode (every select
+  // stays in the DOM there), else the rendered slot selects, else the default
+  // panel while the grid has not rendered yet. Never throws.
+  function shownModelSlotCount() {
+    if (state.quickMode) return 1;
+    const rendered = document.querySelectorAll("select[data-model-slot]").length;
+    if (rendered > 0) return rendered;
+    return Array.isArray(defaultModelIds) && defaultModelIds.length > 0 ? defaultModelIds.length : 4;
+  }
+
+  function highStakesAckPending() {
+    return !!state.highStakesRequired && !state.highStakesAck;
+  }
+
+  // Write the hint for the current panel and gate. ``show`` reveals it (the
+  // landing hand-off); otherwise it is only refreshed while already showing.
+  function renderHandoffHint(show) {
+    const hint = el("handoff-hint");
+    if (!hint) return;
+    if (!show && hint.hidden) return;
+    const nodes = handoffHintParts(shownModelSlotCount(), highStakesAckPending()).map((part) => {
+      if (!part.strong) return document.createTextNode(part.text);
+      const strong = document.createElement("strong");
+      strong.textContent = part.text;
+      return strong;
+    });
+    hint.replaceChildren(...nodes);
+    hint.hidden = false;
+    setComposerStep("models");
+  }
+
+  // W33 (ADR-0140 decision 8, failure-mode row 32): the step marker above the
+  // composer, "Question → Models → Estimate and run". Exactly one step carries
+  // ``aria-current="step"``: Models while the hand-off hint is showing (the
+  // question is already in the box), else Question.
+  function setComposerStep(step) {
+    const marker = el("composer-steps");
+    if (!marker) return;
+    for (const item of marker.querySelectorAll("[data-step]")) {
+      if (item.dataset.step === step) item.setAttribute("aria-current", "step");
+      else item.removeAttribute("aria-current");
+    }
+  }
+
+  // Land the user on the next step: the acknowledgement while it is pending
+  // (the two buttons the hint names are disabled until then), else the hint.
+  function focusHandoffHint() {
+    const hint = el("handoff-hint");
+    if (!hint || hint.hidden) return;
+    const behavior = "auto";
+    if (highStakesAckPending() && highStakesAckCheckbox) {
+      highStakesAckCheckbox.focus({ preventScroll: true });
+      highStakesAckCheckbox.scrollIntoView({ behavior, block: "center" });
+      return;
+    }
+    hint.focus({ preventScroll: true });
+    hint.scrollIntoView({ behavior, block: "center" });
   }
 
   // ---------------------------------------------------------------------------
@@ -1655,6 +1857,9 @@
     if (addButton) addButton.hidden = modelIds.length >= PANEL_MAX_SLOTS;
     // CHG-011 D5: the shape line follows the rendered count.
     renderPanelShapeLine(modelIds.length);
+    // W33 (ADR-0140 decision 8, failure-mode row 30): so does a hand-off hint
+    // still on screen ("Your four models" after a slot was removed was false).
+    renderHandoffHint(false);
   }
 
   // CHG-011 D5. Writes the composer's shape line for the rendered slot count.
@@ -2400,6 +2605,10 @@
     // Stop button — available while running, removed once terminal.
     const stopBtn = el("live-stop");
     if (stopBtn) stopBtn.hidden = isTerminal;
+    // W33 (ADR-0140 decision 4, failure-mode row 29): the reverse — the way
+    // home appears only once the run is no longer in progress.
+    const liveNewQuestion = el("live-new-question");
+    if (liveNewQuestion) liveNewQuestion.hidden = !isTerminal;
 
     // Correlation id (the live card subsumes the aside's run-id readout).
     const corr = el("live-corr");
@@ -6320,10 +6529,18 @@
     renderSessionTrail();
   }
 
-  /** Clear the entire session trail. */
+  /** Clear the entire session trail. Only the panel's "Clear" button calls this
+      (ADR-0140 decision 1): going to a new question keeps the list. */
   function clearSessionTrail() {
     state.sessionTrail = [];
     renderSessionTrail();
+    // W33 (failure-mode row 15): "Clear" has just hidden itself, so focus moves
+    // to the panel heading rather than dropping to <body>, and a polite message
+    // says what happened.
+    const heading = el("session-trail-heading");
+    if (heading) heading.focus({ preventScroll: true });
+    const live = el("session-trail-live");
+    if (live) live.textContent = "Session list cleared.";
   }
 
   const TRAIL_STATUS_MUTED = new Set(["failed", "timed_out", "cancelled", "degraded", "simulated"]);
@@ -6348,11 +6565,33 @@
     const host = el("session-trail-list");
     if (!host) return;
     const entries = state.sessionTrail;
+    const panel = host.closest(".session-trail-panel");
+    const clearBtn = el("session-trail-clear");
+    const emptyLine = el("session-trail-empty");
+    const capLine = el("session-trail-cap");
+    // W33 (ADR-0140 decision 7, bug 9): an empty list says what will appear
+    // here and hides "Clear"; ``data-trail-empty`` leaves the empty panel
+    // unpinned at phone width (app.css). Decision 1 / failure-mode row 2: once
+    // the list REACHES its cap, a line says so, because the next question drops
+    // the oldest entry.
+    if (panel) panel.dataset.trailEmpty = entries.length ? "false" : "true";
+    if (emptyLine) emptyLine.hidden = entries.length > 0;
+    if (clearBtn) clearBtn.hidden = entries.length === 0;
+    if (capLine) {
+      // The text is written only at the cap (not merely hidden below it), so
+      // the line does not exist for any reader until it is true.
+      const atCap = entries.length >= SESSION_TRAIL_CAP;
+      capLine.textContent = atCap ? `Only your last ${SESSION_TRAIL_CAP} questions are kept here.` : "";
+      capLine.hidden = !atCap;
+    }
     if (!entries.length) {
       host.hidden = true;
       host.replaceChildren();
       return;
     }
+    // A new entry supersedes the "cleared" announcement.
+    const live = el("session-trail-live");
+    if (live) live.textContent = "";
     host.hidden = false;
     host.replaceChildren();
     // Newest first.
@@ -6377,8 +6616,6 @@
       btn.addEventListener("click", () => restoreTrailRun(e));
       host.appendChild(btn);
     }
-    const clearBtn = el("session-trail-clear");
-    if (clearBtn) clearBtn.hidden = false;
   }
 
   /**
@@ -6402,7 +6639,11 @@
     if (!runId) return;
     // Defense in depth alongside the disabled attribute in renderSessionTrail:
     // never let a trail click hijack a run that is actively in flight.
-    if (state.isRunning) return;
+    if (state.isRunning || state.creatingRun) return;
+    // W33 (ADR-0140 decision 5, row 26): opening an earlier result leaves the
+    // composer's question, so an estimate still loading for it is dropped —
+    // its late answer must not open the cost confirmation over this result.
+    if (state.submittingRun) dropInFlightEstimate();
     state.currentRunId = runId;
     state.terminalHandled = true;
     stopPolling();
@@ -7648,12 +7889,16 @@
       "aria-label",
       `${length.toLocaleString()} of 20,000 characters`,
     );
-    // Empty (0) is invalid (required field). 1–11 chars is too short.
-    const isInvalid = length < 12;
+    // W43 (ADR-0140 decision 9): an empty box is not an error until the user
+    // tries to submit — it used to be red with "Question is required." on
+    // every page load. 1–11 characters is advice, never an error state.
+    // Blank-only text counts as empty, the same test ``startRun`` applies.
+    const isEmpty = queryTextarea.value.trim().length === 0;
+    const isInvalid = isEmpty && !!state.submissionAttempted;
     queryTextarea.setAttribute("aria-invalid", isInvalid ? "true" : "false");
-    if (length === 0) {
-      validationHint.textContent = "Question is required.";
-      charCount.dataset.warning = "true";
+    if (isEmpty) {
+      validationHint.textContent = isInvalid ? "Question is required." : "";
+      charCount.dataset.warning = isInvalid ? "true" : "false";
       // Phase 4: Show inline field error only after submission attempt
       if (state.submissionAttempted && queryError) {
         queryError.textContent = "Please enter a question before running.";
@@ -7927,15 +8172,26 @@
     const breakdown = ce.breakdown || {};
     const reasons = Array.isArray(ce.reasons) ? ce.reasons : [];
 
-    // Question echo (from the composer).
-    if (gateQuestion) gateQuestion.textContent = queryTextarea.value.trim();
+    // W33 (ADR-0140 decision 5, review round 2): the gate describes the run
+    // that was PRICED — the question, panel and mode the estimate was asked
+    // for (``state.pricedRun``, set with ``currentEstimate``) — not whatever
+    // the composer holds when the answer lands. "Approve" submits that same
+    // priced run, so the page and the request now say the same thing. The live
+    // composer is only a fallback for a caller that rendered without one.
+    const priced = state.pricedRun || {
+      queryText: queryTextarea.value.trim(),
+      modelIds: getModelIds(),
+      quick: state.quickMode,
+    };
+    // Question echo.
+    if (gateQuestion) gateQuestion.textContent = priced.queryText;
     // W4: the meta line names the requested panel size, not "4 models".
     const gateMeta = el("cost-gate-question-meta");
-    const quickGate = state.quickMode === true;
+    const quickGate = priced.quick === true;
     if (gateMeta) {
       const stageRows = Array.isArray(breakdown.by_stage) ? breakdown.by_stage : [];
       const checkPriced = stageRows.some((row) => row && row.stage !== "initial_answers");
-      gateMeta.textContent = costGateMetaText(getModelIds().length, quickGate, checkPriced);
+      gateMeta.textContent = costGateMetaText(priced.modelIds.length, quickGate, checkPriced);
     }
 
     // Big mono total. The estimated range is band-specific and is set only
@@ -8144,23 +8400,41 @@
   // ``trigger`` is the button that initiated the flow, so its own spinner is
   // the one shown.
   async function estimateRun({ autoProceed = false, trigger = estimateButton } = {}) {
+    // W33 (ADR-0140 decision 5, failure-mode row 26): an answer that arrives
+    // after the user has gone home belongs to a question they left. It opens
+    // nothing, runs nothing and shows no error (see dropInFlightEstimate).
+    const generation = estimateGeneration;
     clearError();
     hideCostConfirmation();
     setButtonLoading(trigger, true);
     try {
       const queryText = queryTextarea.value.trim();
       if (!queryText) {
+        // W43: a submit attempt is what makes the empty box an error.
+        updateQueryValidation();
         throw new ApiError({
           status: 422,
           code: "QUERY_REQUIRED",
           message: "Please enter a question before running an estimate.",
         });
       }
-      const estimate = await api("/v1/query-runs/estimate", {
-        method: "POST",
-        body: JSON.stringify(runRequestBody(queryText, getModelIds(), state.quickMode)),
-      });
+      // What is priced is what a run will submit: the text, the panel and the
+      // mode at THIS moment, not whatever the box holds when the create is
+      // sent (row 26: an edit typed while the estimate loaded used to run).
+      const priced = { queryText, modelIds: getModelIds(), quick: state.quickMode };
+      let estimate;
+      try {
+        estimate = await api("/v1/query-runs/estimate", {
+          method: "POST",
+          body: JSON.stringify(runRequestBody(priced.queryText, priced.modelIds, priced.quick)),
+        });
+      } catch (error) {
+        if (generation !== estimateGeneration) return null;
+        throw error;
+      }
+      if (generation !== estimateGeneration) return null;
       state.currentEstimate = estimate;
+      state.pricedRun = priced;
       // Slice 1: fan the itemized ``by_model`` breakdown out onto the
       // slot cards and surface the grand total in the composer footer.
       // ``by_model`` emits the four slot rows first, in slot order, so we map
@@ -8246,11 +8520,42 @@
       }
       return estimate;
     } finally {
-      setButtonLoading(trigger, false);
-      // ``setButtonLoading`` clears ``disabled``; re-assert the gate so a
-      // high-stakes topic detected mid-compose keeps both CTAs disabled.
-      applyHighStakesGate();
+      // A dropped estimate's buttons were already reset when it was dropped,
+      // and may now belong to a newer flow.
+      if (generation === estimateGeneration) {
+        setButtonLoading(trigger, false);
+        // ``setButtonLoading`` clears ``disabled``; re-assert the gate so a
+        // high-stakes topic detected mid-compose keeps both CTAs disabled.
+        applyHighStakesGate();
+      }
     }
+  }
+
+  // W33 (ADR-0140 decision 5, failure-mode row 26): going home drops anything
+  // still in flight for the question being left. Bumping the generation makes
+  // every pending estimate, and a Run-now continuation that has not yet sent
+  // its create, a no-op when it answers; the latch and the spinners are
+  // released here so the composer is usable at once.
+  let estimateGeneration = 0;
+  function dropInFlightEstimate() {
+    estimateGeneration += 1;
+    state.currentEstimate = null;
+    state.pricedRun = null;
+    if (state.submittingRun) {
+      state.submittingRun = false;
+      setButtonLoading(estimateButton, false);
+      setButtonLoading(runNowButton, false);
+    }
+    // An approval still in its warnings check has sent nothing that costs
+    // anything (callers never drop while ``createInFlight``): release its
+    // single-create latch so the next "Run now" is not blocked by it. The
+    // abandoned approval itself returns at its generation check and, being
+    // stale, leaves the latch to whichever flow holds it by then.
+    if (state.creatingRun && !state.createInFlight) {
+      state.creatingRun = false;
+      setButtonLoading(gateConfirmButton || proceedButton, false);
+    }
+    applyHighStakesGate();
   }
 
   function warningAcknowledgements(warnings) {
@@ -8301,6 +8606,13 @@
       if (highStakesAckCheckbox) highStakesAckCheckbox.checked = false;
     }
     applyHighStakesGate();
+    // W33 (ADR-0140, failure-mode row 18): a hand-off hint on screen must not
+    // name buttons the gate has just disabled. If the probe answered after the
+    // hint took focus, the acknowledgement is the next step, so focus moves on.
+    const hint = el("handoff-hint");
+    const hintHadFocus = !!hint && document.activeElement === hint;
+    renderHandoffHint(false);
+    if (hintHadFocus && highStakesAckPending()) focusHandoffHint();
   }
 
   // Probe the warnings endpoint for the current query text. A
@@ -8427,6 +8739,7 @@
     // later, after the create POST, so it can't cover this window. Set the latch
     // synchronously (no await before it) and clear it in ``finally``.
     if (state.submittingRun || state.isRunning) return;
+    const generation = estimateGeneration;
     state.submittingRun = true;
     state.submissionAttempted = true;
     clearError();
@@ -8440,6 +8753,8 @@
     try {
       const queryText = queryTextarea.value.trim();
       if (!queryText) {
+        // W43: a submit attempt is what makes the empty box an error.
+        updateQueryValidation();
         throw new ApiError({
           status: 422,
           code: "QUERY_REQUIRED",
@@ -8448,16 +8763,21 @@
       }
       await estimateRun({ autoProceed, trigger });
     } catch (error) {
-      handleError(error);
+      // W33 row 26: no error card for a question the user has left.
+      if (generation === estimateGeneration) handleError(error);
     } finally {
-      state.submittingRun = false;
-      setButtonLoading(trigger, false);
-      // ``setButtonLoading`` clears ``disabled``; re-assert the run/gate
-      // state so both CTAs stay disabled when a run is now in flight (a
-      // ``Run now`` allow-band click auto-proceeds inside ``estimateRun``)
-      // or a high-stakes topic is unacknowledged. This also re-derives the
-      // sibling CTA's disabled state that was force-locked above.
-      applyHighStakesGate();
+      // A dropped flow's latch was released by dropInFlightEstimate, and a
+      // newer flow may hold it now.
+      if (generation === estimateGeneration) {
+        state.submittingRun = false;
+        setButtonLoading(trigger, false);
+        // ``setButtonLoading`` clears ``disabled``; re-assert the run/gate
+        // state so both CTAs stay disabled when a run is now in flight (a
+        // ``Run now`` allow-band click auto-proceeds inside ``estimateRun``)
+        // or a high-stakes topic is unacknowledged. This also re-derives the
+        // sibling CTA's disabled state that was force-locked above.
+        applyHighStakesGate();
+      }
     }
   }
 
@@ -8475,6 +8795,7 @@
     // ``finally``) guarantees at most one create is ever in flight, enforcing
     // the "one run at a time per session" invariant on the client.
     if (state.creatingRun) return;
+    const generation = estimateGeneration;
     state.submissionAttempted = true;
     if (!state.currentEstimate) {
       // Defensive: button should be disabled until an estimate exists.
@@ -8491,7 +8812,17 @@
       return;
     }
     clearError();
-    const queryText = queryTextarea.value.trim();
+    // W33 (ADR-0140 decision 5, failure-mode row 26): submit the question that
+    // was PRICED, with the panel and mode it was priced for — never text typed
+    // into the box while the estimate loaded. ``pricedRun`` is set together
+    // with ``currentEstimate``; the box is only a fallback for a caller that
+    // set an estimate without it.
+    const priced = state.pricedRun || {
+      queryText: queryTextarea.value.trim(),
+      modelIds: getModelIds(),
+      quick: state.quickMode,
+    };
+    const queryText = priced.queryText;
     if (!queryText) {
       throw new ApiError({
         status: 422,
@@ -8517,6 +8848,9 @@
         method: "POST",
         body: JSON.stringify({ query_text: queryText }),
       });
+      // Row 26: the user went home while the warnings check was answering, so
+      // nothing has been sent that costs anything — stop here.
+      if (generation !== estimateGeneration) return;
       const costConfirmationPayload =
         thresholdAction === "require_confirmation"
           ? {
@@ -8526,10 +8860,14 @@
                 state.currentEstimate.cost_estimate.confirmation_token,
             }
           : null;
+      // From here the create is on the wire and a run will exist, so going
+      // home waits for it (goToNewQuestion checks ``createInFlight``) rather
+      // than leaving a charged run nobody is watching.
+      state.createInFlight = true;
       const created = await api("/v1/query-runs", {
         method: "POST",
         body: JSON.stringify(
-          runRequestBody(queryText, getModelIds(), state.quickMode, {
+          runRequestBody(queryText, priced.modelIds, priced.quick, {
             safety_acknowledgements: warningAcknowledgements(warnings.warnings),
             cost_confirmation: costConfirmationPayload,
           }),
@@ -8551,9 +8889,9 @@
       state.lastResult = null;
       state.terminalHandled = false;
       // #126: do NOT clear the trail here. This fires on EVERY run creation,
-      // including a follow-up (the same session thread continuing) — only
-      // "Start fresh" (clearSessionTrail() at the #result-startfresh handler)
-      // and the manual trail-clear button are supposed to reset the trail.
+      // including a follow-up (the same session thread continuing) — only the
+      // panel's "Clear" button resets the trail (ADR-0140 decision 1; "Start
+      // fresh" also cleared it until W33).
       // Clearing unconditionally here made SESSION_TRAIL_CAP and the
       // append/dedupe logic below unreachable: every run replaced the trail
       // instead of appending to it.
@@ -8601,13 +8939,19 @@
         await estimateRun();
         return;
       }
-      handleError(error);
+      // W33 row 26: no error card for a question the user has left.
+      if (generation === estimateGeneration) handleError(error);
     } finally {
       // Release the single-create latch. On the success path the run is now in
       // flight and ``setRunning(true)`` keeps every CTA disabled anyway; on the
-      // failure path this re-opens the create for a genuine retry.
-      state.creatingRun = false;
-      setButtonLoading(confirmBtn, false);
+      // failure path this re-opens the create for a genuine retry. A dropped
+      // approval's latch was already released by dropInFlightEstimate, and a
+      // newer flow may hold it now, so a stale one leaves it alone.
+      if (generation === estimateGeneration) {
+        state.creatingRun = false;
+        state.createInFlight = false;
+        setButtonLoading(confirmBtn, false);
+      }
     }
   }
 
@@ -8615,6 +8959,7 @@
   // estimate and re-enables the composer without starting a run.
   function cancelEstimate() {
     state.currentEstimate = null;
+    state.pricedRun = null;
     hideCostConfirmation();
     renderNotices(null);
     toast({ message: "Estimate cleared.", tone: "info", timeout: 2500 });
@@ -8680,7 +9025,8 @@
       }
       state.terminalHandled = true;
       // PR1/#14: the run is over — clear the post-submit error latch. A later
-      // "Start fresh" writes "" and dispatches an ``input`` event; without this
+      // empty "Review & run" or "New question" writes "" and dispatches an
+      // ``input`` event; without this
       // reset that trips the "enter a question" error on an intentionally-empty
       // composer the moment the user arrives (the flag never reset after submit).
       state.submissionAttempted = false;
@@ -8711,13 +9057,16 @@
         // PR1/#10: the question has been answered — clear the composer so the
         // old question does not linger behind the result on the next visit.
         // ``submissionAttempted`` is already reset above, so this ``input``
-        // dispatch cannot paint a false error. Follow-up (re-fills from
-        // ``state.liveQueryText``) and Back-to-edit / Esc-from-cost-gate (which
-        // never enter the result view) keep their text — separate paths.
+        // dispatch cannot paint a false error. Back-to-edit / Esc-from-cost-gate
+        // (which never enter the result view) keep their text — separate paths.
         if (queryTextarea) {
           queryTextarea.value = "";
           queryTextarea.dispatchEvent(new Event("input", { bubbles: true }));
         }
+        // W33 (ADR-0140 decision 2, bug 2): the next-question box opens empty
+        // after EVERY finished run, never holding the follow-up just answered.
+        const nextQuestionBox = el("result-next-input");
+        if (nextQuestionBox) nextQuestionBox.value = "";
       }
       if (result.status === "completed") {
         toast({
@@ -9424,12 +9773,11 @@
       landingHandoffNoteText.textContent = message;
     }
 
-    // The panel the visitor is about to review: the rendered slot selects, or
-    // the default panel while the grid has not rendered yet. Never throws.
+    // The panel the visitor is about to review: the models the composer shows
+    // (one in quick mode, ADR-0140 failure-mode row 19), or the default panel
+    // while the grid has not rendered yet. Never throws.
     function landingHandoffSlotCount() {
-      const rendered = document.querySelectorAll("select[data-model-slot]").length;
-      if (rendered > 0) return rendered;
-      return Array.isArray(defaultModelIds) && defaultModelIds.length > 0 ? defaultModelIds.length : 4;
+      return shownModelSlotCount();
     }
 
     // Disable/enable the two landing CTAs while the transition message dwells, so
@@ -9489,7 +9837,8 @@
       // had happened. Instant scroll (no animation) is reduced-motion-safe.
       window.scrollTo(0, 0);
       queryTextarea.focus({ preventScroll: true });
-      // Caret at the END of the pre-filled text, ready to refine.
+      // Caret at the END of any carried-in text (a chip, a typed next
+      // question, the landing question), ready to refine.
       const caret = queryTextarea.value.length;
       try {
         queryTextarea.setSelectionRange(caret, caret);
@@ -9544,6 +9893,13 @@
           queryTextarea.dispatchEvent(new Event("input", { bubbles: true }));
         }
         goToComposer();
+        // W33 (ADR-0140 decision 8, bug 10): the question is already in the box,
+        // so the next step is the models. Only THIS path (the timer that ends a
+        // landing hand-off) moves focus on to the hint above the slots; example
+        // chips, "Open the workspace" and a typed follow-up keep goToComposer's
+        // focus on the question box.
+        renderHandoffHint(true);
+        focusHandoffHint();
       }, LANDING_HANDOFF_DWELL_MS);
     }
 
@@ -9634,54 +9990,95 @@
       });
     }
 
-    // Result-view "Ask your next question" (design parity, screen 05). Follow-up
-    // and Start fresh both route back to the composer — there is no server-side
-    // context carry (that remains a documented backend follow-up), so the copy
-    // only promises what actually happens: the question is pre-filled and the
-    // user re-approves the estimate.
+    // Result-view "Ask your next question" (design parity, screen 05). "Review
+    // & run" carries what is typed in the box to the composer, and an empty box
+    // opens an EMPTY composer: nothing pre-fills it (ADR-0140 decision 2, bug
+    // 2). The browser sends no context, so each question is answered on its
+    // own and the note under the box says so. The "Follow up on this" / "Start
+    // fresh" mode buttons are hidden in the template until W37 sends the
+    // previous question and answer (decision 3): with no pre-fill they did the
+    // same thing, so they are not wired here.
     const nextInput = el("result-next-input");
-    const followBtn = el("result-followup");
-    const freshBtn = el("result-startfresh");
     const nextRun = el("result-next-run");
-    let nextFollowUp = true;
-    function setNextMode(followUp) {
-      nextFollowUp = followUp;
-      if (followBtn) {
-        followBtn.classList.toggle("result-next-mode-active", followUp);
-        followBtn.setAttribute("aria-pressed", String(followUp));
+    function reviewAndRun() {
+      // PR1/#14: arriving at the composer is a fresh attempt — clear the
+      // post-submit error latch so an empty navigation never shows "enter a
+      // question" before the user has submitted anything.
+      state.submissionAttempted = false;
+      const typed = (nextInput && nextInput.value.trim()) || "";
+      if (queryTextarea) {
+        queryTextarea.value = typed;
+        queryTextarea.dispatchEvent(new Event("input", { bubbles: true }));
       }
-      if (freshBtn) {
-        freshBtn.classList.toggle("result-next-mode-active", !followUp);
-        freshBtn.setAttribute("aria-pressed", String(!followUp));
-      }
-      if (!followUp && nextInput) nextInput.value = "";
-      if (nextInput) nextInput.focus({ preventScroll: true });
+      // Land on the composer (page B) so the user can REVIEW OR CHANGE their
+      // models before running. We deliberately do NOT auto-fire the estimate
+      // here; the user picks their models then clicks See the estimate / Run now.
+      goToComposer();
     }
-    if (followBtn) followBtn.addEventListener("click", () => setNextMode(true));
-    if (freshBtn) freshBtn.addEventListener("click", () => {
-      setNextMode(false);
-      clearSessionTrail();
-    });
-    if (nextRun) {
-      nextRun.addEventListener("click", async () => {
-        // PR1/#14: arriving at the composer is a fresh attempt — clear the
-        // post-submit error latch so a Start-fresh (empty) navigation never
-        // shows "enter a question" before the user has submitted anything.
-        state.submissionAttempted = false;
-        const typed = (nextInput && nextInput.value.trim()) || "";
-        // Follow-up pre-fills the answered question so the user can refine it;
-        // Start fresh (or a typed refinement) uses the box verbatim.
-        const base = typed || (nextFollowUp ? state.liveQueryText || "" : "");
+    if (nextRun) nextRun.addEventListener("click", reviewAndRun);
+    if (nextInput) {
+      // W33 (failure-mode row 7): Ctrl/Cmd+Enter in the box does what "Review &
+      // run" does. Stop propagation so the page-wide shortcut, which runs only
+      // the composer, never sees it.
+      nextInput.addEventListener("keydown", (event) => {
+        if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+          event.preventDefault();
+          event.stopPropagation();
+          reviewAndRun();
+        }
+      });
+    }
+
+    // W33 (ADR-0140 decisions 4 and 5): the way to a new question — "New
+    // question" (result header; live-run view once the run is over) and every
+    // ``[data-home-link]`` brand link (result, transcript, top bar). It opens
+    // the composer in place, without a reload, so the session list is kept;
+    // it clears any error card and cost confirmation, and drops an estimate
+    // still in flight (row 26).
+    //
+    // What happens to the question box depends on where the user was (row
+    // 28): from a result or a transcript, that question has run, so the box
+    // opens EMPTY. From the composer or the cost confirmation (the top-bar
+    // logo is the only home control there) the question has NOT run, and the
+    // logo never deletes it. From a stopped, failed or timed-out run the text
+    // is kept too, so the same question can be tried again.
+    //
+    // Not while a run is in progress, nor while its create is on the wire: a
+    // run that finishes switches to its result and empties the box, which
+    // would lose text typed meanwhile. The live-run view shows no home
+    // control until then.
+    function goToNewQuestion() {
+      if (state.isRunning || state.createInFlight) return;
+      const leaving = document.getElementById("main-content")?.dataset.activeView;
+      const questionHasRun = leaving === "result" || leaving === "transcript";
+      dropInFlightEstimate();
+      clearError();
+      hideCostConfirmation();
+      state.submissionAttempted = false;
+      if (questionHasRun) {
+        if (nextInput) nextInput.value = "";
         if (queryTextarea) {
-          queryTextarea.value = base;
+          queryTextarea.value = "";
           queryTextarea.dispatchEvent(new Event("input", { bubbles: true }));
         }
-        // Land on the composer (page B) with the question pre-filled so the user
-        // can REVIEW OR CHANGE their four models before running — a follow-up
-        // reuses the same models by default, but a new question may want a
-        // different panel. We deliberately do NOT auto-fire the estimate here;
-        // the user picks their models then clicks See the estimate / Run now.
-        goToComposer();
+      } else if (queryTextarea) {
+        // Re-validate so a "Question is required" left by an earlier empty
+        // submit does not survive the move (submissionAttempted is reset).
+        updateQueryValidation();
+      }
+      goToComposer();
+    }
+    for (const button of qsa("[data-new-question]")) {
+      button.addEventListener("click", goToNewQuestion);
+    }
+    for (const link of qsa("[data-home-link]")) {
+      link.addEventListener("click", (event) => {
+        // A modified or middle click keeps the browser's own behaviour (a new
+        // tab or window on /ui); a plain click stays in this page.
+        if (event.defaultPrevented || event.button !== 0) return;
+        if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+        event.preventDefault();
+        goToNewQuestion();
       });
     }
   }
@@ -9703,6 +10100,8 @@
     }
     const note = el("quick-mode-note");
     if (note) note.hidden = !state.quickMode;
+    // W33 (row 30): a hand-off hint on screen recounts (one model in quick mode).
+    renderHandoffHint(false);
   }
 
   function initQuickMode() {
@@ -9786,6 +10185,8 @@
     highStakesAckCheckbox.addEventListener("change", () => {
       state.highStakesAck = highStakesAckCheckbox.checked;
       applyHighStakesGate();
+      // W33: once ticked, a hand-off hint on screen drops "tick … first".
+      renderHandoffHint(false);
     });
   }
 
@@ -9799,7 +10200,8 @@
         // own — its CTAs route to the composer. Without this guard, a first-time
         // visitor pressing Ctrl/Cmd+Enter on the landing would fire an empty
         // ``startRun()`` and paint a QUERY_REQUIRED error banner over the pitch.
-        if (document.getElementById("main-content")?.dataset.activeView === "landing") {
+        const activeView = document.getElementById("main-content")?.dataset.activeView;
+        if (activeView === "landing") {
           return;
         }
         // On the cost gate, Ctrl/Cmd+Enter confirms the estimate (unless
@@ -9808,6 +10210,14 @@
           if (gateConfirmButton && !gateConfirmButton.hidden && !gateConfirmButton.disabled) {
             proceedWithRun();
           }
+          return;
+        }
+        // W33 (ADR-0140, failure-mode row 7): only the composer runs from the
+        // keyboard. On the result, transcript or live-run view the composer is
+        // hidden, and running it painted a false "Question is required" over
+        // the text the user had typed in the next-question box (which has its
+        // own Ctrl/Cmd+Enter: it does what "Review & run" does).
+        if (activeView && activeView !== "composer") {
           return;
         }
         // Ctrl/Cmd+Enter runs the estimate-first flow (``startRun`` with the
@@ -10187,6 +10597,9 @@
     // reflow, and prevents the ``!important`` rules from trapping the composer
     // hidden once a first-time visitor navigates into it.
     document.documentElement.removeAttribute("data-first-visit");
+    // W33 (ADR-0140 decision 6): from here on, entering the result or the
+    // transcript is a browser history entry.
+    initViewHistory();
     initThemeToggle();
     initLanding();
     initModelSlotSelection();
@@ -10202,10 +10615,9 @@
     // PR8: wire the session-trail clear button and render the initial (empty) state.
     const trailClearBtn = el("session-trail-clear");
     if (trailClearBtn) {
+      // The ONLY control that empties the list (ADR-0140 decision 1).
       trailClearBtn.addEventListener("click", () => {
         clearSessionTrail();
-        // "Start fresh" also clears the trail so the user's next session
-        // begins with a clean slate.
       });
     }
     renderSessionTrail();
