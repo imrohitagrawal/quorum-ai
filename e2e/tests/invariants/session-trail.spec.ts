@@ -35,12 +35,55 @@ async function driveWithCompleted(page: Page, completed: Record<string, unknown>
   await expect(page.locator("#result-verdict[data-consensus]")).toBeVisible({ timeout: 20000 });
 }
 
-/** Navigate from result view back to the composer. Clicks "Start fresh"
-    then "Review & run" so we land at the composer. */
+/** Navigate from the result view back to an empty composer with the result
+    header's "New question" button (ADR-0140 decision 4). It used "Start
+    fresh", which ADR-0140 hides until W37. */
 async function goBackToComposer(page: Page) {
-  await page.locator("#result-startfresh").click();
-  await page.locator("#result-next-run").click();
+  const newQuestion = page.locator('[data-view="result"]').getByRole("button", { name: "New question", exact: true });
+  await expect(newQuestion).toBeVisible();
+  await newQuestion.click();
   await expect(page.locator("#query-text")).toBeVisible({ timeout: 10000 });
+}
+
+/** A distinct, well-formed run id per run index (the GET route matches 36 hex/dash chars). */
+const distinctRunId = (i: number) => `${(i + 1).toString(16).padStart(8, "0")}-1111-4111-8111-111111111111`;
+
+/** Answer every create with the next distinct run id, and every GET with a
+    completed run under that id. Each run gets its own id so the trail's
+    runId de-duplication can never be what keeps a count low. */
+async function routeDistinctRuns(page: Page) {
+  let created = 0;
+  await Promise.all([
+    page.route("**/v1/query-runs/estimate", (r) => r.fulfill(fulfil(costEstimateEnvelope()))),
+    page.route("**/v1/query-runs/warnings", (r) => r.fulfill(fulfil({ warnings: [] }))),
+    page.route("**/v1/query-runs/active", (r) => r.fulfill(fulfil({ query_run_id: null }))),
+  ]);
+  await page.route(/\/v1\/query-runs$/, (r) => {
+    if (r.request().method() !== "POST") return r.continue();
+    const id = distinctRunId(created);
+    created += 1;
+    return r.fulfill(fulfil({ ...goldenCreateResp(), query_run_id: id, correlation_id: `corr-${id}` }));
+  });
+  await page.route(/\/v1\/query-runs\/[0-9a-f-]{36}$/, (r) => {
+    const id = r.request().url().split("/").pop() as string;
+    return r.fulfill(fulfil({ ...goldenCompletedResp(), query_run_id: id, correlation_id: `corr-${id}` }));
+  });
+}
+
+/** Run one question from wherever the page is: the composer on the first
+    run, the result's next-question box after that (a path that exists both
+    before and after ADR-0140). */
+async function runQuestion(page: Page, question: string) {
+  const onResult = await page.locator('[data-view="result"]').isVisible();
+  if (onResult) {
+    await page.locator("#result-next-input").fill(question);
+    await page.locator("#result-next-run").click();
+    await expect(page.locator('[data-view="composer"]')).toBeVisible();
+  }
+  await page.locator("#query-text").fill(question);
+  await page.locator("#run-now").click();
+  await expect(page.locator("#result-question")).toHaveText(question, { timeout: 20000 });
+  await expect(page.locator("#result-verdict[data-consensus]")).toBeVisible({ timeout: 20000 });
 }
 
 test.describe("PR8 — Conversation trail UI", () => {
@@ -98,16 +141,38 @@ test.describe("PR8 — Conversation trail UI", () => {
     await expect(page.locator(".session-trail-entry")).toHaveCount(1);
   });
 
-  // STILL REMOVED: "the trail is capped at 10 entries". #126 fixed the bug
-  // documented below (a follow-up run now appends instead of replacing — see
-  // "a follow-up run (not Start fresh) appends to the trail instead of
-  // replacing it"), so SESSION_TRAIL_CAP is no longer unreachable dead code
-  // in principle. A dedicated 11-distinct-run cap test is still not added
-  // here: it needs 11 distinct create+complete route cycles (expensive, and
-  // out of #126's scope, which was the single-entry defect, not the cap).
-  // Leaving this noted rather than silently dropped, per #126's own finding
-  // that WP-F's original "if the trail is ever changed to accumulate, add a
-  // real test with it" condition is now true.
+  // ADR-0140 decision 1 / failure-mode row 2: the list keeps at most 10
+  // entries and, once it reaches the cap, a line says so instead of dropping
+  // the oldest silently. MOCKED because 11 runs cost about $1.16 against an
+  // anonymous session's $0.40 daily envelope — the real backend cannot reach
+  // the cap in one session. Each run has its own id (routeDistinctRuns), so
+  // the runId de-duplication cannot be what holds the count at 10.
+  // The ADR leaves the line's wording open; the design names "Showing your
+  // last 10 questions", so the key phrase "last 10" is asserted, not the sentence.
+  test("the list caps at 10 entries and says so once it reaches the cap", async ({ page }) => {
+    // RED-IF: renderSessionTrail stops writing the cap line at SESSION_TRAIL_CAP entries, or the cap stops dropping the oldest.
+    test.setTimeout(180000);
+    await boot(page);
+    await routeDistinctRuns(page);
+    const q = (i: number) => `Cap test question number ${String(i).padStart(2, "0")}?`;
+    const panel = page.locator(".session-trail-panel");
+    const capLine = panel.getByText(/last 10/i);
+
+    for (let i = 1; i <= 9; i++) await runQuestion(page, q(i));
+    await expect(page.locator(".session-trail-entry")).toHaveCount(9);
+    await expect(capLine, "below the cap there is nothing to say").toHaveCount(0);
+
+    await runQuestion(page, q(10));
+    await expect(page.locator(".session-trail-entry")).toHaveCount(10);
+    await expect(capLine, "the line appears when the list REACHES the cap").toBeVisible();
+
+    await runQuestion(page, q(11));
+    await expect(page.locator(".session-trail-entry")).toHaveCount(10);
+    await expect(capLine).toBeVisible();
+    const questions = await page.locator(".session-trail-question").allTextContents();
+    expect(questions.some((t) => t.includes(q(11)))).toBe(true);
+    expect(questions.some((t) => t.includes(q(1))), "the oldest entry is the one dropped").toBe(false);
+  });
 
   test("long questions are truncated to 80 characters", async ({ page }) => {
     const longQuestion = "A".repeat(200);
@@ -129,30 +194,45 @@ test.describe("PR8 — Conversation trail UI", () => {
     expect(text).toContain("…");
   });
 
-  test("'Start fresh' clears the session trail", async ({ page }) => {
+  // ADR-0140 decision 1 (bug 1, M07 point 1). These two replace tests that
+  // PINNED the bug: "'Start fresh' clears the session trail", and a "Start
+  // fresh then a new run REPLACES the trail" test that could not tell a clear
+  // from a de-duplication, because both runs reused the golden run id.
+  test("nothing but Clear empties the list: Start fresh is hidden and going to a new question keeps the entry", async ({ page }) => {
+    // RED-IF: #result-startfresh is visible again (ADR-0140 decision 3), or any way back to the composer calls clearSessionTrail().
     await driveWithCompleted(page, goldenCompletedResp());
     await expect(page.locator(".session-trail-entry")).toHaveCount(1);
-    // Click "Start fresh".
-    await page.locator("#result-startfresh").click();
-    // The trail list must now be hidden (empty after clear).
-    await expect(page.locator("#session-trail-list")).toBeHidden();
+    await expect(page.locator("#result-next-run")).toBeVisible();
+    await expect(page.locator("#result-startfresh")).toBeHidden();
+
+    await page.locator("#result-next-run").click();
+    await expect(page.locator('[data-view="composer"]')).toBeVisible();
+    await expect(page.locator(".session-trail-entry"), "going to the composer keeps the list").toHaveCount(1);
+
+    // Clear is the one control that empties it.
+    await page.locator("#session-trail-clear").click();
+    await expect(page.locator(".session-trail-entry")).toHaveCount(0);
   });
 
-  test("'Start fresh' followed by a new run replaces the trail with the new entry", async ({ page }) => {
-    await driveWithCompleted(page, goldenCompletedResp());
-    await expect(page.locator(".session-trail-entry")).toHaveCount(1);
-    // Navigate back to composer via "Start fresh" and start another run — the
-    // old entry should be replaced by the new one (Start fresh explicitly
-    // clears the trail; this is a genuinely new session thread).
-    await goBackToComposer(page);
-    await page.getByRole("textbox").first().fill("Second question here?");
+  test("a new question after a finished run APPENDS to the list (two distinct run ids)", async ({ page }) => {
+    // RED-IF: the result header's New question path clears the trail, or the button is missing (ADR-0140 decisions 1, 4).
+    await boot(page);
+    await routeDistinctRuns(page);
+    await page.getByRole("textbox").first().fill("First question here?");
     await page.locator("#run-now").click();
     await expect(page.locator("#result-verdict[data-consensus]")).toBeVisible({ timeout: 20000 });
-    // Trail must show exactly one entry (the new run), not the old one.
-    await expect(page.locator("#session-trail-list")).toBeVisible();
     await expect(page.locator(".session-trail-entry")).toHaveCount(1);
-    const q = await page.locator(".session-trail-question").first().textContent();
-    expect(q).toContain("Second question here?");
+
+    await goBackToComposer(page);
+    await expect(page.locator("#query-text")).toHaveValue("");
+    await page.getByRole("textbox").first().fill("Second question here?");
+    await page.locator("#run-now").click();
+    await expect(page.locator("#result-question")).toHaveText("Second question here?", { timeout: 20000 });
+
+    await expect(page.locator(".session-trail-entry")).toHaveCount(2);
+    const questions = await page.locator(".session-trail-question").allTextContents();
+    expect(questions.some((q) => q.includes("First question here?"))).toBe(true);
+    expect(questions.some((q) => q.includes("Second question here?"))).toBe(true);
   });
 
   // #126: a FOLLOW-UP run (the "Follow up" mode is the default on the result
@@ -197,8 +277,8 @@ test.describe("PR8 — Conversation trail UI", () => {
     await expect(page.locator("#result-verdict[data-consensus]")).toBeVisible({ timeout: 20000 });
     await expect(page.locator(".session-trail-entry")).toHaveCount(1);
 
-    // "Follow up" is the DEFAULT next-run mode (not "Start fresh") — click
-    // straight through to the composer without touching #result-startfresh.
+    // "Review & run" with an empty box goes back to the composer; since
+    // ADR-0140 nothing pre-fills it, so the next line types the question.
     await page.locator("#result-next-run").click();
     await expect(page.locator("#query-text")).toBeVisible({ timeout: 10000 });
     await page.getByRole("textbox").first().fill("Second question here?");

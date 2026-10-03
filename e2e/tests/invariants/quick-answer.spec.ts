@@ -239,6 +239,9 @@ test.describe("W5 quick answer (ADR-0128)", () => {
       r.request().method() === "POST" ? r.fulfill(json(goldenCreateResp())) : r.continue());
     await page.locator("#result-next-run").click();
     await expect(page.locator('[data-view="composer"]')).toBeVisible();
+    // ADR-0140: nothing pre-fills the composer any more, so type the question
+    // (this used to rely on the previous question being copied in).
+    await page.locator("#query-text").fill("A second question, this time for the panel?");
     await page.locator("#quick-mode-input").uncheck();
     await page.locator("#run-now").click();
     await expect(page.locator("#result-verdict[data-consensus]")).toBeVisible({ timeout: 20000 });

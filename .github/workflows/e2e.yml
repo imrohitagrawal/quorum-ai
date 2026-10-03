@@ -204,6 +204,7 @@ jobs:
           tests/invariants/peer-critique-copy.spec.ts
           tests/invariants/panel-size.spec.ts
           tests/invariants/quick-answer.spec.ts
+          tests/invariants/page-journey.spec.ts
           --project=chromium
           --retries=0
 

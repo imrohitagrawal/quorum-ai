@@ -403,6 +403,10 @@ test.describe("transcript-view disclosure banner (#115)", () => {
     // "ask your next question" -> run again (app.js `nextRun` handler).
     await page.locator("#transcript-back").click();
     await page.locator("#result-next-run").click();
+    // ADR-0140: the composer no longer pre-fills the previous question, so the
+    // second question is typed explicitly (this used to rely on the pre-fill).
+    await expect(page.locator('[data-view="composer"]')).toBeVisible();
+    await page.locator("#query-text").fill("A second question about the same topic?");
 
     // Second run, still "mixed", but with DIFFERENT counts.
     const run2 = { ...goldenCompletedResp(), demo_mode: true, live_count: 1, local_count: 3 };
