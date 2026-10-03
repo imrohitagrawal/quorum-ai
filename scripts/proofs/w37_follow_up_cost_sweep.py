@@ -8,7 +8,8 @@ the price source before any number, because every figure below moves with them.
 It sets production's judge posture (2026-10-04 `/status`: judge on, model
 `openai/gpt-4.1-mini`) with a dummy key — no call is made — and reads the built-in
 price table (`_CATALOG_FALLBACK_ENTRIES`), never the live catalog, so two runs agree.
-Set PEER_CRITIQUE_ENABLED=true for the peer-critique posture.
+For the peer-critique posture, turn the peer-critique setting on in the environment
+(`config.Settings.peer_critique_enabled`); the first line printed says which posture ran.
 """
 
 from __future__ import annotations

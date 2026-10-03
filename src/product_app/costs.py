@@ -415,6 +415,23 @@ class DailyAllowance(BaseModel):
     bounded_by: AllowanceBound
 
 
+def _context_tokens(context: dict[str, Any] | None) -> tuple[Decimal, Decimal]:
+    """A follow-up context's ``(prior_question, prior_synthesis)`` in tokens.
+
+    Measured on the STRIPPED text, which is what the providers send
+    (``providers._flat_context_text``). One helper for the point estimate and
+    the bound, so the two cannot price a different context.
+    """
+    if not context:
+        return Decimal(0), Decimal(0)
+    question = (context.get("prior_question") or "").strip()
+    answer = (context.get("prior_synthesis") or "").strip()
+    return (
+        Decimal(len(question)) / CHARS_PER_TOKEN,
+        Decimal(len(answer)) / CHARS_PER_TOKEN,
+    )
+
+
 def daily_allowance_from(*, already_spent: Decimal, cumulative: Decimal) -> DailyAllowance:
     """The allowance left, from one ledger figure and the in-memory running total.
 
@@ -1673,21 +1690,10 @@ class CostEstimationService:
             + (Decimal(str(settings.cost_output_tokens_per_query_token)) * query_tokens),
             Decimal(settings.initial_answer_max_tokens),
         )
-        # L4: compute extra context tokens from the optional follow-up context.
-        # The context dict carries { prior_question, prior_synthesis }; when
-        # present we price the prior_question as additional input tokens
-        # (it is injected into the system prompt of every debate/synthesis call).
-        # The prior_synthesis is re-sent as part of the user prompt and is
-        # priced in the upstream_answers_tokens term below; we add its length
-        # to the synthesis prompt token count explicitly.
-        context_tokens = Decimal(0)
-        if context:
-            prior_q = (context.get("prior_question") or "").strip()
-            prior_s = (context.get("prior_synthesis") or "").strip()
-            if prior_q:
-                context_tokens += Decimal(len(prior_q)) / CHARS_PER_TOKEN
-            if prior_s:
-                context_tokens += Decimal(len(prior_s)) / CHARS_PER_TOKEN
+        # L4 / W37 (ADR-0143 decision 2): the follow-up context's two texts,
+        # in tokens, kept APART because each call is priced for what it is
+        # sent -- see ``_cost_components``.
+        prior_question_tokens, prior_synthesis_tokens = _context_tokens(context)
         # Issue #265 left this HALF done, and #110's follow-on is the other
         # half. ``judge_configured()`` is THE predicate — the same one
         # ``query_runs._request_path_judge`` gates the paid call on and
@@ -1724,7 +1730,8 @@ class CostEstimationService:
             # per-section floor, not the enforced cap, so the point estimate
             # stays strictly <= the ``_estimate_bound_usd`` ceiling.
             synthesis_sections=Decimal(settings.cost_synthesis_sections),
-            context_tokens=context_tokens,
+            prior_question_tokens=prior_question_tokens,
+            prior_synthesis_tokens=prior_synthesis_tokens,
             price_judge=price_judge,
             judge_typical=True,
             quick=mode == MODE_QUICK,
@@ -1889,7 +1896,8 @@ class CostEstimationService:
         synthesis_sections: Decimal = Decimal(1),
         debate_output_override: Decimal | None = None,
         search_context_override: Decimal | None = None,
-        context_tokens: Decimal = Decimal(0),
+        prior_question_tokens: Decimal = Decimal(0),
+        prior_synthesis_tokens: Decimal = Decimal(0),
         price_round_two_prior_critique: bool = False,
         price_judge: bool = False,
         judge_typical: bool = False,
@@ -1918,10 +1926,13 @@ class CostEstimationService:
         ``BOUND_WEB_SEARCH_CONTEXT_TOKENS``, not the setting (ADR-0125), so a
         setting raised above that figure can put the point above the bound.
 
-        ``context_tokens`` is the extra input tokens from a follow-up context
-        (prior_question + prior_synthesis). It is priced into debate and synthesis
-        calls (those that receive context via the system prompt) but NOT into the
-        initial-answer calls.
+        ``prior_question_tokens`` and ``prior_synthesis_tokens`` are a
+        follow-up context's two texts, in tokens. W37 (ADR-0143 decision 2):
+        each call is priced for what it is SENT -- every answer call (each
+        panel slot, or quick's one model) for both, each debate call (the
+        moderator, or every critic) for the question only, each synthesis
+        section call for both ONCE, and the judge for neither. Both paths pass
+        the same figures, so the point estimate stays at or below the bound.
         """
         if not model_slots:
             raise ValueError("model_slots must not be empty")
@@ -1978,10 +1989,18 @@ class CostEstimationService:
         # does not. This is the term the old model missed entirely — it
         # priced ~11 query tokens instead of the ~2,300 prompt tokens a
         # searching call actually carries.
+        # W37 (ADR-0143 decisions 1 and 2): a follow-up's answer call carries
+        # the previous question AND the previous final answer in its system
+        # message (``providers._follow_up_system_suffix``), so each slot's
+        # prompt is priced for both, at that slot's own input price.
+        answer_context_tokens = prior_question_tokens + prior_synthesis_tokens
         initial_per_model: list[Decimal] = []
         for slot in model_slots:
             prompt_tokens = (
-                system_tokens + (search_tokens if slot.search else Decimal(0)) + query_tokens
+                system_tokens
+                + (search_tokens if slot.search else Decimal(0))
+                + query_tokens
+                + answer_context_tokens
             )
             slot_cost = _cost(slot.model_id, prompt_tokens, init_output_tokens)
             # A searching slot also pays the flat web-search plugin fee — the
@@ -1997,13 +2016,10 @@ class CostEstimationService:
         # writers), not a rate borrowed from the four slot models. Their prompt
         # scales with the initial answers they consume (``init_output_tokens``),
         # so the guardrail bound's larger initial output flows through here too.
-        # L4: when a follow-up context is present, the prior_question is
-        # injected into the system prompt (same for every debate + synthesis
-        # call) and the prior_synthesis is re-sent in the user prompt (same
-        # for every synthesis section). Both are modelled as additional
-        # input tokens.
-        # Same prefix for debate (system) and synthesis (user).
-        context_input_tokens = context_tokens
+        # L4 / W37 (ADR-0143 decision 2): debate is sent the previous
+        # QUESTION only, in its system message, so that is all it is priced
+        # for. Before W37 it was priced for the previous answer too, which it
+        # is never sent (failure-modes row 3).
         # W4. One upstream answer per SLOT, not a hard four: with ``Decimal(4)``
         # a panel of two was priced as if the moderator read four answers, so
         # the estimate and the fail-safe bound (which shares this arithmetic)
@@ -2038,7 +2054,7 @@ class CostEstimationService:
         else:
             debate_system_tokens = system_tokens
         debate_prompt_tokens = (
-            debate_system_tokens + query_tokens + upstream_answers_tokens + context_input_tokens
+            debate_system_tokens + query_tokens + upstream_answers_tokens + prior_question_tokens
             # Round 2's prompt also carries round 1's critique in full
             # (``debate._debate_user_prompt`` appends ``prior_round``, sliced
             # nowhere), so debate input is NOT the same for both rounds. Without
@@ -2113,8 +2129,12 @@ class CostEstimationService:
             system_tokens
             + query_tokens
             + upstream_answers_tokens
-            + context_input_tokens  # prior_question in system prompt
-            + context_input_tokens  # prior_synthesis in user prompt (re-sent)
+            # W37 (ADR-0143 decision 2): each section call is sent the previous
+            # question once (system message) and the previous answer once (user
+            # message), so the pair is priced ONCE. Before W37 both texts were
+            # priced twice (failure-modes row 4).
+            + prior_question_tokens
+            + prior_synthesis_tokens
             + Decimal(2) * debate_output_tokens
         )
         # Synthesis fans out into ``synthesis_sections`` independent live calls,
@@ -2354,16 +2374,9 @@ class CostEstimationService:
         total is a true ceiling on real cost: the guardrail keying off it can
         only ever over-protect, never wave through a run that then bills more.
         """
-        # Compute context tokens once; both the point estimate and the bound
-        # must model the same context so the point <= bound invariant holds.
-        context_tokens = Decimal(0)
-        if context:
-            prior_q = (context.get("prior_question") or "").strip()
-            prior_s = (context.get("prior_synthesis") or "").strip()
-            if prior_q:
-                context_tokens += Decimal(len(prior_q)) / CHARS_PER_TOKEN
-            if prior_s:
-                context_tokens += Decimal(len(prior_s)) / CHARS_PER_TOKEN
+        # The same context figures as the point estimate (``_context_tokens``),
+        # so the point <= bound invariant holds.
+        prior_question_tokens, prior_synthesis_tokens = _context_tokens(context)
         init_output_tokens = Decimal(settings.initial_answer_max_tokens)
         # Issue #265. ``judge_configured()`` is THE predicate — the same one
         # ``query_runs._request_path_judge`` gates the paid call on and
@@ -2382,7 +2395,8 @@ class CostEstimationService:
             # from its OWN figure, not the setting, so a truer setting cannot
             # move an affordable mix into BLOCK.
             search_context_override=Decimal(BOUND_WEB_SEARCH_CONTEXT_TOKENS),
-            context_tokens=context_tokens,
+            prior_question_tokens=prior_question_tokens,
+            prior_synthesis_tokens=prior_synthesis_tokens,
             # The bound is the only caller that must be a true CEILING, and the
             # only one with no breakdown to reconcile — which is why
             # ``price_round_two_prior_critique`` is still exclusive to it: that

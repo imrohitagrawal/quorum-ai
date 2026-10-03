@@ -3882,8 +3882,9 @@ a.result-source-chip:hover { border-color: var(--info); color: var(--info); }
   background: var(--accent-soft);
   border: 1px solid var(--line-2);
 }
-/* W33 (ADR-0140 decision 3): hidden until W37 sends the previous question and
-   answer; the display above would otherwise override the attribute. */
+/* W37 (ADR-0143 decision 4): hidden on a result with no final answer
+   (app.js renderFollowUpMode); the display above would otherwise override the
+   attribute. */
 .result-next-modes[hidden] { display: none; }
 .result-next-mode {
   min-height: 34px;
@@ -3946,6 +3947,37 @@ a.result-source-chip:hover { border-color: var(--info); color: var(--info); }
 }
 .result-next-cost { font-size: 0.84rem; color: var(--muted); }
 .result-next-cost-note { color: var(--muted); }
+
+/* W37 (ADR-0143 decision 5): the composer's "Following up on" line, shown
+   while a follow-up's context is attached, with its "Start fresh" button. */
+.follow-up-context {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-md);
+  background: var(--accent-soft);
+  font-size: 0.86rem;
+  line-height: 1.55;
+  color: var(--body);
+}
+.follow-up-context[hidden] { display: none; }
+.follow-up-context-text { min-width: 0; overflow-wrap: anywhere; }
+.follow-up-context-drop {
+  min-height: 34px;
+  padding: 0 var(--space-4);
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-pill);
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.84rem;
+  font-weight: 600;
+  cursor: pointer;
+}
 
 /* ----- Result footer strip (design comp screen 05) ------------------------- */
 .result-footer {

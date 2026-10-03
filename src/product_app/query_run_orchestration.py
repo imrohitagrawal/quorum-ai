@@ -506,9 +506,9 @@ class QueryRun:
     debate_call_usages: list[tuple[int, TokenUsage | None]] = field(default_factory=list)
     synthesis_call_usages: list[TokenUsage | None] = field(default_factory=list)
     #: L4: optional follow-up context from a previous query run. ``None``
-    #: when this run was not triggered as a follow-up. Stored so the
-    #: pipeline can inject prior context into debate/synthesis prompts
-    #: and the cost estimator can account for the extra tokens.
+    #: when this run was not triggered as a follow-up. Held in memory for the
+    #: run only, so the pipeline can send it to the answer, debate and
+    #: synthesis calls (W37, ADR-0143) and the cost estimator can price it.
     context: dict[str, Any] | None = None
     #: W5: the request's shape, ``"panel"`` or ``"quick"`` (ADR-0126). Decided
     #: once at create and never re-derived from the slot count: a panel that
@@ -1302,6 +1302,11 @@ def _execute_query_run(query_run_id: UUID, account_id: UUID) -> None:
                 # dispatched — whatever the key says.
                 billing_class=BILLING_NOT_BILLED,
             )
+        # W37 (ADR-0143 decision 1): a follow-up's context reaches every
+        # answer call. Passed only when set: several tests double
+        # ``produce_initial_answer`` with a fixed signature, and a fresh
+        # question's call stays exactly what it was.
+        follow_up: dict[str, Any] = {"context": query_run.context} if query_run.context else {}
         return provider_execution_service.produce_initial_answer(
             account_id=account_id,
             query_run_id=query_run_id,
@@ -1309,6 +1314,7 @@ def _execute_query_run(query_run_id: UUID, account_id: UUID) -> None:
             model_slot=model_slot,
             credential_source=credential_source,
             openrouter_key=openrouter_key,
+            **follow_up,
         )
 
     futures = [
