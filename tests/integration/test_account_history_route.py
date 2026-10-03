@@ -37,7 +37,7 @@ from tests.integration.test_account_history_flow import _finish, _start_run
 from tests.integration.test_google_sign_in import SignIn, _boot, _signed_in
 from tests.integration.test_query_run_cost_guardrails import DEFAULT_MODEL_IDS, confirmed_request
 
-from product_app import account_history, auth, main
+from product_app import account_history, auth, main, session_store
 from product_app import query_run_orchestration as qro
 from product_app.main import app
 from product_app.query_run_orchestration import query_run_repository
@@ -272,6 +272,34 @@ def test_a_store_that_cannot_be_read_answers_exactly_the_unavailable_line(
     )
 
 
+@pytest.mark.parametrize("how", ["store_closed", "no_store"])
+def test_a_sessions_store_that_cannot_say_who_is_signed_in_is_503(
+    sign_in: SignIn, how: str
+) -> None:
+    """Row 9 / ADR-0142 decision 2a (review round 1 reproduced 403
+    NOT_SIGNED_IN here, so the page said the sign-in had changed). RED-IF:
+    with the sessions store closed, or gone (``get_store()`` is ``None``),
+    mid-session, a signed-in cookie gets anything but 503
+    ``HISTORY_UNAVAILABLE``, lacks ``no-store``, or carries list markup.
+    Partner: the same cookie read its row while the store was there."""
+    client = sign_in.client()
+    _signed_in(client)
+    _finish(_start_run(_account(sign_in, ADA), "kept while the store is down 8d4f"))
+    assert _questions_in(_ok(_get(client))["html"]) == ["kept while the store is down 8d4f"]
+    try:
+        if how == "store_closed":
+            sign_in.store.close()
+        else:
+            session_store.configure(None)
+        response = _get(client)
+    finally:
+        session_store.configure(sign_in.store)
+    _refused(response, 503)
+    assert response.json()["detail"]["code"] == "HISTORY_UNAVAILABLE"
+    assert response.headers.get("Cache-Control") == "no-store"
+    assert "kept while the store is down 8d4f" not in response.text
+
+
 @pytest.mark.parametrize("who", ["signed_in", "no_session", "anonymous"])
 def test_every_answer_is_no_store(sign_in: SignIn, who: str) -> None:
     """Row 15. RED-IF: a 200, 401 or 403 from the route lacks
@@ -331,9 +359,10 @@ def test_a_cancelled_run_is_in_history_as_soon_as_the_cancel_returns(
     """Row 12. A real cookie-path create starts a worker whose pipeline is a
     stub that sleeps until released; the DELETE cancels it. RED-IF: the
     cancel route does not write the History row itself, so the row appears
-    only when the worker exits (measured 903 ms with a 1 s stub). Partner:
-    once the worker has exited, its second write replaced the row, never
-    added one (exactly one row, keyed by run id)."""
+    only when the worker exits (903 ms in a design-review probe whose
+    pipeline stub slept 1 s). Partner: once the worker has exited, its
+    second write replaced the row, never added one (exactly one row, keyed
+    by run id)."""
     release = threading.Event()
     workers: list[threading.Thread] = []
 

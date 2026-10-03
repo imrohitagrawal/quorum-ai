@@ -57,8 +57,24 @@ _RENDERED_ONLY_WITH_SIGN_IN = frozenset(
         "idle-stay",
         "idle-sign-out",
         "idle-reload",
+        # W33 slice D (ADR-0142): the History refresh reads the top bar's
+        # email and inserts its lines before the account controls; neither is
+        # looked up through ``el(...)`` (see ``_other_id_lookups``).
+        "account-email",
+        "account-delete",
     }
 )
+
+
+def _other_id_lookups(js: str) -> set[str]:
+    """Ids app.js looks up other than through ``el(...)`` or
+    ``getElementById(...)``: a ``querySelector("#id")`` and the History
+    refresh's panel-scoped ``find("id")``. Ids the script creates itself
+    (``line("id", ...)``, the reload and error lines) are not markup hooks."""
+    found = set(re.findall(r'querySelector\(["\']#([a-z0-9-]+)["\']\)', js))
+    found |= set(re.findall(r'\bfind\(["\']([a-z0-9-]+)["\']\)', js))
+    created = set(re.findall(r'\bline\(\s*["\']([a-z0-9-]+)["\']', js))
+    return found - created
 
 
 def _sign_in_markup(monkeypatch: pytest.MonkeyPatch) -> str:
@@ -99,6 +115,12 @@ def test_workspace_html_contains_all_dom_hooks_used_by_javascript(
     # Find every literal "..." passed to ``el(`` or ``getElementById(``.
     requested_ids = set(re.findall(r'el\(["\']([a-z0-9-]+)["\']\)', js))
     requested_ids |= set(re.findall(r'getElementById\(["\']([a-z0-9-]+)["\']\)', js))
+    # W33 slice D: the History refresh's own lookups. RED-IF: renaming
+    # ``account-email`` or ``account-delete`` on either side (the server
+    # markup or the script's lookup) goes unnoticed.
+    other = _other_id_lookups(js)
+    assert {"account-email", "account-delete"} <= other
+    requested_ids |= other
     # The ``document.getElementById("model-catalog-data")`` in app.js
     # also lives in the template — check separately.
     assert requested_ids >= _RENDERED_ONLY_WITH_SIGN_IN  # both really are app.js hooks

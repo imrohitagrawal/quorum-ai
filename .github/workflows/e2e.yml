@@ -454,13 +454,14 @@ jobs:
           --project=chromium
           --retries=0
 
-      # EXECUTED-COUNT FLOOR, same reasoning as the lanes above. 9 is the
-      # spec's whole test count, MEASURED 2026-10-03 as "9 passed" with the
-      # invocation above on a scratch reference build of slice D (the real
-      # build did not exist yet; on 10c4fd0 the lane is red by design, 7 of 9
-      # failing). Re-measure on the real build before merging.
+      # EXECUTED-COUNT FLOOR, same reasoning as the lanes above. 12 is the
+      # spec's whole test count. MEASURED 2026-10-03 with the invocation above:
+      # the first nine tests were red by design on 087dbb9 (7 of 9 failing) and
+      # gave "9 passed" on 25b8867; review round 1 added three, and on 8927df9
+      # the lane gave "11 passed", "1 failed" (the toasts over History, red by
+      # design until its fix). Re-measure when that fix lands.
       - name: "signed-in History lane: floor on tests actually executed"
-        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 9 --lane "signed-in History lane"
+        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 12 --lane "signed-in History lane"
 
       - name: Clear the previous lane's JUnit report
         # Adversarial review (#162/#166): without this, a Playwright run that

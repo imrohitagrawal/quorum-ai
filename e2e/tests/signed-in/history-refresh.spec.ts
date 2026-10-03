@@ -11,8 +11,10 @@ import { test, expect, type APIResponse, type BrowserContext, type Page, type Re
  * local callback carrying the real `state` from the URL the app built, and a
  * `code` that tells the stub which account to sign in (`<sub>|<email>`).
  * Everything else — sign-in, estimate, the simulated run ($0), History — is
- * the real backend. Rows 10 and 11 add ONE more mock each, on
- * `/v1/account/history` only, and say so.
+ * the real backend. Six tests add ONE more mock each, on
+ * `/v1/account/history` only, and say so in the test: rows 10 and 11, row
+ * 12's two re-ask tests, row 6 (another account's email) and row 9 / decision
+ * 2a (a 503).
  *
  * Rows are those of docs/analysis/2026-10-03-w33d-history-refresh-failure-modes.md.
  *
@@ -20,7 +22,7 @@ import { test, expect, type APIResponse, type BrowserContext, type Page, type Re
  *   - `#account-history-reload` — the one line asking the person to reload,
  *     shown on 401/403 (or an email that differs), with the rows removed;
  *   - `#account-history-error` — the line saying the history could not be
- *     refreshed, shown on a network error, with the rows kept.
+ *     refreshed, shown on a network error or a 503, with the rows kept.
  * Both inside `#account-history`.
  */
 
@@ -125,7 +127,7 @@ test.describe("signed-in History refresh (W33 slice D)", () => {
     expect(new URL(page.url()).pathname).toBe("/ui");
   });
 
-  test("the owner's journey: a question just asked is in History without a reload", async ({ page }) => {
+  test("bug 8a's journey: a question just asked is in History without a reload", async ({ page }) => {
     // Row 12 / bug 8a. RED-IF: opening History after a run, without a
     // reload, still shows "No questions yet." — the panel is not refreshed
     // from the server when it opens. Positive partner (green today): before
@@ -436,6 +438,109 @@ test.describe("signed-in History refresh (W33 slice D)", () => {
     await openHistory(page);
     await expect(questions(page).first()).toHaveText(question);
     expect(asks.length).toBe(3);
+  });
+
+  test("an answer for another account's email removes the rows and asks for a reload", async ({ page }) => {
+    // Row 6 (review round 1: mutating the email check to `false` left the
+    // lane green). RED-IF: an answer whose email is not the one on the page
+    // is drawn anyway (its rows shown), or no reload line appears. The ONE
+    // extra mock: the real answer is fetched and only its `email` is
+    // replaced with another account's.
+    test.setTimeout(120000);
+    const account = freshAccount("email");
+    const other = freshAccount("someone-else");
+    await signIn(page, account);
+    const question = `Not shown under another email ${account.sub}`;
+    await runQuestion(page, question);
+    await loadUntilListed(page, question);
+
+    let answered = 0;
+    await page.route(
+      (url) => url.pathname === HISTORY,
+      async (route) => {
+        const real = await route.fetch();
+        const body = await real.json();
+        expect(body.html, "the real answer lists the question").toContain(question);
+        answered += 1;
+        await route.fulfill({ response: real, json: { ...body, email: other.email } });
+      },
+    );
+    await openHistory(page);
+    await expect(page.locator("#account-history #account-history-reload")).toBeVisible();
+    await expect(page.locator("#account-history-reload")).toContainText(/reload/i);
+    await expect(page.locator("#account-history-list")).toHaveCount(0);
+    await expect(page.locator("#account-history").getByText(question)).toHaveCount(0);
+    expect(answered).toBe(1);
+  });
+
+  test("a 503 from the route keeps the rows and says it could not refresh", async ({ page }) => {
+    // Row 9 / ADR-0142 decision 2a: the sessions store cannot say who is
+    // signed in. RED-IF: a 503 removes the rows, shows the reload line
+    // ("your sign-in changed"), or shows no error line. The ONE extra mock:
+    // the route answers 503 HISTORY_UNAVAILABLE in the server's own shape
+    // (pinned by the integration test of the same row).
+    test.setTimeout(120000);
+    const account = freshAccount("store-down");
+    await signIn(page, account);
+    const question = `Kept through a 503 ${account.sub}`;
+    await runQuestion(page, question);
+    await loadUntilListed(page, question);
+
+    let answered = 0;
+    await page.route(
+      (url) => url.pathname === HISTORY,
+      async (route) => {
+        answered += 1;
+        await route.fulfill({
+          status: 503,
+          headers: { "Cache-Control": "no-store" },
+          json: {
+            detail: { code: "HISTORY_UNAVAILABLE", message: "Your history could not be read just now." },
+          },
+        });
+      },
+    );
+    await openHistory(page);
+    await expect(page.locator("#account-history #account-history-error")).toBeVisible();
+    await expect(page.locator("#account-history-error")).toContainText(/could not be refreshed/i);
+    await expect(questions(page).first()).toHaveText(question);
+    await expect(page.locator("#account-history-reload")).toHaveCount(0);
+    expect(answered).toBe(1);
+  });
+
+  test("right after a run, the toasts do not block History or Sign out at 1440 px", async ({ page }) => {
+    // Review round 1 (product): the "Run started" / "Run completed" toasts
+    // sat over the top bar's History and Sign out and took their clicks; a
+    // click on History landed after 5.02 s. Real backend, no extra mock.
+    // RED-IF: right after a run, a click on History does not land within
+    // 1 s, or the point at the centre of Sign out is covered by something
+    // else. Partner: the toast is still showing then, and its own dismiss
+    // control still removes it.
+    test.setTimeout(120000);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    const account = freshAccount("toasts");
+    await signIn(page, account);
+    await runQuestion(page, `Toasts over the top bar ${account.sub}`);
+    await page.locator("#result-new-question").click();
+    await expect(page.locator('[data-view="composer"]')).toBeVisible();
+
+    const toastNow = page.locator(".toast", { hasText: "Run completed" });
+    await expect(toastNow).toBeVisible();
+    const signOutHit = await page.locator("#sign-out").evaluate((button) => {
+      const box = button.getBoundingClientRect();
+      const top = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+      return top === button || button.contains(top);
+    });
+    // Soft, so a red run reports the History click below as well.
+    expect.soft(signOutHit, "something covers the centre of Sign out").toBe(true);
+    const started = Date.now();
+    await summary(page).click({ timeout: 1000 });
+    expect(Date.now() - started).toBeLessThan(1000);
+    await expect(page.locator("#account-history")).toHaveAttribute("open", "");
+
+    await expect(toastNow).toBeVisible();
+    await toastNow.locator(".toast-close").click({ timeout: 1000 });
+    await expect(toastNow).toHaveCount(0);
   });
 
   test("the anonymous page has no History panel and never asks for one", async ({ browser }) => {
