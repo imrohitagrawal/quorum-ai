@@ -198,12 +198,17 @@ test.describe("PR8 — Conversation trail UI", () => {
   // PINNED the bug: "'Start fresh' clears the session trail", and a "Start
   // fresh then a new run REPLACES the trail" test that could not tell a clear
   // from a de-duplication, because both runs reused the golden run id.
-  test("nothing but Clear empties the list: Start fresh is hidden and going to a new question keeps the entry", async ({ page }) => {
-    // RED-IF: #result-startfresh is visible again (ADR-0140 decision 3), or any way back to the composer calls clearSessionTrail().
+  // W37 (ADR-0143 decisions 4 and 7): Start fresh is back, and it only
+  // switches the mode — pressing it must not empty the list.
+  test("nothing but Clear empties the list: Start fresh and going to a new question keep the entry", async ({ page }) => {
+    // RED-IF: #result-startfresh is not shown on a result with a final answer (ADR-0143 decision 4), or pressing it or any way back to the composer calls clearSessionTrail() (decision 7).
     await driveWithCompleted(page, goldenCompletedResp());
     await expect(page.locator(".session-trail-entry")).toHaveCount(1);
     await expect(page.locator("#result-next-run")).toBeVisible();
-    await expect(page.locator("#result-startfresh")).toBeHidden();
+    await expect(page.locator("#result-startfresh")).toBeVisible();
+    await page.locator("#result-startfresh").click();
+    await expect(page.locator("#result-startfresh")).toHaveAttribute("aria-pressed", "true");
+    await expect(page.locator(".session-trail-entry"), "Start fresh keeps the list").toHaveCount(1);
 
     await page.locator("#result-next-run").click();
     await expect(page.locator('[data-view="composer"]')).toBeVisible();

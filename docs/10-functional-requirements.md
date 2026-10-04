@@ -70,7 +70,7 @@ These requirements cover Release 1 MVP for the public AI cross-validation workfl
 - Owner: Product owner.
 - Priority: Must.
 - Rationale: The two-round debate workflow can be expensive, especially with user-selected models.
-- Acceptance criteria: AC-009, AC-010, AC-054.
+- Acceptance criteria: AC-009, AC-010, AC-054, AC-057.
 - Tests: TEST-FR-005.
 - Jira: Not created.
 

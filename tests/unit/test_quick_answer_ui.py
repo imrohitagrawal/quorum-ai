@@ -149,7 +149,9 @@ def test_the_landing_never_gains_the_info_line() -> None:
 def test_a_panel_request_body_is_unchanged_and_a_quick_one_carries_the_mode() -> None:
     """RED IF: a panel body gains ``mode`` (or any key) or changes key order;
     a quick body stops sending ``mode: "quick"``, sends more than one model,
-    or ever sends ``context`` (refused server-side, ADR-0126 5a).
+    or sends ``context`` when it was given none. (W37, ADR-0143 decision 3:
+    quick now accepts context; the bodies WITH context are pinned in
+    ``tests/unit/test_w37_follow_up_page_functions.py``.)
 
     Key ORDER is pinned by comparing the serialised JSON, which is what reaches
     the wire, so the panel body stays byte-identical to the pre-W5 one.

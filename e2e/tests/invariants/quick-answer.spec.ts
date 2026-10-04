@@ -144,7 +144,7 @@ test.describe("W5 quick answer (ADR-0128)", () => {
     ]);
     expect(create?.body.mode).toEqual("quick");
     expect(create?.body.model_slots).toEqual([SLOTS[0].model_id]);
-    // A quick request with follow-up context is refused server-side (ADR-0126).
+    // A fresh quick question sends no context; a quick follow-up does (ADR-0143 decision 3, follow-up-context.spec.ts).
     expect("context" in (create?.body ?? {})).toBe(false);
 
     // Positive partner: a panel run from a fresh page sends no mode and four models.

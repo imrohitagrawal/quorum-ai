@@ -241,6 +241,16 @@
               <div id="query-error" class="field-error" hidden role="alert" aria-live="assertive"></div>
             </div>
 
+            <!-- W37 (ADR-0143 decision 5, failure-modes rows 13 and 14): shown
+                 while a follow-up's context is attached, so the user can see why
+                 the estimate rose and drop it. app.js (setFollowUpContext) writes
+                 the previous question as text, never HTML, and "Start fresh"
+                 drops the context and keeps the typed question. -->
+            <p id="follow-up-context" class="follow-up-context" hidden>
+              <span class="follow-up-context-text">Following up on: &ldquo;<span id="follow-up-context-question"></span>&rdquo; &mdash; <span id="follow-up-context-audience">the models</span> will see that question and its final answer.</span>
+              <button id="follow-up-context-drop" type="button" class="follow-up-context-drop">Start fresh</button>
+            </p>
+
             <!-- COPY-002 high-stakes gate. Hidden until POST /v1/query-runs/warnings
                  flags a ``high_stakes`` topic; the acknowledgement checkbox keeps
                  the primary CTA disabled until it is checked. The safety
@@ -349,7 +359,7 @@
               </div>
             </div>
             <div class="composer-footer">
-              <p class="composer-footer-notice"><strong>See the estimate</strong> to review the itemized cost first, or <strong>Run now</strong> to start low-cost runs immediately — anything needing confirmation still pauses for your approval · the <span class="mono">$0.50</span>/run hard cap always applies · you can spend up to <span class="mono">$0.40</span> in any 24 hours, simulated runs included · one run at a time per session</p>
+              <p class="composer-footer-notice"><strong>See the estimate</strong> to check the cost first, or <strong>Run now</strong> to start straight away. If a run costs more than usual, it asks you first. The <span class="mono">$0.50</span>/run hard cap always applies · you can spend up to <span class="mono">$0.40</span> in any 24 hours, simulated runs included · one run at a time per session</p>
               <div class="composer-footer-actions">
                 <span id="composer-total-estimate" class="mono composer-total" aria-live="polite">—</span>
                 <button id="run-now" class="button button-secondary composer-cta" type="button" data-loading-text="Starting...">
@@ -412,6 +422,10 @@
               <span class="cost-gate-question-label">Your question</span>
               <div id="cost-gate-question" class="cost-gate-question-text"></div>
               <span id="cost-gate-question-meta" class="cost-gate-question-meta">4 models · 2 debate rounds · synthesis · sourced answers where search succeeds</span>
+              <!-- W37 (ADR-0143, review round 1): shown only when the priced run
+                   carries a follow-up's context; app.js writes the previous
+                   question as text, never HTML. -->
+              <span id="cost-gate-follow-up" class="cost-gate-question-meta" hidden>Following up on: &ldquo;<span id="cost-gate-follow-up-question"></span>&rdquo;</span>
             </div>
 
             <div id="cost-review-card" class="cost-review-card" data-band="require_confirmation">
@@ -697,12 +711,12 @@
 
               <!-- Ask your next question (design parity, screen 05). "Review &
                    run" returns to the composer with whatever is typed here; an
-                   empty box opens an empty composer (ADR-0140 decision 2). The
-                   browser sends no context, so each question is answered on its
-                   own, and the note says so. The "Follow up on this" / "Start
-                   fresh" mode buttons are hidden until W37 sends the previous
-                   question and answer (ADR-0140 decision 3); with no pre-fill
-                   they would do the same thing. -->
+                   empty box opens an empty composer (ADR-0140 decision 2). W37
+                   (ADR-0143 decision 4): on a result with a final answer, app.js
+                   (renderFollowUpMode) shows "Follow up on this" (pressed by
+                   default) and "Start fresh", and the note names the previous
+                   question; on a result with none, the buttons stay hidden and
+                   the note says the next question is answered on its own. -->
               <div class="result-next" role="region" aria-label="Ask your next question">
                 <div class="result-next-head">
                   <h2 class="result-next-title">Ask your next question</h2>
@@ -713,7 +727,7 @@
                 </div>
                 <p class="result-next-note">
                   <span class="result-next-dot" aria-hidden="true"></span>
-                  <span>Your next question is answered on its own — the models won't see the question above or its answer.</span>
+                  <span id="result-next-note-text">Your next question is answered on its own — the models won't see the question above or its answer.</span>
                 </p>
                 <textarea
                   id="result-next-input"
@@ -876,7 +890,7 @@
                 </p>
                 <div class="landing-runbar-actions">
                   <button id="landing-estimate" class="button button-secondary" type="button">Estimate</button>
-                  <button id="landing-run" class="button button-primary" type="button">Run the debate &rarr;</button>
+                  <button id="landing-run" class="button button-primary" type="button">Choose models &rarr;</button>
                 </div>
               </div>
             </div>

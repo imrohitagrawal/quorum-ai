@@ -2,7 +2,10 @@
 
 ## Status
 
-Accepted — 2026-10-03, board row W33 (slice A) and W43. The product owner
+Accepted — 2026-10-03, board row W33 (slice A) and W43. Decision 3 (the follow-up
+buttons hidden until W37) is superseded by ADR-0143 decision 4 (2026-10-04), and the
+hint's last sentence in decision 8 by the owner's wording (CHG-027 d, ADR-0143
+decision 8). The product owner
 reported bugs 1, 2, 6, 9 and 10 on 2026-09-29 and 2026-09-30 (M07 points 1, 2, 6,
 9; M23); W43 was found by W34's product review, not by the owner. The owner
 decided the follow-up box (CHG-026 g) and agreed the composer-hint fix the session

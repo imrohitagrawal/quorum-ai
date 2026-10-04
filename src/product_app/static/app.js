@@ -101,7 +101,8 @@
   // question, as text parts; ``strong: true`` parts are the button names. It
   // counts the models actually shown (one in quick mode) and, while the
   // high-stakes acknowledgement is showing, says to tick it first, because
-  // the two buttons it names stay disabled until then. Self-contained.
+  // the two buttons it names stay disabled until then. The last part is the
+  // owner's wording (W37, ADR-0143 decision 8). Self-contained.
   function handoffHintParts(slotCount, highStakes) {
     const words = { 2: "two", 3: "three", 4: "four" };
     const n = Number(slotCount);
@@ -109,35 +110,70 @@
       n === 1
         ? "Your model is picked for you — change it if you like. "
         : `Your ${words[n] || String(n)} models are picked for you — change any if you like. `;
+    const ending = [
+      { text: "See the estimate", strong: true },
+      { text: " to check the cost first, or " },
+      { text: "Run now", strong: true },
+      { text: " to start straight away. If a run costs more than usual, it asks you first." },
+    ];
     if (highStakes) {
       return [
         { text: lead + "First tick " },
         { text: "I understand this is not professional advice", strong: true },
         { text: " above, then press " },
-        { text: "See the estimate", strong: true },
-        { text: " to check the cost first, or " },
-        { text: "Run now", strong: true },
-        { text: " to start straight away (it still asks first if the cost needs your approval)." },
+        ...ending,
       ];
     }
-    return [
-      { text: lead + "Then press " },
-      { text: "See the estimate", strong: true },
-      { text: " to check the cost first, or " },
-      { text: "Run now", strong: true },
-      { text: " to start straight away (it still asks first if the cost needs your approval)." },
-    ];
+    return [{ text: lead + "Press " }, ...ending];
   }
   // W5 (ADR-0128). The body of an estimate or create request. A panel body is
   // byte-identical to the pre-W5 one: no `mode` key, the same key order. A
-  // quick body sends slot 1 alone and `mode: "quick"`, and never `context` (a
-  // quick request with follow-up context is refused, ADR-0126 5a; the browser
-  // sends no context on any run). Self-contained: the unit harness runs it alone.
-  function runRequestBody(queryText, modelIds, quick, extra) {
+  // quick body sends slot 1 alone and `mode: "quick"`.
+  // W37 (ADR-0143 decisions 3 and 5): `context` is a follow-up's
+  // `{prior_question, prior_synthesis}`, sent on panel and quick bodies alike;
+  // without it (null or absent) the body is exactly what it was. The estimate,
+  // the warnings probe and the create are all built from the same attached
+  // context. Self-contained: the unit harness runs it alone.
+  function runRequestBody(queryText, modelIds, quick, extra, context) {
     const body = quick
       ? { query_text: queryText, model_slots: modelIds.slice(0, 1), mode: "quick" }
       : { query_text: queryText, model_slots: modelIds };
+    if (context) body.context = context;
     return extra ? { ...body, ...extra } : body;
+  }
+
+  // W37 (ADR-0143 decision 6). The previous final answer a follow-up sends:
+  // for a panel result, the five synthesis sections in the order the page
+  // shows them, joined by blank lines with no headings added (failure-modes
+  // row 9), cut to the server's 60,117-character limit; for a quick result,
+  // its answer text. A result with no final answer gives "" (row 11).
+  // Self-contained: the unit harness runs it alone, so the limit is written
+  // here.
+  function priorAnswerText(result) {
+    const limit = 60117;
+    // Cut at the limit in UTF-16 units, backing off one unit when the cut
+    // would split a surrogate pair, so no half character is ever sent.
+    const cut = (text) => {
+      if (text.length <= limit) return text;
+      const last = text.charCodeAt(limit - 1);
+      return text.slice(0, last >= 0xd800 && last <= 0xdbff ? limit - 1 : limit);
+    };
+    const res = (result && result.result) || {};
+    if (result && result.mode === "quick") {
+      const answers = Array.isArray(res.model_answers) ? res.model_answers : [];
+      const done = answers.find(
+        (a) => a && a.status === "completed" && String(a.answer_text || "").trim() !== "",
+      );
+      return done ? cut(String(done.answer_text).trim()) : "";
+    }
+    const fs = res.final_synthesis;
+    if (!fs) return "";
+    return cut(
+      ["consensus", "disagreement", "uncertainty", "recommendation", "source_support"]
+        .map((key) => String(fs[key] == null ? "" : fs[key]).trim())
+        .filter((text) => text !== "")
+        .join("\n\n"),
+    );
   }
 
   // W5 (ADR-0128). The cost gate's meta line. The panel sentence is the one
@@ -445,6 +481,25 @@
     // ``renderSessionTrail`` and the restore-click handler. NOT persisted
     // server-side; ephemeral to the browser tab.
     sessionTrail: [],
+    // W37 (ADR-0143). ``resultFollowUp`` is what the result ON SCREEN offers
+    // to follow up: ``{prior_question, prior_synthesis}``, or null when it has
+    // no final answer (row 11). ``followUpMode`` is the pressed mode button
+    // under it ("followup" by default, or "fresh"). ``followUpContext`` is the
+    // context ATTACHED to the composer, read by the estimate, the warnings
+    // probes and the create alike (rows 5 and 6). Set only by "Review & run"
+    // in follow-up mode. Cleared (decision 5, row 13) by every way to the
+    // composer that starts something new: ``goToComposer`` (the landing and
+    // its chips, "New question", the brand links, example chips), the
+    // composer's own "Start fresh", and the "Start a new run", "Start your
+    // own query" and "Stop it & start new" card actions, and a run that
+    // finishes onto its result (that run used it). Kept by the ways back
+    // to the question being worked on: "Back to the question" and the other
+    // fix-the-request card actions (``returnToComposer``), the cost
+    // confirmation's Back (``gateBackToComposer``) and browser Back/Forward
+    // (``applyViewHistoryEntry``). Held in this tab only; never stored (row 17).
+    resultFollowUp: null,
+    followUpMode: "followup",
+    followUpContext: null,
   };
 
   // ---------------------------------------------------------------------------
@@ -637,6 +692,111 @@
       if (item.dataset.step === step) item.setAttribute("aria-current", "step");
       else item.removeAttribute("aria-current");
     }
+  }
+
+  // W37 (ADR-0143 decision 4). The previous question as the note and the
+  // composer line show it: shortened for display only (row 15); the request
+  // carries it whole.
+  // W37 review round 1: one model is "the model". The next run's shape is
+  // the composer's quick-answer control.
+  function followUpAudience() {
+    return state.quickMode ? "the model" : "the models";
+  }
+
+  function followUpQuestionLabel(question) {
+    const text = String(question || "").replace(/\s+/g, " ").trim();
+    return text.length > 140 ? `${text.slice(0, 139)}…` : text;
+  }
+
+  // W37 (ADR-0143 decisions 4 and 7). The mode buttons and the note under
+  // "Ask your next question", from ``resultFollowUp`` and ``followUpMode``.
+  // The buttons show only on a result with a final answer (row 11). Switching
+  // the mode changes nothing else: the session list is untouched (ADR-0140
+  // decision 1). Text only, never HTML (row 15).
+  function renderFollowUpMode() {
+    const offer = state.resultFollowUp;
+    const following = !!offer && state.followUpMode === "followup";
+    const modes = qs(".result-next-modes");
+    if (modes) modes.hidden = !offer;
+    for (const [id, pressed] of [
+      ["result-followup", following],
+      ["result-startfresh", !following],
+    ]) {
+      const button = el(id);
+      if (!button) continue;
+      button.setAttribute("aria-pressed", pressed ? "true" : "false");
+      button.classList.toggle("result-next-mode-active", pressed);
+    }
+    const note = el("result-next-note-text");
+    if (note) {
+      note.textContent = following
+        ? `Following up on: “${followUpQuestionLabel(offer.prior_question)}” — ${followUpAudience()} will see that question and its final answer.`
+        : `Your next question is answered on its own — ${followUpAudience()} won't see the question above or its answer.`;
+    }
+  }
+
+  // W37: what the result on screen offers. Called by ``renderResult`` with the
+  // question it echoes, so a result re-opened from the session list offers
+  // ITS question and answer, not the latest run's (row 10). Each result opens
+  // in follow-up mode (decision 4).
+  function offerFollowUp(result, question) {
+    const answer = priorAnswerText(result);
+    const asked = String(question || "").trim();
+    state.resultFollowUp = asked && answer ? { prior_question: asked, prior_synthesis: answer } : null;
+    state.followUpMode = "followup";
+    renderFollowUpMode();
+  }
+
+  // W37 (ADR-0143 decision 5). Attach (or, with null, drop) the context the
+  // composer's next estimate, warnings probe and run carry, and show it: the
+  // "Following up on" line with its Start fresh button (row 14).
+  function setFollowUpContext(context) {
+    state.followUpContext = context || null;
+    const line = el("follow-up-context");
+    const label = el("follow-up-context-question");
+    if (label) label.textContent = context ? followUpQuestionLabel(context.prior_question) : "";
+    const audience = el("follow-up-context-audience");
+    if (audience) audience.textContent = followUpAudience();
+    if (line) line.hidden = !context;
+  }
+
+  // W37 review round 1: a card action that starts something new ("Start a
+  // new run", "Start your own query") drops the follow-up context first
+  // (decision 5); "Back to the question" keeps it (``returnToComposer``).
+  function startNewFromCard() {
+    clearFollowUpContext();
+    returnToComposer("question");
+  }
+
+  // Drop the attached context. When one was attached, an estimate still
+  // loading was priced with it, so it is dropped too (review round 2: its late
+  // answer must not open a follow-up confirmation or create a run with the
+  // dropped context) -- unless the create is already on the wire, which is
+  // when the composer's Start fresh is disabled. The high-stakes check reads
+  // the context, so it asks again for the question alone. One mechanism for
+  // every caller: ``goToComposer`` (example chips included), the composer's
+  // Start fresh and the card actions.
+  function clearFollowUpContext() {
+    const had = !!state.followUpContext;
+    setFollowUpContext(null);
+    if (!had) return;
+    if (!state.createInFlight) dropInFlightEstimate();
+    scheduleHighStakesCheck();
+  }
+
+  // The create is on the wire (or no longer): while it is, the composer's
+  // Start fresh is disabled, because the run being created carries the
+  // context it would drop (review round 2).
+  function setCreateInFlight(on) {
+    state.createInFlight = on;
+    const drop = el("follow-up-context-drop");
+    if (drop) drop.disabled = on;
+  }
+
+  // The warnings probe's body: the same attached context as the estimate and
+  // the create, so the high-stakes box and create agree (rows 6 and 18).
+  function warningsRequestBody(queryText, context) {
+    return context ? { query_text: queryText, context } : { query_text: queryText };
   }
 
   // Land the user on the next step: the acknowledgement while it is pending
@@ -3364,6 +3524,8 @@
     const question = state.liveQueryText || "";
     const questionEl = el("result-question");
     if (questionEl) questionEl.textContent = question || "—";
+    // W37 (ADR-0143 decision 4): the mode buttons and note for THIS result.
+    offerFollowUp(result, question);
 
     // Completion status pill (INK — never green).
     const status = result.status || "completed";
@@ -6674,6 +6836,10 @@
         // user's question is not.
         const question = entry.question ? String(entry.question) : "";
         state.liveQueryText = question;
+        // W37 review round 1: text typed for another result must not be sent
+        // as a follow-up to this one; the box opens empty, as after a run.
+        const nextQuestionBox = el("result-next-input");
+        if (nextQuestionBox) nextQuestionBox.value = "";
         renderResult(result);
         setView("result");
         focusResultHeading();
@@ -8338,9 +8504,19 @@
       queryText: queryTextarea.value.trim(),
       modelIds: getModelIds(),
       quick: state.quickMode,
+      context: state.followUpContext,
     };
     // Question echo.
     if (gateQuestion) gateQuestion.textContent = priced.queryText;
+    // W37 review round 1: say the priced run is a follow-up, and of what.
+    const gateFollowUp = el("cost-gate-follow-up");
+    const gateFollowUpQuestion = el("cost-gate-follow-up-question");
+    if (gateFollowUpQuestion) {
+      gateFollowUpQuestion.textContent = priced.context
+        ? followUpQuestionLabel(priced.context.prior_question)
+        : "";
+    }
+    if (gateFollowUp) gateFollowUp.hidden = !priced.context;
     // W4: the meta line names the requested panel size, not "4 models".
     const gateMeta = el("cost-gate-question-meta");
     const quickGate = priced.quick === true;
@@ -8600,12 +8776,21 @@
       // What is priced is what a run will submit: the text, the panel and the
       // mode at THIS moment, not whatever the box holds when the create is
       // sent (row 26: an edit typed while the estimate loaded used to run).
-      const priced = { queryText, modelIds: getModelIds(), quick: state.quickMode };
+      // W37 (row 5): and the follow-up context attached at this moment, so
+      // the create sends the context this estimate was priced for.
+      const priced = {
+        queryText,
+        modelIds: getModelIds(),
+        quick: state.quickMode,
+        context: state.followUpContext,
+      };
       let estimate;
       try {
         estimate = await api("/v1/query-runs/estimate", {
           method: "POST",
-          body: JSON.stringify(runRequestBody(priced.queryText, priced.modelIds, priced.quick)),
+          body: JSON.stringify(
+            runRequestBody(priced.queryText, priced.modelIds, priced.quick, null, priced.context),
+          ),
         });
       } catch (error) {
         if (generation !== estimateGeneration) return null;
@@ -8817,7 +9002,7 @@
     try {
       const response = await api("/v1/query-runs/warnings", {
         method: "POST",
-        body: JSON.stringify({ query_text: queryText }),
+        body: JSON.stringify(warningsRequestBody(queryText, state.followUpContext)),
       });
       // Drop a stale response: a newer probe was issued while this one
       // was in flight, so its (fresher) result must win.
@@ -9000,6 +9185,7 @@
       queryText: queryTextarea.value.trim(),
       modelIds: getModelIds(),
       quick: state.quickMode,
+      context: state.followUpContext,
     };
     const queryText = priced.queryText;
     if (!queryText) {
@@ -9025,7 +9211,7 @@
         state.currentEstimate.cost_estimate.threshold_action;
       const warnings = await api("/v1/query-runs/warnings", {
         method: "POST",
-        body: JSON.stringify({ query_text: queryText }),
+        body: JSON.stringify(warningsRequestBody(queryText, priced.context)),
       });
       // Row 26: the user went home while the warnings check was answering, so
       // nothing has been sent that costs anything — stop here.
@@ -9042,14 +9228,20 @@
       // From here the create is on the wire and a run will exist, so going
       // home waits for it (goToNewQuestion checks ``createInFlight``) rather
       // than leaving a charged run nobody is watching.
-      state.createInFlight = true;
+      setCreateInFlight(true);
       const created = await api("/v1/query-runs", {
         method: "POST",
         body: JSON.stringify(
-          runRequestBody(queryText, priced.modelIds, priced.quick, {
-            safety_acknowledgements: warningAcknowledgements(warnings.warnings),
-            cost_confirmation: costConfirmationPayload,
-          }),
+          runRequestBody(
+            queryText,
+            priced.modelIds,
+            priced.quick,
+            {
+              safety_acknowledgements: warningAcknowledgements(warnings.warnings),
+              cost_confirmation: costConfirmationPayload,
+            },
+            priced.context,
+          ),
         ),
       });
       state.currentRunId = created.query_run_id;
@@ -9128,7 +9320,7 @@
       // newer flow may hold it now, so a stale one leaves it alone.
       if (generation === estimateGeneration) {
         state.creatingRun = false;
-        state.createInFlight = false;
+        setCreateInFlight(false);
         setButtonLoading(confirmBtn, false);
       }
     }
@@ -9246,6 +9438,10 @@
         // after EVERY finished run, never holding the follow-up just answered.
         const nextQuestionBox = el("result-next-input");
         if (nextQuestionBox) nextQuestionBox.value = "";
+        // W37 review round 2 (decision 6, one step back): the context this run
+        // was sent belongs to it; the composer keeps none of it. Following up
+        // this result attaches THIS question and answer.
+        setFollowUpContext(null);
       }
       if (result.status === "completed") {
         toast({
@@ -9454,6 +9650,8 @@
     stopPolling();
     state.currentRunId = null;
     setRunning(false);
+    // W37 (decision 5): "start new" drops the follow-up context.
+    clearFollowUpContext();
     returnToComposer();
   }
 
@@ -9519,7 +9717,7 @@
     const footer = supportId ? `Run ID ${supportId} — quote when reporting` : undefined;
 
     const actions = [
-      { label: "Start a new run", primary: true, action: () => returnToComposer("question") },
+      { label: "Start a new run", primary: true, action: startNewFromCard },
     ];
     // Only offer "Review available results" when a synthesis actually
     // exists (otherwise the button would open an empty result view).
@@ -9576,7 +9774,7 @@
           "ends — so we can't open it for you. That's the extent of what " +
           "we can say about it.",
         actions: [
-          { label: "Start your own query", primary: true, action: () => returnToComposer("question") },
+          { label: "Start your own query", primary: true, action: startNewFromCard },
           { label: "Start a session", action: retrySession },
         ],
         footer: "error 404 · no run details disclosed",
@@ -9891,7 +10089,7 @@
   //   * The landing is REACHABLE (top-bar "How it works" → ``setView("landing")``)
   //     but is NOT the default view — ``boot()`` still lands on the composer.
   //   * NOTHING on the landing runs a query or fabricates a live estimate. The
-  //     "Estimate" and "Run the debate" buttons both just open the composer
+  //     "Estimate" and "Choose models" buttons both just open the composer
   //     (estimate-first flow lives there); "Run" pre-fills nothing.
   //   * The example chips fill the REAL composer textarea via ``.value`` (not
   //     innerHTML) with the chip's own question, dispatch a native ``input``
@@ -10036,6 +10234,13 @@
       // re-flash after they had settled in. Clearing an already-fired timer is
       // a harmless no-op.
       if (landingHandoffTimer) clearLandingHandoffLatch();
+      // W37 (ADR-0143 decision 5, row 13): every caller of this function starts
+      // a question on its own -- the landing, an example chip, "New question",
+      // the brand link -- so it clears the context. "Review & run" in follow-up
+      // mode re-attaches it AFTER this call. The card actions that start
+      // something new clear it themselves (startNewFromCard); "Back to the
+      // question", the cost confirmation's Back and browser Back/Forward keep it.
+      clearFollowUpContext();
       markWorkspaceSeen();
       setView("composer");
       if (!queryTextarea) return;
@@ -10204,13 +10409,35 @@
     // Result-view "Ask your next question" (design parity, screen 05). "Review
     // & run" carries what is typed in the box to the composer, and an empty box
     // opens an EMPTY composer: nothing pre-fills it (ADR-0140 decision 2, bug
-    // 2). The browser sends no context, so each question is answered on its
-    // own and the note under the box says so. The "Follow up on this" / "Start
-    // fresh" mode buttons are hidden in the template until W37 sends the
-    // previous question and answer (decision 3): with no pre-fill they did the
-    // same thing, so they are not wired here.
+    // 2). W37 (ADR-0143 decisions 4, 5 and 7): on a result with a final
+    // answer, "Follow up on this" (pressed by default) makes "Review & run"
+    // attach that result's question and final answer to the composer; "Start
+    // fresh" sends the next question on its own. The buttons only switch the
+    // mode: they never touch the session list (ADR-0140 decision 1).
     const nextInput = el("result-next-input");
     const nextRun = el("result-next-run");
+    for (const [id, mode] of [
+      ["result-followup", "followup"],
+      ["result-startfresh", "fresh"],
+    ]) {
+      const button = el(id);
+      if (!button) continue;
+      button.addEventListener("click", () => {
+        state.followUpMode = mode;
+        renderFollowUpMode();
+      });
+    }
+    // The composer's "Start fresh" (row 13): drops the attached context
+    // (``clearFollowUpContext`` also drops an estimate still loading) and
+    // keeps the typed question. Inert while the create is on the wire.
+    const dropContextButton = el("follow-up-context-drop");
+    if (dropContextButton) {
+      dropContextButton.addEventListener("click", () => {
+        if (state.createInFlight) return;
+        clearFollowUpContext();
+        if (queryTextarea) queryTextarea.focus({ preventScroll: true });
+      });
+    }
     function reviewAndRun() {
       // PR1/#14: arriving at the composer is a fresh attempt — clear the
       // post-submit error latch so an empty navigation never shows "enter a
@@ -10221,10 +10448,16 @@
         queryTextarea.value = typed;
         queryTextarea.dispatchEvent(new Event("input", { bubbles: true }));
       }
+      // W37 (row 10): the context of the result ON SCREEN, read now.
+      const context = state.followUpMode === "followup" ? state.resultFollowUp : null;
       // Land on the composer (page B) so the user can REVIEW OR CHANGE their
       // models before running. We deliberately do NOT auto-fire the estimate
       // here; the user picks their models then clicks See the estimate / Run now.
       goToComposer();
+      if (context) {
+        setFollowUpContext({ ...context });
+        scheduleHighStakesCheck();
+      }
     }
     if (nextRun) nextRun.addEventListener("click", reviewAndRun);
     if (nextInput) {
@@ -10313,6 +10546,10 @@
     if (note) note.hidden = !state.quickMode;
     // W33 (row 30): a hand-off hint on screen recounts (one model in quick mode).
     renderHandoffHint(false);
+    // W37: "the model" or "the models" follows the shape.
+    const audience = el("follow-up-context-audience");
+    if (audience) audience.textContent = followUpAudience();
+    renderFollowUpMode();
   }
 
   function initQuickMode() {

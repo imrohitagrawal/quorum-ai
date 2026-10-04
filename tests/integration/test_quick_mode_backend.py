@@ -301,35 +301,59 @@ def test_a_quick_run_whose_one_answer_fails_ends_partial(monkeypatch: pytest.Mon
     )
 
 
-def test_a_quick_request_with_follow_up_context_is_refused() -> None:
-    """Follow-up context is priced into and sent to debate and synthesis only,
-    which a quick answer does not run. RED IF it is accepted (review round 1:
-    it was, priced at $0 and never sent). Partner: a panel still takes it, and
-    a quick request with an empty context is still accepted."""
+def test_a_quick_request_with_follow_up_context_is_accepted_priced_and_run() -> None:
+    """W37 (ADR-0143 decision 3, superseding ADR-0126 5a): quick accepts
+    context and sends it to its one answer call, so the estimate prices it and
+    create runs it.
+
+    RED IF: a quick request with context is still refused -- on ``a4f1898``
+    the estimate answers 422 "A quick answer takes no follow-up context." --
+    or it is accepted but priced at nothing (the quote with context must be
+    ABOVE the same request without it), or create charges a different figure
+    from the one quoted (the confirmation token is bound to the cost).
+
+    Partners: the same validator still runs on quick -- an over-long value and
+    an unknown key are still refused -- so "accepted" is not "unvalidated".
+    """
     client, headers = _client_and_headers()
-    context = {"prior_question": "What is a database?", "prior_synthesis": "A store."}
-    quick = _estimate(
-        client,
-        headers,
-        {"query_text": QUERY, "model_slots": DEFAULT_IDS[:1], "mode": "quick", "context": context},
+    # 4,000 characters is 1,000 tokens: enough to move a four-decimal quote on
+    # the cheapest default model.
+    context = {"prior_question": "What is a database?", "prior_synthesis": "A store. " * 444}
+    base = {"query_text": QUERY, "model_slots": DEFAULT_IDS[:1], "mode": "quick"}
+    fresh = _estimate(client, headers, base)
+    assert fresh.status_code == 200, fresh.text
+    quick = _estimate(client, headers, {**base, "context": context})
+    assert quick.status_code == 200, quick.text
+    quoted = quick.json()["cost_estimate"]
+    assert Decimal(str(quoted["estimated_cost_usd"])) > Decimal(
+        str(fresh.json()["cost_estimate"]["estimated_cost_usd"])
+    ), "a quick follow-up was quoted at the price of a fresh quick question"
+
+    body: dict[str, Any] = {
+        **base,
+        "context": context,
+        "safety_acknowledgements": [
+            {"warning_type": WarningType.SENSITIVE_DATA, "version": WARNING_VERSION},
+        ],
+    }
+    if quoted["threshold_action"] == "require_confirmation":
+        body["cost_confirmation"] = {
+            "estimated_cost_usd": quoted["estimated_cost_usd"],
+            "confirmation_token": quoted["confirmation_token"],
+        }
+    with isolated_run_semaphore(1) as semaphore:
+        created = client.post("/v1/query-runs", headers=headers, json=body)
+        assert created.status_code == 202, created.text
+        assert created.json()["mode"] == "quick"
+        assert wait_for_free_permits(semaphore, 1, timeout_s=60.0) == 1
+    assert Decimal(str(created.json()["cost_estimate"]["estimated_cost_usd"])) == Decimal(
+        str(quoted["estimated_cost_usd"])
     )
-    assert quick.status_code == 422, quick.text
-    assert "A quick answer takes no follow-up context." in quick.text
-    panel = _estimate(
-        client, headers, {"query_text": QUERY, "model_slots": DEFAULT_IDS[:2], "context": context}
-    )
-    assert panel.status_code == 200, panel.text
-    empty = _estimate(
-        client,
-        headers,
-        {
-            "query_text": QUERY,
-            "model_slots": DEFAULT_IDS[:1],
-            "mode": "quick",
-            "context": {"prior_question": " ", "prior_synthesis": None},
-        },
-    )
-    assert empty.status_code == 200, empty.text
+
+    too_long = _estimate(client, headers, {**base, "context": {"prior_synthesis": "x" * 60_118}})
+    assert too_long.status_code == 422, too_long.text
+    unknown = _estimate(client, headers, {**base, "context": {"prior_answer": "x"}})
+    assert unknown.status_code == 422, unknown.text
 
 
 def test_the_active_run_reports_its_mode() -> None:
@@ -369,11 +393,16 @@ def test_the_active_run_reports_its_mode() -> None:
         query_run_repository.transition(run.query_run_id, QueryRunStatus.CANCELLED)
 
 
-def test_the_warnings_probe_refuses_the_context_create_refuses_on_quick() -> None:
-    """Issue #155: the probe and create must agree, or the probe hands out
-    advice create will refuse. RED IF the probe accepts context on a quick
-    request (round 2 of review measured it answering 200 while create gave
-    422). Partner: the probe still takes the same context on a panel."""
+def test_the_warnings_probe_accepts_the_context_create_accepts_on_quick() -> None:
+    """Issue #155: the probe and create must agree. W37 (ADR-0143 decision 3)
+    makes create accept context on a quick request, so the probe must too, or
+    the page's probe for a quick follow-up fails while its create would pass
+    (failure-modes row 6).
+
+    RED IF: the probe still refuses context on quick (on ``a4f1898`` it
+    answers 422 "A quick answer takes no follow-up context.").
+    Partner: the probe still applies the shared length rule on quick.
+    """
     client, headers = _client_and_headers()
     context = {"prior_question": "What is a database?", "prior_synthesis": "A store."}
     quick = client.post(
@@ -381,12 +410,14 @@ def test_the_warnings_probe_refuses_the_context_create_refuses_on_quick() -> Non
         headers=headers,
         json={"query_text": QUERY, "context": context, "mode": "quick"},
     )
-    assert quick.status_code == 422, quick.text
-    assert "A quick answer takes no follow-up context." in quick.text
-    panel = client.post(
-        "/v1/query-runs/warnings", headers=headers, json={"query_text": QUERY, "context": context}
+    assert quick.status_code == 200, quick.text
+    assert isinstance(quick.json()["warnings"], list)
+    too_long = client.post(
+        "/v1/query-runs/warnings",
+        headers=headers,
+        json={"query_text": QUERY, "context": {"prior_synthesis": "x" * 60_118}, "mode": "quick"},
     )
-    assert panel.status_code == 200, panel.text
+    assert too_long.status_code == 422, too_long.text
 
 
 def test_a_quick_run_with_no_server_key_fails_in_the_quick_shape(
