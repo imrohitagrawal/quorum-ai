@@ -8338,7 +8338,8 @@
   function sharedAllowanceText(allowance, canSignIn) {
     if (!allowance || allowance.shared_by_network !== true) return "";
     const cap = capUsd(allowance.cap_usd);
-    const offer = canSignIn ? ` Sign in to get your own${cap ? ` ${cap}` : ""} a day.` : "";
+    const own = cap ? `your own ${cap} a day` : "your own daily allowance";
+    const offer = canSignIn ? ` Sign in to get ${own}.` : "";
     return `This allowance is shared by everyone on this network who is not signed in.${offer}`;
   }
 
