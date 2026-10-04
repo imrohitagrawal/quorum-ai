@@ -40,6 +40,7 @@ Every dollar figure is a literal (rule 7a), never ``DAILY_CAP_USD``.
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 import threading
 from collections.abc import Iterator
@@ -1001,3 +1002,162 @@ def test_with_no_usable_accounts_table_a_signed_in_session_keeps_its_own_allowan
     finally:
         path.chmod(0o644)
         store.close()
+
+
+# --- 11. the server's words for a network's meter (W47 review round 1) --------------------
+#
+# The estimate's ``reasons`` (both lists) and the create route's 402 ``message``
+# said "the account's" / "this account" / "Account has spent" for every meter.
+# For an anonymous session the meter is its NETWORK's, which the person may not
+# have spent at all. Asserted as the absence of the word "account" over every
+# server sentence about the limit, with partners proving the sentences are
+# there (they still state the figures), and the signed-in wording unchanged.
+
+ACCOUNT_WORD = re.compile(r"\baccount", re.IGNORECASE)
+
+
+def _limit_texts(body: dict[str, Any]) -> list[str]:
+    """Every server sentence about a limit in an estimate response or a 402 ``detail``."""
+    texts: list[str] = list(body.get("reasons") or [])
+    if "message" in body:
+        texts.append(str(body["message"]))
+    estimate = body.get("cost_estimate") or {}
+    texts.extend(estimate.get("reasons") or [])
+    return texts
+
+
+def _ring_spend(key: UUID, amount: str) -> None:
+    """One opening charge on the in-memory running total only."""
+    from product_app.costs import CostThresholdAction, cost_event_recorder
+
+    assert cost_event_recorder is not None
+    cost_event_recorder.record(
+        event_type=COST_ACCEPTED_SIMULATED_EVENT,
+        account_id=key,
+        query_run_id=uuid4(),
+        estimated_cost_usd=Decimal(amount),
+        threshold_action=CostThresholdAction.ALLOW,
+        confirmed=False,
+        persist=False,
+    )
+
+
+def _blocked(client: TestClient, csrf: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    """(estimate body, create 402 detail) for a blocked default-panel run."""
+    estimate = client.post(ESTIMATE, json=_estimate_body(), headers={"X-CSRF-Token": csrf})
+    assert estimate.status_code == 200, estimate.text
+    created = client.post(RUNS, json=acknowledged_request(QUERY), headers={"X-CSRF-Token": csrf})
+    assert created.status_code == 402, created.text
+    return estimate.json(), created.json()["detail"]
+
+
+def test_a_networks_daily_block_never_calls_the_meter_the_account() -> None:
+    """RED-IF any server sentence about an anonymous session's daily-cap block
+    (the estimate's two ``reasons`` lists, the create 402's ``message`` and its
+    estimate's reasons) says "account" -- the network spent it, not an account.
+    Partners: it IS the daily-cap block, and the sentences still state the
+    figures (the $0.40 cap and the network's $0.3156)."""
+    with configure_for_tests(), isolated_run_semaphore(1) as semaphore:
+        spender = _browser(NET_A)
+        spender_csrf = _boot(spender)
+        for _ in range(3):
+            _run(spender, spender_csrf, semaphore)
+        newcomer = _browser(NET_A)
+        estimate, detail = _blocked(newcomer, _boot(newcomer))
+
+    texts = _limit_texts(estimate) + _limit_texts(detail)
+    assert estimate["cost_estimate"]["block_reason"] == "daily_cap"
+    assert any("0.40" in text for text in texts), texts
+    assert any("0.3156" in text for text in texts), texts
+    assert [text for text in texts if ACCOUNT_WORD.search(text)] == []
+
+
+def test_a_networks_running_total_block_never_calls_the_meter_the_account() -> None:
+    """RED-IF any server sentence about an anonymous session's running-total
+    block says "account" (today: "the account's recent spend", "Cumulative
+    spend for this account"). Partners: it IS that block, and the sentences
+    still state the $0.50 limit and the network's $0.4500."""
+    with configure_for_tests():
+        newcomer = _browser(NET_A)
+        csrf = _boot(newcomer)
+        _ring_spend(network_spend_key(newcomer, NET_A), "0.4500")
+        estimate, detail = _blocked(newcomer, csrf)
+
+    texts = _limit_texts(estimate) + _limit_texts(detail)
+    assert estimate["cost_estimate"]["block_reason"] == "account_running_total"
+    assert any("0.50" in text for text in texts), texts
+    assert any("0.4500" in text for text in texts), texts
+    assert [text for text in texts if ACCOUNT_WORD.search(text)] == []
+
+
+def test_the_late_daily_refusal_of_a_network_never_calls_the_meter_the_account(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The charge-time ``OVER_DAILY_CAP`` 402: another tab on the network books
+    $0.35 between this request's estimate and its charge. RED-IF its
+    ``message`` says "account". Partners: it is that 402 (``daily_cap``, the
+    network's flag), and the message still names the 24 hours."""
+    real = cost_estimation_service.try_record_run_charge
+
+    def another_tab_first(**kwargs: Any) -> Any:
+        _book_ledger(kwargs["account_id"], "0.3500")
+        return real(**kwargs)
+
+    with configure_for_tests() as store, isolated_run_semaphore(1):
+        client = _browser(NET_A)
+        csrf = _boot(client)
+        monkeypatch.setattr(cost_estimation_service, "try_record_run_charge", another_tab_first)
+        created = client.post(
+            RUNS, json=acknowledged_request(QUERY), headers={"X-CSRF-Token": csrf}
+        )
+        assert _charge_rows(store, network_spend_key(client, NET_A)) == 1
+
+    assert created.status_code == 402, created.text
+    detail = created.json()["detail"]
+    assert detail["block_reason"] == "daily_cap"
+    assert detail["daily_allowance"]["shared_by_network"] is True
+    assert "24 hours" in detail["message"]
+    assert not ACCOUNT_WORD.search(detail["message"]), detail["message"]
+
+
+def _book_ledger(key: UUID, amount: str) -> None:
+    from product_app.feedback_store import get_store
+
+    store = get_store()
+    assert store is not None
+    assert store.record(
+        recorder="cost",
+        event_type=COST_ACCEPTED_SIMULATED_EVENT,
+        account_id=key,
+        query_run_id=uuid4(),
+        recorded_at=datetime.now(UTC),
+        payload={"account_id": str(key), "estimated_cost_usd": amount},
+    )
+
+
+def test_a_signed_in_accounts_blocks_keep_the_account_wording(sign_in: SignIn) -> None:
+    """Partner of the three tests above: for a signed-in account the meter IS
+    the account's, and the wording is unchanged. RED-IF the daily-cap or the
+    running-total sentences for a signed-in account stop saying "account"
+    (the fix must follow the meter, not drop the word everywhere)."""
+    with configure_for_tests():
+        daily = _browser(NET_A)
+        daily_csrf = _sign_in(daily, sign_in, "108000000000000047009", "w47-words-day@example.com")
+        _book_ledger(_account_spend_key(sign_in, daily), "0.3900")
+        daily_estimate, daily_detail = _blocked(daily, daily_csrf)
+        running = _browser(NET_B)
+        running_csrf = _sign_in(
+            running, sign_in, "108000000000000047010", "w47-words-run@example.com"
+        )
+        _ring_spend(_account_spend_key(sign_in, running), "0.4500")
+        running_estimate, running_detail = _blocked(running, running_csrf)
+
+    assert daily_estimate["cost_estimate"]["block_reason"] == "daily_cap"
+    assert running_estimate["cost_estimate"]["block_reason"] == "account_running_total"
+    for texts in (
+        _limit_texts(daily_estimate),
+        _limit_texts(daily_detail),
+        _limit_texts(running_estimate),
+        _limit_texts(running_detail),
+    ):
+        assert any(ACCOUNT_WORD.search(text) for text in texts), texts

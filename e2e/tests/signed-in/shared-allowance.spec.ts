@@ -84,6 +84,11 @@ const isEstimate = (r: Response) => new URL(r.url()).pathname === ESTIMATE && r.
 const gateView = (page: Page) => page.locator('[data-view="cost-gate"]');
 const card = (page: Page) => page.locator("#cost-review-card");
 const allowanceLine = (page: Page) => page.locator("#cost-gate-allowance");
+/** A control INSIDE the cost card that starts sign-in (W47 review round 1): the offer must be actionable where it is read. */
+const cardSignIn = (page: Page) =>
+  card(page).getByRole("button", { name: /sign in/i }).or(card(page).getByRole("link", { name: /sign in/i }));
+const isSignInStart = (r: { url(): string; method(): string }) =>
+  new URL(r.url()).pathname === "/v1/auth/google/start" && r.method() === "POST";
 
 /** Ask for the estimate of `question` from the composer; returns the server's estimate JSON (read, not mocked). */
 async function seeEstimate(page: Page, question: string): Promise<Record<string, any>> {
@@ -129,6 +134,30 @@ test.describe("W47 — the allowance is shared by the network while not signed i
     await page.context().close();
   });
 
+  test("the shared card's sign-in offer is a control in the card that starts sign-in", async ({ browser }) => {
+    // RED-IF: the shared allowance's "Sign in to get your own $0.40 a day" is only text (the one way to
+    // act on it is the top bar's button, scrolled out of sight on a long card), or the in-card control
+    // does not start the same sign-in as `#sign-in-google` (POST /v1/auth/google/start, then Google's
+    // consent page, caught here). Partners: the top-bar sign-in exists, the card shows the shared
+    // sentence, and the person ends up signed in.
+    const page = await newAnonymousPage(browser);
+    const account = freshAccount("w47-card-sign-in");
+    await routeGoogle(page, account);
+    await expect(page.locator("#sign-in-google")).toBeVisible();
+
+    const body = await seeEstimate(page, QUESTIONS[2]);
+    expect(body.cost_estimate.threshold_action).toBe("allow");
+    await expect(card(page)).toContainText(/this network/i);
+
+    const control = cardSignIn(page);
+    await expect(control).toBeVisible();
+    const started = page.waitForRequest(isSignInStart);
+    await control.click();
+    await started;
+    await expect(page.locator("#account-email")).toHaveText(account.email);
+    await page.context().close();
+  });
+
   test("a signed-in estimate's allowance line does not mention the network", async ({ page }) => {
     // RED-IF: a signed-in account's allowance line says "network" (its $0.40 is its own, ADR-0144
     // decision 3), or the server flags it shared. Partner: the line is shown and is the allowance line.
@@ -142,6 +171,8 @@ test.describe("W47 — the allowance is shared by the network while not signed i
     expect(line).toMatch(/left in the last 24 hours/);
     expect(line).not.toMatch(/network/i);
     expect(body.cost_estimate.daily_allowance.shared_by_network).toBe(false);
+    // W47 review round 1: an own allowance offers no sign-in in the card (partner of the test above).
+    await expect(cardSignIn(page)).toHaveCount(0);
   });
 
   test("a new anonymous session is blocked by the network's spend, the block says so, and signing in gives an own allowance", async ({ browser }) => {
@@ -174,6 +205,8 @@ test.describe("W47 — the allowance is shared by the network while not signed i
     expect(text).toMatch(/this network/i);
     expect(text).toMatch(/not signed in/i);
     expect(text).toMatch(SIGN_IN_OFFER);
+    // W47 review round 1: the block card's offer is a control in the card, not only words.
+    await expect(cardSignIn(newcomer)).toBeVisible();
 
     // The top bar's "Sign in with Google" is on every view; signing in reloads /ui on the composer.
     await signInFromHere(newcomer, freshAccount("w47-own-back"));

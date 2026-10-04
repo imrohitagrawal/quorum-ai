@@ -563,3 +563,200 @@ test.describe("W33 slice C — limit messages for states a browser cannot reach 
     expect(await cardText(page)).not.toMatch(SHORT_CAP);
   });
 });
+
+/**
+ * W47 review round 1 (ADR-0144 decision 6): the copy for a SHARED (network) allowance.
+ *
+ * Server-shaped mocks: each body is a real response from `fixtures/limit-responses.ts` (recorded before
+ * W47) with ONE field changed, `daily_allowance.shared_by_network`, which the W47 server sends `true` for
+ * an anonymous session and `false` for a signed-in one. Mocked because a shared daily block or running
+ * total on the real backend needs this lane's one network to be spent, which the e2e lanes' LOCAL-only
+ * override (decision 7) prevents. The main lane offers no sign-in, so these pages have no
+ * `#sign-in-google`; the sign-in control is pinned in tests/signed-in/shared-allowance.spec.ts.
+ */
+test.describe("W47 — the words for a shared (network) allowance (server-shaped mocks)", () => {
+  test.skip(({ browserName }) => browserName !== "chromium", "reference run is chromium-only");
+
+  const fulfil = (body: unknown, status = 200) => ({ status, contentType: "application/json", body: JSON.stringify(body) });
+  const shared = <T,>(base: T, value: boolean, where: "estimate" | "detail" = "estimate"): T =>
+    reshaped(base, (c) => {
+      if (where === "estimate") c.cost_estimate.daily_allowance.shared_by_network = value;
+      else c.detail.daily_allowance.shared_by_network = value;
+    });
+  // The network's spend named next to its figure, in either order, inside one sentence.
+  const networkSpend = (figure: string) =>
+    new RegExp(`\\${figure}[^.]*network|network[^.]*\\${figure}`, "i");
+  const live = (page: Page) => page.locator("#cost-gate-live");
+  const signInControl = (page: Page) => card(page).getByRole("button", { name: /sign in/i }).or(card(page).getByRole("link", { name: /sign in/i }));
+
+  async function mockedEstimate(page: Page, body: unknown) {
+    await boot(page);
+    await page.route("**/v1/query-runs/estimate", (r) => r.fulfill(fulfil(body)));
+    await page.locator("#query-text").fill(QUESTIONS[0]);
+    await page.locator("#estimate-run").click();
+    await expect(gateView(page)).toBeVisible({ timeout: 15000 });
+  }
+
+  async function refusedCreate(page: Page, detail: unknown) {
+    await boot(page);
+    let served = 0;
+    await page.route("**/v1/query-runs", (r) => {
+      if (r.request().method() !== "POST" || served > 0) return r.continue();
+      served += 1;
+      return r.fulfill(fulfil(detail, 402));
+    });
+    await page.locator("#query-text").fill(QUESTIONS[0]);
+    await page.locator("#run-now").click();
+    await expect(banner(page)).toBeVisible({ timeout: 15000 });
+    expect(served, "the create was answered by the mock exactly once").toBe(1);
+  }
+
+  test("a shared daily block does not tell a person who ran nothing 'You have used'; it names the network's spend", async ({ page }) => {
+    // RED-IF: the daily-cap block card for `shared_by_network: true` still says "You have used $0.32 …"
+    // (the network spent it, maybe not this person), or does not put the $0.32 in a sentence that names
+    // the network. Partner: the next test, where the same body unshared still says "You have used".
+    await mockedEstimate(page, shared(LIMIT_RESPONSES.dailyCap, true));
+    await expect(card(page)).toHaveAttribute("data-band", "block");
+    const text = await cardText(page);
+
+    expect(text, "the spend figure is on the card").toContain("$0.32");
+    expect(text).toMatch(networkSpend("$0.32"));
+    expect(text).not.toMatch(/you have used/i);
+  });
+
+  test("an own (signed-in) daily block keeps 'You have used' and never names the network", async ({ page }) => {
+    // Partner of the test above. RED-IF the own-allowance copy loses "You have used $0.32" or gains
+    // the network wording (decision 3: a signed-in allowance is the person's own).
+    await mockedEstimate(page, shared(LIMIT_RESPONSES.dailyCap, false));
+    await expect(card(page)).toHaveAttribute("data-band", "block");
+    const text = await cardText(page);
+
+    expect(text).toMatch(/You have used \$0\.32/);
+    expect(text).not.toMatch(/network/i);
+  });
+
+  test("the late daily-cap refusal for a shared allowance names the network's spend, not 'You have used'", async ({ page }) => {
+    // The charge-time OVER_DAILY_CAP 402 banner ("… Nothing ran and nothing was charged."), which the
+    // product reviewer saw saying "You have used $0.35 of the $0.40". RED-IF that banner says
+    // "You have used" for `shared_by_network: true`, or does not name the network next to the $0.35.
+    // Partner: the unshared body below keeps "You have used $0.35".
+    await refusedCreate(page, shared(LIMIT_RESPONSES.createChargeTimeDailyCap, true, "detail"));
+    const text = await banner(page).innerText();
+
+    expect(text).toContain("$0.35");
+    expect(text).toMatch(networkSpend("$0.35"));
+    expect(text).not.toMatch(/you have used/i);
+  });
+
+  test("the late daily-cap refusal for an own allowance keeps 'You have used'", async ({ page }) => {
+    // Partner of the test above. RED-IF the signed-in banner loses "You have used $0.35" or names the network.
+    await refusedCreate(page, shared(LIMIT_RESPONSES.createChargeTimeDailyCap, false, "detail"));
+    await expect(banner(page)).toBeVisible();
+    const text = await banner(page).innerText();
+
+    expect(text).toMatch(/You have used \$0\.35/);
+    expect(text).not.toMatch(/network/i);
+  });
+
+  test("a shared running-total block does not say 'Your recent runs' and says the allowance is shared", async ({ page }) => {
+    // RED-IF: the account_running_total block for `shared_by_network: true` says "Your recent runs …"
+    // (the network's runs, not this person's), or lacks the shared sentence (who shares it: everyone on
+    // this network who is not signed in). Partner: the next test keeps "Your recent runs" for an own one.
+    await mockedEstimate(page, shared(LIMIT_RESPONSES.accountRunningTotal, true));
+    await expect(card(page)).toHaveAttribute("data-band", "block");
+    const text = await cardText(page);
+
+    expect(text, "the running limit is named").toContain("$0.50");
+    expect(text).toMatch(/this network/i);
+    expect(text).toMatch(/not signed in/i);
+    expect(text).not.toMatch(/your recent runs/i);
+  });
+
+  test("an own running-total block keeps 'Your recent runs' and never names the network", async ({ page }) => {
+    // Partner of the test above. RED-IF the own-allowance running-total copy changes.
+    await mockedEstimate(page, shared(LIMIT_RESPONSES.accountRunningTotal, false));
+    await expect(card(page)).toHaveAttribute("data-band", "block");
+    const text = await cardText(page);
+
+    expect(text).toMatch(/Your recent runs/);
+    expect(text).not.toMatch(/network/i);
+  });
+
+  test("a shared daily block's screen-reader announcement says the allowance is shared on this network", async ({ page }) => {
+    // RED-IF: `#cost-gate-live` (the gate's polite live region) announces a shared daily block without
+    // saying the allowance is the network's. Partners: it announces the daily allowance at all, and the
+    // own-allowance announcement (second half) does not mention a network.
+    await mockedEstimate(page, shared(LIMIT_RESPONSES.dailyCap, true));
+    await expect(live(page)).toContainText(/daily allowance/i);
+    await expect(live(page)).toContainText(/this network/i);
+
+    await page.goto("about:blank");
+    await mockedEstimate(page, shared(LIMIT_RESPONSES.dailyCap, false));
+    await expect(live(page)).toContainText(/daily allowance/i);
+    await expect(live(page)).not.toContainText(/network/i);
+  });
+
+  test("the shared sentence is set in body type, not the monospace figure line", async ({ page }) => {
+    // RED-IF: the sentence "shared by everyone on this network …" on an allow card is rendered in the
+    // allowance line's monospace face (it is prose, not a figure). Partners: the shared sentence is on
+    // the card, and the figure line itself IS monospace.
+    const body = reshaped(LIMIT_RESPONSES.allowBoundedByRunningTotal, (c) => {
+      c.cost_estimate.daily_allowance = {
+        cap_usd: "0.40",
+        spent_usd: "0.1052",
+        remaining_usd: "0.2948",
+        bounded_by: "daily_cap",
+        shared_by_network: true,
+      };
+    });
+    await mockedEstimate(page, body);
+    await expect(card(page)).toHaveAttribute("data-band", "allow");
+    await expect(page.locator("#cost-gate-allowance")).toBeVisible();
+
+    const fonts = await page.evaluate(() => {
+      const gate = document.querySelector('[data-view="cost-gate"]') as HTMLElement;
+      const all = Array.from(gate.querySelectorAll<HTMLElement>("*")).filter(
+        (n) => n.checkVisibility() && /shared by everyone on this network/i.test(n.textContent ?? ""),
+      );
+      // The innermost element holding the sentence.
+      const holder = all.find((n) => !all.some((m) => m !== n && n.contains(m)));
+      const figure = document.getElementById("cost-gate-allowance") as HTMLElement;
+      return {
+        sentence: holder ? getComputedStyle(holder).fontFamily : null,
+        figure: getComputedStyle(figure).fontFamily,
+        figureText: figure.innerText,
+      };
+    });
+
+    expect(fonts.sentence, "the shared sentence is on the card").not.toBeNull();
+    expect(fonts.figureText).toMatch(/left in the last 24 hours/);
+    expect(fonts.figure.toLowerCase()).toMatch(/mono/);
+    expect(fonts.sentence).not.toBe(fonts.figure);
+  });
+
+  test("with no sign-in on the page, a shared card offers no sign-in control", async ({ page }) => {
+    // Partner of tests/signed-in/shared-allowance.spec.ts's in-card sign-in control (decision 6: the
+    // offer only "when sign-in is available"). RED-IF a sign-in control appears on a page that has no
+    // way to sign in. Positive partner: this page really has no `#sign-in-google`, and the shared
+    // sentence IS on the card (the control's absence is not the card's absence).
+    await mockedEstimate(page, shared(LIMIT_RESPONSES.dailyCap, true));
+    await expect(card(page)).toHaveAttribute("data-band", "block");
+
+    await expect(page.locator("#sign-in-google")).toHaveCount(0);
+    await expect(card(page)).toContainText(/this network/i);
+    await expect(signInControl(page)).toHaveCount(0);
+  });
+
+  test("the composer footer says the $0.40 is shared on the network when not signed in", async ({ page }) => {
+    // RED-IF: the composer footer still describes the $0.40 as if it were the visitor's own, with no
+    // word that it is the network's while not signed in. Partners (green today): it still names the
+    // $0.40, the 24 hours and simulated runs (the W33 slice C checks above).
+    await boot(page);
+    const footer = (await footerNotice(page).innerText()).trim();
+
+    expect(footer).toContain("$0.40");
+    expect(footer).toMatch(/24 hours/);
+    expect(footer).toMatch(/simulated/i);
+    expect(footer).toMatch(/network/i);
+  });
+});
