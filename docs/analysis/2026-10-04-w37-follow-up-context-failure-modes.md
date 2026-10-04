@@ -3,9 +3,10 @@
 Written 2026-10-04 before the change (AGENTS.md rule 16e: this changes what a run
 costs). Board row W37. Decision: CHG-026 (g), the owner's M08 point 5 (*"If we do not
 have context or a track of those questions being sent to models, then how would the
-models understand that this is a follow-up question?"*), and their 2026-07-23 decision
-(*"prior question + final synthesis in the prompts"*,
-`docs/archive/2026-08/UI-BUG-TRIAGE-2026-07-23-ANALYSIS.md`, "User decisions"). On
+models understand that this is a follow-up question?"*), and, as a session recorded it on
+2026-07-23, *"prior question + final synthesis in the prompts"*
+(`docs/archive/2026-08/UI-BUG-TRIAGE-2026-07-23-ANALYSIS.md`, "User decisions"; no
+transcript of that day is kept, so the words cannot be checked against the owner's). On
 2026-10-04 the owner accepted ADR-0140's calls and asked for both follow-up buttons back
 (CHG-027). Design: ADR-0143.
 
@@ -68,7 +69,7 @@ calls (row 1); ADR-0143 re-measures with the same script after the change.
 | 10 | Context from the wrong result: the session list re-opens an older result. | The models get a different conversation from the one on screen. | Context is taken from the result on screen when "Review & run" is pressed. |
 | 11 | A result with no final answer (failed, stopped, timed out) offers "Follow up on this". | A follow-up with nothing to follow. | The mode buttons show only on a result with a final answer; otherwise the note says the next question is answered on its own. |
 | 12 | A quick result's follow-up, or a follow-up asked in quick mode, is refused (ADR-0126 5a). | "Follow up on this" fails in one of the two modes. | Quick accepts context and sends it to its one answer call; the prior answer of a quick result is its answer text. ADR-0143 supersedes 5a. |
-| 13 | "New question", the brand link or "Start fresh" leaves context attached. | A fresh question sent as a follow-up and charged for the context. | Only "Review & run" in follow-up mode attaches it; every other way to the composer clears it; the composer shows the line and a way to drop it. |
+| 13 | "New question", the brand link or "Start fresh" leaves context attached. | A fresh question sent as a follow-up and charged for the context. | Only "Review & run" in follow-up mode attaches it; every way to the composer that starts something new clears it; "Back to the question", the cost confirmation's Back and browser Back/Forward keep it (ADR-0143 decision 5); the composer shows the line and a way to drop it. |
 | 14 | The composer shows nothing about the context. | The user does not know why the estimate went up. | The composer shows "Following up on: …" with the prior question while context is attached. |
 | 15 | The prior question in "Following up on: …" is rendered as HTML. | Injection into the page. | Text only (`textContent`), shortened for display. |
 | 16 | "Start fresh" empties the session list (bug 1). | Regression of ADR-0140 decision 1. | It only switches the mode. |

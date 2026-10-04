@@ -441,7 +441,7 @@ def _follow_up_context_tokens(context: dict[str, Any] | None) -> _FollowUpTokens
 
     Review round 1 measured the gap this closes: for a 49-character question
     and an 8,000-character answer, debate was sent +150 characters and priced
-    +49; synthesis was sent +8,379 and priced +8,079. The lengths are read from
+    +49; synthesis was sent +8,349 and priced +8,049. The lengths are read from
     the functions that BUILD the prompts, so price and prompt cannot drift. One
     helper for the point estimate and the bound. Local imports: ``providers``
     and ``synthesis`` both import this module.

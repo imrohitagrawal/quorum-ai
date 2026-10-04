@@ -10204,10 +10204,12 @@
       // re-flash after they had settled in. Clearing an already-fired timer is
       // a harmless no-op.
       if (landingHandoffTimer) clearLandingHandoffLatch();
-      // W37 (ADR-0143 decision 5, row 13): every way to the composer starts a
-      // question on its own -- the landing, an example chip, "New question",
-      // the brand link. "Review & run" in follow-up mode is the one way that
-      // attaches the context, and it does so AFTER this call.
+      // W37 (ADR-0143 decision 5, row 13): every caller of this function starts
+      // a question on its own -- the landing, an example chip, "New question",
+      // the brand link -- so it clears the context. "Review & run" in follow-up
+      // mode re-attaches it AFTER this call. The card actions that start
+      // something new clear it themselves (startNewFromCard); "Back to the
+      // question", the cost confirmation's Back and browser Back/Forward keep it.
       clearFollowUpContext();
       markWorkspaceSeen();
       setView("composer");

@@ -7,8 +7,9 @@ their message of 2026-10-04 (CHG-027), build item 1: *"W37: follow-up context �
 previous question and final answer go to all four models; the next-question box opens
 empty with "Following up on: …"; bring back both follow-up buttons; plus the landing
 rename and the hint wording."* and *"In W37 bring back both "Follow up on this" and
-"Start fresh"."* It was first decided as CHG-026 (g), from M08 point 5 and M10's
-*"Rest, I agree with all your suggestions"*, and before that on 2026-07-23, as a
+"Start fresh"."* It was first decided as CHG-026 (g), from M08 point 5 and M09 (the owner's reply to
+the session's question "send context to all four models?"), with M10's *"Rest, I
+agree with all your suggestions"*, and before that on 2026-07-23, as a
 session recorded it: *"prior question + final synthesis in the prompts"*. The shape below is the session's design; the
 points that are the session's own calls are listed under Consequences so the owner can
 overturn them. Failure modes, listed before the code:
@@ -112,9 +113,12 @@ both texts twice and sent each once. A quick request with context is refused
 
   Every row is `allow`. With peer critique on, the 60,117 row moves from
   `require_confirmation` (0.3142) to `allow` (0.2731), and the 38,000 row is
-  0.1595 / 0.2579. A follow-up is cheaper than the old pricing quoted because debate
-  and synthesis are no longer priced for text they are not sent; that saving is larger
-  than the new price of the four answer calls. It still costs more than a fresh
+  0.1595 / 0.2579. At every length in the table a follow-up is cheaper than the old
+  pricing quoted, because debate and synthesis are no longer priced for text they are
+  not sent; that saving is larger than the new price of the four answer calls. For a
+  previous answer shorter than about 250 characters it is the other way round, by
+  $0.0001 (50 characters: 0.1135 before, 0.1136 after, typical), because the fixed
+  wording is now priced. It still costs more than a fresh
   question: at a typical final answer, two runs fit in the day instead of three.
 - The fixed text this change adds to each answer call's system message (a follow-up
   sentence, the untrusted-data rule, labels and fences) brings the default answer
@@ -133,15 +137,24 @@ both texts twice and sent each once. A quick request with context is refused
   and its Start fresh button; (iv) "New question" and the brand link clear the
   context; (v) the full final answer up to the server limit, no smaller trim;
   (vi) one step back only; (vii) both texts go in the system message and the user
-  message stays the new question; (viii) debate and synthesis are re-priced to what
-  they are sent, which lowers the charge for every follow-up; (ix) the previous
+  message stays the new question; (viii) debate and synthesis are re-priced to exactly
+  what they are sent, wording included, which lowers their charge for a previous
+  answer longer than about 250 characters and raises it slightly below that; (ix) the previous
   question is now flattened for debate and synthesis too; (x) the server trusts the
   client's text rather than looking up the previous run; (xi) a result with no final
   answer offers no follow-up; (xii) the previous answer is the five sections in
   display order joined by blank lines, taken from the result on screen; (xiii) "all
   four models" is read as the answer calls, so under peer critique the critics get the
   question only; (xiv) which ways to the composer keep or clear the context
-  (decision 5).
+  (decision 5); (xv) an answer call's fixed follow-up wording is not priced on its
+  own, it fits the flat 350-token system allowance (1,175 characters, measured),
+  while debate and synthesis are priced for theirs; (xvi) the composer footer also
+  uses the hint sentence of CHG-027 (d), replacing "anything needing confirmation
+  still pauses for your approval" — the owner named only the hint; (xvii) the cost
+  confirmation repeats "Following up on: …"; (xviii) with one model the note says
+  "the model"; (xix) a result re-opened from the session list opens with an empty
+  box; (xx) a context with no previous answer says nothing about a final answer,
+  and one with no previous question says nothing about a question.
 - The price assumes four characters a token, an average rather than a bound
   (ADR-0095). A follow-up now sends up to 80,117 characters of client text to each
   of up to four answer calls at the slot's own price, so text that tokenizes worse
@@ -152,6 +165,6 @@ both texts twice and sent each once. A quick request with context is refused
   run"; a follow-up to a high-stakes question asks for the acknowledgement again
   without saying the previous question is why; the run's pop-up messages can cover
   the line for a few seconds (board row W46); the mode buttons wrap to two lines at
-  390 px. "Go to run" on a "one run at a time" card never opens the other run's
-  result (board row W49); it would otherwise pair this tab's last question with that
+  390 px. "Go to run" on a "one run at a time" card does not open the other run's
+  result once this tab has finished or re-opened a run (board row W49); it would otherwise pair this tab's last question with that
   run's answer.
