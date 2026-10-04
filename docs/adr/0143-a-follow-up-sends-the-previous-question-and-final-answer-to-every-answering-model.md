@@ -63,7 +63,10 @@ both texts twice and sent each once. A quick request with context is refused
    new clears it: "New question", the brand link, the landing page, and the "Start a
    new run", "Start your own query" and "Stop it & start new" actions on a failure or
    busy card. The ways that go back to the question being worked on keep it: "Back to
-   the question", the cost confirmation's Back, and browser Back and Forward.
+   the question", the cost confirmation's Back, and browser Back and Forward. A run that finishes onto its result
+   leaves no context attached. Clearing the context also drops an estimate still
+   loading for it, and the composer's Start fresh is unavailable while the run that
+   carries the context is being created.
 6. **What is sent.** The previous question is the question of the result on screen.
    The previous final answer is, for a panel result, the five synthesis sections in
    the order the page shows them (consensus, disagreement, uncertainty,
@@ -155,7 +158,8 @@ both texts twice and sent each once. A quick request with context is refused
   confirmation repeats "Following up on: …"; (xviii) with one model the note says
   "the model"; (xix) a result re-opened from the session list opens with an empty
   box; (xx) a context with no previous answer says nothing about a final answer,
-  and one with no previous question says nothing about a question.
+  and one with no previous question says nothing about a question; (xxi) a finished
+  run leaves no context attached, so browser Back to the composer shows none.
 - The price assumes four characters a token, an average rather than a bound
   (ADR-0095). A follow-up now sends up to 80,117 characters of client text to each
   of up to four answer calls at the slot's own price, so text that tokenizes worse
