@@ -42,7 +42,10 @@ identified for the per-network session limits (`auth.client_ip_of`, W30, ADR-013
 5. **No address is written anywhere new**: the cost ledger holds the hashed key only.
    `docs/48` gains a row for it. One existing event already carried the visitor's
    address: a run degraded at the global ceiling sends `client_ip` to Sentry, and that
-   event now carries the network key beside it, so Sentry can pair the two.
+   event now carries the network key beside it, so Sentry can pair the two. The hash
+   protects the address only from someone without the server secret: with it, an IPv4
+   key can be reversed by trying every address (about 2.7 core-hours, measured by
+   review).
 6. **The page says the allowance is shared.** The estimate's daily allowance carries a
    flag saying it is the network's; for an anonymous session the allowance line and the
    daily-allowance block say it is shared by everyone on this network who is not signed
