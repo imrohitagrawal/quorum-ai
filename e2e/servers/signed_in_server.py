@@ -102,6 +102,10 @@ def main() -> None:
             # per-address limits are not what this lane measures (rule 13).
             "SESSION_RATE_LIMIT_PER_MINUTE": "600",
             "SESSION_MINT_CAP_OVERRIDE": "600",
+            # W47 (ADR-0144 decision 7): cleared on purpose, so this lane
+            # exercises the real per-network sharing (shared-allowance.spec.ts)
+            # even though the e2e job's env sets the override for other lanes.
+            "ANONYMOUS_SPEND_PER_SESSION_OVERRIDE": "",
             # Every test signs in from this one address; the start limiter
             # (5 then 1 a minute) is not what this lane measures.
             "SIGN_IN_STARTS_PER_ADDRESS_BURST": "100",

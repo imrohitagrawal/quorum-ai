@@ -435,7 +435,15 @@ def test_the_spend_key_is_refused_between_the_rows_going_and_the_second_refusal(
     """``spend_key_for`` reads the row, then the mark. Deletion must set the
     mark BEFORE the row goes, or a lookup landing just after the commit (and
     before the second refusal) finds neither and meters under the account id,
-    a fresh envelope. Turns red if the first refusal is dropped."""
+    a fresh envelope. Turns red if the first refusal is dropped -- or, since
+    W47 (ADR-0144), if "no accounts row" is taken to mean "anonymous" and the
+    still-live session is metered under its NETWORK's key instead of refused.
+
+    Until W47 this used ``session_id="s"``, which is no live session, so the
+    session check refused it (401) before the store was read and the test
+    could not see either fault. It now uses the browser's real session, which
+    is still live inside this window (sessions are refused after the rows go,
+    ``account_deletion.delete_account``)."""
     from fastapi import HTTPException
     from tests.integration.test_anonymous_spend_per_network import _request
 
@@ -444,7 +452,11 @@ def test_the_spend_key_is_refused_between_the_rows_going_and_the_second_refusal(
     client = sign_in.client()
     _signed_in(client)
     account, _, _ = _account(sign_in)
-    session = auth.SessionContext(account_id=account, session_id="s", csrf_token="c", legacy=False)
+    live = auth.session_repository.get(client.cookies[COOKIE])
+    assert live is not None and live.account_id == account
+    session = auth.SessionContext(
+        account_id=account, session_id=live.session_id, csrf_token=live.csrf_token, legacy=False
+    )
     real_delete = sign_in.store.delete_account
     seen: list[int] = []
 

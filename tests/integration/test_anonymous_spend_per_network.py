@@ -61,7 +61,7 @@ from tests.integration.test_query_run_cost_guardrails import (
 
 from product_app import auth, session_store
 from product_app import query_run_orchestration as qro
-from product_app.config import settings
+from product_app.config import RuntimeEnvironment, settings
 from product_app.costs import cost_estimation_service
 from product_app.feedback_store import (
     COST_ACCEPTED_EVENT,
@@ -717,3 +717,127 @@ def test_with_no_session_store_anonymous_sessions_still_share_the_networks_allow
 
         assert _charge_rows(store, _key(run)) == 1
         assert _allowance(seen) == _allowance_dict("0.1052", "0.2948", shared=True)
+
+
+# --- 8. the LOCAL-only override for the e2e lanes (decision 7) ----------------------------
+#
+# ``ANONYMOUS_SPEND_PER_SESSION_OVERRIDE`` (setting
+# ``anonymous_spend_per_session_override``): with it on, and only in LOCAL,
+# each anonymous session is its own network for spend; the allowance still
+# reports ``shared_by_network: true``. Config guards (default off, blank,
+# refused outside LOCAL): ``tests/unit/test_anonymous_spend_override.py``.
+
+
+def test_the_override_is_off_in_this_suite() -> None:
+    """The premise of every sharing test above: conftest blanks the variable,
+    so a developer's shell or .env cannot turn them into per-session tests.
+    RED-IF the setting is missing (today) or on here."""
+    assert settings.anonymous_spend_per_session_override is False
+
+
+def test_with_the_local_override_each_anonymous_session_has_its_own_allowance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Decision 7. RED-IF, with the override on in LOCAL, a second anonymous
+    session on the same network sees the first one's spend (the e2e lanes
+    would starve), or the flag stops saying the allowance is shared (the page
+    copy must not change with a test switch). Partners: the override does not
+    make spend free -- the first session's own estimate shows its $0.1052, and
+    each session's run is charged exactly once under its own key."""
+    assert settings.runtime_environment is RuntimeEnvironment.LOCAL
+    monkeypatch.setattr(settings, "anonymous_spend_per_session_override", True)
+    with configure_for_tests() as store, isolated_run_semaphore(1) as semaphore:
+        first = _browser(NET_A)
+        first_csrf = _boot(first)
+        first_run = _run(first, first_csrf, semaphore)
+        own = _estimate(first, first_csrf)
+        second = _browser(NET_A)
+        second_csrf = _boot(second)
+        fresh = _estimate(second, second_csrf)
+        second_run = _run(second, second_csrf, semaphore)
+
+        assert _allowance(own) == _allowance_dict("0.1052", "0.2948", shared=True)
+        assert _allowance(fresh) == ANON_FRESH
+        assert _key(first_run) != _key(second_run)
+        assert _charge_rows(store, _key(first_run)) == 1
+        assert _charge_rows(store, _key(second_run)) == 1
+
+
+def test_the_override_is_not_honoured_outside_local(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Belt and braces behind the startup refusal, as
+    ``_effective_session_mint_cap`` does for the mint cap: outside LOCAL the
+    read path itself ignores the override. RED-IF two anonymous sessions on
+    one network get different keys there. Partner: in LOCAL the same two
+    sessions DO get different keys, so the equality is not a dead switch."""
+    first, second = _browser(NET_A), _browser(NET_A)
+    _boot(first)
+    _boot(second)
+    monkeypatch.setattr(settings, "anonymous_spend_per_session_override", True)
+
+    local = (network_spend_key(first, NET_A), network_spend_key(second, NET_A))
+    monkeypatch.setattr(settings, "runtime_environment", RuntimeEnvironment.PRODUCTION)
+    deployed = (network_spend_key(first, NET_A), network_spend_key(second, NET_A))
+
+    assert local[0] != local[1]
+    assert deployed[0] == deployed[1]
+
+
+def test_the_override_leaves_a_signed_in_account_on_its_own_spend_key(
+    sign_in: SignIn, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Decision 7 changes ANONYMOUS sessions only. RED-IF, with the override
+    on, a signed-in account's run is keyed per session (its id, or a session
+    hash) instead of its account's spend key, so signing in on another device
+    would open a fresh $0.40."""
+    monkeypatch.setattr(settings, "anonymous_spend_per_session_override", True)
+    with configure_for_tests() as store, isolated_run_semaphore(1) as semaphore:
+        account = _browser(NET_A)
+        csrf = _sign_in(account, sign_in, "108000000000000047006", "w47-override@example.com")
+        run = _run(account, csrf, semaphore)
+
+        assert _key(run) == _account_spend_key(sign_in, account)
+        assert _charge_rows(store, _key(run)) == 1
+
+
+# --- 9. the accounts table cannot be read (ADR-0136's SPEND_KEY_UNAVAILABLE) -------------
+
+
+def test_an_anonymous_session_is_refused_when_the_accounts_table_cannot_be_read(
+    sign_in: SignIn,
+) -> None:
+    """A GUARD, green today by design: today ``spend_key_for`` reads the
+    accounts row for every session and refuses (503) when it cannot. The W47
+    build must keep that order -- whether a session is anonymous is itself a
+    read of that table, and guessing "anonymous" on a failed read would meter
+    a signed-in account under the network. RED-IF an anonymous session on an
+    unreadable table is estimated or charged instead of refused with 503
+    ``SPEND_KEY_UNAVAILABLE``. Partners: the same session's estimate is served
+    before the table breaks, and nothing at all is charged."""
+    with configure_for_tests() as store:
+        client = _browser(NET_A)
+        csrf = _boot(client)
+        before = client.post(
+            ESTIMATE,
+            json={"query_text": QUERY, "model_slots": DEFAULT_MODEL_IDS},
+            headers={"X-CSRF-Token": csrf},
+        )
+        sign_in.store._conn.execute("ALTER TABLE accounts RENAME TO accounts_gone")  # noqa: SLF001
+        estimate = client.post(
+            ESTIMATE,
+            json={"query_text": QUERY, "model_slots": DEFAULT_MODEL_IDS},
+            headers={"X-CSRF-Token": csrf},
+        )
+        created = client.post(
+            RUNS, json=acknowledged_request(QUERY), headers={"X-CSRF-Token": csrf}
+        )
+        charges = [
+            event
+            for event in store.iter_events(recorders=["cost"])
+            if event.event_type in CHARGE_TYPES
+        ]
+
+    assert before.status_code == 200, before.text
+    for refused in (estimate, created):
+        assert refused.status_code == 503, refused.text
+        assert refused.json()["detail"]["code"] == "SPEND_KEY_UNAVAILABLE"
+    assert charges == []
