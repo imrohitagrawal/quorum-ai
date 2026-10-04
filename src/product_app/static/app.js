@@ -151,21 +151,29 @@
   // here.
   function priorAnswerText(result) {
     const limit = 60117;
+    // Cut at the limit in UTF-16 units, backing off one unit when the cut
+    // would split a surrogate pair, so no half character is ever sent.
+    const cut = (text) => {
+      if (text.length <= limit) return text;
+      const last = text.charCodeAt(limit - 1);
+      return text.slice(0, last >= 0xd800 && last <= 0xdbff ? limit - 1 : limit);
+    };
     const res = (result && result.result) || {};
     if (result && result.mode === "quick") {
       const answers = Array.isArray(res.model_answers) ? res.model_answers : [];
       const done = answers.find(
         (a) => a && a.status === "completed" && String(a.answer_text || "").trim() !== "",
       );
-      return done ? String(done.answer_text).trim().slice(0, limit) : "";
+      return done ? cut(String(done.answer_text).trim()) : "";
     }
     const fs = res.final_synthesis;
     if (!fs) return "";
-    return ["consensus", "disagreement", "uncertainty", "recommendation", "source_support"]
-      .map((key) => String(fs[key] == null ? "" : fs[key]).trim())
-      .filter((text) => text !== "")
-      .join("\n\n")
-      .slice(0, limit);
+    return cut(
+      ["consensus", "disagreement", "uncertainty", "recommendation", "source_support"]
+        .map((key) => String(fs[key] == null ? "" : fs[key]).trim())
+        .filter((text) => text !== "")
+        .join("\n\n"),
+    );
   }
 
   // W5 (ADR-0128). The cost gate's meta line. The panel sentence is the one
@@ -483,7 +491,8 @@
     // composer that starts something new: ``goToComposer`` (the landing and
     // its chips, "New question", the brand links, example chips), the
     // composer's own "Start fresh", and the "Start a new run", "Start your
-    // own query" and "Stop it & start new" card actions. Kept by the ways back
+    // own query" and "Stop it & start new" card actions, and a run that
+    // finishes onto its result (that run used it). Kept by the ways back
     // to the question being worked on: "Back to the question" and the other
     // fix-the-request card actions (``returnToComposer``), the cost
     // confirmation's Back (``gateBackToComposer``) and browser Back/Forward
@@ -722,7 +731,7 @@
     if (note) {
       note.textContent = following
         ? `Following up on: “${followUpQuestionLabel(offer.prior_question)}” — ${followUpAudience()} will see that question and its final answer.`
-        : "Your next question is answered on its own — the models won't see the question above or its answer.";
+        : `Your next question is answered on its own — ${followUpAudience()} won't see the question above or its answer.`;
     }
   }
 
@@ -759,12 +768,29 @@
     returnToComposer("question");
   }
 
-  // Drop the attached context. The high-stakes check reads the context, so
-  // when one was attached it asks again for the question alone.
+  // Drop the attached context. When one was attached, an estimate still
+  // loading was priced with it, so it is dropped too (review round 2: its late
+  // answer must not open a follow-up confirmation or create a run with the
+  // dropped context) -- unless the create is already on the wire, which is
+  // when the composer's Start fresh is disabled. The high-stakes check reads
+  // the context, so it asks again for the question alone. One mechanism for
+  // every caller: ``goToComposer`` (example chips included), the composer's
+  // Start fresh and the card actions.
   function clearFollowUpContext() {
     const had = !!state.followUpContext;
     setFollowUpContext(null);
-    if (had) scheduleHighStakesCheck();
+    if (!had) return;
+    if (!state.createInFlight) dropInFlightEstimate();
+    scheduleHighStakesCheck();
+  }
+
+  // The create is on the wire (or no longer): while it is, the composer's
+  // Start fresh is disabled, because the run being created carries the
+  // context it would drop (review round 2).
+  function setCreateInFlight(on) {
+    state.createInFlight = on;
+    const drop = el("follow-up-context-drop");
+    if (drop) drop.disabled = on;
   }
 
   // The warnings probe's body: the same attached context as the estimate and
@@ -9202,7 +9228,7 @@
       // From here the create is on the wire and a run will exist, so going
       // home waits for it (goToNewQuestion checks ``createInFlight``) rather
       // than leaving a charged run nobody is watching.
-      state.createInFlight = true;
+      setCreateInFlight(true);
       const created = await api("/v1/query-runs", {
         method: "POST",
         body: JSON.stringify(
@@ -9294,7 +9320,7 @@
       // newer flow may hold it now, so a stale one leaves it alone.
       if (generation === estimateGeneration) {
         state.creatingRun = false;
-        state.createInFlight = false;
+        setCreateInFlight(false);
         setButtonLoading(confirmBtn, false);
       }
     }
@@ -9412,6 +9438,10 @@
         // after EVERY finished run, never holding the follow-up just answered.
         const nextQuestionBox = el("result-next-input");
         if (nextQuestionBox) nextQuestionBox.value = "";
+        // W37 review round 2 (decision 6, one step back): the context this run
+        // was sent belongs to it; the composer keeps none of it. Following up
+        // this result attaches THIS question and answer.
+        setFollowUpContext(null);
       }
       if (result.status === "completed") {
         toast({
@@ -10397,15 +10427,14 @@
         renderFollowUpMode();
       });
     }
-    // The composer's "Start fresh" (row 13): drops the attached context and
-    // keeps the typed question. An estimate still loading was priced with the
-    // context, so it is dropped too, and the high-stakes check (which reads
-    // the context) asks again.
+    // The composer's "Start fresh" (row 13): drops the attached context
+    // (``clearFollowUpContext`` also drops an estimate still loading) and
+    // keeps the typed question. Inert while the create is on the wire.
     const dropContextButton = el("follow-up-context-drop");
     if (dropContextButton) {
       dropContextButton.addEventListener("click", () => {
+        if (state.createInFlight) return;
         clearFollowUpContext();
-        if (!state.createInFlight) dropInFlightEstimate();
         if (queryTextarea) queryTextarea.focus({ preventScroll: true });
       });
     }
