@@ -14,9 +14,9 @@ from __future__ import annotations
 import math
 import os
 from enum import StrEnum
-from typing import Any, ClassVar
+from typing import Annotated, Any, ClassVar
 
-from pydantic import Field, field_validator
+from pydantic import BeforeValidator, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -24,6 +24,17 @@ class RuntimeEnvironment(StrEnum):
     LOCAL = "local"
     STAGING = "staging"
     PRODUCTION = "production"
+
+
+def _blank_is_off(value: object) -> object:
+    """A blank switch is off: the same footgun guard as
+    ``Settings._blank_mint_cap_override_is_unset``, for a ``bool``. A plain
+    function behind ``BeforeValidator``, not a ``@field_validator`` method:
+    the count of decorated functions is pinned
+    (``tests/unit/test_mutation_test_set_integrity.py``)."""
+    if isinstance(value, str) and value.strip() == "":
+        return False
+    return value
 
 
 class Settings(BaseSettings):
@@ -359,6 +370,17 @@ class Settings(BaseSettings):
         if isinstance(value, str) and value.strip() == "":
             return None
         return value
+
+    #: W47 (ADR-0144 decision 7): every e2e browser connects from one loopback
+    #: address, so with anonymous spend counted per network a whole e2e lane
+    #: would share ONE $0.40 a day and starve. On, each anonymous session is
+    #: its own network for spend. Same guards as ``session_mint_cap_override``:
+    #: off by default, a blank value is off, honoured only when
+    #: ``runtime_environment is LOCAL`` (``auth``), and
+    #: ``validate_production_environment()`` REFUSES TO START with it on
+    #: anywhere else. Never changes a signed-in account's key.
+    #: Env var: ``ANONYMOUS_SPEND_PER_SESSION_OVERRIDE``.
+    anonymous_spend_per_session_override: Annotated[bool, BeforeValidator(_blank_is_off)] = False
 
     @field_validator("session_mint_cap_override", mode="after")
     @classmethod
@@ -961,6 +983,15 @@ def validate_production_environment() -> None:
             "The session mint-cap override is a hermetic-test-lane control "
             "and must never weaken the durable per-IP daily cap in a deployed "
             "environment."
+        )
+    if settings.anonymous_spend_per_session_override:
+        raise RuntimeError(
+            "Refusing to start: runtime_environment="
+            + settings.runtime_environment.value
+            + " requires ANONYMOUS_SPEND_PER_SESSION_OVERRIDE to be unset. "
+            "The per-session spend override is a hermetic-test-lane control "
+            "and must never give each anonymous session its own daily "
+            "allowance in a deployed environment (ADR-0144)."
         )
     # SEC-H2: enforce QUORUM_TOKEN_SECRET in non-local environments.
     # An auto-generated per-process secret breaks multi-instance

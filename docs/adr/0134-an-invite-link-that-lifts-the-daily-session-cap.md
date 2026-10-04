@@ -12,6 +12,8 @@ lifts the session limit for whoever opens it, from any network, until an end
 date. CHG-022 left the detailed design to the building session, failure
 modes first.
 
+**Amended by ADR-0144 (2026-10-04):** an anonymous session's spend key is now its network's; every anonymous session on one network shares one $0.40 a day.
+
 So everything below beyond item (4) is the session's design, and these
 choices are **PROPOSED — AWAITING OWNER**, built at their safe default:
 

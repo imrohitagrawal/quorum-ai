@@ -710,12 +710,16 @@ components:
           - daily_cap
           - running_total
           title: Bounded By
+        shared_by_network:
+          type: boolean
+          title: Shared By Network
       type: object
       required:
       - cap_usd
       - spent_usd
       - remaining_usd
       - bounded_by
+      - shared_by_network
       title: DailyAllowance
       description: 'What is left of the account''s rolling 24-hour cap (ADR-0141 decision 2).
 
@@ -739,7 +743,18 @@ components:
 
         ``running_total`` the figure is not "of the cap in the last 24 hours" and
 
-        does not free up as runs age, so the page must not word it that way.'
+        does not free up as runs age, so the page must not word it that way.
+
+
+        ``shared_by_network`` (W47, ADR-0144 decision 6) is ``True`` when the
+
+        allowance is an anonymous session''s, which is its network''s: everyone on
+
+        that network who is not signed in shares it, and the page says so.
+
+        ``False`` for a signed-in account, the legacy header, and a service call
+
+        that names no network.'
     DebateOutput:
       properties:
         round_number:

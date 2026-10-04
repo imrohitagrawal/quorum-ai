@@ -146,7 +146,8 @@ def test_an_upper_case_revoked_id_is_read_as_lower_case() -> None:
 
 
 def test_one_days_new_sessions_from_a_link_stay_under_the_ceiling() -> None:
-    """Each new session is a new account that may spend DAILY_CAP_USD. Turns
+    """When the cap was chosen, each new anonymous session could spend
+    DAILY_CAP_USD (before ADR-0144). Turns
     red if one day's new sessions from a link, at that cap, reach the
     site-wide ceiling (50 did: 50 x 0.40 = 20.00 against 5.00). It does not
     bound a link over several days: accounts kept alive add up (ADR-0134)."""

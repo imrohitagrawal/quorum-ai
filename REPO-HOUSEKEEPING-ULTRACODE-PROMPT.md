@@ -351,6 +351,7 @@ e2e only when specs, fixtures or UI move — and then:
 rm -f .data/feedback_events.sqlite3
 lsof -ti tcp:18085 | xargs -r kill -9
 cd e2e && SESSION_RATE_LIMIT_PER_MINUTE=600 SESSION_MINT_CAP_OVERRIDE=600 \
+  ANONYMOUS_SPEND_PER_SESSION_OVERRIDE=true \
   npx playwright test <specs> --project=chromium --workers=1 --retries=0
 ```
 

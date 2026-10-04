@@ -30,6 +30,10 @@ jobs:
       # Issue #100: same reasoning, the DURABLE per-IP daily mint cap — a
       # 429 during boot here would bake a broken baseline into the repo.
       SESSION_MINT_CAP_OVERRIDE: "600"
+      # W47 (ADR-0144 decision 7): every browser here shares one loopback address,
+      # so per-network anonymous spend would give the whole lane one $0.40 a day.
+      # LOCAL-only; the app refuses to start with it set anywhere else.
+      ANONYMOUS_SPEND_PER_SESSION_OVERRIDE: "true"
     steps:
       - name: Check out the dispatched branch
         uses: actions/checkout@v4

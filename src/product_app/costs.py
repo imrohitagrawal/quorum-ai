@@ -407,12 +407,19 @@ class DailyAllowance(BaseModel):
     ``bounded_by`` says which limit set ``remaining_usd``. When it is
     ``running_total`` the figure is not "of the cap in the last 24 hours" and
     does not free up as runs age, so the page must not word it that way.
+
+    ``shared_by_network`` (W47, ADR-0144 decision 6) is ``True`` when the
+    allowance is an anonymous session's, which is its network's: everyone on
+    that network who is not signed in shares it, and the page says so.
+    ``False`` for a signed-in account, the legacy header, and a service call
+    that names no network.
     """
 
     cap_usd: Decimal
     spent_usd: Decimal
     remaining_usd: Decimal
     bounded_by: AllowanceBound
+    shared_by_network: bool
 
 
 @dataclass(frozen=True)
@@ -463,7 +470,9 @@ def _follow_up_context_tokens(context: dict[str, Any] | None) -> _FollowUpTokens
     )
 
 
-def daily_allowance_from(*, already_spent: Decimal, cumulative: Decimal) -> DailyAllowance:
+def daily_allowance_from(
+    *, already_spent: Decimal, cumulative: Decimal, shared_by_network: bool = False
+) -> DailyAllowance:
     """The allowance left, from one ledger figure and the in-memory running total.
 
     ``remaining`` is ``DAILY_CAP_USD - already_spent``, lowered to
@@ -472,7 +481,8 @@ def daily_allowance_from(*, already_spent: Decimal, cumulative: Decimal) -> Dail
     can read "$0.29 left" while the server blocks; a tie stays ``daily_cap``),
     and clamped to ``[0, DAILY_CAP_USD]``
     (a live run reconciled above its estimate can put the ledger above the cap).
-    Pure arithmetic: it reads and writes nothing.
+    Pure arithmetic: it reads and writes nothing. ``shared_by_network`` is
+    passed through (W47).
     """
     remaining = DAILY_CAP_USD - already_spent
     bounded_by: AllowanceBound = "daily_cap"
@@ -485,6 +495,7 @@ def daily_allowance_from(*, already_spent: Decimal, cumulative: Decimal) -> Dail
         spent_usd=already_spent.quantize(COST_DISPLAY_QUANTUM, rounding=ROUND_CEILING),
         remaining_usd=remaining.quantize(COST_DISPLAY_QUANTUM, rounding=ROUND_FLOOR),
         bounded_by=bounded_by,
+        shared_by_network=shared_by_network,
     )
 
 
@@ -849,6 +860,7 @@ class CostEstimationService:
         context: dict[str, Any] | None = None,
         mode: str = MODE_PANEL,
         spend_key: UUID | None = None,
+        shared_by_network: bool = False,
     ) -> CostEstimate:
         # Issue #123: the cheapest, most frequently-hit request path is where
         # a stale-store reconnect gets kicked off. Both calls are cheap on
@@ -908,7 +920,7 @@ class CostEstimationService:
         bound = self._estimate_bound_usd(
             query_text=query_text, model_slots=model_slots, context=context, mode=mode
         )
-        threshold_action, reasons = self._threshold_for(bound)
+        threshold_action, reasons = self._threshold_for(bound, shared_by_network=shared_by_network)
         # C8: cumulative-spend guard. A user can issue many small
         # queries that each stay below ``HARD_LIMIT_USD`` but together
         # blow the budget. The hard limit is per-account-per-window;
@@ -1090,13 +1102,27 @@ class CostEstimationService:
         daily_allowance = (
             None
             if already_spent is None
-            else daily_allowance_from(already_spent=already_spent, cumulative=cumulative)
+            else daily_allowance_from(
+                already_spent=already_spent,
+                cumulative=cumulative,
+                # W47 (ADR-0144 decision 6): the route says whether
+                # ``spend_key`` is a network's; a direct call names none.
+                shared_by_network=shared_by_network,
+            )
         )
         # ADR-0141 decision 1: which limit blocks. The per-run cap wins whatever
         # else fires and keeps its own reasons (that run can never start, so
         # "wait" is the wrong advice); it is returned by the final return below.
         # The other three keep the order they were always tested in.
         block: tuple[BlockReason, list[str]] | None = None
+        # W47 (ADR-0144): an anonymous session's meter is its NETWORK's, which
+        # the person may not have spent at all, so no reason built here (nor
+        # ``_threshold_for``'s per-run reason) calls it "the account". A
+        # signed-in account's wording is byte-identical.
+        meter = "this network" if shared_by_network else "the account"
+        this_meter = "this network" if shared_by_network else "this account"
+        no_cap = "no 24h cap" if shared_by_network else "no account's 24h cap"
+        meter_has = "This network has" if shared_by_network else "Account has"
         if threshold_action is CostThresholdAction.BLOCK:
             pass
         elif running_total_fires:
@@ -1105,11 +1131,11 @@ class CostEstimationService:
                 "account_running_total",
                 [
                     (
-                        "This run would take the account's recent spend past its "
+                        f"This run would take {meter}'s recent spend past its "
                         f"USD {HARD_LIMIT_USD} running limit."
                     ),
                     (
-                        "Cumulative spend for this account is "
+                        f"Cumulative spend for {this_meter} is "
                         f"{cumulative.quantize(COST_DISPLAY_QUANTUM)} USD."
                     ),
                 ],
@@ -1121,9 +1147,9 @@ class CostEstimationService:
                     (
                         "The daily spend ledger is not writable and a reconnect "
                         "attempt has already been made without restoring it, so "
-                        "no account's 24h cap can be verified right now. This is "
-                        "a storage fault on the shared ledger, not a limit this "
-                        "account has reached."
+                        f"{no_cap} can be verified right now. This is "
+                        "a storage fault on the shared ledger, not a limit "
+                        f"{this_meter} has reached."
                     ),
                 ],
             )
@@ -1137,9 +1163,9 @@ class CostEstimationService:
                     # against a ledger of measured actuals (#255) — it is not a
                     # worst-case figure, and calling it one told the operator
                     # the rail was stricter than it is.
-                    f"This run would take the account past its USD {DAILY_CAP_USD} daily cap.",
+                    f"This run would take {meter} past its USD {DAILY_CAP_USD} daily cap.",
                     (
-                        "Account has spent "
+                        f"{meter_has} spent "
                         f"{already_spent.quantize(COST_DISPLAY_QUANTUM)} "
                         "USD in the last 24 hours; spend frees up as each run "
                         "turns 24 hours old."
@@ -1151,8 +1177,8 @@ class CostEstimationService:
                 if estimated <= DAILY_CAP_USD
                 else [
                     (
-                        f"This run's estimate of {estimated} USD is larger than the "
-                        f"account's whole USD {DAILY_CAP_USD} allowance for 24 hours, "
+                        f"This run's estimate of {estimated} USD is larger than "
+                        f"{meter}'s whole USD {DAILY_CAP_USD} allowance for 24 hours, "
                         "so it will not fit however long you wait."
                     ),
                     "Choose lower-cost models or shorten the question.",
@@ -1221,7 +1247,9 @@ class CostEstimationService:
             daily_allowance=daily_allowance,
         )
 
-    def daily_allowance_for(self, spend_key: UUID) -> DailyAllowance | None:
+    def daily_allowance_for(
+        self, spend_key: UUID, *, shared_by_network: bool = False
+    ) -> DailyAllowance | None:
         """A FRESH read of the allowance, for the charge-time ``OVER_DAILY_CAP``
         402 (ADR-0141 decision 3).
 
@@ -1229,6 +1257,7 @@ class CostEstimationService:
         same key charged between it and the refused charge — so the figure is
         read again. One ``daily_spend_for`` call and nothing written. ``None``
         when the ledger cannot be metered, as on the estimate.
+        ``shared_by_network`` as on the estimate (W47).
         """
         from product_app.feedback_store import get_store  # local import to avoid cycles
         from product_app.store_reconnect import feedback_ledger_may_be_metered
@@ -1239,6 +1268,7 @@ class CostEstimationService:
         return daily_allowance_from(
             already_spent=store.daily_spend_for(spend_key),
             cumulative=self._cumulative_spend_for(spend_key),
+            shared_by_network=shared_by_network,
         )
 
     def _log_daily_cap_bypassed(self) -> None:
@@ -2532,15 +2562,19 @@ class CostEstimationService:
             total += event.estimated_cost_usd
         return total
 
-    def _threshold_for(self, bound: Decimal) -> tuple[CostThresholdAction, list[str]]:
+    def _threshold_for(
+        self, bound: Decimal, *, shared_by_network: bool = False
+    ) -> tuple[CostThresholdAction, list[str]]:
         # ``bound`` is the fail-safe ``max_cost_usd`` (the "up to $Y" figure),
         # NOT the realistic point estimate — the rail keys off the worst case so
         # a run can never bill past a limit it was waved through under.
+        # W47 (ADR-0144): a network's meter is not called "this account".
         if bound > HARD_LIMIT_USD:
             return (
                 CostThresholdAction.BLOCK,
                 [
-                    "Worst-case cost could exceed the USD 0.50 hard limit for this account.",
+                    "Worst-case cost could exceed the USD 0.50 hard limit for "
+                    f"{'this network' if shared_by_network else 'this account'}.",
                 ],
             )
         if bound > SOFT_THRESHOLD_USD:

@@ -1443,6 +1443,10 @@ select {
   color: var(--ink);
 }
 .cost-gate-allowance[hidden] { display: none; }
+/* W47: the line's figure is monospace; who shares a network's allowance
+   (and the sign-in offer) is a sentence, not a figure, so this child span
+   is set in body type. */
+.cost-gate-allowance-shared { font-family: var(--font-sans); }
 
 .cost-gate-actions {
   display: flex;

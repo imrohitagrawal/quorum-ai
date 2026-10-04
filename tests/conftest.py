@@ -155,6 +155,11 @@ os.environ["GOOGLE_OAUTH_REDIRECT_URI"] = ""
 # into ``max_cost_usd`` that divergence moves the SPEND RAILS — CI would
 # validate them in a shape production never runs.
 os.environ["QUORUM_EVAL_JUDGE_MODEL_ID"] = ""
+# W47 (ADR-0144 decision 7). The e2e lanes and AGENTS.md rule 13's local
+# command set this LOCAL-only override; a shell or .env that still carries it
+# would turn every per-network spend test in this suite into a per-session
+# one. Tests that exercise the override set it for themselves.
+os.environ["ANONYMOUS_SPEND_PER_SESSION_OVERRIDE"] = ""
 
 import ipaddress
 import socket

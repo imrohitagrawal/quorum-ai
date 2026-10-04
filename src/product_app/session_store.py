@@ -160,6 +160,18 @@ def account_id_for(google_sub: str, *, key: bytes) -> UUID:
     return UUID(bytes=digest[:16], version=4)
 
 
+def network_spend_key(network: str) -> UUID:
+    """An anonymous session's spend key (W47, ADR-0144 decision 1): a keyed
+    one-way hash of its network under the server secret as it reads now
+    (:func:`_account_key`), turned into a UUID the way :func:`account_id_for`
+    is, under a W47-only prefix so a network never shares a key with a Google
+    subject. Every anonymous session on one network gets the same key, so they
+    share one daily allowance; the cost ledger holds this hash, never the
+    address (decision 5). ``auth.spend_meter_for`` chooses the text."""
+    digest = hmac.new(_account_key(), b"w47-network:" + network.encode(), hashlib.sha256).digest()
+    return UUID(bytes=digest[:16], version=4)
+
+
 def _to_utc(value: datetime) -> datetime:
     """UTC, so the history table's ISO text orders and compares correctly. A
     naive value is taken as UTC already (the app only makes aware ones)."""
@@ -1046,13 +1058,44 @@ class SessionStore:
         returning ``None`` on an error read as "anonymous")."""
         if not self._accounts_ready:
             return None
+        return self._no_account_row(account_id, table_may_be_missing=False)
+
+    def has_no_account_row(self, account_id: UUID) -> bool | None:
+        """Like :meth:`is_anonymous`, but answered while the accounts feature
+        is unavailable too (W47, ADR-0144 decision 3): a database that predates
+        the spend-key column (read-only, so the column was never added) still
+        restores signed-in sessions, and their account rows can be read.
+        ``True`` when the id is in no accounts row, or there is no accounts
+        table at all; ``False`` when a row exists; ``None`` when that cannot be
+        read. ``auth.spend_meter_for`` calls it only while the accounts
+        feature is unavailable, and :meth:`is_anonymous` otherwise;
+        :meth:`is_anonymous` keeps its answer for carry-over, the idle limit
+        and the History route (``main``'s ``GET /v1/account/history``) too."""
+        return self._no_account_row(account_id, table_may_be_missing=True)
+
+    def _no_account_row(self, account_id: UUID, *, table_may_be_missing: bool) -> bool | None:
+        """The one read behind :meth:`is_anonymous` and
+        :meth:`has_no_account_row`: whether ``account_id`` is in no accounts
+        row (a missing accounts table counts as no row only when
+        ``table_may_be_missing``); ``None`` when that cannot be read."""
         with self._lock:
             if self._closed:
                 return None
             try:
-                row = self._conn.execute(
-                    "SELECT 1 FROM accounts WHERE account_id = ?", (str(account_id),)
-                ).fetchone()
+                table = (
+                    not table_may_be_missing
+                    or self._conn.execute(
+                        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'accounts'"
+                    ).fetchone()
+                    is not None
+                )
+                row = (
+                    self._conn.execute(
+                        "SELECT 1 FROM accounts WHERE account_id = ?", (str(account_id),)
+                    ).fetchone()
+                    if table
+                    else None
+                )
             except sqlite3.Error as exc:
                 self._warn("check whether a session is anonymous", exc)
                 return None

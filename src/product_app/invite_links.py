@@ -7,7 +7,8 @@ log prints query strings, measured 2026-09-26). The invite page posts it
 here in a JSON body; a valid token becomes an HttpOnly cookie. While the
 cookie holds a valid token, a new session from that browser counts against
 the LINK's own daily cap instead of the visitor address's. Nothing else
-reads it: spend limits count accounts and the site.
+reads it: spend limits count signed-in accounts, networks (an anonymous
+session's spend is its network's, W47, ADR-0144) and the site.
 
 The token is ``v1.<id>.<until>.<signature>``: a 12-hex-digit id, the last
 day it works (UTC, inclusive), and an HMAC-SHA256 of ``v1.<id>.<until>``
@@ -43,12 +44,14 @@ from pydantic import BaseModel, ConfigDict, StrictStr
 #: sessions in a rolling 24 hours; a signing key has at least this many
 #: characters.
 MAX_VALID_DAYS = 90
-#: 12, not the 50 first proposed: each new session is a new account that may
-#: spend DAILY_CAP_USD (0.40), so one day's new sessions from a link can spend
-#: at most 12 x 0.40 = 4.80 in their first 24 hours, under the site-wide
-#: GLOBAL_DAILY_CEILING_USD (5.00). Accounts kept alive add up across days, so
-#: this is not a bound on a leaked link over time (ADR-0134): its end date and
-#: revocation are. Pinned as a relationship in tests/unit/test_invite_links.py.
+#: 12, not the 50 first proposed. When it was chosen each new anonymous
+#: session could spend its own DAILY_CAP_USD (0.40), so 12 x 0.40 = 4.80 had to
+#: fit under the site-wide GLOBAL_DAILY_CEILING_USD (5.00); that relationship is
+#: still pinned in tests/unit/test_invite_links.py. Since W47 (ADR-0144) an
+#: anonymous session spends its NETWORK's 0.40 a day, so an invite never lifts
+#: spend: its visitors share their network's allowance like anyone else there,
+#: however many sessions the link opens. A leaked link is bounded by its end
+#: date and revocation (ADR-0134).
 DAILY_SESSIONS_PER_LINK = 12
 MIN_KEY_LENGTH = 32
 
