@@ -26,7 +26,7 @@ from product_app.auth import (
     enforce_csrf,
     refuse_sign_in_only,
     require_session,
-    spend_key_for,
+    spend_meter_for,
 )
 from product_app.config import RuntimeEnvironment, settings
 from product_app.costs import (
@@ -610,8 +610,9 @@ def estimate_query_run(
     enforce_csrf(request, session)
     # SEC-C3: per-account rate limit to prevent rapid-fire estimate spam
     _enforce_account_rate_limit(request, session)
-    # W7 (ADR-0136): the key the per-account spend rails read.
-    spend_key = spend_key_for(session)
+    # W7 (ADR-0136): the key the per-account spend rails read; W47
+    # (ADR-0144): an anonymous session's is its network's, and says so.
+    spend = spend_meter_for(session, request)
     model_slots = _validated_model_slots(
         payload.model_slots,
         slot_search=payload.slot_search,
@@ -621,7 +622,8 @@ def estimate_query_run(
         query_text=payload.query_text,
         model_slots=model_slots,
         account_id=session.account_id,
-        spend_key=spend_key,
+        spend_key=spend.key,
+        shared_by_network=spend.shared_by_network,
         # WP-G2 (F-10): the fix here is the ``context`` field on the shared
         # request base, NOT this line — with the field present, the old
         # ``getattr(payload, "context", None)`` would read the same value. It
@@ -665,8 +667,9 @@ def create_query_run(
     # SEC-C3: per-account rate limit to prevent rapid-fire run creation
     _enforce_account_rate_limit(request, session)
     # W7 (ADR-0136): read once, stored on the run, so its charge, void and
-    # reconcile all use the key the estimate read.
-    spend_key = spend_key_for(session)
+    # reconcile all use the key the estimate read -- even if the network
+    # changes mid-run (W47, ADR-0144 decision 4).
+    spend = spend_meter_for(session, request)
     model_slots = _validated_model_slots(
         payload.model_slots,
         slot_search=payload.slot_search,
@@ -701,7 +704,8 @@ def create_query_run(
         query_text=payload.query_text,
         model_slots=model_slots,
         account_id=session.account_id,
-        spend_key=spend_key,
+        spend_key=spend.key,
+        shared_by_network=spend.shared_by_network,
         context=payload.context,
         mode=payload.mode,
     )
@@ -800,7 +804,8 @@ def create_query_run(
             cost_estimate=cost_estimate,
             cost_decision=cost_decision,
             capacity_permit=capacity_permit,
-            spend_key=spend_key,
+            spend_key=spend.key,
+            shared_by_network=spend.shared_by_network,
             # Issue #100 §2.8: the global-ceiling Sentry alert wants an
             # IP breakdown alongside account_id. The visitor's own address
             # (VisitorAddressMiddleware, ADR-0132); the session limits key on
@@ -817,7 +822,7 @@ def create_query_run(
         raise
 
 
-def _over_daily_cap_detail(spend_key: UUID) -> dict[str, object]:
+def _over_daily_cap_detail(spend_key: UUID, *, shared_by_network: bool) -> dict[str, object]:
     """The body of the charge-time ``OVER_DAILY_CAP`` 402 (ADR-0141 decision 3).
 
     That body has no ``cost_estimate``, so it carries the reason and the
@@ -832,10 +837,15 @@ def _over_daily_cap_detail(spend_key: UUID) -> dict[str, object]:
     ``except BaseException`` voids the run's billing, and a charge that was
     refused was never made, so a void row would be false (measured: a 500 and a
     ``cost_charge_voided`` row).
+
+    ``shared_by_network`` says whether ``spend_key`` is a network's, as on the
+    estimate (W47, ADR-0144 decision 6).
     """
     allowance: DailyAllowance | None
     try:
-        allowance = cost_estimation_service.daily_allowance_for(spend_key)
+        allowance = cost_estimation_service.daily_allowance_for(
+            spend_key, shared_by_network=shared_by_network
+        )
     except Exception:  # noqa: BLE001 - the refusal must still be sent
         logger.warning(
             "query_runs: the daily allowance could not be read for a charge-time "
@@ -860,6 +870,7 @@ def _start_reserved_query_run(
     cost_decision: CostGuardrailDecision,
     capacity_permit: BoundedSemaphore | None,
     spend_key: UUID,
+    shared_by_network: bool,
     client_ip: str | None = None,
 ) -> QueryRunCreateResponse:
     """Create, bill and launch a run whose capacity permit is already held.
@@ -922,7 +933,7 @@ def _start_reserved_query_run(
             _abandon_unstarted_run(query_run.query_run_id)
             raise HTTPException(
                 status_code=status.HTTP_402_PAYMENT_REQUIRED,
-                detail=_over_daily_cap_detail(spend_key),
+                detail=_over_daily_cap_detail(spend_key, shared_by_network=shared_by_network),
             )
         if charge is ChargeOutcome.OVER_GLOBAL_CEILING:
             query_run = query_run_repository.mark_global_ceiling_reached(query_run.query_run_id)
@@ -974,7 +985,7 @@ def _start_reserved_query_run(
             _abandon_unstarted_run(query_run.query_run_id)
             raise HTTPException(
                 status_code=status.HTTP_402_PAYMENT_REQUIRED,
-                detail=_over_daily_cap_detail(spend_key),
+                detail=_over_daily_cap_detail(spend_key, shared_by_network=shared_by_network),
             )
         if charge is ChargeOutcome.OVER_GLOBAL_CEILING:
             # The deployment-wide ceiling degrades rather than blocks. Mark the

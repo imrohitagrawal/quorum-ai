@@ -160,6 +160,18 @@ def account_id_for(google_sub: str, *, key: bytes) -> UUID:
     return UUID(bytes=digest[:16], version=4)
 
 
+def network_spend_key(network: str) -> UUID:
+    """An anonymous session's spend key (W47, ADR-0144 decision 1): a keyed
+    one-way hash of its network under the server secret as it reads now
+    (:func:`_account_key`), turned into a UUID the way :func:`account_id_for`
+    is, under a W47-only prefix so a network never shares a key with a Google
+    subject. Every anonymous session on one network gets the same key, so they
+    share one daily allowance; the cost ledger holds this hash, never the
+    address (decision 5). ``auth.spend_meter_for`` chooses the text."""
+    digest = hmac.new(_account_key(), b"w47-network:" + network.encode(), hashlib.sha256).digest()
+    return UUID(bytes=digest[:16], version=4)
+
+
 def _to_utc(value: datetime) -> datetime:
     """UTC, so the history table's ISO text orders and compares correctly. A
     naive value is taken as UTC already (the app only makes aware ones)."""

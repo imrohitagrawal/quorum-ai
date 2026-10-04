@@ -407,12 +407,19 @@ class DailyAllowance(BaseModel):
     ``bounded_by`` says which limit set ``remaining_usd``. When it is
     ``running_total`` the figure is not "of the cap in the last 24 hours" and
     does not free up as runs age, so the page must not word it that way.
+
+    ``shared_by_network`` (W47, ADR-0144 decision 6) is ``True`` when the
+    allowance is an anonymous session's, which is its network's: everyone on
+    that network who is not signed in shares it, and the page says so.
+    ``False`` for a signed-in account, the legacy header, and a service call
+    that names no network.
     """
 
     cap_usd: Decimal
     spent_usd: Decimal
     remaining_usd: Decimal
     bounded_by: AllowanceBound
+    shared_by_network: bool
 
 
 @dataclass(frozen=True)
@@ -463,7 +470,9 @@ def _follow_up_context_tokens(context: dict[str, Any] | None) -> _FollowUpTokens
     )
 
 
-def daily_allowance_from(*, already_spent: Decimal, cumulative: Decimal) -> DailyAllowance:
+def daily_allowance_from(
+    *, already_spent: Decimal, cumulative: Decimal, shared_by_network: bool = False
+) -> DailyAllowance:
     """The allowance left, from one ledger figure and the in-memory running total.
 
     ``remaining`` is ``DAILY_CAP_USD - already_spent``, lowered to
@@ -472,7 +481,8 @@ def daily_allowance_from(*, already_spent: Decimal, cumulative: Decimal) -> Dail
     can read "$0.29 left" while the server blocks; a tie stays ``daily_cap``),
     and clamped to ``[0, DAILY_CAP_USD]``
     (a live run reconciled above its estimate can put the ledger above the cap).
-    Pure arithmetic: it reads and writes nothing.
+    Pure arithmetic: it reads and writes nothing. ``shared_by_network`` is
+    passed through (W47).
     """
     remaining = DAILY_CAP_USD - already_spent
     bounded_by: AllowanceBound = "daily_cap"
@@ -485,6 +495,7 @@ def daily_allowance_from(*, already_spent: Decimal, cumulative: Decimal) -> Dail
         spent_usd=already_spent.quantize(COST_DISPLAY_QUANTUM, rounding=ROUND_CEILING),
         remaining_usd=remaining.quantize(COST_DISPLAY_QUANTUM, rounding=ROUND_FLOOR),
         bounded_by=bounded_by,
+        shared_by_network=shared_by_network,
     )
 
 
@@ -849,6 +860,7 @@ class CostEstimationService:
         context: dict[str, Any] | None = None,
         mode: str = MODE_PANEL,
         spend_key: UUID | None = None,
+        shared_by_network: bool = False,
     ) -> CostEstimate:
         # Issue #123: the cheapest, most frequently-hit request path is where
         # a stale-store reconnect gets kicked off. Both calls are cheap on
@@ -1090,7 +1102,13 @@ class CostEstimationService:
         daily_allowance = (
             None
             if already_spent is None
-            else daily_allowance_from(already_spent=already_spent, cumulative=cumulative)
+            else daily_allowance_from(
+                already_spent=already_spent,
+                cumulative=cumulative,
+                # W47 (ADR-0144 decision 6): the route says whether
+                # ``spend_key`` is a network's; a direct call names none.
+                shared_by_network=shared_by_network,
+            )
         )
         # ADR-0141 decision 1: which limit blocks. The per-run cap wins whatever
         # else fires and keeps its own reasons (that run can never start, so
@@ -1221,7 +1239,9 @@ class CostEstimationService:
             daily_allowance=daily_allowance,
         )
 
-    def daily_allowance_for(self, spend_key: UUID) -> DailyAllowance | None:
+    def daily_allowance_for(
+        self, spend_key: UUID, *, shared_by_network: bool = False
+    ) -> DailyAllowance | None:
         """A FRESH read of the allowance, for the charge-time ``OVER_DAILY_CAP``
         402 (ADR-0141 decision 3).
 
@@ -1229,6 +1249,7 @@ class CostEstimationService:
         same key charged between it and the refused charge — so the figure is
         read again. One ``daily_spend_for`` call and nothing written. ``None``
         when the ledger cannot be metered, as on the estimate.
+        ``shared_by_network`` as on the estimate (W47).
         """
         from product_app.feedback_store import get_store  # local import to avoid cycles
         from product_app.store_reconnect import feedback_ledger_may_be_metered
@@ -1239,6 +1260,7 @@ class CostEstimationService:
         return daily_allowance_from(
             already_spent=store.daily_spend_for(spend_key),
             cumulative=self._cumulative_spend_for(spend_key),
+            shared_by_network=shared_by_network,
         )
 
     def _log_daily_cap_bypassed(self) -> None:

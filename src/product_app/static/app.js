@@ -8329,6 +8329,26 @@
   // the page never decides a limit from it.
   const DAILY_CAP_LABEL_USD = "0.40";
 
+  // W47 (ADR-0144 decision 6): an anonymous session's allowance is its
+  // network's — the server flags it ``shared_by_network: true`` — so the page
+  // says who shares it and, where this page offers sign-in (``canSignIn``),
+  // that signing in gives a person their own allowance. "" for an allowance
+  // that is the caller's own (signed in), so that copy never names a network.
+  // Pure (no DOM): callers pass ``canSignIn`` from ``signInOffered()``.
+  function sharedAllowanceText(allowance, canSignIn) {
+    if (!allowance || allowance.shared_by_network !== true) return "";
+    const cap = capUsd(allowance.cap_usd);
+    const offer = canSignIn ? ` Sign in to get your own${cap ? ` ${cap}` : ""} a day.` : "";
+    return `This allowance is shared by everyone on this network who is not signed in.${offer}`;
+  }
+
+  // Whether this page offers sign-in: the server renders the top bar's
+  // "Sign in with Google" only when sign-in is enabled, this is its host, and
+  // the session is not signed in (W7, ADR-0130).
+  function signInOffered() {
+    return Boolean(el("sign-in-google"));
+  }
+
   // W33 slice C (ADR-0141 decisions 5 and 7): the words for a block, chosen
   // from ``block_reason`` and never from the prose ``reasons``. Pure (no DOM).
   //   * ``per_run_cap`` (and a block with no reason, as an older server
@@ -8345,7 +8365,8 @@
   //   * ``ledger_unavailable``: a storage fault, not a limit reached.
   // ``estimatedUsd`` is the run's point estimate as the server sent it, or
   // undefined when unknown (the charge-time refusal carries none).
-  function limitBlockCopy({ reason, allowance, estimatedUsd }) {
+  // ``canSignIn`` words the W47 sign-in offer on a shared allowance.
+  function limitBlockCopy({ reason, allowance, estimatedUsd, canSignIn }) {
     // The response's own cap when it carries an allowance (shown only if it
     // is a well-formed decimal); the label only when there is no allowance.
     const capValue = allowance ? allowance.cap_usd : DAILY_CAP_LABEL_USD;
@@ -8376,6 +8397,7 @@
       const nothingLeft =
         allowance != null && /^\d+(\.\d*)?$/.test(String(allowance.remaining_usd)) &&
         !/[1-9]/.test(String(allowance.remaining_usd));
+      const shared = sharedAllowanceText(allowance, canSignIn);
       return {
         perRunFurniture: false,
         offerCheaper: false,
@@ -8384,7 +8406,8 @@
           : "Not enough allowance left — this run won't start",
         body:
           `${used}${needs}. Simulated runs count too. ` +
-          "Spend frees up as each run turns 24 hours old.",
+          "Spend frees up as each run turns 24 hours old." +
+          (shared ? ` ${shared}` : ""),
         announce:
           `Run blocked by ${cap ? `the ${cap}` : "the"} daily allowance. ` +
           "Spend frees up as each run turns 24 hours old.",
@@ -8428,15 +8451,19 @@
   // (``bounded_by: "running_total"``) it is not "of $0.40 in the last 24
   // hours" and does not free up with time, so it is worded against the
   // running limit instead (decision 2).
-  function allowanceLineText(allowance, estimatedUsd) {
+  // W47 (ADR-0144 decision 6): a shared (network) allowance says so, and
+  // offers sign-in where the page has it (``canSignIn``).
+  function allowanceLineText(allowance, estimatedUsd, canSignIn) {
     const remaining = allowance ? usdCents(allowance.remaining_usd, "down") : "";
     if (!remaining) return "Your daily allowance cannot be checked right now.";
     const uses = `this run uses about ${gateUsd(estimatedUsd)}`;
+    const shared = sharedAllowanceText(allowance, canSignIn);
+    const tail = shared ? ` ${shared}` : "";
     if (allowance.bounded_by === "running_total") {
-      return `${remaining} left before the ${capUsd(COST_HARD_LIMIT_USD)} running limit; ${uses}.`;
+      return `${remaining} left before the ${capUsd(COST_HARD_LIMIT_USD)} running limit; ${uses}.${tail}`;
     }
     const cap = capUsd(allowance.cap_usd);
-    return `${remaining}${cap ? ` of ${cap}` : ""} left in the last 24 hours; ${uses}.`;
+    return `${remaining}${cap ? ` of ${cap}` : ""} left in the last 24 hours; ${uses}.${tail}`;
   }
 
   // Render a list of {label, usd} rows plus a bold Total row into a
@@ -8555,6 +8582,7 @@
         reason: ce.block_reason,
         allowance: ce.daily_allowance,
         estimatedUsd: ce.estimated_cost_usd,
+        canSignIn: signInOffered(),
       });
       // The block note names the worst case (max_cost_usd), which can exceed
       // the cap even when the typical estimate shown above is under it.
@@ -8664,7 +8692,11 @@
     // W33 slice C (ADR-0141 decision 6): what is left of the allowance,
     // before any block, as the server computed it.
     if (gateAllowance) {
-      gateAllowance.textContent = allowanceLineText(ce.daily_allowance, ce.estimated_cost_usd);
+      gateAllowance.textContent = allowanceLineText(
+        ce.daily_allowance,
+        ce.estimated_cost_usd,
+        signInOffered(),
+      );
       gateAllowance.hidden = false;
     }
     // Reset the block-only surfaces so a prior block render never bleeds
@@ -9840,6 +9872,7 @@
         reason,
         allowance: allowance || null,
         estimatedUsd: blocked ? blocked.estimated_cost_usd : undefined,
+        canSignIn: signInOffered(),
       });
       const footer = `threshold_action: blocked${error.correlationId ? ` · ${error.correlationId}` : ""}`;
       if (copy.perRunFurniture) {

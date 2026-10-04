@@ -922,23 +922,87 @@ def refuse_sign_in_only(session: SessionContext) -> None:
         )
 
 
-def spend_key_for(session: SessionContext) -> UUID:
-    """The key this session's runs are metered under (W7, ADR-0136).
+@dataclass(frozen=True)
+class SpendMeter:
+    """The key a request's spend is metered under, and whether that key is its
+    network's (W47, ADR-0144): ``shared_by_network`` is what the estimate's
+    ``daily_allowance`` reports, so the page can say who shares it."""
+
+    key: UUID
+    shared_by_network: bool
+
+
+def _anonymous_spend_key(session: SessionContext, request: Request) -> UUID:
+    """An anonymous session's spend key: its network's (ADR-0144 decision 1).
+
+    The network is :func:`client_ip_of` (an IPv4 address, or an IPv6
+    address's /64), the one the per-network session limits count. A request
+    whose network cannot be identified -- no client, or a host that is not an
+    address -- gets the ONE key every such request shares (decision 2: fail
+    closed). With the LOCAL-only test override on, each anonymous session is
+    its own network (decision 7); it is read only in LOCAL, behind the startup
+    refusal in ``validate_production_environment``, as
+    :func:`_effective_session_mint_cap` reads its override.
+    """
+    network = client_ip_of(request) or ""
+    try:
+        ipaddress.ip_network(network)
+    except ValueError:
+        network = ""
+    if (
+        settings.anonymous_spend_per_session_override
+        and settings.runtime_environment is RuntimeEnvironment.LOCAL
+    ):
+        network = f"{network} session:{session.account_id}"
+    return session_store.network_spend_key(network)
+
+
+def _session_expired() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail={
+            "code": AuthError.SESSION_EXPIRED.value,
+            "message": "Browser session expired and must be renewed.",
+        },
+    )
+
+
+def _spend_key_unavailable() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail={
+            "code": "SPEND_KEY_UNAVAILABLE",
+            "message": "Your spending limit could not be checked just now. Please try again.",
+        },
+    )
+
+
+def spend_meter_for(session: SessionContext, request: Request) -> SpendMeter:
+    """The key this session's runs are metered under (W7, ADR-0136; W47,
+    ADR-0144), and whether it is the network's.
 
     Read once per request by the estimate and create routes, and stored on the
-    run, so its charge, void and reconcile use one key. A read error refuses
-    (503) rather than falling back to the account id, which for a signed-in
-    account would be a fresh, empty envelope; this refuses anonymous runs
-    too while the sessions database cannot be read. The id is used as is only
-    where the store says the id has no account row, or has no usable
-    accounts table at all.
-    The lookup comes FIRST and the deletion check SECOND: a delete is marked
+    run, so its charge, void and reconcile use one key even if the network
+    changes mid-run. A signed-in account is metered under its stored spend
+    key; the legacy header under its own id; an ANONYMOUS session -- one whose
+    id has no account row -- under its network's key
+    (:func:`_anonymous_spend_key`), so every anonymous session on one network
+    shares one daily allowance.
+
+    Anonymity is decided from whether an account row exists, never from the
+    store returning the id: an account created before the spend key has a
+    stored key EQUAL to its id (ADR-0136 backfill) and keeps its own
+    allowance. A read error refuses (503) rather than guessing: for a
+    signed-in account, guessing "anonymous" would meter it under the network,
+    and the id would be a fresh, empty envelope.
+    The lookups come FIRST and the deletion check SECOND: a delete is marked
     as under way before the account row goes and stays marked until the
     sessions are refused, so a lookup that already misses the row of a
-    deleted account sees one or the other (within the session lifetime).
+    deleted account sees one or the other (within the session lifetime), and
+    a deleted account's other device gets a 401, never the network's spend.
     """
     if session.legacy:
-        return session.account_id
+        return SpendMeter(key=session.account_id, shared_by_network=False)
     # W34 (ADR-0139, decision 3): a sign-in-only session is refused HERE, the
     # one choke point the estimate and the run creation both pass through
     # before any cost or guardrail event is recorded, so nothing past the
@@ -948,38 +1012,41 @@ def spend_key_for(session: SessionContext) -> UUID:
     # account signed out everywhere (or was deleted) is refused here, before
     # it can be estimated or charged.
     if session_repository.get(session.session_id) is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail={
-                "code": AuthError.SESSION_EXPIRED.value,
-                "message": "Browser session expired and must be renewed.",
-            },
-        )
+        raise _session_expired()
     store = session_store.get_store()
-    key = session.account_id if store is None else store.spend_key_for(session.account_id)
-    # A key that differs from the id proves the row was read, so the delete
-    # has not committed; a key equal to the id is refused while a delete is
-    # under way or just done. That covers every deleted account (its random
-    # id never comes back), and also, for the length of one delete
-    # transaction, an account created before the spend key, whose key IS its
-    # id: its other devices get a 401 then and work again straight after.
-    if key == session.account_id and session_repository.account_is_going(session.account_id):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail={
-                "code": AuthError.SESSION_EXPIRED.value,
-                "message": "Browser session expired and must be renewed.",
-            },
-        )
-    if key is None:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={
-                "code": "SPEND_KEY_UNAVAILABLE",
-                "message": "Your spending limit could not be checked just now. Please try again.",
-            },
-        )
-    return key
+    anonymous: bool | None
+    if store is None:
+        # No session store: no one can sign in, so every session is anonymous.
+        anonymous = True
+    else:
+        key = store.spend_key_for(session.account_id)
+        if key is None:
+            raise _spend_key_unavailable()
+        # A key that differs from the id proves the row was read, so the
+        # delete has not committed and the session is signed in.
+        if key != session.account_id:
+            return SpendMeter(key=key, shared_by_network=False)
+        # The id itself: no account row, or a row whose spend key is the id
+        # (written by an older build, or backfilled). Which one is a second
+        # read; with no usable accounts table no one can be signed in.
+        anonymous = store.is_anonymous(session.account_id) if store.accounts_available() else True
+    # Refused while a delete is under way or just done. That covers every
+    # deleted account (its random id never comes back), and also, for the
+    # length of one delete transaction, an account created before the spend
+    # key, whose key IS its id: its other devices get a 401 then and work
+    # again straight after.
+    if session_repository.account_is_going(session.account_id):
+        raise _session_expired()
+    if anonymous is None:
+        raise _spend_key_unavailable()
+    if not anonymous:
+        return SpendMeter(key=session.account_id, shared_by_network=False)
+    return SpendMeter(key=_anonymous_spend_key(session, request), shared_by_network=True)
+
+
+def spend_key_for(session: SessionContext, request: Request) -> UUID:
+    """The key alone, of :func:`spend_meter_for`."""
+    return spend_meter_for(session, request).key
 
 
 def require_session(request: Request) -> SessionContext:
