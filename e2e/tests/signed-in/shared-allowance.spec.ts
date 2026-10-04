@@ -1,4 +1,5 @@
 import { test, expect, type Browser, type Page, type Response } from "@playwright/test";
+import { LIMIT_RESPONSES } from "../../fixtures/limit-responses";
 
 /**
  * W47 (ADR-0144 decision 6) on the SIGNED-IN lane: the page says the anonymous
@@ -217,5 +218,58 @@ test.describe("W47 — the allowance is shared by the network while not signed i
     expect(own.cost_estimate.daily_allowance.spent_usd).toBe("0.0000");
     expect(await allowanceLine(newcomer).innerText()).not.toMatch(/network/i);
     await newcomer.context().close();
+  });
+
+  /**
+   * Review round 2, B: the card's sign-in control only where signing in can help. Server-shaped mocks
+   * (`fixtures/limit-responses.ts`, real responses with `shared_by_network` set as the W47 server sends
+   * it for an anonymous session): the per-run cap and a run larger than a whole day's allowance need an
+   * expensive panel whose price moves with the live catalog, and neither is lifted by an own $0.40.
+   * This lane is used because its pages offer sign-in (`#sign-in-google`); the main lane's do not.
+   */
+  const sharedBody = (base: any) => {
+    const copy = structuredClone(base);
+    copy.cost_estimate.daily_allowance.shared_by_network = true;
+    return copy;
+  };
+  const gateSignIn = (page: Page) => page.locator("#gate-sign-in");
+
+  async function mockedBlock(browser: Browser, body: unknown): Promise<Page> {
+    const page = await newAnonymousPage(browser);
+    await page.route("**/v1/query-runs/estimate", (r) =>
+      r.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) }),
+    );
+    await page.locator("#query-text").fill(QUESTIONS[0]);
+    await page.locator("#estimate-run").click();
+    await expect(gateView(page)).toBeVisible({ timeout: 15000 });
+    await expect(card(page)).toHaveAttribute("data-band", "block");
+    // Partner: this page offers sign-in, so a hidden card control is the card's choice, not the page's.
+    await expect(page.locator("#sign-in-google")).toBeVisible();
+    return page;
+  }
+
+  for (const [name, base] of [
+    ["the per-run cap", LIMIT_RESPONSES.perRunCap],
+    ["a run larger than a whole day's allowance", LIMIT_RESPONSES.dailyCapLargerThanADay],
+  ] as const) {
+    test(`the card offers no sign-in on ${name}, where an own allowance cannot help`, async ({ browser }) => {
+      // RED-IF `#gate-sign-in` ("Sign in for your own allowance") is shown on this block: signing in gives
+      // a person their own $0.40 a day, which lifts neither the $0.50 per-run cap nor a run that alone
+      // costs more than $0.40. Partners: the block rendered on a page that offers sign-in, and the
+      // shared daily-cap test below shows the control.
+      const page = await mockedBlock(browser, sharedBody(base));
+
+      await expect(gateSignIn(page)).toHaveCount(1);
+      await expect(gateSignIn(page)).toBeHidden();
+      await page.context().close();
+    });
+  }
+
+  test("the card offers sign-in on a shared daily-cap block", async ({ browser }) => {
+    // Partner of the two tests above (green on 626c916): the control is shown where an own $0.40 helps.
+    const page = await mockedBlock(browser, sharedBody(LIMIT_RESPONSES.dailyCap));
+
+    await expect(gateSignIn(page)).toBeVisible();
+    await page.context().close();
   });
 });

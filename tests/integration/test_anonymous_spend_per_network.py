@@ -46,6 +46,7 @@ import threading
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from decimal import Decimal
+from html.parser import HTMLParser
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -58,6 +59,7 @@ from tests.google_token_stub import good_claims
 from tests.helpers import isolated_run_semaphore, wait_for_free_permits
 from tests.integration.test_google_sign_in import SignIn, _boot, _signed_in
 from tests.integration.test_query_run_cost_guardrails import (
+    BLOCKED_MODEL_IDS,
     DEFAULT_MODEL_IDS,
     _stable_catalog_price,  # noqa: F401 -- a fixture, used by name below
     acknowledged_request,
@@ -1074,7 +1076,7 @@ def test_a_networks_daily_block_never_calls_the_meter_the_account() -> None:
 
 def test_a_networks_running_total_block_never_calls_the_meter_the_account() -> None:
     """RED-IF any server sentence about an anonymous session's running-total
-    block says "account" (today: "the account's recent spend", "Cumulative
+    block says "account" (before review round 1: "the account's recent spend", "Cumulative
     spend for this account"). Partners: it IS that block, and the sentences
     still state the $0.50 limit and the network's $0.4500."""
     with configure_for_tests():
@@ -1161,3 +1163,191 @@ def test_a_signed_in_accounts_blocks_keep_the_account_wording(sign_in: SignIn) -
         _limit_texts(running_detail),
     ):
         assert any(ACCOUNT_WORD.search(text) for text in texts), texts
+
+
+# --- 12. review round 2: the per-run cap and the ledger fault, for a network's meter --------
+#
+# Two more server sentences named the account whatever the meter: the per-run
+# cap's "… hard limit for this account." and the condemned ledger's "… no
+# account's 24h cap can be verified …". Reached for real: an expensive panel
+# under the pinned catalog (no lowered constant, rule 7a), and the fail-closed
+# ledger state of issue #122. The own-key wording is pinned BYTE-IDENTICAL, as
+# the server sends it on 626c916, for a signed-in account and the legacy header.
+
+#: Under the pinned catalog: worst case above the $0.50 per-run cap
+#: (test_block_reason_and_daily_allowance.PER_RUN_ONLY_QUERY).
+PER_RUN_QUERY = "x" * 2_000
+
+#: What the server sends for an OWN meter on 626c916 (measured over the routes):
+#: per-run cap, then the condemned ledger. Keys: the estimate's top-level
+#: ``reasons``, its ``cost_estimate.reasons``, and the create 402's ``message``.
+OWN_PER_RUN = {
+    "reasons": ["Estimated cost exceeds USD 0.50 and is blocked for this slice."],
+    "cost_estimate_reasons": [
+        "Worst-case cost could exceed the USD 0.50 hard limit for this account."
+    ],
+    "message": "This run's worst-case cost is above the USD 0.50 per-run cap.",
+}
+OWN_LEDGER = {
+    "reasons": [
+        "The daily spend ledger cannot be verified right now, so this run is blocked. "
+        "This is a storage fault, not a limit this account has reached."
+    ],
+    "cost_estimate_reasons": [
+        "The daily spend ledger is not writable and a reconnect attempt has already been "
+        "made without restoring it, so no account's 24h cap can be verified right now. "
+        "This is a storage fault on the shared ledger, not a limit this account has reached."
+    ],
+    "message": (
+        "The daily spend ledger cannot be verified right now; this is a storage fault, "
+        "not a limit this account has reached."
+    ),
+}
+
+
+def _block_words(
+    client: TestClient, headers: dict[str, str], models: list[str], query: str
+) -> tuple[str | None, dict[str, Any]]:
+    """(block_reason, the three server texts) of one blocked estimate and create."""
+    estimate = client.post(
+        ESTIMATE, json={"query_text": query, "model_slots": models}, headers=headers
+    )
+    assert estimate.status_code == 200, estimate.text
+    created = client.post(RUNS, json=acknowledged_request(query, models), headers=headers)
+    assert created.status_code == 402, created.text
+    body = estimate.json()
+    return body["cost_estimate"]["block_reason"], {
+        "reasons": body["reasons"],
+        "cost_estimate_reasons": body["cost_estimate"]["reasons"],
+        "message": created.json()["detail"]["message"],
+    }
+
+
+def _all_texts(words: dict[str, Any]) -> list[str]:
+    return [*words["reasons"], *words["cost_estimate_reasons"], words["message"]]
+
+
+def test_a_networks_per_run_cap_block_never_calls_the_meter_the_account() -> None:
+    """RED-IF an anonymous session's per-run cap block says "account" in the
+    estimate's reasons or the create 402's message (626c916: "… hard limit
+    for this account."). Partners: it IS the per-run cap block, and the
+    texts still name the $0.50 limit."""
+    with configure_for_tests():
+        client = _browser(NET_A)
+        csrf = _boot(client)
+        reason, words = _block_words(
+            client, {"X-CSRF-Token": csrf}, BLOCKED_MODEL_IDS, PER_RUN_QUERY
+        )
+
+    texts = _all_texts(words)
+    assert reason == "per_run_cap"
+    assert any("0.50" in text for text in texts), texts
+    assert [text for text in texts if ACCOUNT_WORD.search(text)] == []
+
+
+def test_a_networks_ledger_fault_block_never_calls_the_meter_the_account(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """RED-IF an anonymous session's ``ledger_unavailable`` block says
+    "account" (626c916: "no account's 24h cap", "not a limit this account has
+    reached"). Partners: it IS that block, and the texts still say it is a
+    storage fault."""
+    from tests.integration.test_block_reason_and_daily_allowance import _ledger_condemned
+
+    _ledger_condemned(monkeypatch)
+    client = _browser(NET_A)
+    csrf = _boot(client)
+    reason, words = _block_words(client, {"X-CSRF-Token": csrf}, DEFAULT_MODEL_IDS, QUERY)
+
+    texts = _all_texts(words)
+    assert reason == "ledger_unavailable"
+    assert any("storage fault" in text for text in texts), texts
+    assert [text for text in texts if ACCOUNT_WORD.search(text)] == []
+
+
+def test_an_own_meters_per_run_and_ledger_words_are_unchanged(
+    sign_in: SignIn, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Partner of the two tests above: for a signed-in account and for the
+    legacy header the meter IS the account's, and the words are the bytes
+    626c916 sends (``OWN_PER_RUN``, ``OWN_LEDGER``). RED-IF the fix changes
+    the own-key wording instead of following the meter."""
+    from tests.integration.test_block_reason_and_daily_allowance import _ledger_condemned
+
+    with configure_for_tests():
+        account = _browser(NET_A)
+        csrf = _sign_in(account, sign_in, "108000000000000047011", "w47-words-own@example.com")
+        legacy = TestClient(app, client=(NET_A, 50000))
+        legacy_headers = {"X-Account-Id": str(uuid4())}
+        signed_per_run = _block_words(
+            account, {"X-CSRF-Token": csrf}, BLOCKED_MODEL_IDS, PER_RUN_QUERY
+        )
+        legacy_per_run = _block_words(legacy, legacy_headers, BLOCKED_MODEL_IDS, PER_RUN_QUERY)
+        _ledger_condemned(monkeypatch)
+        signed_ledger = _block_words(account, {"X-CSRF-Token": csrf}, DEFAULT_MODEL_IDS, QUERY)
+        legacy_ledger = _block_words(legacy, legacy_headers, DEFAULT_MODEL_IDS, QUERY)
+
+    assert signed_per_run == ("per_run_cap", OWN_PER_RUN)
+    assert legacy_per_run == ("per_run_cap", OWN_PER_RUN)
+    assert signed_ledger == ("ledger_unavailable", OWN_LEDGER)
+    assert legacy_ledger == ("ledger_unavailable", OWN_LEDGER)
+
+
+class _FooterText(HTMLParser):
+    """The visible text of every ``<p class="composer-footer-notice">``."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.footers: list[str] = []
+        self._depth = 0
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if self._depth:
+            self._depth += tag == "p"
+            return
+        classes = (dict(attrs).get("class") or "").split()
+        if tag == "p" and "composer-footer-notice" in classes:
+            self._depth = 1
+            self.footers.append("")
+
+    def handle_endtag(self, tag: str) -> None:
+        if self._depth and tag == "p":
+            self._depth -= 1
+
+    def handle_data(self, data: str) -> None:
+        if self._depth:
+            self.footers[-1] += data
+
+
+def _footer_of(client: TestClient) -> str:
+    page = client.get("/ui")
+    assert page.status_code == 200, page.text[:300]
+    parser = _FooterText()
+    parser.feed(page.text)
+    (footer,) = parser.footers
+    return " ".join(footer.split())
+
+
+def test_the_composer_footer_names_the_network_only_on_an_anonymous_page(sign_in: SignIn) -> None:
+    """Review round 2, A. RED-IF a signed-in page's composer footer says the
+    $0.40 is shared on the network (626c916 renders "shared by everyone on your
+    network while not signed in" for everyone; a signed-in allowance is the
+    person's own, decision 3). Partners: the anonymous page's footer DOES name
+    the network, both footers keep the $0.40, the 24 hours and simulated runs,
+    and the signed-in page really is signed in (its top bar has no sign-in
+    button)."""
+    anonymous = _browser(NET_A)
+    anonymous_footer = _footer_of(anonymous)
+    account = _browser(NET_B)
+    _sign_in(account, sign_in, "108000000000000047012", "w47-footer@example.com")
+    signed_in_page = account.get("/ui").text
+    signed_in_footer = _footer_of(account)
+
+    assert 'id="sign-in-google"' not in signed_in_page
+    assert 'id="sign-in-google"' in anonymous.get("/ui").text
+    for footer in (anonymous_footer, signed_in_footer):
+        assert "$0.40" in footer, footer
+        assert "24 hours" in footer, footer
+        assert "simulated" in footer, footer
+    assert "network" in anonymous_footer, anonymous_footer
+    assert "network" not in signed_in_footer, signed_in_footer

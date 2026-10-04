@@ -747,6 +747,32 @@ test.describe("W47 — the words for a shared (network) allowance (server-shaped
     await expect(signInControl(page)).toHaveCount(0);
   });
 
+  test("a shared 'larger than a day' block does not say 'you can spend' and says the allowance is shared", async ({ page }) => {
+    // Review round 2, C. A run whose estimate ALONE is above the whole $0.40 (decision 7's early branch of
+    // the daily-cap copy). RED-IF, for `shared_by_network: true`, the card still says "the whole $0.40
+    // you can spend in 24 hours" (it is the network's $0.40) or lacks the shared sentence. Partners: it IS
+    // that block (its headline), and the next test keeps the own-allowance wording.
+    await mockedEstimate(page, shared(LIMIT_RESPONSES.dailyCapLargerThanADay, true));
+    await expect(card(page)).toHaveAttribute("data-band", "block");
+    await expect(headline(page)).toContainText(/larger than a day/i);
+    const text = await cardText(page);
+
+    expect(text).toMatch(/this network/i);
+    expect(text).toMatch(/not signed in/i);
+    expect(text).not.toMatch(/you can spend/i);
+  });
+
+  test("an own 'larger than a day' block keeps 'you can spend in 24 hours' and never names the network", async ({ page }) => {
+    // Partner of the test above. RED-IF the own-allowance wording of decision 7 changes.
+    await mockedEstimate(page, shared(LIMIT_RESPONSES.dailyCapLargerThanADay, false));
+    await expect(card(page)).toHaveAttribute("data-band", "block");
+    await expect(headline(page)).toContainText(/larger than a day/i);
+    const text = await cardText(page);
+
+    expect(text).toMatch(/you can spend in 24 hours/);
+    expect(text).not.toMatch(/network/i);
+  });
+
   test("the composer footer says the $0.40 is shared on the network when not signed in", async ({ page }) => {
     // RED-IF: the composer footer still describes the $0.40 as if it were the visitor's own, with no
     // word that it is the network's while not signed in. Partners (green today): it still names the
