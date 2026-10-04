@@ -8383,10 +8383,17 @@
           perRunFurniture: false,
           offerCheaper: true,
           headline: "Larger than a day's allowance — this run won't start",
-          body:
-            `This run is estimated at ${runText}, more than the whole ${cap} ` +
-            "you can spend in 24 hours, so it will not fit however long you " +
-            "wait. Choose lower-cost models or shorten the question.",
+          // W47 review round 2: a shared allowance is the network's $0.40, not
+          // what "you can spend"; signing in cannot lift this block, so the
+          // shared sentence carries no sign-in offer.
+          body: sharedAllowanceText(allowance, false)
+            ? `This run is estimated at ${runText}, more than the whole ${cap} ` +
+              "allowance for 24 hours, so it will not fit however long you wait. " +
+              "Choose lower-cost models or shorten the question. " +
+              sharedAllowanceText(allowance, false)
+            : `This run is estimated at ${runText}, more than the whole ${cap} ` +
+              "you can spend in 24 hours, so it will not fit however long you " +
+              "wait. Choose lower-cost models or shorten the question.",
           announce: `Run blocked. Estimated ${runText} is more than the whole ${cap} daily allowance.`,
         };
       }
@@ -8550,10 +8557,19 @@
     const breakdown = ce.breakdown || {};
     const reasons = Array.isArray(ce.reasons) ? ce.reasons : [];
     // W47 (ADR-0144 decision 6): a shared (network) allowance offers sign-in
-    // in the card, in every band, where the page has sign-in at all.
+    // in the card where the page has sign-in at all, except on a block an own
+    // $0.40 a day cannot lift: the per-run cap (or a block with no reason), a
+    // run larger than the whole day, and a ledger fault.
     if (gateSignInButton) {
-      const sharedAllowance = Boolean(ce.daily_allowance && ce.daily_allowance.shared_by_network === true);
-      gateSignInButton.hidden = !(sharedAllowance && signInOffered());
+      const allowance = ce.daily_allowance;
+      const sharedAllowance = Boolean(allowance && allowance.shared_by_network === true);
+      const largerThanADay =
+        allowance != null && Number(ce.estimated_cost_usd) > Number(allowance.cap_usd);
+      const ownAllowanceHelps =
+        action !== "block" ||
+        ce.block_reason === "account_running_total" ||
+        (ce.block_reason === "daily_cap" && !largerThanADay);
+      gateSignInButton.hidden = !(sharedAllowance && ownAllowanceHelps && signInOffered());
     }
 
     // W33 (ADR-0140 decision 5, review round 2): the gate describes the run

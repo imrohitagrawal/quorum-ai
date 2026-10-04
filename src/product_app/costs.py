@@ -920,7 +920,7 @@ class CostEstimationService:
         bound = self._estimate_bound_usd(
             query_text=query_text, model_slots=model_slots, context=context, mode=mode
         )
-        threshold_action, reasons = self._threshold_for(bound)
+        threshold_action, reasons = self._threshold_for(bound, shared_by_network=shared_by_network)
         # C8: cumulative-spend guard. A user can issue many small
         # queries that each stay below ``HARD_LIMIT_USD`` but together
         # blow the budget. The hard limit is per-account-per-window;
@@ -1116,10 +1116,12 @@ class CostEstimationService:
         # The other three keep the order they were always tested in.
         block: tuple[BlockReason, list[str]] | None = None
         # W47 (ADR-0144): an anonymous session's meter is its NETWORK's, which
-        # the person may not have spent at all, so the reasons never call it
-        # "the account". A signed-in account's wording is unchanged.
+        # the person may not have spent at all, so no reason built here (nor
+        # ``_threshold_for``'s per-run reason) calls it "the account". A
+        # signed-in account's wording is byte-identical.
         meter = "this network" if shared_by_network else "the account"
         this_meter = "this network" if shared_by_network else "this account"
+        no_cap = "no 24h cap" if shared_by_network else "no account's 24h cap"
         meter_has = "This network has" if shared_by_network else "Account has"
         if threshold_action is CostThresholdAction.BLOCK:
             pass
@@ -1145,7 +1147,7 @@ class CostEstimationService:
                     (
                         "The daily spend ledger is not writable and a reconnect "
                         "attempt has already been made without restoring it, so "
-                        "no account's 24h cap can be verified right now. This is "
+                        f"{no_cap} can be verified right now. This is "
                         "a storage fault on the shared ledger, not a limit "
                         f"{this_meter} has reached."
                     ),
@@ -2560,15 +2562,19 @@ class CostEstimationService:
             total += event.estimated_cost_usd
         return total
 
-    def _threshold_for(self, bound: Decimal) -> tuple[CostThresholdAction, list[str]]:
+    def _threshold_for(
+        self, bound: Decimal, *, shared_by_network: bool = False
+    ) -> tuple[CostThresholdAction, list[str]]:
         # ``bound`` is the fail-safe ``max_cost_usd`` (the "up to $Y" figure),
         # NOT the realistic point estimate — the rail keys off the worst case so
         # a run can never bill past a limit it was waved through under.
+        # W47 (ADR-0144): a network's meter is not called "this account".
         if bound > HARD_LIMIT_USD:
             return (
                 CostThresholdAction.BLOCK,
                 [
-                    "Worst-case cost could exceed the USD 0.50 hard limit for this account.",
+                    "Worst-case cost could exceed the USD 0.50 hard limit for "
+                    f"{'this network' if shared_by_network else 'this account'}.",
                 ],
             )
         if bound > SOFT_THRESHOLD_USD:

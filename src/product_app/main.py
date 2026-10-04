@@ -1164,6 +1164,11 @@ def _render_workspace_html(account_controls: str = "", *, signed_in: bool = Fals
     # so no later substitution may run over it.
     if signed_in:
         rendered = rendered.replace(_ANONYMOUS_LEDE, escape(_signed_in_lede()), 1)
+        # W47 (ADR-0144 decisions 3 and 6): a signed-in allowance is the
+        # person's own, so the composer footer does not say it is shared.
+        rendered = rendered.replace(
+            ", shared by everyone on your network while not signed in", "", 1
+        )
     return rendered.replace("{{ account_controls }}", account_controls, 1)
 
 
