@@ -365,13 +365,13 @@ jobs:
         # MEASURED, not added: the 19-spec lane run as the step above runs it,
         # plus the two local overrides, reported "308 passed (6.2m)" on
         # 2026-09-25.
-        # 308 -> 384 (W37, ADR-0143). W33's page-journey and limit-messages
+        # 308 -> 393 (W37, ADR-0143). W33's page-journey and limit-messages
         # specs joined this lane without the floor moving; W37 adds
-        # follow-up-context.spec.ts (nine tests). Measured on 2026-10-04 by the
-        # W37 builder, the 22-spec lane as the step above runs it plus the two
-        # local overrides: 384 executed, 384 passed, 0 skipped. The hosted run
-        # of the W37 pull request confirms it.
-        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 384 --lane "invariants lane"
+        # follow-up-context.spec.ts (18 tests after review round 1). Measured on
+        # 2026-10-04 by the W37 builder on a1cf393, the 22-spec lane as the step
+        # above runs it plus the two local overrides: JUnit tests="393", 0
+        # failures, 0 skipped. The hosted run of the W37 pull request confirms it.
+        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 393 --lane "invariants lane"
 
       - name: Clear the previous lane's JUnit report
         run: rm -f e2e/results.xml

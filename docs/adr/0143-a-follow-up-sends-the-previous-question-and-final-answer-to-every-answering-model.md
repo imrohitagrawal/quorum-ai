@@ -35,10 +35,13 @@ both texts twice and sent each once. A quick request with context is refused
    That is intended: today a previous question can still start its own line inside
    the fence.
 2. **Each call is priced for what it is sent**, in the typical figure and the
-   ceiling: answer calls for the question and the answer; debate (the moderator, or
-   each critic) for the question only, which is what it has always been sent;
-   synthesis for both, once per section call. The judge gets no context and is not
-   priced for any.
+   ceiling: answer calls for the question and the answer (the fixed words around them
+   sit inside the flat 350 tokens already priced for that system message); debate
+   (the moderator, or each critic) for the question only, which is what it has always
+   been sent, plus the fixed words around it; synthesis for both texts and their fixed
+   words, once per section call. The fixed words are measured from the functions that
+   write them, so price and prompt cannot drift apart. The judge gets no context and
+   is not priced for any.
 3. **Quick accepts context** and sends it to its one answer call. This supersedes
    ADR-0126 decision 5a.
 4. **The page sends it.** On a result that has a final answer, "Ask your next
@@ -103,13 +106,13 @@ both texts twice and sent each once. A quick request with context is refused
   | Final answer (chars) | Before: typical / ceiling | After: typical / ceiling | Runs a day after |
   |---|---|---|---|
   | none (fresh question) | 0.1134 / 0.1927 | 0.1134 / 0.1927 | 3 |
-  | 8,000 | 0.1224 / 0.2018 | 0.1189 / 0.1983 | 3 |
-  | 38,000 (typical) | 0.1562 / 0.2355 | 0.1396 / 0.2189 | 2 |
-  | 60,117 (the limit) | 0.1811 / 0.2604 | 0.1548 / 0.2341 | 2 |
+  | 8,000 | 0.1224 / 0.2018 | 0.1191 / 0.1984 | 3 |
+  | 38,000 (typical) | 0.1562 / 0.2355 | 0.1397 / 0.2190 | 2 |
+  | 60,117 (the limit) | 0.1811 / 0.2604 | 0.1549 / 0.2342 | 2 |
 
   Every row is `allow`. With peer critique on, the 60,117 row moves from
-  `require_confirmation` (0.3142) to `allow` (0.2729), and the 38,000 row is
-  0.1593 / 0.2577. A follow-up is cheaper than the old pricing quoted because debate
+  `require_confirmation` (0.3142) to `allow` (0.2731), and the 38,000 row is
+  0.1595 / 0.2579. A follow-up is cheaper than the old pricing quoted because debate
   and synthesis are no longer priced for text they are not sent; that saving is larger
   than the new price of the four answer calls. It still costs more than a fresh
   question: at a typical final answer, two runs fit in the day instead of three.
@@ -144,3 +147,11 @@ both texts twice and sent each once. A quick request with context is refused
   of up to four answer calls at the slot's own price, so text that tokenizes worse
   than average (code, some non-English scripts) can cost more than the ceiling says.
   How much worse is unmeasured: no tokenizer is installed here.
+- Known limits found by review and left for later (browser review of 2026-10-04):
+  on a phone, the "Following up on" line is below the first screen after "Review &
+  run"; a follow-up to a high-stakes question asks for the acknowledgement again
+  without saying the previous question is why; the run's pop-up messages can cover
+  the line for a few seconds (board row W46); the mode buttons wrap to two lines at
+  390 px. "Go to run" on a "one run at a time" card never opens the other run's
+  result (board row W49); it would otherwise pair this tab's last question with that
+  run's answer.
