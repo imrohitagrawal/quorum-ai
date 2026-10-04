@@ -44,13 +44,17 @@ identified for the per-network session limits (`auth.client_ip_of`, W30, ADR-013
    address: a run degraded at the global ceiling sends `client_ip` to Sentry, and that
    event now carries the network key beside it, so Sentry can pair the two. The hash
    protects the address only from someone without the server secret: with it, an IPv4
-   key can be reversed by trying every address (about 2.7 core-hours, measured by
-   review).
+   key can be reversed by trying every address (a few core-hours in Python, measured
+   by review).
 6. **The page says the allowance is shared.** The estimate's daily allowance carries a
-   flag saying it is the network's; for an anonymous session the allowance line and the
-   daily-allowance block say it is shared by everyone on this network who is not signed
-   in, and, when the page shows "Sign in with Google", that signing in gives a person their own $0.40 a
-   day.
+   flag saying it is the network's; for an anonymous session the allowance line, the
+   daily-allowance block, the running-total block, their screen-reader announcements,
+   the late daily-cap refusal and the composer footer say it is shared by everyone on
+   this network who is not signed in, and, when the page shows "Sign in with Google",
+   that signing in gives a person their own $0.40 a day; the cost card then shows its
+   own sign-in button, except on a block signing in cannot lift (the per-run cap, or a
+   run larger than the whole day). The server's reasons and messages say "this network"
+   where they said "the account". A signed-in page never mentions the network.
 7. **A local-only test override.** Every browser in the e2e lanes comes from one
    loopback address, so they would all share one $0.40 a day and the lanes could not
    run (measured by the test designer, with its reference build, on a fresh database:
@@ -106,4 +110,14 @@ identified for the per-network session limits (`auth.client_ip_of`, W30, ADR-013
   signed in; (x) `shared_by_network` is a required field of `daily_allowance`, also in
   the charge-time 402; (xi) a failed read of the account row refuses the run (503). The
   copy of (iv) is: "This allowance is shared by everyone on this network who is not
-  signed in. Sign in to get your own $0.40 a day."
+  signed in. Sign in to get your own $0.40 a day."; (xii) the words for a shared
+  allowance after review: the block card says "Everyone on this network who is not
+  signed in has used $X of the $0.40 they can spend in the last 24 hours" and "This
+  network's recent runs", never "You have used" or "Your recent runs"; the server says
+  "this network" instead of "the account"; a "Sign in for your own allowance" button
+  in the cost card; and the composer footer adds "shared by everyone on your network
+  while not signed in" for an anonymous page only.
+- Known limits found by the browser review and left: on a phone the card's sign-in
+  button opens just below the first screen; signing in reloads the page and loses the
+  question just priced (as the top-bar sign-in already did); the late daily-cap
+  refusal offers sign-in in words only; the block card names the shared group twice.

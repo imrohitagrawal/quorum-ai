@@ -11,7 +11,7 @@ decision: messages name the limit actually hit and show the remaining allowance
 (the session's wording, accepted by the owner in M10). The fields and the copy
 below are the session's design. No limit value changes.
 
-**Amended by ADR-0144 (2026-10-04):** an anonymous session's spend key is now its network's; every anonymous session on one network shares one $0.40 a day; this answers the owner question recorded below (CHG-027 a).
+**Amended by ADR-0144 (2026-10-04):** an anonymous session's spend key is now its network's; every anonymous session on one network shares one $0.40 a day; this answers the owner question recorded below (CHG-027 a); an anonymous session's limit messages now say "this network" where they said "the account".
 
 ## Context
 

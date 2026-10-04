@@ -378,9 +378,9 @@ jobs:
         # adds one test; the W47 builder (a subagent) reported "398 tests executed
         # (floor 397), 0 skipped" on a908e4d+3522a4f with the three local
         # overrides. 398 -> 408 after W47 review round 1 (limit-messages adds ten
-        # tests; added, not measured). Not re-run by the orchestrator; the hosted
+        # tests) and 408 -> 410 after round 2 (two more; added, not measured). Not re-run by the orchestrator; the hosted
         # run of the W47 pull request must confirm it before merge.
-        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 408 --lane "invariants lane"
+        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 410 --lane "invariants lane"
 
       - name: Clear the previous lane's JUnit report
         run: rm -f e2e/results.xml
@@ -473,9 +473,9 @@ jobs:
           --project=chromium
           --retries=0
 
-      # EXECUTED-COUNT FLOOR, same reasoning as the lanes above. 19 is the three
+      # EXECUTED-COUNT FLOOR, same reasoning as the lanes above. 22 is the three
       # specs' whole test count (history-refresh 14, follow-up-context 1, W37;
-      # shared-allowance 4, W47 after review round 1 — added, to be confirmed by
+      # shared-allowance 7, W47 after review round 2 — added, to be confirmed by
       # this lane's run);
       # the lane reported "15 executed, 15 passed" on 2026-10-04 (W37 builder).
       # History of the 14: MEASURED 2026-10-03 with the invocation above:
@@ -487,7 +487,7 @@ jobs:
       # 700 px): against b552d37's code the lane gave "12 passed", "2 failed",
       # red by design until their fix. Re-measure when that fix lands.
       - name: "signed-in History lane: floor on tests actually executed"
-        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 19 --lane "signed-in History lane"
+        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 22 --lane "signed-in History lane"
 
       - name: Clear the previous lane's JUnit report
         # Adversarial review (#162/#166): without this, a Playwright run that
