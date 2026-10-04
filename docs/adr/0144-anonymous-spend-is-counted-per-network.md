@@ -52,8 +52,8 @@ identified for the per-network session limits (`auth.client_ip_of`, W30, ADR-013
    the late daily-cap refusal and the composer footer say it is shared by everyone on
    this network who is not signed in, and, when the page shows "Sign in with Google",
    that signing in gives a person their own $0.40 a day; the cost card then shows its
-   own sign-in button, except on a block signing in cannot lift (the per-run cap, or a
-   run larger than the whole day). The server's reasons and messages say "this network"
+   own sign-in button, except on a block signing in cannot lift (the per-run cap, a run
+   larger than the whole day, or a spend ledger that cannot be read). The server's reasons and messages say "this network"
    where they said "the account". A signed-in page never mentions the network.
 7. **A local-only test override.** Every browser in the e2e lanes comes from one
    loopback address, so they would all share one $0.40 a day and the lanes could not
