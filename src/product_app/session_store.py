@@ -1070,6 +1070,34 @@ class SessionStore:
                 return None
         return row is None
 
+    def has_no_account_row(self, account_id: UUID) -> bool | None:
+        """Like :meth:`is_anonymous`, but answered while the accounts feature
+        is unavailable too (W47, ADR-0144 decision 3): a database that predates
+        the spend-key column (read-only, so the column was never added) still
+        restores signed-in sessions, and their account rows can be read.
+        ``True`` when the id is in no accounts row, or there is no accounts
+        table at all; ``False`` when a row exists; ``None`` when that cannot be
+        read. Only the spend key reads it; :meth:`is_anonymous` keeps its
+        answer for carry-over and the idle limit."""
+        with self._lock:
+            if self._closed:
+                return None
+            try:
+                table = self._conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'accounts'"
+                ).fetchone()
+                row = (
+                    None
+                    if table is None
+                    else self._conn.execute(
+                        "SELECT 1 FROM accounts WHERE account_id = ?", (str(account_id),)
+                    ).fetchone()
+                )
+            except sqlite3.Error as exc:
+                self._warn("check whether a session has an account row", exc)
+                return None
+        return row is None
+
     def account_for(self, account_id: UUID) -> StoredAccount | None:
         """The signed-in account behind ``account_id``, or ``None``.
 

@@ -1028,8 +1028,15 @@ def spend_meter_for(session: SessionContext, request: Request) -> SpendMeter:
             return SpendMeter(key=key, shared_by_network=False)
         # The id itself: no account row, or a row whose spend key is the id
         # (written by an older build, or backfilled). Which one is a second
-        # read; with no usable accounts table no one can be signed in.
-        anonymous = store.is_anonymous(session.account_id) if store.accounts_available() else True
+        # read of the account row. Without the spend-key column (a read-only
+        # database from before it) no one can sign in, but a signed-in
+        # session can still be restored and its row read: it keeps its own
+        # id (ADR-0144 decision 3).
+        anonymous = (
+            store.is_anonymous(session.account_id)
+            if store.accounts_available()
+            else store.has_no_account_row(session.account_id)
+        )
     # Refused while a delete is under way or just done. That covers every
     # deleted account (its random id never comes back), and also, for the
     # length of one delete transaction, an account created before the spend
