@@ -1067,8 +1067,9 @@ class SessionStore:
         restores signed-in sessions, and their account rows can be read.
         ``True`` when the id is in no accounts row, or there is no accounts
         table at all; ``False`` when a row exists; ``None`` when that cannot be
-        read. Only the spend key reads it; :meth:`is_anonymous` keeps its
-        answer for carry-over and the idle limit."""
+        read. Only the spend key reads it (``auth.spend_meter_for``);
+        :meth:`is_anonymous` keeps its answer for carry-over, the idle limit
+        and the History route (``main``'s ``GET /v1/account/history``)."""
         return self._no_account_row(account_id, table_may_be_missing=True)
 
     def _no_account_row(self, account_id: UUID, *, table_may_be_missing: bool) -> bool | None:

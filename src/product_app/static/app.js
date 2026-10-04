@@ -348,6 +348,8 @@
   const gateBackButton = el("gate-back");
   const gateBlockModelsButton = el("gate-block-models");
   const gateBlockShortenButton = el("gate-block-shorten");
+  // W47 review round 1: the card's own sign-in, for a shared allowance.
+  const gateSignInButton = el("gate-sign-in");
   const gateCapNote = el("cost-gate-cap-note");
   const gateHintConfirm = el("cost-gate-hint-confirm");
   const gateLive = el("cost-gate-live");
@@ -8399,6 +8401,13 @@
         allowance != null && /^\d+(\.\d*)?$/.test(String(allowance.remaining_usd)) &&
         !/[1-9]/.test(String(allowance.remaining_usd));
       const shared = sharedAllowanceText(allowance, canSignIn);
+      // W47 review round 1: a shared allowance was spent by the NETWORK, not
+      // necessarily by this person, so it never says "You have used".
+      const usedText =
+        shared && spent
+          ? `Everyone on this network who is not signed in has used ${spent} of ${ofCap} ` +
+            "they can spend in the last 24 hours"
+          : used;
       return {
         perRunFurniture: false,
         offerCheaper: false,
@@ -8406,23 +8415,29 @@
           ? "Daily allowance used — this run won't start"
           : "Not enough allowance left — this run won't start",
         body:
-          `${used}${needs}. Simulated runs count too. ` +
+          `${usedText}${needs}. Simulated runs count too. ` +
           "Spend frees up as each run turns 24 hours old." +
           (shared ? ` ${shared}` : ""),
         announce:
           `Run blocked by ${cap ? `the ${cap}` : "the"} daily allowance. ` +
-          "Spend frees up as each run turns 24 hours old.",
+          "Spend frees up as each run turns 24 hours old." +
+          (shared ? ` ${shared}` : ""),
       };
     }
     if (reason === "account_running_total") {
+      // W47 review round 1: a shared allowance's recent runs are the
+      // network's, so they are never "Your recent runs".
+      const shared = sharedAllowanceText(allowance, canSignIn);
+      const whose = shared ? "This network's recent runs" : "Your recent runs";
       return {
         perRunFurniture: false,
         offerCheaper: false,
         headline: "Running limit reached — this run won't start",
         body:
-          `Your recent runs${runText ? ` and this one (about ${runText})` : ""} ` +
-          `add up to more than the ${hardCap} running limit. Simulated runs count too.`,
-        announce: `Run blocked by the ${hardCap} running limit.`,
+          `${whose}${runText ? ` and this one (about ${runText})` : ""} ` +
+          `add up to more than the ${hardCap} running limit. Simulated runs count too.` +
+          (shared ? ` ${shared}` : ""),
+        announce: `Run blocked by the ${hardCap} running limit.${shared ? ` ${shared}` : ""}`,
       };
     }
     if (reason === "ledger_unavailable") {
@@ -8452,19 +8467,32 @@
   // (``bounded_by: "running_total"``) it is not "of $0.40 in the last 24
   // hours" and does not free up with time, so it is worded against the
   // running limit instead (decision 2).
-  // W47 (ADR-0144 decision 6): a shared (network) allowance says so, and
-  // offers sign-in where the page has it (``canSignIn``).
-  function allowanceLineText(allowance, estimatedUsd, canSignIn) {
+  // The figure sentence only; who shares a shared allowance is set beside it
+  // by ``renderAllowanceLine`` (W47).
+  function allowanceLineText(allowance, estimatedUsd) {
     const remaining = allowance ? usdCents(allowance.remaining_usd, "down") : "";
     if (!remaining) return "Your daily allowance cannot be checked right now.";
     const uses = `this run uses about ${gateUsd(estimatedUsd)}`;
-    const shared = sharedAllowanceText(allowance, canSignIn);
-    const tail = shared ? ` ${shared}` : "";
     if (allowance.bounded_by === "running_total") {
-      return `${remaining} left before the ${capUsd(COST_HARD_LIMIT_USD)} running limit; ${uses}.${tail}`;
+      return `${remaining} left before the ${capUsd(COST_HARD_LIMIT_USD)} running limit; ${uses}.`;
     }
     const cap = capUsd(allowance.cap_usd);
-    return `${remaining}${cap ? ` of ${cap}` : ""} left in the last 24 hours; ${uses}.${tail}`;
+    return `${remaining}${cap ? ` of ${cap}` : ""} left in the last 24 hours; ${uses}.`;
+  }
+
+  // W47 (ADR-0144 decision 6, review round 1): the allowance line is the
+  // figure (monospace), then, for a shared (network) allowance, who shares it
+  // and the sign-in offer in a child element set in body type (it is prose).
+  function renderAllowanceLine(node, allowance, estimatedUsd, canSignIn) {
+    node.textContent = allowanceLineText(allowance, estimatedUsd);
+    const shared = allowance && usdCents(allowance.remaining_usd, "down")
+      ? sharedAllowanceText(allowance, canSignIn)
+      : "";
+    if (!shared) return;
+    const span = document.createElement("span");
+    span.className = "cost-gate-allowance-shared";
+    span.textContent = ` ${shared}`;
+    node.appendChild(span);
   }
 
   // Render a list of {label, usd} rows plus a bold Total row into a
@@ -8521,6 +8549,12 @@
     }
     const breakdown = ce.breakdown || {};
     const reasons = Array.isArray(ce.reasons) ? ce.reasons : [];
+    // W47 (ADR-0144 decision 6): a shared (network) allowance offers sign-in
+    // in the card, in every band, where the page has sign-in at all.
+    if (gateSignInButton) {
+      const sharedAllowance = Boolean(ce.daily_allowance && ce.daily_allowance.shared_by_network === true);
+      gateSignInButton.hidden = !(sharedAllowance && signInOffered());
+    }
 
     // W33 (ADR-0140 decision 5, review round 2): the gate describes the run
     // that was PRICED — the question, panel and mode the estimate was asked
@@ -8693,11 +8727,7 @@
     // W33 slice C (ADR-0141 decision 6): what is left of the allowance,
     // before any block, as the server computed it.
     if (gateAllowance) {
-      gateAllowance.textContent = allowanceLineText(
-        ce.daily_allowance,
-        ce.estimated_cost_usd,
-        signInOffered(),
-      );
+      renderAllowanceLine(gateAllowance, ce.daily_allowance, ce.estimated_cost_usd, signInOffered());
       gateAllowance.hidden = false;
     }
     // Reset the block-only surfaces so a prior block render never bleeds
@@ -10784,6 +10814,10 @@
         }
       });
     }
+    // W47 review round 1: the cost card's "Sign in" (shown for a shared
+    // allowance) starts exactly the top bar's sign-in.
+    const cardSignIn = el("gate-sign-in");
+    if (cardSignIn && signIn) cardSignIn.addEventListener("click", () => signIn.click());
     const signOut = el("sign-out");
     if (signOut) {
       signOut.addEventListener("click", async () => {

@@ -2,9 +2,10 @@
 
 Named, dated addresses or ranges whose visitors are not held to the two
 per-network session limits: the per-minute session limiter and the daily
-new-session cap. Nothing here is read by a spend limit; ``DAILY_CAP_USD``
-and ``GLOBAL_DAILY_CEILING_USD`` count accounts and the site, never
-addresses.
+new-session cap. Nothing here is read by a spend limit: an allow-listed
+visitor's anonymous spend is counted per network like anyone else's (W47,
+ADR-0144), a signed-in account's per account, and
+``GLOBAL_DAILY_CEILING_USD`` for the whole site.
 
 The list is one setting, ``SESSION_CAP_EXEMPT_NETWORKS``, a JSON list::
 

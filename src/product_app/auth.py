@@ -263,7 +263,7 @@ class SessionContext:
     session_created_at: datetime | None = None
     #: W34 (ADR-0139): the session was minted for a visitor whose network
     #: had used its anonymous allowance. It may sign in and sign out and
-    #: nothing else: :func:`spend_key_for` refuses it before any money path.
+    #: nothing else: :func:`spend_meter_for` refuses it before any money path.
     sign_in_only: bool = False
 
 
@@ -465,7 +465,7 @@ class SessionRepository:
     def begin_deletion(self, account_id: UUID) -> None:
         """A delete of ``account_id`` is under way (ADR-0136). No session is
         refused for it, so another device keeps working if the delete fails;
-        :func:`spend_key_for` and carry-over read it for an id whose account
+        :func:`spend_meter_for` and carry-over read it for an id whose account
         row they did not find, in the moment between the row going and
         :meth:`revoke_account`."""
         with self._lock:
@@ -904,7 +904,7 @@ def refuse_sign_in_only(session: SessionContext) -> None:
     ADR-0139, decision 3: it may sign in and sign out and nothing else).
 
     Called before any record or state change by every route that writes:
-    :func:`spend_key_for` (the estimate and the run creation), the warnings
+    :func:`spend_meter_for` (the estimate and the run creation), the warnings
     route (a durable safety row per call) and the cancel route. Read-only
     routes are not gated: the page must still boot its model list. The
     message names the way forward and no money figure (assumption iii).

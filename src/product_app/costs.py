@@ -1115,6 +1115,12 @@ class CostEstimationService:
         # "wait" is the wrong advice); it is returned by the final return below.
         # The other three keep the order they were always tested in.
         block: tuple[BlockReason, list[str]] | None = None
+        # W47 (ADR-0144): an anonymous session's meter is its NETWORK's, which
+        # the person may not have spent at all, so the reasons never call it
+        # "the account". A signed-in account's wording is unchanged.
+        meter = "this network" if shared_by_network else "the account"
+        this_meter = "this network" if shared_by_network else "this account"
+        meter_has = "This network has" if shared_by_network else "Account has"
         if threshold_action is CostThresholdAction.BLOCK:
             pass
         elif running_total_fires:
@@ -1123,11 +1129,11 @@ class CostEstimationService:
                 "account_running_total",
                 [
                     (
-                        "This run would take the account's recent spend past its "
+                        f"This run would take {meter}'s recent spend past its "
                         f"USD {HARD_LIMIT_USD} running limit."
                     ),
                     (
-                        "Cumulative spend for this account is "
+                        f"Cumulative spend for {this_meter} is "
                         f"{cumulative.quantize(COST_DISPLAY_QUANTUM)} USD."
                     ),
                 ],
@@ -1140,8 +1146,8 @@ class CostEstimationService:
                         "The daily spend ledger is not writable and a reconnect "
                         "attempt has already been made without restoring it, so "
                         "no account's 24h cap can be verified right now. This is "
-                        "a storage fault on the shared ledger, not a limit this "
-                        "account has reached."
+                        "a storage fault on the shared ledger, not a limit "
+                        f"{this_meter} has reached."
                     ),
                 ],
             )
@@ -1155,9 +1161,9 @@ class CostEstimationService:
                     # against a ledger of measured actuals (#255) — it is not a
                     # worst-case figure, and calling it one told the operator
                     # the rail was stricter than it is.
-                    f"This run would take the account past its USD {DAILY_CAP_USD} daily cap.",
+                    f"This run would take {meter} past its USD {DAILY_CAP_USD} daily cap.",
                     (
-                        "Account has spent "
+                        f"{meter_has} spent "
                         f"{already_spent.quantize(COST_DISPLAY_QUANTUM)} "
                         "USD in the last 24 hours; spend frees up as each run "
                         "turns 24 hours old."
@@ -1169,8 +1175,8 @@ class CostEstimationService:
                 if estimated <= DAILY_CAP_USD
                 else [
                     (
-                        f"This run's estimate of {estimated} USD is larger than the "
-                        f"account's whole USD {DAILY_CAP_USD} allowance for 24 hours, "
+                        f"This run's estimate of {estimated} USD is larger than "
+                        f"{meter}'s whole USD {DAILY_CAP_USD} allowance for 24 hours, "
                         "so it will not fit however long you wait."
                     ),
                     "Choose lower-cost models or shorten the question.",

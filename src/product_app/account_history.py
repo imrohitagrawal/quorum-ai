@@ -121,7 +121,7 @@ def carry_over(*, anonymous_account_id: UUID, account_id: UUID) -> None:
         # An id with no account row because its account is being or was just
         # deleted is not anonymous (ADR-0136): its runs are the deleted
         # account's, never the signing-in one's. Checked AFTER the row read,
-        # for the ordering ``auth.spend_key_for`` explains.
+        # for the ordering ``auth.spend_meter_for`` explains.
         if auth.session_repository.account_is_going(anonymous_account_id):
             return
         now = _now()

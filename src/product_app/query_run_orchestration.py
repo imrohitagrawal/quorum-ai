@@ -2020,7 +2020,7 @@ def _validated_model_slots(
         ) from exc
 
 
-def _estimate_reasons(estimate: CostEstimate) -> list[str]:
+def _estimate_reasons(estimate: CostEstimate, *, shared_by_network: bool = False) -> list[str]:
     """The reasons published on ``POST /v1/query-runs/estimate``.
 
     DERIVED FROM THE CONSTANTS, never typed as literals. This function is a
@@ -2038,7 +2038,12 @@ def _estimate_reasons(estimate: CostEstimate) -> list[str]:
     daily-cap or ledger block no longer says "exceeds USD 0.50". A BLOCK with no
     reason (an estimate built by hand) gets the per-run wording, the one limit
     every BLOCK estimate used to be described by.
+
+    W47 (ADR-0144): ``shared_by_network`` is the route's flag for a meter
+    that is an anonymous session's NETWORK's; it is never called "the
+    account" (the person may not have spent it). Signed-in wording unchanged.
     """
+    meter = "this network" if shared_by_network else "the account"
     if estimate.threshold_action is CostThresholdAction.ALLOW:
         return ["Estimated cost is within the normal execution band."]
     if estimate.threshold_action is CostThresholdAction.REQUIRE_CONFIRMATION:
@@ -2047,19 +2052,20 @@ def _estimate_reasons(estimate: CostEstimate) -> list[str]:
         ]
     if estimate.block_reason == "account_running_total":
         return [
-            "This run would take the account's recent spend past its "
+            f"This run would take {meter}'s recent spend past its "
             f"USD {HARD_LIMIT_USD} running limit and is blocked."
         ]
     if estimate.block_reason == "ledger_unavailable":
         return [
             "The daily spend ledger cannot be verified right now, so this run is "
-            "blocked. This is a storage fault, not a limit this account has reached."
+            "blocked. This is a storage fault, not a limit "
+            f"{'this network' if shared_by_network else 'this account'} has reached."
         ]
     if estimate.block_reason == "daily_cap":
         # Says nothing about waiting, so it is true for a run larger than a
         # whole day's allowance too (decision 7); no separate wording needed.
         return [
-            f"This run would take the account past its USD {DAILY_CAP_USD} cap "
+            f"This run would take {meter} past its USD {DAILY_CAP_USD} cap "
             "for the last 24 hours and is blocked."
         ]
     return [f"Estimated cost exceeds USD {HARD_LIMIT_USD} and is blocked for this slice."]
@@ -2073,31 +2079,36 @@ def _larger_than_a_day(estimate: CostEstimate) -> bool:
     return estimate.estimated_cost_usd > DAILY_CAP_USD
 
 
-def _block_message(reason: BlockReason | None, *, larger_than_a_day: bool = False) -> str:
+def _block_message(
+    reason: BlockReason | None, *, larger_than_a_day: bool = False, shared_by_network: bool = False
+) -> str:
     """The ``message`` of the create route's ``COST_LIMIT_EXCEEDED`` 402s,
     worded from the limit that was hit (ADR-0141 decision 3) rather than one
     "exceeds the hard ceiling" sentence for every block. ``None`` keeps the
     per-run wording, as :func:`_estimate_reasons` does. ``larger_than_a_day``
-    (decision 7) words a daily block whose run can never fit."""
+    (decision 7) words a daily block whose run can never fit.
+    ``shared_by_network`` as in :func:`_estimate_reasons` (W47)."""
+    meter = "this network" if shared_by_network else "the account"
     if reason == "account_running_total":
         return (
-            "This run would take the account's recent spend past its "
+            f"This run would take {meter}'s recent spend past its "
             f"USD {HARD_LIMIT_USD} running limit."
         )
     if reason == "ledger_unavailable":
         return (
             "The daily spend ledger cannot be verified right now; this is a "
-            "storage fault, not a limit this account has reached."
+            "storage fault, not a limit "
+            f"{'this network' if shared_by_network else 'this account'} has reached."
         )
     if reason == "daily_cap" and larger_than_a_day:
         return (
-            f"This run is larger than the account's whole USD {DAILY_CAP_USD} "
+            f"This run is larger than {meter}'s whole USD {DAILY_CAP_USD} "
             "allowance for 24 hours, so it will not fit however long you wait; "
             "choose lower-cost models or shorten the question."
         )
     if reason == "daily_cap":
         return (
-            f"This run would take the account past its USD {DAILY_CAP_USD} cap "
+            f"This run would take {meter} past its USD {DAILY_CAP_USD} cap "
             "for the last 24 hours; spend frees up as each run turns 24 hours old."
         )
     return f"This run's worst-case cost is above the USD {HARD_LIMIT_USD} per-run cap."

@@ -653,7 +653,7 @@ def estimate_query_run(
         correlation_id=f"estimate_{uuid4().hex}",
         cost_estimate=estimate,
         model_slots=model_slots,
-        reasons=_estimate_reasons(estimate),
+        reasons=_estimate_reasons(estimate, shared_by_network=spend.shared_by_network),
     )
 
 
@@ -734,6 +734,7 @@ def create_query_run(
                 "message": _block_message(
                     cost_estimate.block_reason,
                     larger_than_a_day=_larger_than_a_day(cost_estimate),
+                    shared_by_network=spend.shared_by_network,
                 ),
                 "cost_estimate": cost_estimate.model_dump(mode="json"),
             },
@@ -855,7 +856,7 @@ def _over_daily_cap_detail(spend_key: UUID, *, shared_by_network: bool) -> dict[
         allowance = None
     return {
         "code": "COST_LIMIT_EXCEEDED",
-        "message": _block_message("daily_cap"),
+        "message": _block_message("daily_cap", shared_by_network=shared_by_network),
         "block_reason": "daily_cap",
         "daily_allowance": None if allowance is None else allowance.model_dump(mode="json"),
     }
