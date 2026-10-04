@@ -64,8 +64,8 @@ both texts twice and sent each once. A quick request with context is refused
    new run", "Start your own query" and "Stop it & start new" actions on a failure or
    busy card. The ways that go back to the question being worked on keep it: "Back to
    the question", the cost confirmation's Back, and browser Back and Forward. A run that finishes onto its result
-   leaves no context attached. Clearing the context also drops an estimate still
-   loading for it, and the composer's Start fresh is unavailable while the run that
+   leaves no context attached. Clearing the context also drops a follow-up estimate
+   still loading for it (one window excepted, under Consequences), and the composer's Start fresh is unavailable while the run that
    carries the context is being created.
 6. **What is sent.** The previous question is the question of the result on screen.
    The previous final answer is, for a panel result, the five synthesis sections in
@@ -158,13 +158,22 @@ both texts twice and sent each once. A quick request with context is refused
   confirmation repeats "Following up on: …"; (xviii) with one model the note says
   "the model"; (xix) a result re-opened from the session list opens with an empty
   box; (xx) a context with no previous answer says nothing about a final answer,
-  and one with no previous question says nothing about a question; (xxi) a finished
-  run leaves no context attached, so browser Back to the composer shows none.
+  and one with no previous question says nothing about a question; (xxi) a run that
+  finishes onto its result leaves no context attached, so browser Back to the composer
+  shows none (a failed run keeps it, and its line stays visible).
 - The price assumes four characters a token, an average rather than a bound
   (ADR-0095). A follow-up now sends up to 80,117 characters of client text to each
   of up to four answer calls at the slot's own price, so text that tokenizes worse
   than average (code, some non-English scripts) can cost more than the ceiling says.
   How much worse is unmeasured: no tokenizer is installed here.
+- Known limit, found by the last check before release and left by choice (both
+  review rounds were used, and each fix round had exposed a narrower case of the same
+  in-flight state): when a run's cost confirmation has expired, the page re-estimates
+  while the create still counts as in flight, and an example chip clicked during that
+  re-estimate hides the "Following up on" line without dropping the estimate. The cost
+  confirmation that follows names the follow-up and must be approved, so nothing is
+  charged without the user's approval. Root cause: the create-in-flight flag stays set
+  across that re-estimate.
 - Known limits found by review and left for later (browser review of 2026-10-04):
   on a phone, the "Following up on" line is below the first screen after "Review &
   run"; a follow-up to a high-stakes question asks for the acknowledgement again
