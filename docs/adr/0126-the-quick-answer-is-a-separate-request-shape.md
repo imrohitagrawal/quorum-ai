@@ -2,7 +2,9 @@
 
 ## Status
 
-Accepted — 2026-09-25, first of four pull requests. The owner decided the
+Accepted — 2026-09-25, first of four pull requests. Decision 5a (a quick request with
+follow-up context is refused) is superseded by ADR-0143 decision 3 (2026-10-04): quick
+accepts context and sends it to its one answer call. The owner decided the
 mode on 2026-09-24 (CHG-012 D1, their words: *"Guard: separate mode:
 "quick", Copy: "Quick answer — one model, no debate", show info message that
 "four models by default, 2 debates and 1 sourced answer" which we have been

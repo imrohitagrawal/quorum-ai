@@ -40,8 +40,9 @@ both texts twice and sent each once. A quick request with context is refused
    sit inside the flat 350 tokens already priced for that system message); debate
    (the moderator, or each critic) for the question only, which is what it has always
    been sent, plus the fixed words around it; synthesis for both texts and their fixed
-   words, once per section call. The fixed words are measured from the functions that
-   write them, so price and prompt cannot drift apart. The judge gets no context and
+   words, once per section call. For debate and synthesis the fixed words are measured
+   from the functions that write them, so price and prompt cannot drift apart; for an
+   answer call a test guards that they stay inside the flat 350. The judge gets no context and
    is not priced for any.
 3. **Quick accepts context** and sends it to its one answer call. This supersedes
    ADR-0126 decision 5a.
@@ -125,8 +126,8 @@ both texts twice and sent each once. A quick request with context is refused
   system prompt to 1,175 characters, 293.75 tokens, inside the flat 350 tokens
   already priced for it (measured by the builder; recorded in
   `providers._follow_up_system_suffix`).
-- This supersedes ADR-0126 decision 5a and ADR-0140 decision 3; both ADRs are left as
-  written.
+- This supersedes ADR-0126 decision 5a and ADR-0140 decision 3 (and decision 8's
+  last hint sentence); each now says so in its Status, its decisions left as written.
 - Personal text is not stored anywhere new: no new store, log field or history
   column; `docs/48` is unchanged.
 - A model whose context window is smaller than question + search context + previous
