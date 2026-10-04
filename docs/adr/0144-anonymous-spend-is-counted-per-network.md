@@ -36,20 +36,23 @@ identified for the per-network session limits (`auth.client_ip_of`, W30, ADR-013
    with no row is anonymous; a read that fails refuses the run (503). Refusing every
    run in that state was the alternative, and was not chosen: it would stop signed-in
    people who could run before.
-4. **The key is read once per request** by `spend_key_for(session, request)` on the
+4. **The key is read once per request** by `auth.spend_meter_for(session, request)` on the
    estimate and create routes, and stored on the run at create, as today, so a run's
    charge, void and reconcile share one key even if the network changes mid-run.
 5. **No address is written anywhere new**: the cost ledger holds the hashed key only.
-   `docs/48` gains a row for it.
+   `docs/48` gains a row for it. One existing event already carried the visitor's
+   address: a run degraded at the global ceiling sends `client_ip` to Sentry, and that
+   event now carries the network key beside it, so Sentry can pair the two.
 6. **The page says the allowance is shared.** The estimate's daily allowance carries a
    flag saying it is the network's; for an anonymous session the allowance line and the
    daily-allowance block say it is shared by everyone on this network who is not signed
-   in, and, when sign-in is available, that signing in gives a person their own $0.40 a
+   in, and, when the page shows "Sign in with Google", that signing in gives a person their own $0.40 a
    day.
 7. **A local-only test override.** Every browser in the e2e lanes comes from one
    loopback address, so they would all share one $0.40 a day and the lanes could not
-   run (measured by the test designer: on a fresh database `page-journey.spec.ts` had
-   18 failures by its 29th test, each reading "Not enough allowance left"). A setting,
+   run (measured by the test designer, with its reference build, on a fresh database:
+   `page-journey.spec.ts` had 18 failures by its 29th test of 44; the failure page it
+   checked read "Not enough allowance left"). A setting,
    `ANONYMOUS_SPEND_PER_SESSION_OVERRIDE`, makes each anonymous session its own
    network for spend, with the same guards as `SESSION_MINT_CAP_OVERRIDE`: off by
    default, honoured only when `RUNTIME_ENVIRONMENT=local`, and the app refuses to
@@ -96,4 +99,8 @@ identified for the per-network session limits (`auth.client_ip_of`, W30, ADR-013
   (v) no move of the last day's spend at deploy; (vi) the running-total rail is left as
   it is; (vii) the local-only test override of decision 7; (viii) on a database without the
   spend-key column, a signed-in account keeps its own id rather than being refused
-  (decision 3).
+  (decision 3); (ix) the network's spend total is shown to everyone on it who is not
+  signed in; (x) `shared_by_network` is a required field of `daily_allowance`, also in
+  the charge-time 402; (xi) a failed read of the account row refuses the run (503). The
+  copy of (iv) is: "This allowance is shared by everyone on this network who is not
+  signed in. Sign in to get your own $0.40 a day."

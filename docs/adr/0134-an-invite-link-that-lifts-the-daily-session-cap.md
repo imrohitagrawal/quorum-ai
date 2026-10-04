@@ -2,6 +2,8 @@
 
 ## Status
 
+**Amended by ADR-0144 (2026-10-04):** an anonymous session's spend key is now its network's; every anonymous session on one network shares one $0.40 a day.
+
 Accepted — 2026-09-26, board row W32. The product owner decided an invite
 link on 2026-09-25 (CHG-022, transcript `efe4f2fc`). Their words:
 *"Also, I would like you to include the one limit to know and the invite
