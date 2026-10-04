@@ -280,26 +280,31 @@ def test_a_run_started_as_the_account_is_deleted_is_refused(
 
 
 def test_an_anonymous_run_keeps_its_key_after_sign_in(sign_in: SignIn) -> None:
-    """S8. A run started anonymously is charged under the anonymous key; its
+    """S8. A run started anonymously is charged under the anonymous key --
+    since W47 its NETWORK's key (ADR-0144), not the session's id; its
     correction after the browser signs in must land there too. Turns red if
     the run's key follows the new session (the void would then miss the
-    charge)."""
+    charge), or is the anonymous session's own id (today, before W47)."""
+    from tests.integration.test_anonymous_spend_per_network import network_spend_key
+
     with ledger_for_tests() as ledger:
         client = sign_in.client()
         csrf = _boot(client)
         anonymous = auth.session_repository.get(client.cookies[COOKIE]).account_id  # type: ignore[union-attr]
+        network = network_spend_key(client, "testclient")
         created = client.post(
             "/v1/query-runs", json=acknowledged_request(QUERY), headers={"X-CSRF-Token": csrf}
         )
         assert created.status_code == 202, created.text
         run = query_run_repository.get(UUID(created.json()["query_run_id"]))
-        assert run.spend_key == anonymous
+        assert network != anonymous
+        assert run.spend_key == network
         query = _start(client, _csrf(client))
         _callback(client, code="stub-auth-code-1", state=query["state"])
         _, spend_key, _ = _account(sign_in)
-        assert ledger.daily_spend_for(anonymous) == run.cost_estimate.estimated_cost_usd
+        assert ledger.daily_spend_for(network) == run.cost_estimate.estimated_cost_usd
         qro._void_run_billing(session=None, query_run=run, reason="test")  # type: ignore[arg-type]
-        assert ledger.daily_spend_for(anonymous) == Decimal("0")
+        assert ledger.daily_spend_for(network) == Decimal("0")
         assert ledger.daily_spend_for(spend_key) == Decimal("0")
 
 
@@ -432,6 +437,7 @@ def test_the_spend_key_is_refused_between_the_rows_going_and_the_second_refusal(
     before the second refusal) finds neither and meters under the account id,
     a fresh envelope. Turns red if the first refusal is dropped."""
     from fastapi import HTTPException
+    from tests.integration.test_anonymous_spend_per_network import _request
 
     from product_app import account_deletion
 
@@ -445,7 +451,8 @@ def test_the_spend_key_is_refused_between_the_rows_going_and_the_second_refusal(
     def delete_then_look(account_id: UUID) -> bool:
         assert real_delete(account_id) is True
         with pytest.raises(HTTPException) as refused:
-            auth.spend_key_for(session)
+            # W47 (ADR-0144): the request is the second argument.
+            auth.spend_key_for(session, _request("testclient"))
         seen.append(refused.value.status_code)
         return True
 
@@ -459,8 +466,12 @@ def test_the_spend_key_is_refused_between_the_rows_going_and_the_second_refusal(
 
 
 def test_spend_key_for_before_the_accounts_table_is_ready_is_the_id(tmp_path: Path) -> None:
-    """With no usable accounts table no one can be signed in, so every id is
-    metered as itself. Turns red if that reads as an error instead."""
+    """With no usable accounts table no one can be signed in, so the STORE
+    answers every id with itself. Turns red if that reads as an error instead.
+    This is the store's answer only: since W47 (ADR-0144) the route meters an
+    anonymous session under its network's key whatever the store says --
+    ``test_anonymous_spend_per_network.py`` pins that, including with no
+    session store at all."""
     path = tmp_path / "old.sqlite3"
     _old_database(path, uuid4())
     path.chmod(0o444)

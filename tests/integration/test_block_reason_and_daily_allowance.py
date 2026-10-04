@@ -13,18 +13,23 @@ places open; these are the choices, made here so the builder has one target):
   ``"account_running_total"``, ``"ledger_unavailable"``, ``"daily_cap"``, or
   JSON ``null`` when ``threshold_action`` is not ``"block"``. The key is always
   present.
-* ``cost_estimate.daily_allowance``: an object with EXACTLY four keys, or JSON
-  ``null``. ``cap_usd`` is the daily cap as the constant prints it, ``"0.40"``.
+* ``cost_estimate.daily_allowance``: an object with EXACTLY five keys, or JSON
+  ``null`` (four until W47; ADR-0144 decision 6 added ``shared_by_network``).
+  ``cap_usd`` is the daily cap as the constant prints it, ``"0.40"``.
   ``spent_usd`` and ``remaining_usd`` always carry FOUR decimal places — the
   same ``COST_DISPLAY_QUANTUM`` as ``estimated_cost_usd`` and the existing
   "Account has spent 0.0000 USD" reason — so a fresh session reads
   ``{"cap_usd": "0.40", "spent_usd": "0.0000", "remaining_usd": "0.4000",
-  "bounded_by": "daily_cap"}`` and a clamped one reads ``"remaining_usd":
-  "0.0000"``. ``bounded_by`` (review round 1) is ``"daily_cap"`` or
+  "bounded_by": "daily_cap", "shared_by_network": true}`` and a clamped one
+  reads ``"remaining_usd": "0.0000"``. ``bounded_by`` (review round 1) is ``"daily_cap"`` or
   ``"running_total"``: which limit set the remaining figure. The running total
   sets it only when ``0.50 - total`` is STRICTLY smaller than ``0.40 - spent``.
   Four places, not two, because decision 5 has the PAGE round spent up and
-  remaining down, which needs the unrounded figure.
+  remaining down, which needs the unrounded figure. ``shared_by_network``
+  (W47, ADR-0144) is ``true`` for an anonymous cookie session (its allowance
+  is its network's) and ``false`` for a signed-in account, the legacy header
+  and a service call that names no network; its own suite is
+  ``tests/integration/test_anonymous_spend_per_network.py``.
 * The charge-time ``OVER_DAILY_CAP`` 402 carries ``detail.block_reason`` and
   ``detail.daily_allowance`` (top level of ``detail``; that body has no
   ``cost_estimate``).
@@ -46,6 +51,7 @@ import pytest
 from fastapi.testclient import TestClient
 from tests.google_token_stub import good_claims
 from tests.helpers import isolated_run_semaphore, scoped_events, wait_for_free_permits
+from tests.integration.test_anonymous_spend_per_network import network_spend_key
 from tests.integration.test_google_sign_in import SignIn, _boot, _signed_in
 from tests.integration.test_query_run_cost_guardrails import (
     BLOCKED_MODEL_IDS,
@@ -89,12 +95,17 @@ PER_RUN_ONLY_QUERY = "x" * 2_000
 #: and, on an account that has spent nothing, the daily cap fire — failure-mode
 #: row 2's shape (the design reviewer measured 0.4628 / 0.6109 at 12,000).
 BOTH_CAPS_QUERY = "x" * 8_000
+#: A fresh allowance of an anonymous cookie session: its network's (W47).
 FRESH = {
     "cap_usd": "0.40",
     "spent_usd": "0.0000",
     "remaining_usd": "0.4000",
     "bounded_by": "daily_cap",
+    "shared_by_network": True,
 }
+#: A fresh allowance that is the caller's own: a signed-in account, the legacy
+#: header, or a service call that names no network (W47, ADR-0144 decision 3).
+FRESH_OWN = {**FRESH, "shared_by_network": False}
 CHARGE_TYPES = frozenset({COST_ACCEPTED_EVENT, COST_ACCEPTED_SIMULATED_EVENT})
 
 
@@ -257,11 +268,14 @@ def _account_of(client: TestClient) -> UUID:
 
 
 def _spend_key_of(client: TestClient, sign_in: SignIn | None = None) -> UUID:
-    """The key this browser's runs are metered under: the account id for an
-    anonymous session, the account row's spend key once signed in (ADR-0136)."""
+    """The key this browser's runs are metered under: for an anonymous session
+    its NETWORK's key (W47, ADR-0144; a plain TestClient's host
+    ``"testclient"`` is not an address, so the one key every unidentifiable
+    request shares), asked of ``auth.spend_key_for``; the account row's spend
+    key once signed in (ADR-0136)."""
     account = _account_of(client)
     if sign_in is None:
-        return account
+        return network_spend_key(client, "testclient")
     rows = sign_in.account_rows()
     (key,) = [UUID(row["spend_key"]) for row in rows if row["account_id"] == str(account)]
     return key
@@ -453,6 +467,7 @@ def test_the_allowance_falls_by_exactly_the_runs_charged() -> None:
             "spent_usd": _money(spent),
             "remaining_usd": _money(Decimal("0.40") - spent),
             "bounded_by": "daily_cap",
+            "shared_by_network": False,
         }
         # Spelled out once at today's unit price, so the arithmetic above is
         # checked against a literal too (0.1052 per run, pinned elsewhere).
@@ -478,6 +493,7 @@ def test_the_allowance_is_clamped_at_zero_when_spend_exceeds_the_cap() -> None:
             "spent_usd": "0.4500",
             "remaining_usd": "0.0000",
             "bounded_by": "daily_cap",
+            "shared_by_network": False,
         }
 
 
@@ -504,12 +520,14 @@ def test_the_running_total_lowers_the_remainder_when_it_is_the_smaller_rail() ->
             "spent_usd": "0.3156",
             "remaining_usd": "0.0844",
             "bounded_by": "daily_cap",
+            "shared_by_network": False,
         }
         assert _allowance(after) == {
             "cap_usd": "0.40",
             "spent_usd": "0.0000",
             "remaining_usd": "0.1844",
             "bounded_by": "running_total",
+            "shared_by_network": False,
         }
 
 
@@ -530,6 +548,7 @@ def test_the_lowered_remainder_is_clamped_at_zero_too() -> None:
             "spent_usd": "0.0000",
             "remaining_usd": "0.0000",
             "bounded_by": "running_total",
+            "shared_by_network": False,
         }
 
 
@@ -549,14 +568,14 @@ def test_the_allowance_is_null_when_the_ledger_cannot_be_metered(
 
     assert degraded["spend_metering_unavailable"] is True
     assert degraded["threshold_action"] == "allow"
-    assert _allowance(metered) == FRESH
+    assert _allowance(metered) == FRESH_OWN
     assert _allowance(degraded) is None
     assert _block_reason(degraded) is None
 
 
 def test_an_estimate_with_no_spend_key_has_a_null_allowance() -> None:
     """RED-IF: ``CostEstimationService.estimate`` called with neither an account
-    nor a spend key (no route does this — both pass ``spend_key_for(session)``
+    nor a spend key (no route does this — both pass ``spend_key_for(session, request)``
     — but the service accepts it) reports an allowance for nobody. Partner:
     the same call with a key has one."""
     slots = validate_model_slots(DEFAULT_MODEL_IDS)
@@ -567,7 +586,7 @@ def test_an_estimate_with_no_spend_key_has_a_null_allowance() -> None:
         )
 
     assert keyless.model_dump(mode="json").get("daily_allowance", "MISSING") is None
-    assert keyed.model_dump(mode="json").get("daily_allowance") == FRESH
+    assert keyed.model_dump(mode="json").get("daily_allowance") == FRESH_OWN
 
 
 # --- 4. privacy on a shared computer (failure-mode row 11) ----------------------------
@@ -583,12 +602,18 @@ def _leaks(text: str, *needles: object) -> list[str]:
     return found
 
 
-def test_after_sign_out_the_anonymous_allowance_is_fresh_and_names_nothing_of_the_account(
+def test_after_sign_out_the_anonymous_allowance_holds_none_of_the_accounts_spend(
     sign_in: SignIn,
 ) -> None:
     """RED-IF: after an account spends and signs out, the next anonymous
-    estimate's allowance is anything but fresh, or its body carries the
+    estimate's allowance includes the account's spend, or its body carries the
     account's spend figure, its remainder, its spend key or its account id.
+    Until W47 this test was named "...is_fresh..." and pinned that every
+    anonymous session after a sign-out starts fresh; under ADR-0144 it starts
+    from its NETWORK's anonymous spend, which here is none, so the figure is
+    still the whole $0.40 -- now flagged ``shared_by_network`` (red today on
+    that flag). The case where the network HAS spent is
+    ``test_anonymous_spend_per_network.py::test_signing_out_does_not_start_a_fresh_allowance``.
     Positive partner: the account's OWN estimate shows its spend (so the
     figure the absence check looks for really is the one that would leak)."""
     with configure_for_tests() as store:
@@ -623,14 +648,16 @@ def test_after_sign_in_the_account_allowance_names_nothing_of_the_anonymous_sess
     """RED-IF: an anonymous session spends and then signs in, and the signed-in
     estimate shows the anonymous spend (or its remainder or id) instead of the
     account's own fresh envelope. Positive partner: the anonymous estimate
-    showed that spend before signing in."""
+    showed that spend before signing in. Since W47 the anonymous spend is
+    booked under the NETWORK's key (ADR-0144), where an anonymous session's
+    runs are charged, not under the anonymous session's id."""
     with configure_for_tests() as store:
         sign_in.stub.claims = good_claims(sub="108000000000000033303", email="w33c-in@example.com")
         client = sign_in.client()
         csrf = _boot(client)
         anonymous = auth.session_repository.get(client.cookies["quorum_session"])
         assert anonymous is not None
-        _book(store, anonymous.account_id, "0.2917")
+        _book(store, _spend_key_of(client), "0.2917")
         before = _post_estimate(client, {"X-CSRF-Token": csrf})
 
         assert _signed_in(client).status_code in (302, 303, 307)
@@ -644,7 +671,7 @@ def test_after_sign_in_the_account_allowance_names_nothing_of_the_anonymous_sess
 
         assert _allowance(before["cost_estimate"])["spent_usd"] == "0.2917"
         assert response.status_code == 200, response.text
-        assert _allowance(response.json()["cost_estimate"]) == FRESH
+        assert _allowance(response.json()["cost_estimate"]) == FRESH_OWN
         assert _leaks(response.text, "0.2917", "0.1083", anonymous.account_id, key) == []
 
 
@@ -712,6 +739,7 @@ def test_the_create_routes_estimate_402_names_the_daily_cap() -> None:
             "spent_usd": "0.3900",
             "remaining_usd": "0.0100",
             "bounded_by": "daily_cap",
+            "shared_by_network": False,
         }
         assert "hard ceiling" not in detail["message"], detail["message"]
 
@@ -755,7 +783,9 @@ def _another_tab_charges_first(
     return keys
 
 
-def _assert_the_charge_time_402(detail: dict[str, Any], store: FeedbackStore, key: UUID) -> None:
+def _assert_the_charge_time_402(
+    detail: dict[str, Any], store: FeedbackStore, key: UUID, *, shared: bool
+) -> None:
     # The estimate this create ran said 0.0000 spent; only a FRESH read sees
     # the other tab's 0.3500.
     assert "cost_estimate" not in detail
@@ -767,6 +797,7 @@ def _assert_the_charge_time_402(detail: dict[str, Any], store: FeedbackStore, ke
         "spent_usd": "0.3500",
         "remaining_usd": "0.0500",
         "bounded_by": "daily_cap",
+        "shared_by_network": shared,
     }
 
 
@@ -786,8 +817,8 @@ def test_the_charge_time_402_names_the_daily_cap_and_reads_the_allowance_afresh(
         detail = _create_402(client, {"X-CSRF-Token": csrf})
 
         assert charged == [key]
-        assert query_run_repository.get_active_for_account(key) is None
-        _assert_the_charge_time_402(detail, store, key)
+        assert query_run_repository.get_active_for_account(_account_of(client)) is None
+        _assert_the_charge_time_402(detail, store, key, shared=True)
 
 
 def test_the_legacy_paths_charge_time_402_says_the_same(
@@ -804,7 +835,7 @@ def test_the_legacy_paths_charge_time_402_says_the_same(
         detail = _create_402(client, _legacy(account))
 
         assert charged == [account]
-        _assert_the_charge_time_402(detail, store, account)
+        _assert_the_charge_time_402(detail, store, account, shared=False)
 
 
 # --- 7. wording (decisions 3 and 4) -----------------------------------------------------
@@ -1026,7 +1057,7 @@ def test_a_failed_allowance_read_on_the_cookie_path_still_refuses_with_a_402(
         fault.armed = False
 
         rows_after = _rows(store, key)
-        assert query_run_repository.get_active_for_account(key) is None
+        assert query_run_repository.get_active_for_account(_account_of(client)) is None
         _assert_a_refusal_without_an_allowance(response, fault, rows_before, rows_after)
 
 
@@ -1073,6 +1104,7 @@ def test_the_running_total_sets_bounded_by_in_the_reviewers_case() -> None:
             "spent_usd": "0.1052",
             "remaining_usd": "0.0792",
             "bounded_by": "running_total",
+            "shared_by_network": False,
         }
 
 
@@ -1096,10 +1128,12 @@ def test_bounded_by_switches_only_when_the_running_total_is_strictly_smaller() -
         "spent_usd": "0.0000",
         "remaining_usd": "0.4000",
         "bounded_by": "daily_cap",
+        "shared_by_network": False,
     }
     assert _allowance(past_it) == {
         "cap_usd": "0.40",
         "spent_usd": "0.0000",
         "remaining_usd": "0.3999",
         "bounded_by": "running_total",
+        "shared_by_network": False,
     }

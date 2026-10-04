@@ -1000,6 +1000,8 @@ def test_the_lost_write_signal_changes_exactly_one_field_on_the_estimate(
         "spent_usd": "0.0000",
         "remaining_usd": "0.4000",
         "bounded_by": "daily_cap",
+        # W47 (ADR-0144): a service call that names no network is not shared.
+        "shared_by_network": False,
     }
     assert degraded.model_dump(mode="json").get("daily_allowance", "MISSING") is None
     # ADR-0016 (superseding ADR-0004): a failing ledger no longer leaves the

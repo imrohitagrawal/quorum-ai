@@ -154,8 +154,38 @@ async function expectNoHardCapFurniture(page: Page) {
   expect(await cardText(page)).not.toMatch(/is over the \$0\.50? hard cap/);
 }
 
+// W47 (ADR-0144 decision 6): an anonymous allowance is its NETWORK's. Key phrases, not sentences; the
+// offer `\bsign in\b` is not matched by "signed in".
+const SIGN_IN_OFFER = /\bsign in\b/i;
+
 test.describe("W33 slice C — limit messages on the real backend (no page.route)", () => {
   test.skip(({ browserName }) => browserName !== "chromium", "reference run is chromium-only");
+
+  test("W47: an anonymous allowance line says it is shared by everyone on this network who is not signed in", async ({ page }) => {
+    // RED-IF: an anonymous allow-band estimate's allowance line does not say the allowance is shared on
+    // this network by people who are not signed in, or the server does not flag it `shared_by_network:
+    // true`, or the line offers signing in on a page that has no way to sign in (ADR-0144 decision 6:
+    // the offer only "when sign-in is available"). Placed FIRST in this describe: the daily-cap test
+    // below spends this network's allowance. The signed-in lane (tests/signed-in/shared-allowance.spec.ts)
+    // covers the page WITH sign-in.
+    const mocked = forbidRoutes(page);
+    await boot(page);
+    const signInOffered = (await page.locator("#sign-in-google").count()) > 0;
+
+    const body = await seeEstimate(page, QUESTIONS[0]);
+
+    expect(body.cost_estimate.threshold_action, "an estimate that can run shows the allowance line").not.toBe("block");
+    await expect(page.locator("#cost-gate-allowance")).toBeVisible();
+    const line = await page.locator("#cost-gate-allowance").innerText();
+    // Partner (green today): it is decision 6's allowance sentence, unchanged.
+    expect(line).toMatch(ALLOWANCE_SENTENCE);
+    expect(line).toMatch(/this network/i);
+    expect(line).toMatch(/not signed in/i);
+    if (signInOffered) expect(line).toMatch(SIGN_IN_OFFER);
+    else expect(line, "no sign-in offer where the page has no sign-in").not.toMatch(SIGN_IN_OFFER);
+    expect(body.cost_estimate.daily_allowance.shared_by_network).toBe(true);
+    expect(mocked()).toBe(false);
+  });
 
   test("a daily-cap block names the $0.40 daily cap, what was used, that simulated runs count, and that it frees up", async ({ page }) => {
     // RED-IF: the daily block still wears the hard-cap headline, note, rail or "cheaper models"/"shorten"
@@ -191,6 +221,11 @@ test.describe("W33 slice C — limit messages on the real backend (no page.route
     expect(text).toMatch(/simulated/i);
     expect(text).toMatch(/frees up as each run turns 24 hours old/i);
     expect(text).not.toMatch(SHORT_CAP);
+    // W47 (ADR-0144 decision 6). RED-IF: an anonymous daily block does not say the allowance is shared by
+    // everyone on this network who is not signed in, or the server does not flag it shared.
+    expect(text).toMatch(/this network/i);
+    expect(text).toMatch(/not signed in/i);
+    expect(body.cost_estimate.daily_allowance.shared_by_network).toBe(true);
 
     // Round 2. RED-IF: a daily block that still has allowance left (the real fourth run: about
     // $0.08) is headlined as if the allowance were used up, or the gate still asks for approval.

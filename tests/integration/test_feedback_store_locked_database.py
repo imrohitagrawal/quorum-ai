@@ -655,6 +655,8 @@ def test_a_bypassed_cap_changes_exactly_one_field_on_the_returned_estimate(
         "spent_usd": "0.0000",
         "remaining_usd": "0.4000",
         "bounded_by": "daily_cap",
+        # W47 (ADR-0144): a service call that names no network is not shared.
+        "shared_by_network": False,
     }
     assert without_store.model_dump(mode="json").get("daily_allowance", "MISSING") is None
     assert without_store.confirmation_token is not None
