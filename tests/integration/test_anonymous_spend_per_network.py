@@ -40,9 +40,12 @@ Every dollar figure is a literal (rule 7a), never ``DAILY_CAP_USD``.
 from __future__ import annotations
 
 import json
+import sqlite3
 import threading
 from collections.abc import Iterator
+from datetime import UTC, datetime
 from decimal import Decimal
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from uuid import UUID, uuid4
@@ -72,6 +75,7 @@ from product_app.feedback_store import (
 from product_app.main import app
 from product_app.query_run_orchestration import QueryRun, query_run_repository
 from product_app.query_runs import _ip_rate_limiter
+from product_app.session_store import SessionStore
 
 pytestmark = pytest.mark.usefixtures("_stable_catalog_price")
 
@@ -841,3 +845,159 @@ def test_an_anonymous_session_is_refused_when_the_accounts_table_cannot_be_read(
         assert refused.status_code == 503, refused.text
         assert refused.json()["detail"]["code"] == "SPEND_KEY_UNAVAILABLE"
     assert charges == []
+
+
+# --- 10. the anonymity read itself (builder-reported branches, a908e4d) ------------------
+#
+# ``auth.spend_meter_for`` decides "anonymous" by whether an account row exists.
+# A signed-in account created before the spend key has a stored key EQUAL to
+# its id (ADR-0136 backfill, CHG-024), so the store returning the id is not
+# proof of anything; a second read says which. Decision 3: a signed-in account
+# never gets the network's key.
+
+
+def _post(client: TestClient, path: str, csrf: str, body: dict[str, Any]) -> Any:
+    return client.post(path, json=body, headers={"X-CSRF-Token": csrf})
+
+
+def _estimate_body() -> dict[str, Any]:
+    return {"query_text": QUERY, "model_slots": DEFAULT_MODEL_IDS}
+
+
+def test_a_backfilled_account_is_refused_when_the_anonymity_read_fails(
+    sign_in: SignIn, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Builder-reported branch 1. A backfilled account (spend key == its id)
+    whose second read, ``is_anonymous``, cannot be answered (``None``). RED-IF
+    the estimate or the create is served instead of refused with 503
+    ``SPEND_KEY_UNAVAILABLE`` -- guessing "anonymous" meters a signed-in
+    account under the network, guessing "signed in" skips the deletion read.
+    Partners: the same account is served (200, its own allowance) before the
+    read breaks; an account whose key differs from its id is still served
+    with the read broken (the refusal is this branch's, not a blanket one);
+    nothing at all is charged."""
+    with configure_for_tests() as store:
+        old = _browser(NET_A)
+        old_csrf = _sign_in(old, sign_in, "108000000000000047007", "w47-old-503@example.com")
+        old_id = _account_of(old)
+        sign_in.store._conn.execute(  # noqa: SLF001 - the backfilled shape
+            "UPDATE accounts SET spend_key = account_id WHERE account_id = ?", (str(old_id),)
+        )
+        new = _browser(NET_A)
+        new_csrf = _sign_in(new, sign_in, "108000000000000047008", "w47-new-200@example.com")
+        before = _post(old, ESTIMATE, old_csrf, _estimate_body())
+        monkeypatch.setattr(sign_in.store, "is_anonymous", lambda _account_id: None)
+
+        refused = [
+            _post(old, ESTIMATE, old_csrf, _estimate_body()),
+            _post(old, RUNS, old_csrf, acknowledged_request(QUERY)),
+        ]
+        served = _post(new, ESTIMATE, new_csrf, _estimate_body())
+        charges = [e for e in store.iter_events(recorders=["cost"]) if e.event_type in CHARGE_TYPES]
+
+    assert before.status_code == 200, before.text
+    assert _allowance(before.json()["cost_estimate"]) == OWN_FRESH
+    assert served.status_code == 200, served.text
+    assert _allowance(served.json()["cost_estimate"]) == OWN_FRESH
+    for response in refused:
+        assert response.status_code == 503, response.text
+        assert response.json()["detail"]["code"] == "SPEND_KEY_UNAVAILABLE"
+    assert charges == []
+
+
+def _read_only_store_without_the_spend_key(tmp_path: Path) -> tuple[Path, UUID, str, str]:
+    """A sessions database as the build before ADR-0136 left it (accounts
+    table, no spend-key column), holding one signed-in account and one durable
+    session of it; returned READ-ONLY, so the spend-key migration cannot run
+    and ``accounts_available()`` is ``False`` -- the state the store's own
+    docs describe as "sessions work as before, and only sign-in is
+    unavailable". Returns (path, account id, session id, csrf token)."""
+    from tests.integration.test_spend_key import _old_database
+
+    from product_app.session_store import _digest
+
+    path = tmp_path / "old-read-only.sqlite3"
+    account = uuid4()
+    _old_database(path, account)
+    session_id, csrf = "w47-old-session-" + uuid4().hex, "w47-old-csrf-" + uuid4().hex
+    now = datetime.now(UTC).isoformat()
+    connection = sqlite3.connect(str(path))
+    try:
+        connection.execute(
+            "INSERT INTO sessions VALUES (?, ?, ?, ?, ?)",
+            (_digest(session_id), str(account), csrf, now, now),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+    path.chmod(0o444)
+    return path, account, session_id, csrf
+
+
+def test_with_no_usable_accounts_table_anonymous_sessions_share_the_network(
+    tmp_path: Path,
+) -> None:
+    """Builder-reported branch 2, the anonymous half. With the accounts
+    feature unavailable (read-only, pre-spend-key database) no one can sign
+    in, so a NEW session is anonymous and is metered under its network. RED-IF
+    that state gives each anonymous session its own id (``else True`` turned
+    ``else False``: the fresh-$0.40-per-session bug again). Partners: the store
+    really is in that state, and the first session's charge is on the ledger
+    under the shared key."""
+    path, _, _, _ = _read_only_store_without_the_spend_key(tmp_path)
+    store = SessionStore(str(path))
+    try:
+        assert store.accounts_available() is False
+        session_store.configure(store)  # restored by conftest's _isolated_session_store
+        with configure_for_tests() as ledger, isolated_run_semaphore(1) as semaphore:
+            first = _browser(NET_A)
+            run = _run(first, _boot(first), semaphore)
+            second = _browser(NET_A)
+            seen = _estimate(second, _boot(second))
+
+            assert _key(run) != _account_of(first)
+            assert _charge_rows(ledger, _key(run)) == 1
+            assert _allowance(seen) == _allowance_dict("0.1052", "0.2948", shared=True)
+    finally:
+        path.chmod(0o644)
+        store.close()
+
+
+def test_with_no_usable_accounts_table_a_signed_in_session_keeps_its_own_allowance(
+    tmp_path: Path,
+) -> None:
+    """Builder-reported branch 2, the signed-in half. The same read-only,
+    pre-spend-key database still RESTORES a signed-in account's durable session
+    (``SessionStore._MIGRATIONS_DDL``'s note: "sessions work as before"). Every
+    account in such a database predates the spend key, so its key is its own
+    id (CHG-024) -- what this state metered it under before W47 -- and decision
+    3 says a signed-in account never gets the network's key. The account row
+    is still readable, so the code can tell it from an anonymous session.
+    RED-IF its estimate or run is metered under the network (shared flag
+    true, the network's spend shown, or a run key other than its id).
+    Partners: the session really was restored from disk (the cookie resolves
+    to the stored account), and the network has spent, so a network key would
+    show it."""
+    path, account, session_id, csrf = _read_only_store_without_the_spend_key(tmp_path)
+    store = SessionStore(str(path))
+    try:
+        assert store.accounts_available() is False
+        session_store.configure(store)  # restored by conftest's _isolated_session_store
+        with configure_for_tests() as ledger, isolated_run_semaphore(1) as semaphore:
+            spender = _browser(NET_A)
+            spender_run = _run(spender, _boot(spender), semaphore)
+            spender_rows = _charge_rows(ledger, _key(spender_run))
+            restored = _browser(NET_A)
+            restored.cookies.set(COOKIE, session_id)
+            assert _account_of(restored) == account
+
+            estimate = _estimate(restored, csrf)
+            run = _run(restored, csrf, semaphore)
+
+            assert spender_rows == 1
+            assert _allowance(estimate) == OWN_FRESH
+            assert _key(run) == account
+            assert _charge_rows(ledger, _key(spender_run)) == 1
+    finally:
+        path.chmod(0o644)
+        store.close()
