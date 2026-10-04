@@ -506,7 +506,7 @@ def test_every_debate_and_synthesis_call_is_priced_for_the_characters_it_is_sent
     """RED IF: a debate or synthesis call is sent more follow-up text than the
     estimate prices it for. On ``b67922a`` the break-it reviewer measured, for
     this exact shape, debate sent +150 characters and priced +49, synthesis
-    sent +8,379 and priced +8,079: the labels, fences and the synthesis
+    sent +8,349 and priced +8,049: the labels, fences and the synthesis
     directive that wrap the texts are sent on every call and priced on none.
 
     Method: one fresh run and one follow-up run of the same question, every
@@ -668,3 +668,62 @@ def test_positive_partner_the_full_context_carries_two_fences_and_names_the_fina
         fences = [line for line in system.splitlines() if line == UNTRUSTED_BEGIN]
         assert len(fences) == 2
         assert "final answer" in system[len(DEFAULT_ANSWER_SYSTEM) :].lower()
+
+
+# ---------------------------------------------------------------------------
+# Review round 2: an answer with no question must not promise a question.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("empty_question", [None, ""], ids=["null-question", "empty-question"])
+def test_an_answer_only_context_does_not_claim_a_previous_question(
+    _live_stubbed: list[Call], empty_question: str | None
+) -> None:
+    """RED IF: for an API-only context with a previous answer and a null or
+    empty ``prior_question``, the answer call's system message still says
+    "What the user asked before ... are below" (on ``61e5b2b`` the follow-up
+    sentence names both whenever the answer is sent), or carries a question
+    block with nothing in it.
+
+    Structure, not wording: exactly ONE fenced block (the answer's), no
+    "The user's previous question, as data:" label, and no claim of what the
+    user "asked before". Positive partners: the answer IS carried in that one
+    fence, and the full shape (``test_positive_partner_the_full_context_...``)
+    carries two fences.
+    """
+    calls = _run(
+        _live_stubbed,
+        model_ids=FOUR[:2],
+        mode="panel",
+        context={"prior_question": empty_question, "prior_synthesis": PRIOR_SYNTHESIS},
+    )
+    answers = _answer_calls(calls, FOUR[:2])
+    assert len(answers) == 2
+    for call in answers:
+        system = call.role("system")
+        assert system.startswith(DEFAULT_ANSWER_SYSTEM)
+        added = system[len(DEFAULT_ANSWER_SYSTEM) :]
+        assert PRIOR_S_MARK in added and _inside_a_fence(system, PRIOR_S_MARK)
+        fences = [line for line in system.splitlines() if line == UNTRUSTED_BEGIN]
+        assert len(fences) == 1, (
+            f"{call.model_id}: {len(fences)} fenced blocks for an answer-only context"
+        )
+        assert "The user's previous question, as data:" not in added
+        assert "asked before" not in added.lower(), (
+            f"{call.model_id}: claims a previous question that is not there: {added[:300]!r}"
+        )
+
+
+def test_positive_partner_the_full_context_names_both_the_question_and_the_answer(
+    _live_stubbed: list[Call],
+) -> None:
+    """The partner of the test above, green on ``61e5b2b``: with both texts the
+    answer call carries the question's label and says what the user asked
+    before. RED IF the question block or that sentence is dropped."""
+    calls = _run(_live_stubbed, model_ids=FOUR[:2], mode="panel", context=CONTEXT)
+    answers = _answer_calls(calls, FOUR[:2])
+    assert len(answers) == 2
+    for call in answers:
+        added = call.role("system")[len(DEFAULT_ANSWER_SYSTEM) :]
+        assert "The user's previous question, as data:" in added
+        assert "asked before" in added.lower()

@@ -695,3 +695,139 @@ test.describe("W37 — product review: re-opened results, the cost confirmation,
     expect(mocked()).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Review round 2 (the one bounded fix): in-flight requests, a finished run's
+// stale context, and one model in Start fresh mode.
+// ---------------------------------------------------------------------------
+
+/** Hold every response to `path` until `release()` is called. The REAL server
+ * answers (route.fetch); only its arrival in the page is delayed. */
+async function holdResponses(page: Page, path: RegExp) {
+  let release: () => void = () => {};
+  const gate = new Promise<void>((r) => (release = r));
+  await page.route(path, async (route) => {
+    if (route.request().method() !== "POST") return route.continue();
+    const response = await route.fetch();
+    await gate;
+    await route.fulfill({ response });
+  });
+  return () => release();
+}
+
+test.describe("W37 — review round 2: in-flight requests, stale context, one model", () => {
+  test.skip(({ browserName }) => browserName !== "chromium", "reference run is chromium-only");
+
+  test("an example chip clicked while a follow-up estimate is in flight drops that estimate", async ({ page }) => {
+    // RED-IF: a composer example chip (goToComposer) clears the Following up line but not the in-flight estimate, so its late answer creates a run with the old context or opens a follow-up cost confirmation.
+    // Held with page.route around the REAL response: a real estimate answers
+    // in milliseconds, too fast to click anything while it is in flight.
+    const sent = recordRunRequests(page);
+    await attachFollowUp(page);
+    const release = await holdResponses(page, /\/v1\/query-runs\/estimate$/);
+    const estimatesBefore = countOf(sent, "estimate");
+    await page.locator("#run-now").click();
+    const held = await nextSent(sent, "estimate", estimatesBefore);
+    // Positive partner: the estimate in flight IS a follow-up.
+    expect(held.body.context?.prior_question).toBe(Q1);
+    expect((held.body.context?.prior_synthesis ?? "").length).toBeGreaterThan(0);
+
+    const chip = page.locator(".composer-examples [data-landing-chip]").first();
+    await expect(chip).toBeVisible();
+    const chipText = (await chip.getAttribute("data-landing-chip")) ?? "";
+    expect(chipText.length).toBeGreaterThan(0);
+    await chip.click();
+    await expect(page.locator("#query-text")).toHaveValue(chipText);
+    await expect(composerFollowLine(page)).toHaveCount(0);
+
+    release();
+    await expect.poll(() => countOf(sent, "estimate"), { timeout: 5000 }).toBeGreaterThanOrEqual(1);
+    await page.waitForTimeout(2000); // time for a late answer to open a gate or send a create
+    const followUpCreates = sent.filter((s) => s.kind === "create" && s.body.context !== undefined);
+    expect(followUpCreates.map((s) => s.body.query_text), "no run may be created with the dropped context").toEqual([]);
+    await expect(gateFollowLine(page)).toHaveCount(0);
+    await expect(composerView(page)).toBeVisible();
+  });
+
+  test("after a follow-up run finishes, Back to the composer shows no context from the run before it", async ({ page }) => {
+    // RED-IF: state.followUpContext keeps run N-1's question after run N finishes, so browser Back shows "Following up on: <Q1>" again (decision 6: one step back only).
+    const mocked = forbidRoutes(page);
+    const sent = recordRunRequests(page);
+    await attachFollowUp(page);
+    // Run the follow-up (Q2, context Q1).
+    const createsBefore = countOf(sent, "create");
+    await page.locator("#run-now").click();
+    await settleRealRun(page);
+    await expect(page.locator("#result-question")).toHaveText(Q2);
+    const create = await nextSent(sent, "create", createsBefore);
+    expect(create.body.context?.prior_question, "the run was a follow-up of Q1").toBe(Q1);
+
+    // Browser Back from result Q2 to the composer.
+    await page.goBack();
+    await expect(composerView(page)).toBeVisible();
+    await expect(page.getByText(followingUpOn(Q1)).filter({ visible: true })).toHaveCount(0);
+    await expect(composerFollowLine(page).filter({ hasText: Q1 })).toHaveCount(0);
+
+    // Forward to result Q2: following it up attaches Q2, the latest (positive partner).
+    await page.goForward();
+    await expect(page.locator("#result-question")).toHaveText(Q2);
+    await page.locator("#result-next-input").fill(Q3);
+    await page.locator("#result-next-run").click();
+    await expect(composerFollowLine(page)).toHaveCount(1);
+    await expect(composerFollowLine(page)).toContainText(Q2);
+    const body = await seeTheEstimate(page, sent);
+    expect(body.context?.prior_question).toBe(Q2);
+    expect(mocked()).toBe(false);
+  });
+
+  test("the composer's Start fresh cannot drop the context while the create carrying it is in flight", async ({ page }) => {
+    // RED-IF: #follow-up-context-drop stays live while the create is on the wire, so the line disappears but the run is created WITH the context.
+    // Held with page.route around the REAL create response, which otherwise
+    // answers in milliseconds.
+    const sent = recordRunRequests(page);
+    await attachFollowUp(page);
+    const release = await holdResponses(page, /\/v1\/query-runs$/);
+    const createsBefore = countOf(sent, "create");
+    await page.locator("#run-now").click();
+    const create = await nextSent(sent, "create", createsBefore);
+    // Positive partners: the create on the wire carries the context, and the
+    // composer still shows the line and its button.
+    expect(create.body.context?.prior_question).toBe(Q1);
+    await expect(composerView(page)).toBeVisible();
+    await expect(composerFollowLine(page)).toHaveCount(1);
+    const drop = page.locator("#follow-up-context-drop");
+    await expect(drop).toBeVisible();
+    if (await drop.isEnabled()) {
+      await drop.click();
+      // Inert is acceptable; dropping is not: the run being created carries the context.
+      await expect(composerFollowLine(page), "the line must stay while the run that carries it is being created").toHaveCount(1);
+    } else {
+      await expect(drop).toBeDisabled();
+    }
+    release();
+    await settleRealRun(page);
+  });
+
+  test("in quick mode the Start fresh note says the model, singular; a panel says the models", async ({ page }) => {
+    // RED-IF: renderFollowUpMode's Start fresh sentence is fixed to "the models won't see…" even for a quick answer's one model.
+    const mocked = forbidRoutes(page);
+    await boot(page);
+    await askReal(page, Q1);
+    await startFreshButton(page).click();
+    // Positive partner: the panel note in Start fresh mode is plural.
+    await expect(nextNote(page)).toContainText(/\bthe models won.t see\b/);
+    await resultView(page).getByRole("button", { name: "New question", exact: true }).click();
+    await page.locator("#quick-mode-input").check();
+    await page.locator("#query-text").fill(Q2);
+    await page.locator("#run-now").click();
+    await expect(page.locator("#result-quick:visible, #gate-confirm:visible").first()).toBeVisible({ timeout: 30000 });
+    if (await page.locator("#gate-confirm").isVisible()) await page.locator("#gate-confirm").click();
+    await expect(page.locator("#result-quick")).toBeVisible({ timeout: 30000 });
+    await startFreshButton(page).click();
+    await expect(startFreshButton(page)).toHaveAttribute("aria-pressed", "true");
+    await expect(nextNote(page)).toContainText(/on its own/i);
+    await expect(nextNote(page)).toContainText(/\bthe model won.t see\b/);
+    await expect(nextNote(page)).not.toContainText(/\bthe models\b/);
+    expect(mocked()).toBe(false);
+  });
+});

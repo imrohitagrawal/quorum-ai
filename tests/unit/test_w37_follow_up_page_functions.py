@@ -263,3 +263,51 @@ def test_the_landing_button_reads_choose_models() -> None:
     label = html.unescape(re.sub(r"<[^>]+>", "", match.group(1))).strip()
     assert label == "Choose models →", label
     assert "Run the debate" not in html.unescape(page)
+
+
+# --- review round 2: the cut never splits a character ----------------------------
+
+
+def _lone_surrogates(text: str) -> list[int]:
+    """Positions of UTF-16 surrogates left unpaired. ``json.loads`` joins a
+    valid pair into one code point, so any surrogate left in a Python ``str``
+    is a lone half."""
+    return [i for i, ch in enumerate(text) if 0xD800 <= ord(ch) <= 0xDFFF]
+
+
+def _utf16_units(text: str) -> int:
+    return len(text.encode("utf-16-le", "surrogatepass")) // 2
+
+
+@needs_node
+def test_the_cut_at_the_limit_never_leaves_half_a_character() -> None:
+    """RED IF: ``priorAnswerText`` cuts at 60,117 UTF-16 units with a plain
+    ``slice``, so 60,116 letters and an emoji end with a lone high surrogate
+    (``\\ud83d``) -- text no server or model can read as written.
+
+    Asserted for a panel answer and a quick answer: no lone surrogate, still at
+    most 60,117 UTF-16 units (the server's limit). Positive partner: an answer
+    under the limit keeps its emoji whole, so "drop every emoji" also goes red.
+    """
+    emoji = "\U0001f600"
+    over = "a" * 60_116 + emoji + "tail"
+    under = "a" * 100 + emoji
+    panel = _panel_result(
+        consensus=over, disagreement="", uncertainty="", recommendation="", source_support=""
+    )
+    quick = {
+        "mode": "quick",
+        "result": {
+            "final_synthesis": None,
+            "model_answers": [{"slot_number": 1, "status": "completed", "answer_text": over}],
+        },
+    }
+    small = _panel_result(
+        consensus=under, disagreement="", uncertainty="", recommendation="", source_support=""
+    )
+    got_panel, got_quick, got_small = _prior_answer_text([[panel], [quick], [small]])
+    for got in (got_panel, got_quick):
+        assert _lone_surrogates(got) == [], f"lone surrogate at {_lone_surrogates(got)}"
+        assert _utf16_units(got) <= PRIOR_SYNTHESIS_LIMIT
+        assert got.startswith("a" * 60_116)
+    assert got_small == under
