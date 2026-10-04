@@ -2,8 +2,6 @@
 
 ## Status
 
-**Amended by ADR-0144 (2026-10-04):** an anonymous session's spend key is now its network's; every anonymous session on one network shares one $0.40 a day; this answers the owner question recorded below (CHG-027 a).
-
 Accepted — 2026-10-03, board row W33 (slice C). The product owner reported the
 wrong message on 2026-09-29 (M07 points 3 and 4: *"It is unclear which limit is
 applicable when and where. The error messages are not clear."*; M08 point 6:
@@ -12,6 +10,8 @@ exact error or the exact cap that has been hit"*). CHG-026 (h) records the
 decision: messages name the limit actually hit and show the remaining allowance
 (the session's wording, accepted by the owner in M10). The fields and the copy
 below are the session's design. No limit value changes.
+
+**Amended by ADR-0144 (2026-10-04):** an anonymous session's spend key is now its network's; every anonymous session on one network shares one $0.40 a day; this answers the owner question recorded below (CHG-027 a).
 
 ## Context
 

@@ -2,8 +2,6 @@
 
 ## Status
 
-**Amended by ADR-0144 (2026-10-04):** an anonymous session's spend key is now its network's; every anonymous session on one network shares one $0.40 a day.
-
 Accepted — 2026-09-27, board row W7, part b of the second pull request. The
 product owner decided that deleting an account removes its history
 (CHG-012 D7, their words): *"but yes on account deletion we should remove"*.
@@ -14,6 +12,8 @@ session, nulls the account id on operator run rows, and keeps the 24-hour
 spend envelope keyed on a one-way hash of the Google subject for 24 hours.
 On 2026-09-25 at 08:56:57Z (CHG-021 f): *"A reminder and re-confirmation
 from User before permanently deleting the account."*
+
+**Amended by ADR-0144 (2026-10-04):** an anonymous session's spend key is now its network's; every anonymous session on one network shares one $0.40 a day.
 
 Two further owner decisions, both on 2026-09-27, each choosing an option the
 session had drafted:

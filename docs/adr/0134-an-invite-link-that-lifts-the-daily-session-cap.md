@@ -2,8 +2,6 @@
 
 ## Status
 
-**Amended by ADR-0144 (2026-10-04):** an anonymous session's spend key is now its network's; every anonymous session on one network shares one $0.40 a day.
-
 Accepted — 2026-09-26, board row W32. The product owner decided an invite
 link on 2026-09-25 (CHG-022, transcript `efe4f2fc`). Their words:
 *"Also, I would like you to include the one limit to know and the invite
@@ -13,6 +11,8 @@ approved, CHG-022 item (4): a secret link the owner sends to a firm that
 lifts the session limit for whoever opens it, from any network, until an end
 date. CHG-022 left the detailed design to the building session, failure
 modes first.
+
+**Amended by ADR-0144 (2026-10-04):** an anonymous session's spend key is now its network's; every anonymous session on one network shares one $0.40 a day.
 
 So everything below beyond item (4) is the session's design, and these
 choices are **PROPOSED — AWAITING OWNER**, built at their safe default:
