@@ -191,10 +191,14 @@ is the rule only.
     #100, `SESSION_RATE_LIMIT_PER_MINUTE` alone is not enough — the DURABLE
     per-IP daily mint cap (2/24h in production) needs its own LOCAL-only
     override too, or the 3rd cookie-less `/ui` boot in the run gets a 429
-    and every invariant spec after it fails to even render:
+    and every invariant spec after it fails to even render. Since W47
+    (ADR-0144), anonymous spend is shared per network, so every local browser
+    shares one $0.40 a day unless `ANONYMOUS_SPEND_PER_SESSION_OVERRIDE` is set
+    (LOCAL-only, like the other two):
     ```bash
     lsof -ti tcp:18085 | xargs -r kill -9
     cd e2e && SESSION_RATE_LIMIT_PER_MINUTE=600 SESSION_MINT_CAP_OVERRIDE=600 \
+      ANONYMOUS_SPEND_PER_SESSION_OVERRIDE=true \
       npx playwright test <spec> --project=chromium --workers=1 --retries=0
     ```
 13a. **`e2e/tests/review/` makes `make quality` RED on your machine and green in

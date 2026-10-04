@@ -68,6 +68,10 @@ jobs:
       # own override for the same reason — every browser engine here shares
       # one real loopback IP.
       SESSION_MINT_CAP_OVERRIDE: "600"
+      # W47 (ADR-0144 decision 7): every browser here shares one loopback address,
+      # so per-network anonymous spend would give the whole lane one $0.40 a day.
+      # LOCAL-only; the app refuses to start with it set anywhere else.
+      ANONYMOUS_SPEND_PER_SESSION_OVERRIDE: "true"
     steps:
       - name: Check out repository
         uses: actions/checkout@v4

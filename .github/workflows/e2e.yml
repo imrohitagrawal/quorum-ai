@@ -86,6 +86,10 @@ jobs:
       # reason — without it, the 3rd cookie-less /ui boot in this run gets
       # a 429 and every invariant spec after it fails to render.
       SESSION_MINT_CAP_OVERRIDE: "600"
+      # W47 (ADR-0144 decision 7): every browser here shares one loopback address,
+      # so per-network anonymous spend would give the whole lane one $0.40 a day.
+      # LOCAL-only; the app refuses to start with it set anywhere else.
+      ANONYMOUS_SPEND_PER_SESSION_OVERRIDE: "true"
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -461,12 +465,14 @@ jobs:
           npx playwright test
           tests/signed-in/history-refresh.spec.ts
           tests/signed-in/follow-up-context.spec.ts
+          tests/signed-in/shared-allowance.spec.ts
           --config=playwright.signed-in.config.ts
           --project=chromium
           --retries=0
 
-      # EXECUTED-COUNT FLOOR, same reasoning as the lanes above. 15 is the two
-      # specs' whole test count (history-refresh 14, follow-up-context 1, W37);
+      # EXECUTED-COUNT FLOOR, same reasoning as the lanes above. 18 is the three
+      # specs' whole test count (history-refresh 14, follow-up-context 1, W37;
+      # shared-allowance 3, W47 — added, to be confirmed by this lane's run);
       # the lane reported "15 executed, 15 passed" on 2026-10-04 (W37 builder).
       # History of the 14: MEASURED 2026-10-03 with the invocation above:
       # the first nine tests were red by design on 087dbb9 (7 of 9 failing) and
@@ -477,7 +483,7 @@ jobs:
       # 700 px): against b552d37's code the lane gave "12 passed", "2 failed",
       # red by design until their fix. Re-measure when that fix lands.
       - name: "signed-in History lane: floor on tests actually executed"
-        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 15 --lane "signed-in History lane"
+        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 18 --lane "signed-in History lane"
 
       - name: Clear the previous lane's JUnit report
         # Adversarial review (#162/#166): without this, a Playwright run that

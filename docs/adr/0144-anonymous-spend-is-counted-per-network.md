@@ -40,6 +40,16 @@ identified for the per-network session limits (`auth.client_ip_of`, W30, ADR-013
    daily-allowance block say it is shared by everyone on this network who is not signed
    in, and, when sign-in is available, that signing in gives a person their own $0.40 a
    day.
+7. **A local-only test override.** Every browser in the e2e lanes comes from one
+   loopback address, so they would all share one $0.40 a day and the lanes could not
+   run (measured by the test designer: on a fresh database `page-journey.spec.ts` had
+   18 failures by its 29th test, each reading "Not enough allowance left"). A setting,
+   `ANONYMOUS_SPEND_PER_SESSION_OVERRIDE`, makes each anonymous session its own
+   network for spend, with the same guards as `SESSION_MINT_CAP_OVERRIDE`: off by
+   default, honoured only when `RUNTIME_ENVIRONMENT=local`, and the app refuses to
+   start with it set anywhere else. The allowance still reports `shared_by_network`
+   for an anonymous session. The e2e job sets it; the signed-in lane's server clears
+   it, so that lane exercises the real per-network sharing in a browser.
 
 ## Rejected alternatives
 
@@ -72,4 +82,4 @@ identified for the per-network session limits (`auth.client_ip_of`, W30, ADR-013
   construction and its prefix; (ii) unidentifiable requests share one key; (iii) IPv6
   counted by /64; (iv) the wording that says the allowance is shared and offers sign-in;
   (v) no move of the last day's spend at deploy; (vi) the running-total rail is left as
-  it is.
+  it is; (vii) the local-only test override of decision 7.
