@@ -374,10 +374,12 @@ jobs:
         # follow-up-context.spec.ts (22 tests after review round 2). Measured on
         # 2026-10-04 by the W37 builder on c2abe93, the 22-spec lane as the step
         # above runs it plus the two local overrides: JUnit tests="397", 0
-        # failures, 0 skipped. Reported by the W37 builder (a subagent), not re-run
+        # failures, 0 skipped. 397 -> 398 (W47, ADR-0144): limit-messages.spec.ts
+        # adds one test; the W47 builder (a subagent) reported "398 tests executed
+        # (floor 397), 0 skipped" on a908e4d+3522a4f. Reported by the W37 builder (a subagent), not re-run
         # by the orchestrator; the hosted run of the W37 pull request must confirm
         # it before merge.
-        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 397 --lane "invariants lane"
+        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 398 --lane "invariants lane"
 
       - name: Clear the previous lane's JUnit report
         run: rm -f e2e/results.xml

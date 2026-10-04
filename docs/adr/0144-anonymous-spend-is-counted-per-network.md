@@ -78,6 +78,12 @@ identified for the per-network session limits (`auth.client_ip_of`, W30, ADR-013
   network's day.
 - Allow-listed networks (W31) and invite links (W32) never touched spend, and still do
   not: their visitors share their network's allowance.
+- How it is built: the routes read the key and the shared flag together
+  (`auth.spend_meter_for`; `spend_key_for` returns the key alone); whether a session
+  is anonymous is a second store read, made before the deletion check, because an
+  older account's spend key can equal its own id (ADR-0136); the network key is
+  derived in `session_store.network_spend_key` beside `account_id_for`; with the
+  override on, the session's account id is folded into the hashed text.
 - Calls taken by the session (the owner may overturn any of them): (i) the hash
   construction and its prefix; (ii) unidentifiable requests share one key; (iii) IPv6
   counted by /64; (iv) the wording that says the allowance is shared and offers sign-in;
