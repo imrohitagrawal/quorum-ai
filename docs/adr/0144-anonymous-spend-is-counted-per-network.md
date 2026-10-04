@@ -44,16 +44,18 @@ identified for the per-network session limits (`auth.client_ip_of`, W30, ADR-013
    address: a run degraded at the global ceiling sends `client_ip` to Sentry, and that
    event now carries the network key beside it, so Sentry can pair the two. The hash
    protects the address only from someone without the server secret: with it, an IPv4
-   key can be reversed by trying every address (a few core-hours in Python, measured
-   by review).
+   key can be reversed by trying every address (about one to three core-hours in
+   Python on one core, measured twice by review).
 6. **The page says the allowance is shared.** The estimate's daily allowance carries a
    flag saying it is the network's; for an anonymous session the allowance line, the
-   daily-allowance block, the running-total block, their screen-reader announcements,
+   daily-allowance block, the running-total block, the daily and running-total
+   screen-reader announcements,
    the late daily-cap refusal and the composer footer say it is shared by everyone on
    this network who is not signed in, and, when the page shows "Sign in with Google",
    that signing in gives a person their own $0.40 a day; the cost card then shows its
-   own sign-in button, except on a block signing in cannot lift (the per-run cap, a run
-   larger than the whole day, or a spend ledger that cannot be read). The server's reasons and messages say "this network"
+   own sign-in button, except on a block signing in cannot lift (the per-run cap, a
+   daily-cap block for a run larger than the whole day, or a spend ledger that cannot be
+   read; see Consequences for one case it does not catch). The server's reasons and messages say "this network"
    where they said "the account". A signed-in page never mentions the network.
 7. **A local-only test override.** Every browser in the e2e lanes comes from one
    loopback address, so they would all share one $0.40 a day and the lanes could not
@@ -120,4 +122,10 @@ identified for the per-network session limits (`auth.client_ip_of`, W30, ADR-013
 - Known limits found by the browser review and left: on a phone the card's sign-in
   button opens just below the first screen; signing in reloads the page and loses the
   question just priced (as the top-bar sign-in already did); the late daily-cap
-  refusal offers sign-in in words only; the block card names the shared group twice.
+  refusal offers sign-in in words only; the block card names the shared group twice;
+  the screen-reader announcement of the larger-than-a-day block does not say the
+  allowance is shared. Found by the last check before release and left by choice (both
+  review rounds were used): when the in-memory running total fires first on a run
+  larger than the whole day, the block is the running-total one, and the card still
+  offers sign-in, which cannot lift it (a signed-in account would get the daily-cap
+  block). It costs nothing; the offer is only unhelpful.
