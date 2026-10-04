@@ -29,7 +29,13 @@ identified for the per-network session limits (`auth.client_ip_of`, W30, ADR-013
    address) gets one shared key for all such requests, so it fails closed.
 3. **Signed-in accounts are unchanged**: their key is the keyed hash of the Google
    subject, and their spend never counts against a network's anonymous allowance, nor
-   the reverse. The legacy test header keeps its own id.
+   the reverse. The legacy test header keeps its own id. Whether a session is
+   signed in is read from its account row. On a database that predates the spend-key
+   column (read-only, so the column was never added), an account row that exists keeps
+   the account's own id as its key, as it was metered before this change; a session
+   with no row is anonymous; a read that fails refuses the run (503). Refusing every
+   run in that state was the alternative, and was not chosen: it would stop signed-in
+   people who could run before.
 4. **The key is read once per request** by `spend_key_for(session, request)` on the
    estimate and create routes, and stored on the run at create, as today, so a run's
    charge, void and reconcile share one key even if the network changes mid-run.
@@ -88,4 +94,6 @@ identified for the per-network session limits (`auth.client_ip_of`, W30, ADR-013
   construction and its prefix; (ii) unidentifiable requests share one key; (iii) IPv6
   counted by /64; (iv) the wording that says the allowance is shared and offers sign-in;
   (v) no move of the last day's spend at deploy; (vi) the running-total rail is left as
-  it is; (vii) the local-only test override of decision 7.
+  it is; (vii) the local-only test override of decision 7; (viii) on a database without the
+  spend-key column, a signed-in account keeps its own id rather than being refused
+  (decision 3).
