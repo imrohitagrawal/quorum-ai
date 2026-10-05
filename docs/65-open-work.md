@@ -6,7 +6,7 @@ original, because a gate and an offline agent can read it and cannot read `gh`.
 
 Verified at: `4ba35cec0ce40f9dd48b9c1bf0b9aefeb862a28c`
 
-The board holds **52** rows, **14** of them unpinned.
+The board holds **53** rows, **15** of them unpinned.
 
 `scripts/check_open_work.py --check` reads every row's evidence off disk and
 refuses if a claim is false. It runs inside `make validate`, and
@@ -148,6 +148,7 @@ caught by any automated check and 10 of 16 by adversarial review
 | W51 | "How it works" (the top bar's `enterLanding`) does not drop an estimate still loading, so an estimate requested on the composer opens the cost gate over the landing when it arrives (reproduced on `40249a6` by W48's break-it reviewer, 2026-10-05). W48 closes its tour when that happens; the stray cost gate itself is this row | UNPINNED | `—` | — | — |
 | W52 | Keep the short excerpt each search result carries (OpenRouter annotation text, Tavily `content`) with its source for the run, so W29's judge can read it for a cited page that robots.txt says not to fetch (CHG-028). Not shown on the page; bounded; never put in any prompt here (W29's judge must fence it as untrusted); a `docs/48` row pending the owner's approval. Failure modes and an ADR first (ADR-0146) | DONE | `ABSENT src/product_app/providers.py :: excerpt: str` | — | — |
 | W53 | The untrusted-text fence (`neutralize_delimiters` in `untrusted_text.py`) catches its end marker only when it is exact: a marker with a combining mark (U+034F) or variation selector inside it, a look-alike letter or a space passes it unchanged (reproduced on `88887ee` by W52's round-2 reviewers, 2026-10-05). Already true for the answers, questions and debate text it fences today; whether a model obeys an altered marker is untested. Make the fence catch an altered marker before W29 puts a search excerpt in the judge's prompt; widening W52's character removal cannot close it | DONE | `ABSENT src/product_app/untrusted_text.py :: unicodedata.normalize("NFKC"` | — | ADR-0147 |
+| W54 | Switch the judge's page reading on (W29's second step, CHG-026 (e)): ask the owner before the one paid measured run (CHG-027), measure the judge with pages (cost, time held in the run slot, verdict quality), capture its golden output for `PR-EVAL-JUDGE-v2`, set `QUORUM_SOURCE_FETCH_ENABLED` in `fly.toml`. Needs the owner's approval of the `docs/48` rows for search excerpts and cited page text first | UNPINNED | `—` | — | — |
 
 **STOP** marks a row that cannot be finished without a human decision — a money,
 cost or safety guardrail value that only real measurement could justify. Do not
@@ -768,7 +769,7 @@ forever with the defect closed (trap 12, measured on W12/#379). It now pins
 `ABSENT … :: if len(stance) < 2:`, verified absent on `origin/main` and present
 after.
 
-**W33–W43 — the 2026-09-28..30 owner session, added 2026-09-30** (W42 and W43 found by W34's reviews; W44 split from W42 on 2026-10-03; W45 and W46 found by W33's reviews; W47 and W48 added from the owner's decisions of 2026-10-04, CHG-027; W49 found by W37's test designer; W50 by W37's product reviewer; W51 by W48's break-it reviewer; W52 from CHG-028; W53 by W52's round-2 reviewers). Added
+**W33–W43 — the 2026-09-28..30 owner session, added 2026-09-30** (W42 and W43 found by W34's reviews; W44 split from W42 on 2026-10-03; W45 and W46 found by W33's reviews; W47 and W48 added from the owner's decisions of 2026-10-04, CHG-027; W49 found by W37's test designer; W50 by W37's product reviewer; W51 by W48's break-it reviewer; W52 from CHG-028; W53 by W52's round-2 reviewers; W54 split from W29 on 2026-10-06). Added
 unpinned: each is built in its own pull request, and that pull request pins
 the row (W34 first, pinned by ADR-0139's pull request) with the needle its change adds or deletes (memory of this repo:
 "pin a needle the fix must add or delete", not a line the fix edits around).
