@@ -33,14 +33,22 @@ untrusted-text fence catch an altered marker. The owner's decisions:
    and visible text is byte-identical to today.
 2. **Where.** On the owner branch of the judge's memo (`_memoised_verdict`), once per
    verdict: one fetch call per verdict, never one per reader.
-3. **robots.txt.** Read through the fetcher's own pinned path and limits, once per host per
-   verdict, inside the same time budget as the pages, and parsed with
-   `urllib.robotparser.RobotFileParser.parse` (never `.read`, which opens the URL itself and
-   follows redirects). Following RFC 9309: a 4xx answer means fetching is allowed; a
-   timeout, a 5xx, an unreadable or oversized file means it is not (fail closed). A 3xx
-   answer counts as unreadable: RFC 9309 lets a crawler follow up to five redirects, but
-   following one here would need a second pinned fetch; failing closed costs only the
-   page, and the excerpt is used instead.
+3. **robots.txt.** Read through the fetcher's own pinned path and limits, once per origin
+   (scheme, host and port) per verdict, inside the same time budget as the pages, and
+   matched by the app's own RFC 9309 matcher, not `urllib.robotparser` (review round 1
+   showed the standard library allowing five kinds of path the file forbids: `*` wildcards,
+   `$` end anchors, a longer `Disallow` after a shorter `Allow`, a group for another
+   crawler matched by substring, and a file that starts with a byte-order mark). The
+   matcher follows RFC 9309 section 2.2: the group whose user-agent line equals the app's
+   product token `quorum-ai-source-check` (ignoring case), else the `*` group; rules of
+   every matching group combined; the longest matching rule wins and `Allow` wins a tie;
+   `*` matches any characters and `$` ends the path; a leading byte-order mark is ignored.
+   A 4xx answer means fetching is allowed and a 5xx or no answer means it is not, as RFC
+   9309 section 2.3.1 says. Two answers fail closed by the session's choice, not the RFC's:
+   a 3xx (the RFC asks a crawler to follow at least five redirects; following one here
+   would need a second pinned fetch) and a file over the fetcher's 262,144-byte cap (the
+   RFC asks a crawler to parse at least 500 KiB). Failing closed costs only the page; the
+   excerpt is used instead.
 4. **What the judge reads per source**, in this order:
    - the page text, when robots.txt allows it and the page was fetched and usable;
    - the search excerpt (W52), when robots.txt disallows the page and an excerpt exists;
@@ -48,6 +56,10 @@ untrusted-text fence catch an altered marker. The owner's decisions:
    A fetch that fails for another reason (timeout, too large, not text) falls back to the
    title and address, not the excerpt: CHG-026 (d) and CHG-028 name the excerpt for pages
    robots.txt disallows only.
+   Answers often cite the same address. Each distinct address is fetched and given to the
+   judge once; a later source line with the same address says it is the same page as the
+   earlier one, so the judge is never told a page it has could not be read. The 8-item cap
+   counts distinct addresses.
 5. **Cleaning and fencing.** Page text and excerpts are cleaned the way W52 cleans excerpts
    (control and invisible characters removed, whitespace collapsed, cut to 4,000
    characters) and sit inside the judge's untrusted block, which W53's fence neutralises.
@@ -64,9 +76,12 @@ untrusted-text fence catch an altered marker. The owner's decisions:
 8. **The receipt.** A `source_fetch` row at exactly $0 appears in the estimate and the
    measured receipt whenever pages are read, so the step is visible and never priced.
 9. **The wording.** With the setting on, a panel run's trust note says "Checked against N
-   of M cited pages", N being the sources the judge read a page or excerpt for and M the
-   cited sources it saw. When N is 0 it says the judge worked from titles and addresses
-   because no cited page could be read. With the setting off, today's wording stays. The
+   of M cited pages" ("cited page" when M is 1). N is the number of distinct cited
+   addresses whose page the app fetched and the judge read; M is the number of distinct
+   cited addresses the judge saw. A search excerpt does not count toward N: it is not the
+   page, and counting it would say pages were checked when none was fetched (review round
+   1). When N is 0 the note says no cited page could be read and the judge worked from the
+   titles, addresses and any search excerpts. With the setting off, today's wording stays. The
    posture follows ADR-0116: one server-side predicate, served on `/status` and in the
    readiness island, read by the page.
 10. **Data.** Page text, like the excerpt, is never served, logged or stored; it lives in the
@@ -93,6 +108,17 @@ untrusted-text fence catch an altered marker. The owner's decisions:
 - With the setting on: up to 8 seconds of fetching in each panel run's slot, robots.txt
   reads included; a larger judge input and a higher price bound; the judge's quality on
   page text unmeasured until the paid run.
+- With the setting on, the shown estimate (`estimated_cost_usd`) does not include pages:
+  only the upper bound reserves for them, about $0.008 more per panel run with a judge
+  (review round 1). The typical judge input (`cost_judge_input_tokens = 7300`) must be
+  re-measured in the paid run before switch-on (W54).
+- The reserve counts 4 characters per token (ADR-0095's average, not a ceiling). Page text
+  in Chinese, Japanese or code can take more tokens per character, so the paid run must
+  include a non-English page. Review round 1 measured the widest prompt the builder can emit
+  at 33 characters inside the reserve.
 - Calls taken by the session (the owner may overturn any of them): (i) fetching on the
-  memo's owner branch, inside the slot; (ii) robots.txt fail-closed except 4xx; (iii) no
-  excerpt for a failed fetch; (iv) at most 8 page-or-excerpt items; (v) a new prompt id.
+  memo's owner branch, inside the slot; (ii) robots.txt fail-closed on a 3xx or an
+  oversized file; (iii) no excerpt for a failed fetch; (iv) at most 8 page-or-excerpt items,
+  one per distinct address; (v) a new prompt id; (vi) a search excerpt does not count as a
+  checked page in "Checked against N of M"; (vii) the app's own robots.txt matcher rather
+  than a new dependency.
