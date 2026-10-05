@@ -45,9 +45,9 @@ so this is fixed first.
    replacement is cut to the span's length. Texts are cut to their limits before they are
    fenced, so growth would break those limits.
 3. The judge neutralises its joined evidence body once, through the same function, instead of
-   line by line. This changes nothing reachable today: review round 1 built 324 judge prompts
-   with a marker split across every pair of adjacent parts and the output was the same both
-   ways, because a label (`MODEL_ANSWER_1:`) or a source number (`[2]`) always sits between
+   line by line. This changes nothing reachable today: a review-round-1 reviewer reported
+   building judge prompts with a marker split across every pair of adjacent parts and getting
+   the same output both ways (reported, not reproduced here), because a label (`MODEL_ANSWER_1:`) or a source number (`[2]`) always sits between
    two parts. It guards a layout W29 may add, where excerpt text sits next to other text.
 4. No prompt text changes: the markers, the system rules, the prompt ids and every price stay
    as they are.
@@ -71,13 +71,21 @@ so this is fixed first.
 - Known false positives: any text whose letters, read with spaces, punctuation and emoji
   skipped, contain the marker's letters in order loses that stretch inside the prompt:
   "untrusted evidence ending" becomes `[redacted-delimiter]ing`, and the letters may run
-  across words ("a fun, trusted evidence endpoint"). Review round 1 ran the change over the
-  repository's own text (1,188 files, 19.4 million characters, the golden fixture included):
-  only the files that hold real markers changed.
+  across words ("a fun, trusted evidence endpoint"). Review round 2 ran the change over every
+  tracked UTF-8 file at `9cc53d8` (1,542 files, 21.8 million characters, the golden fixture
+  included) and about 44 million characters of French, Turkish, Vietnamese, Greek and Russian
+  prose: accent-dropping added no redaction there. Redaction works on whole characters, so
+  when one character supplies the last letter of a marker and more letters after it (`Ǆ` reads
+  as `DZ`), the whole character is redacted.
 - Known limits: paraphrase ("end of the untrusted block"), digit swaps (`UNTRU5TED`), extra
   letters inside the words, and look-alikes outside the map are not caught: small capitals
   (`ᴜɴᴛʀᴜꜱᴛᴇᴅ`), regional-indicator letters, Cherokee, Armenian, `Đ`, and the Greek lunate
   sigma `Ϲ` (left out because NFKC turns it into `Σ`). Whether a model obeys any altered marker is
   untested.
-- One more pass over each fenced text, linear in its length: review round 1 measured 1, 2, 4
-  and 8 million characters at 0.086, 0.169, 0.346 and 0.693 seconds.
+- One more pass over each fenced text, linear in its length. Measured by the round-2 reviewer
+  on `eb0cc6c`: English prose of 1, 2, 4 and 8 million characters took 0.023, 0.048, 0.094 and
+  0.189 seconds; the worst case found, 2 million random code points with one marker, took 1.45
+  seconds. The test bound is 5 seconds at 2 million characters.
+- Two matches cannot overlap: no character's letters contain `D` or `N` followed by `U`
+  (scanned on Unicode 15.0, 15.1 and 16.0), so no character can end one marker and start the
+  next. A two-line guard keeps the output from growing if a later Unicode version adds one.

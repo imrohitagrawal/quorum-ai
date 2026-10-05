@@ -231,8 +231,8 @@ _LOWER_CASE_LOOK_ALIKES = [
 def test_a_lower_case_look_alike_meets_the_map_after_upper_casing(forged: str) -> None:
     """ADR-0147 decision 1 (round 1): the look-alike map runs before AND
     after upper-casing, so small т, в and ι fold through their mapped
-    capitals, and small ε folds to E. RED IF the map is applied only before
-    upper-casing, or the ε -> E entry is missing."""
+    capitals, and small ε upper-cases to Ε, which the map folds to E. RED IF
+    the map is applied only before upper-casing (measured round 2: 3 red)."""
     out = neutralize_delimiters(f"before {forged} after")
     assert forged not in out
     assert out == f"before {REDACTED} after"
@@ -250,8 +250,10 @@ _UNTESTED_MAP_ENTRIES = [
 
 @pytest.mark.parametrize("forged", _UNTESTED_MAP_ENTRIES)
 def test_each_remaining_map_entry_still_folds(forged: str) -> None:
-    """Pins the palochka and small-izhitsa entries of the look-alike map.
-    RED IF that entry is dropped from the map."""
+    """Pins that palochka and small izhitsa fold. The small forms upper-case
+    to mapped capitals, so dropping a small entry alone stays green (measured
+    in review round 2). RED IF the capital palochka entry (U+04C0) is dropped,
+    or, for the small forms, if the map stops running after upper-casing."""
     out = neutralize_delimiters(f"before {forged} after")
     assert forged not in out
     assert out == f"before {REDACTED} after"
