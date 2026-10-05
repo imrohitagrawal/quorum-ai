@@ -381,9 +381,10 @@ jobs:
         # overrides. 398 -> 408 after W47 review round 1 (limit-messages adds ten
         # tests) and 408 -> 410 after round 2 (two more; added, not measured).
         # 410 -> 428 (W48, ADR-0145): help-and-tour.spec.ts adds 18 tests; added,
-        # not measured — the W48 builder measures it. Not re-run by the orchestrator; the hosted
+        # not measured; the W48 builder reported "428 tests executed" on 2624970.
+        # 428 -> 439 after W48 review round 1 (eleven more; added, not measured). Not re-run by the orchestrator; the hosted
         # run of the W47 pull request must confirm it before merge.
-        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 428 --lane "invariants lane"
+        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 439 --lane "invariants lane"
 
       - name: Clear the previous lane's JUnit report
         run: rm -f e2e/results.xml

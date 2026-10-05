@@ -44,10 +44,12 @@ Escape key cancels a running run. "How it works" is the landing page itself.
    the landing taller**: the phone density check (`landing-cta-reachable.spec.ts`) had
    about 26 px of room on `40249a6` (scroll height 1567 against its 1593.6 bound,
    measured by the test designer), less than one button line, so both sit in lines the
-   landing already has. Below 600 px wide the nav button moves up to the brand line,
-   which has room, and the header's side padding drops from 32 px to 16 px; it stays
-   inside the nav row in the page's structure. Measured by the builder at 390, 375 and
-   360 px wide: scroll height unchanged (1567, 1611, 1635). The top bar's "How it works" opens the landing, where both
+   landing already has at 360 to 390 px wide (the widths the check measures). Where the
+   header already wraps on a phone, the nav button may move up to the brand line; it
+   never makes the header wrap where it was one line (500 to 625 px wide), and the
+   keyboard order of the header's controls follows their visual order. Below about
+   355 px wide the landing does grow (measured by review: up to 59 px at 330 to 340 px),
+   which is recorded under Consequences. The top bar's "How it works" opens the landing, where both
    are. Nothing opens the tour on load, on a timer or from a stored flag. Opening it cancels
    a pending landing hand-off, as "How it works" already does, and keeps the typed
    question.
@@ -57,8 +59,12 @@ Escape key cancels a running run. "How it works" is the landing page itself.
    (shown but disabled on step 1), Next (Done on the last) and "Skip the tour" on every
    step. The dialog sits outside the landing view in the page, so the landing's word
    checks do not read it. Focus goes to the heading on
-   open and on each step, Tab stays inside, Escape closes it and is handled inside the
-   dialog only, and focus returns to the control that opened it. No animation.
+   open and on each step, Tab stays inside, and while it is open a window listener in
+   the capture phase handles Escape (closing it) and Ctrl/Cmd+Enter (ignored) and stops
+   both there, so neither reaches the page-wide shortcuts. Closing returns focus to the
+   control that opened it. If the view leaves the landing while the tour is open (an
+   estimate requested earlier arrives, or browser Back), the tour closes and focus goes
+   to the new view's heading. No animation.
 6. **Existing tests keep their pages**: the shared e2e boot fixture marks the three hints
    as seen, as it already marks the workspace as seen; the new help specs start without
    those flags.
@@ -79,10 +85,21 @@ Escape key cancels a running run. "How it works" is the landing page itself.
 
 - New keys in the visitor's browser storage: one per hint. No server storage, no new
   data kept; `docs/48` is unchanged.
-- The landing does not grow: the two tour buttons sit in existing lines (decision 4).
+- The landing does not grow at the widths its density check measures (360 to 390 px)
+  nor in the header at 500 to 625 px; below about 355 px it grows by up to 59 px
+  (decision 4), and "Choose models" was already below the fold there.
 - Calls taken by the session (the owner may overturn any of them): (i) where each hint
   sits; (ii) the tour as five text steps in a dialog rather than pointing at live
   controls; (iii) two "Take the tour" controls, in the nav row and at the end of the
   preview; (iv) a blocked storage read shows the hint; (v) every word of the help text,
   recorded in `app.js`'s help table (`helpTextTable`), quoted in AC-059 and listed as COPY-007 to COPY-011 in `docs/33`; (vi) the
-  tour buttons fitted into existing landing lines because of the density bound.
+  tour buttons fitted into existing landing lines because of the density bound; (vii)
+  buttons where the owner wrote "link"; (viii) the phone header layout of decision 4;
+  (ix) Back shown but disabled on step 1; (x) the dialog placed outside the landing
+  view; (xi) after "Got it", focus moves to the view's heading or History's control;
+  (xii) the rest of the page is `inert` while the tour is open; (xiii) the History
+  hint's 5 and 30 are written into the text, not read from the settings; (xiv) opening
+  the tour cancels a pending hand-off; (xv) the owner's "in 'How it works'" read as the
+  example preview that "How it works" scrolls to; (xvi) no animation; (xvii) a refused
+  storage write still hides the hint for the page's life; (xviii) reopening the tour
+  starts at step 1; (xix) the tour closes when the view leaves the landing.

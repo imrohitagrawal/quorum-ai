@@ -6,7 +6,7 @@ original, because a gate and an offline agent can read it and cannot read `gh`.
 
 Verified at: `4ba35cec0ce40f9dd48b9c1bf0b9aefeb862a28c`
 
-The board holds **49** rows, **13** of them unpinned.
+The board holds **50** rows, **14** of them unpinned.
 
 `scripts/check_open_work.py --check` reads every row's evidence off disk and
 refuses if a claim is false. It runs inside `make validate`, and
@@ -145,6 +145,7 @@ caught by any automated check and 10 of 16 by adversarial review
 | W48 | Help for new users: contextual hints on by default (the cost estimate, the trust score, History; each once per device, with "Got it"), and an optional 1-minute tour opened only from "Take the tour" on the landing page and in "How it works", never automatically, skippable at every step, keyboard and screen-reader accessible, sharing its text with the hints (CHG-027 g). Journeys and acceptance tests first (ADR-0145) | DONE | `ABSENT src/product_app/templates/workspace.html :: Take the tour` | — | W47 |
 | W49 | "Go to run" on a "one run at a time" card does not open the other run's result once this tab has finished or re-opened a run: `goToActiveRun` does not reset `state.terminalHandled`, so the poll that sees the run finish returns early and the page stays on the live-run view (measured by W37's test designer, 2026-10-04, with mocked responses). Once fixed, also reset `state.liveQueryText` there, or a follow-up would pair this tab's last question with that run's answer (ADR-0143) | UNPINNED | `—` | — | — |
 | W50 | The cost confirmation's Run button stays greyed out (`disabled`) and Ctrl+Enter does nothing after this path: Run now on a question, "New question", re-open that question from "This session", "Review & run", "See the estimate"; the way out is "Back to edit" then "Run now". Reproduced on `369ed5e` and on `main` (`4ba35ce`) by W37's round-2 product reviewer, 2026-10-04; the cause is unmeasured | UNPINNED | `—` | — | — |
+| W51 | "How it works" (the top bar's `enterLanding`) does not drop an estimate still loading, so an estimate requested on the composer opens the cost gate over the landing when it arrives (reproduced on `40249a6` by W48's break-it reviewer, 2026-10-05). W48 closes its tour when that happens; the stray cost gate itself is this row | UNPINNED | `—` | — | — |
 
 **STOP** marks a row that cannot be finished without a human decision — a money,
 cost or safety guardrail value that only real measurement could justify. Do not
@@ -765,7 +766,7 @@ forever with the defect closed (trap 12, measured on W12/#379). It now pins
 `ABSENT … :: if len(stance) < 2:`, verified absent on `origin/main` and present
 after.
 
-**W33–W43 — the 2026-09-28..30 owner session, added 2026-09-30** (W42 and W43 found by W34's reviews; W44 split from W42 on 2026-10-03; W45 and W46 found by W33's reviews; W47 and W48 added from the owner's decisions of 2026-10-04, CHG-027; W49 found by W37's test designer; W50 by W37's product reviewer). Added
+**W33–W43 — the 2026-09-28..30 owner session, added 2026-09-30** (W42 and W43 found by W34's reviews; W44 split from W42 on 2026-10-03; W45 and W46 found by W33's reviews; W47 and W48 added from the owner's decisions of 2026-10-04, CHG-027; W49 found by W37's test designer; W50 by W37's product reviewer; W51 by W48's break-it reviewer). Added
 unpinned: each is built in its own pull request, and that pull request pins
 the row (W34 first, pinned by ADR-0139's pull request) with the needle its change adds or deletes (memory of this repo:
 "pin a needle the fix must add or delete", not a line the fix edits around).
