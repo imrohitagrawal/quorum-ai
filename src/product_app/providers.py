@@ -33,6 +33,7 @@ import json
 import logging
 import re
 import time
+import unicodedata
 from collections.abc import Iterator
 from dataclasses import asdict, dataclass
 from decimal import Decimal
@@ -214,6 +215,17 @@ class SourceReference(BaseModel):
     url: str
     provider: ProviderPath
     is_fallback: bool = False
+    #: W52 (ADR-0146): the passage the search returned with this source --
+    #: OpenRouter's annotation ``content`` or Tavily's result ``content``,
+    #: cleaned and cut by :func:`_clean_search_excerpt`. Empty when the search
+    #: sent none, and on the simulated and inline-Markdown paths.
+    #:
+    #: Kept in the run held in memory and NOWHERE else. ``exclude=True`` keeps
+    #: it out of every serialised response and out of the OpenAPI schema
+    #: (served models are rendered in serialisation mode); ``repr=False`` keeps
+    #: it out of any log line that prints a source. No prompt, judge evidence,
+    #: request or price reads it -- W29 decides how the judge does.
+    excerpt: str = Field(default="", exclude=True, repr=False)
 
 
 class CitationCoverage(BaseModel):
@@ -3629,8 +3641,10 @@ class AnnotationShape:
     ``src/`` resolves one. Whether that can be fixed WITHOUT a new outbound
     fetcher turns on one unmeasured fact: do OpenRouter's ``:online``
     annotations carry passage CONTENT? The 2026-09-06 paid run could not answer
-    it, because :func:`_extract_citations` discards every field but title and
-    url at parse time.
+    it, because :func:`_extract_citations` then discarded every field but title
+    and url at parse time. W52 (ADR-0146) now keeps the passage as
+    ``SourceReference.excerpt``, in memory only; this shape still records
+    counts and a length, never the text.
 
     NEVER THE TEXT. Labels from closed sets, counts, and a LENGTH. Passage
     content is unbounded upstream text -- nobody here has weighed a real
@@ -4211,9 +4225,34 @@ def _parse_tavily_results(payload: object) -> list[SourceReference]:
                 # ...but it is still not the MODEL's own citation, so this flag
                 # stays True and ``citation_coverage`` is deliberately unmoved.
                 is_fallback=True,
+                # W52: from the SAME result as the URL kept above, so a
+                # duplicate or dropped result never lends its text.
+                excerpt=_clean_search_excerpt(result.get("content")),
             ),
         )
     return references
+
+
+def _clean_search_excerpt(value: object) -> str:
+    """A search passage made safe to keep (W52, ADR-0146 decision 2).
+
+    Anything that is not a string is no excerpt. The raw text is first cut to
+    eight times the fetcher's page-text limit, so the per-character work below
+    is bounded by the limit, not by what the provider sent. Whitespace
+    characters are kept long enough to separate words; every other control
+    character (``Cc``) and invisible format character (``Cf``: zero-width,
+    direction controls, the tag block -- one inside a forged fence marker hides
+    it from ``neutralize_delimiters``) is removed; every whitespace run
+    collapses to one space and the ends are trimmed. THEN the text is cut to
+    the limit -- cleaning first, so a run of whitespace cannot spend it. The
+    limit is read at call time so a changed setting moves both cuts.
+    """
+    if not isinstance(value, str):
+        return ""
+    limit = settings.quorum_source_fetch_max_text_chars
+    raw = value[: limit * 8]
+    kept = "".join(ch for ch in raw if ch.isspace() or unicodedata.category(ch) not in ("Cc", "Cf"))
+    return " ".join(kept.split())[:limit]
 
 
 def _extract_message_content(payload: object) -> str:
@@ -4379,8 +4418,7 @@ def _extract_citations(
         # {"url", "title", "content", ...}}. Reading only the flat keys turned
         # 20 distinct annotations into zero sources. The nested block is read
         # first; the flat keys remain the fallback for a provider that sends
-        # them. Passage ``content`` is deliberately not carried here (#447
-        # pieces 2-3 need an input bound first, see #268).
+        # them.
         nested = annotation.get("url_citation")
         block = nested if isinstance(nested, dict) else {}
         raw_url = block.get("url") or annotation.get("url") or annotation.get("source") or ""
@@ -4390,12 +4428,16 @@ def _extract_citations(
             continue
         if not isinstance(title, str):
             title = f" citation {index}"
+        # W52 (ADR-0146): the passage ``content`` is kept as the excerpt, read
+        # from the block the URL came from -- never the other block's text.
+        url_block = block if block.get("url") else annotation
         references.append(
             SourceReference(
                 title=title,
                 url=sanitized,
                 provider=ProviderPath.OPENROUTER_SEARCH,
                 is_fallback=False,
+                excerpt=_clean_search_excerpt(url_block.get("content")),
             ),
         )
     # Workstream-2: parse inline markdown links from the message content as

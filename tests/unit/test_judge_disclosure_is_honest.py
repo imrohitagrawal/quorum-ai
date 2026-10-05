@@ -87,8 +87,9 @@ def test_the_judge_never_receives_the_cited_pages_content() -> None:
 
     So assert the shape instead: the evidence line for a source is EXACTLY
     ``[i] title :: url``, and ``SourceReference`` has no field that could carry
-    page content. RED the day either changes — which is the day the stronger
-    copy would become sayable."""
+    page content beyond W52's search ``excerpt``, which the judge is never
+    given. RED the day either changes — which is the day the stronger copy
+    would become sayable."""
     source = _answer_with_source()
     evidence = build_judge_evidence(
         query_text="Does the evidence support the proposal?",
@@ -103,13 +104,49 @@ def test_the_judge_never_receives_the_cited_pages_content() -> None:
         f"the judge's source line is title+URL and nothing else: {evidence.source_lines!r}"
     )
 
-    # The structural reason the copy is true: there is no content field to send.
+    # The structural reason the copy is true. W52 (ADR-0146) adds ONE field,
+    # ``excerpt``: the search excerpt kept with its source for the run. It is
+    # kept, never handed to the judge (W29 decides that, and must then revisit
+    # this copy). Any OTHER new field is still a stop-and-look.
+    # RED IF: SourceReference gains or loses any field other than these five.
     assert set(InitialModelAnswer.model_fields) >= {"sources"}
-    assert set(SourceReference.model_fields) == {"title", "url", "provider", "is_fallback"}, (
-        "SourceReference gained a field — if it can now carry page content, the "
-        "verified disclosure may need to change with it: "
+    assert set(SourceReference.model_fields) == {
+        "title",
+        "url",
+        "provider",
+        "is_fallback",
+        "excerpt",
+    }, (
+        "SourceReference's fields changed — if it can now carry more page content, "
+        "the verified disclosure may need to change with it: "
         f"{sorted(SourceReference.model_fields)}"
     )
+
+    # W52: a source that CARRIES an excerpt still reaches the judge as exactly
+    # ``[i] title :: url``. RED IF: the excerpt is missing from the source
+    # (partner), or any of its text reaches the judge's evidence.
+    with_excerpt = source.model_copy(
+        update={
+            "sources": [
+                SourceReference(
+                    title="A real page",
+                    url="https://real.example/doc",
+                    provider=ProviderPath.OPENROUTER_SEARCH,
+                    is_fallback=False,
+                    excerpt="EXCERPT-SENTINEL a passage the search returned",
+                )
+            ]
+        }
+    )
+    assert getattr(with_excerpt.sources[0], "excerpt", None) == (
+        "EXCERPT-SENTINEL a passage the search returned"
+    )
+    excerpt_evidence = build_judge_evidence(
+        query_text="Does the evidence support the proposal?",
+        initial_answers=[with_excerpt],
+        final_synthesis=None,
+    )
+    assert excerpt_evidence == evidence
 
 
 # ---------------------------------------------------------------------------

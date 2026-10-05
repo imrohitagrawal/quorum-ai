@@ -19,7 +19,7 @@ it updates the Status column and names the PR or commit.
 | M03.1 | Colleague sign-in vs the 2-a-day limit | Network limit for anonymous use only; never blocks sign-in; signed-in users limited per account | NEXT-SESSION-PROMPT decisions | DONE — ADR-0139 (W34) |
 | M03.2 | The flaky trust-score screenshots | Allow just above the largest difference seen (589 px), those screenshots only | CHG-026 k | CHG-027 e (2026-10-04): 700 px, those screenshots only (W41), not built |
 | M03.3 | ADR-0137's four values and ADR-0138's two | *"approve all points in 3."* — events 10 / 30 days, sign-in starts 5 then 1 a minute, idle 120 minutes, warning 5 | CHG-026 c; ADR-0137, ADR-0138, docs/48 updated | DONE (recorded 2026-09-30) |
-| M03.4, M04 | robots.txt: fetch pages when possible | Respect robots.txt; if disallowed, the judge uses the search excerpt | same | DECIDED, not built (W29) |
+| M03.4, M04 | robots.txt: fetch pages when possible | Respect robots.txt; if disallowed, the judge uses the search excerpt | same | DECIDED; CHG-028 (2026-10-05): keep the search excerpts first (W52, ADR-0146); judge use is W29 |
 | M03.5 | BYOK security research first | Parked until W29 and the limits work; key in server memory only | same | PARKED |
 | M03.6, M04 | Sign out everywhere during a run | Ask first; Yes stops the run and signs out; No keeps only the running session | same | DECIDED, not built |
 | M05.3–4, M21 | Google sign-in | Open to any Google account ("Testing" does not restrict basic scopes) | NEXT-SESSION-PROMPT | DECIDED 2026-09-30; record in docs/19 and fix the runbook sentence |
