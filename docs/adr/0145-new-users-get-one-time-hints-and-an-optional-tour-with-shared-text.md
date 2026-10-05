@@ -44,7 +44,10 @@ Escape key cancels a running run. "How it works" is the landing page itself.
    the landing taller**: the phone density check (`landing-cta-reachable.spec.ts`) had
    about 26 px of room on `40249a6` (scroll height 1567 against its 1593.6 bound,
    measured by the test designer), less than one button line, so both sit in lines the
-   landing already has. The top bar's "How it works" opens the landing, where both
+   landing already has. Below 600 px wide the nav button moves up to the brand line,
+   which has room, and the header's side padding drops from 32 px to 16 px; it stays
+   inside the nav row in the page's structure. Measured by the builder at 390, 375 and
+   360 px wide: scroll height unchanged (1567, 1611, 1635). The top bar's "How it works" opens the landing, where both
    are. Nothing opens the tour on load, on a timer or from a stored flag. Opening it cancels
    a pending landing hand-off, as "How it works" already does, and keeps the typed
    question.
@@ -81,5 +84,5 @@ Escape key cancels a running run. "How it works" is the landing page itself.
   sits; (ii) the tour as five text steps in a dialog rather than pointing at live
   controls; (iii) two "Take the tour" controls, in the nav row and at the end of the
   preview; (iv) a blocked storage read shows the hint; (v) every word of the help text,
-  recorded in `app.js`'s help table (`helpTextTable`) and quoted in AC-059; (vi) the
+  recorded in `app.js`'s help table (`helpTextTable`), quoted in AC-059 and listed as COPY-007 to COPY-011 in `docs/33`; (vi) the
   tour buttons fitted into existing landing lines because of the density bound.
