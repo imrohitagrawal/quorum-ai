@@ -3,6 +3,8 @@ import AxeBuilder from "@axe-core/playwright";
 import {
   boot,
   EVAL_CLEAN,
+  EVAL_LAUNDERED,
+  EVAL_VERIFIED_HIGH,
   goldenCompletedResp,
   goldenCreateResp,
   goldenQuickCreateResp,
@@ -12,6 +14,7 @@ import {
   withEvaluation,
 } from "../../fixtures/golden-run";
 import { freeze, waitForComposerReady } from "../../fixtures/stabilize";
+import { LIMIT_RESPONSES } from "../../fixtures/limit-responses";
 import {
   HELP_HINT_IDS,
   HELP_HINT_KEYS,
@@ -1112,4 +1115,159 @@ test.describe("W48 review round 1 (ADR-0145): the tour and the page, the help te
     expect([...tabbed].sort()).toEqual([...ids].sort());
     expect(tabbed, `Tab order vs visual order ${JSON.stringify(visual)}`).toEqual(visual);
   });
+});
+
+/** Composer → "See the estimate" answered by `envelope` → the cost gate. No hint keys preset. */
+async function costGateFrom(page: Page, envelope: unknown) {
+  await bootWithoutHelpSeen(page);
+  await page.route("**/v1/query-runs/estimate", (r) => r.fulfill(fulfil(envelope)));
+  await openCostGate(page);
+}
+
+/** A panel result whose trust score renders `ev`, no hint keys preset. */
+async function panelResultWith(page: Page, ev: unknown) {
+  await bootWithoutHelpSeen(page);
+  const created = goldenCreateResp();
+  await page.route("**/v1/query-runs/estimate", (r) =>
+    r.fulfill(fulfil({ correlation_id: "corr-help-est", cost_estimate: created.cost_estimate, model_slots: created.model_slots, reasons: [] })),
+  );
+  await page.route("**/v1/query-runs/warnings", (r) => r.fulfill(fulfil({ warnings: [] })));
+  await page.route("**/v1/query-runs/active", (r) => r.fulfill(fulfil({ query_run_id: null })));
+  await page.route(/\/v1\/query-runs\/[0-9a-f-]{36}$/, (r) => r.fulfill(fulfil(withEvaluation(goldenCompletedResp(), ev))));
+  await page.route(/\/v1\/query-runs$/, (r) =>
+    r.request().method() === "POST" ? r.fulfill(fulfil(goldenCreateResp())) : r.continue(),
+  );
+  await runToPanelResult(page);
+}
+
+test.describe("W48 review round 2 (ADR-0145): hint truth on every gate and every trust branch, desktop fit", () => {
+  test.skip(({ browserName }) => browserName !== "chromium", "the help lane runs on the reference engine only");
+
+  for (const name of ["dailyCap", "accountRunningTotal", "ledgerUnavailable"] as const) {
+    test(`A: no estimate hint on a blocked cost gate (${name})`, async ({ page }) => {
+      // RED-IF: the estimate hint shows on a gate whose threshold_action is
+      // "block" (f45c6cc: shown on every cost gate). A blocked gate has no
+      // range, no "up to" figure and no approve button, so every sentence of
+      // the hint is false there. The response is a REAL server response
+      // (fixtures/limit-responses.ts). Partner: the gate really is the block
+      // band, and the hint element is in the page.
+      const body = LIMIT_RESPONSES[name];
+      expect(body.cost_estimate.threshold_action).toBe("block");
+      await costGateFrom(page, body);
+      await expect(page.locator("#cost-review-card")).toHaveAttribute("data-band", "block");
+      await expect(hint(page, "estimate")).toBeAttached();
+      await expect(hint(page, "estimate")).toBeHidden();
+    });
+  }
+
+  for (const band of ["allow", "require_confirmation"] as const) {
+    test(`A partner: the estimate hint still shows on a ${band} cost gate`, async ({ page }) => {
+      // RED-IF: the fix for blocked gates also hides the hint on the allow or
+      // the confirm band, where it is true.
+      const envelope =
+        band === "allow"
+          ? LIMIT_RESPONSES.allowBoundedByRunningTotal
+          : { correlation_id: "corr-help-est", cost_estimate: goldenCompletedResp().cost_estimate, model_slots: goldenCreateResp().model_slots, reasons: [] };
+      expect((envelope as { cost_estimate: { threshold_action: string } }).cost_estimate.threshold_action).toBe(band);
+      await costGateFrom(page, envelope);
+      await expect(page.locator("#cost-review-card")).toHaveAttribute("data-band", band);
+      await expect(hint(page, "estimate")).toBeVisible();
+    });
+  }
+
+  test("B: every figure the estimate hint names is a label on the allow-band card, and it never says \"up to\" (real backend)", async ({ page }) => {
+    // RED-IF: the hint names a figure the card does not label (f45c6cc:
+    // "estimated cost" — the card shows "$0.105" and "estimated range
+    // $0.11–$0.16", no "estimated cost"), quotes a phrase the card does not
+    // show, or says "up to" (no figure on the card is labelled "up to"; only
+    // the cap note mentions one). Partners: the gate is the allow band, the
+    // card shows its "estimated range" label, and the hint names at least one
+    // figure, so the comparison is not over nothing.
+    await bootWithoutHelpSeen(page);
+    await openCostGate(page);
+    await expect(page.locator("#cost-review-card")).toHaveAttribute("data-band", "allow");
+    await expect(hint(page, "estimate")).toBeVisible();
+    const hintText = ((await page.locator(`#${HELP_HINT_IDS.estimate}-text`).textContent()) || "").replace(/\s+/g, " ");
+    const cardText = ((await page.locator("#cost-review-card").innerText()) || "").replace(/\s+/g, " ").toLowerCase();
+    expect(cardText).toContain("estimated range");
+
+    const FIGURE_PHRASES = ["estimated cost", "estimated range", "estimate total", "total", "up to", "worst case", "planning estimate", "typical", "average", "maximum", "minimum", "price"];
+    const named = FIGURE_PHRASES.filter((f) => new RegExp(`\\b${f}\\b`, "i").test(hintText));
+    const quoted = Array.from(hintText.matchAll(/["“]([^"”]+)["”]/g)).map((m) => m[1].toLowerCase());
+    expect(named.length + quoted.length, `the hint names no figure: ${hintText}`).toBeGreaterThan(0);
+    const missing = [...named.map((n) => n.toLowerCase()), ...quoted].filter((f) => !cardText.includes(f));
+    expect(missing, `figure words the allow-band card does not show (card: ${cardText.slice(0, 300)})`).toEqual([]);
+    expect(hintText, "the hint says \"up to\"").not.toMatch(/\bup to\b/i);
+  });
+
+  for (const [label, ev] of [
+    ["EVAL_CLEAN", EVAL_CLEAN],
+    ["EVAL_LAUNDERED", EVAL_LAUNDERED],
+    ["EVAL_VERIFIED_HIGH", EVAL_VERIFIED_HIGH],
+  ] as const) {
+    test(`C: every claim the trust hint makes about the box is visible on the page (${label})`, async ({ page }) => {
+      // RED-IF: the trust hint names "the trust score" (no visible text on
+      // the page calls it that; the box has no title), or says which checks
+      // the answer "met" / which "fell short" where the box lists none
+      // (f45c6cc: EVAL_CLEAN and EVAL_LAUNDERED show no "met" list), or
+      // describes something else the box does not show in this branch.
+      // The disclaimer "the checks do not judge whether the answer is
+      // correct" is not a claim about what the box shows; the unit test pins it.
+      await panelResultWith(page, ev);
+      await expect(hint(page, "trust")).toBeVisible();
+      const facts = await page.evaluate((hintId) => {
+        const box = document.getElementById("result-trust-score") as HTMLElement;
+        const cards = document.getElementById("result-trust") as HTMLElement;
+        const result = document.querySelector('[data-view="result"]') as HTMLElement;
+        const hintEl = document.getElementById(hintId) as HTMLElement;
+        const pageText = result.innerText.replace(hintEl.innerText, "");
+        return {
+          hint: (document.getElementById(`${hintId}-text`)?.textContent || "").replace(/\s+/g, " "),
+          box: box.innerText.replace(/\s+/g, " "),
+          pageText: pageText.replace(/\s+/g, " "),
+          boxBelowCards: cards.getBoundingClientRect().height > 0 && box.getBoundingClientRect().top >= cards.getBoundingClientRect().bottom,
+        };
+      }, HELP_HINT_IDS.trust);
+      // Each row: a claim the hint may make, and what must be on the page for it to be true.
+      const CLAIMS: { says: RegExp; holds: () => boolean; what: string }[] = [
+        { says: /trust score/i, holds: () => /trust score/i.test(facts.pageText), what: 'the page shows the words "trust score"' },
+        { says: /\bmet\b/i, holds: () => /\bmet\b/i.test(facts.box), what: "the box lists checks that were met" },
+        { says: /fell short|falls short|fall short/i, holds: () => /fell short/i.test(facts.box), what: "the box lists checks that fell short" },
+        { says: /citation/i, holds: () => /citation/i.test(facts.box), what: "the box mentions citations" },
+        { says: /listed source|source list/i, holds: () => /\bsource/i.test(facts.box), what: "the box mentions sources" },
+        { says: /\bcheck(ed|s)?\b/i, holds: () => /\bcheck/i.test(facts.box), what: "the box mentions checks" },
+        { says: /summary cards?/i, holds: () => facts.boxBelowCards, what: "the box sits under the summary cards" },
+      ];
+      const made = CLAIMS.filter((c) => c.says.test(facts.hint));
+      // Partners: the box rendered, and the hint makes at least one claim the table can test.
+      expect(facts.box.length).toBeGreaterThan(0);
+      expect(made.length, `the hint makes no claim this test can check: ${facts.hint}`).toBeGreaterThan(0);
+      const untrue = made.filter((c) => !c.holds()).map((c) => `${c.says} — needs: ${c.what}`);
+      expect(untrue, `claims in "${facts.hint}" not true on this page (box: ${facts.box})`).toEqual([]);
+    });
+  }
+
+  for (const size of [
+    { width: 1280, height: 640 },
+    { width: 1366, height: 657 },
+  ]) {
+    test(`D: ${size.width}x${size.height}: with the estimate hint showing, the run button is on screen when the cost gate first opens (real backend)`, async ({ page }) => {
+      // RED-IF: on a short desktop screen the hint-first scroll pushes
+      // #gate-confirm below the fold (f45c6cc: 1280x640, the button at
+      // 657..701). Partners: the hint is showing (the case under test), and
+      // the phone sizes (390x844, 320x640) keep the hint on screen in the
+      // round-1 D tests above.
+      await page.setViewportSize(size);
+      await bootWithoutHelpSeen(page);
+      await openCostGate(page);
+      await expect(hint(page, "estimate")).toBeVisible();
+      await expect(page.locator("#gate-confirm")).toBeVisible();
+      const box = await page.evaluate(() => {
+        const r = (document.getElementById("gate-confirm") as HTMLElement).getBoundingClientRect();
+        return { top: Math.round(r.top), bottom: Math.round(r.bottom), vh: window.innerHeight, scrollY: Math.round(window.scrollY) };
+      });
+      expect(box.top, `#gate-confirm ${JSON.stringify(box)}`).toBeGreaterThanOrEqual(0);
+      expect(box.bottom, `#gate-confirm ${JSON.stringify(box)}`).toBeLessThanOrEqual(box.vh);
+    });
+  }
 });

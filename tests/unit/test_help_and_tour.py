@@ -253,6 +253,48 @@ def test_the_trust_text_says_the_checks_do_not_judge_correctness_and_no_human() 
     assert re.search(r"\bcheck(ed|s)\b", text, re.IGNORECASE), text
 
 
+# --- review round 2: names the page shows, claims every branch supports ---------
+
+
+@needs_node
+def test_the_trust_text_neither_names_a_trust_score_nor_claims_met_checks() -> None:
+    """RED IF: the trust hint calls the box "the trust score" -- no visible
+    text on the page says that (the box has no title; its accessible name is
+    "What was and was not checked") -- or says which checks the answer "met":
+    on the unverified branch the box lists no met checks (EVAL_CLEAN and
+    EVAL_LAUNDERED render none; the browser half,
+    help-and-tour.spec.ts "C: every claim ...", reads all three branches).
+    """
+    text = _help_table()["hints"]["trust"]
+    assert text.strip()  # partner: there is a hint to read
+    assert not re.search(r"trust score", text, re.IGNORECASE), text
+    assert not re.search(r"\bmet\b", text, re.IGNORECASE), text
+
+
+@needs_node
+def test_the_tour_calls_its_trust_step_what_was_checked() -> None:
+    """RED IF: tour step 4 is not titled "What was checked" -- the words the
+    page uses for the box ("What was and was not checked") rather than a
+    name it never shows. Its text stays the hint's (the equality test above).
+    """
+    steps = {step["idea"]: step for step in _help_table()["tour"]}
+    assert "trust" in steps  # partner: the step exists
+    assert steps["trust"]["title"] == "What was checked"
+
+
+@needs_node
+def test_the_estimate_text_does_not_name_an_up_to_figure() -> None:
+    """RED IF: the estimate hint says "up to". No figure on the cost card is
+    labelled "up to" (the allow-band card shows the estimate and an
+    "estimated range"; only the cap note mentions an "up to" figure), so the
+    hint would name a figure the visitor cannot find. The browser half reads
+    the card (help-and-tour.spec.ts "B: every figure ...").
+    """
+    text = _help_table()["hints"]["estimate"]
+    assert re.search(r"\bestimate", text, re.IGNORECASE), text  # partner
+    assert not re.search(r"\bup to\b", text, re.IGNORECASE), text
+
+
 # --- the two "Take the tour" controls on the served landing ---------------------
 
 
