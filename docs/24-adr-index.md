@@ -149,6 +149,7 @@ ways, so the record shows what was believed on a date and what replaced it.
 | [ADR-0144](adr/0144-anonymous-spend-is-counted-per-network.md) | Anonymous spend is counted per network | Architecture | Accepted — 2026-10-04, board row W47 |
 | [ADR-0145](adr/0145-new-users-get-one-time-hints-and-an-optional-tour-with-shared-text.md) | New users get one-time hints and an optional tour, with shared text | Architecture | Accepted — 2026-10-05, board row W48 |
 | [ADR-0146](adr/0146-search-excerpts-are-kept-with-their-source-for-the-run.md) | Search excerpts are kept with their source for the run | Architecture | Accepted — 2026-10-05, board row W52 |
+| [ADR-0147](adr/0147-the-untrusted-text-fence-catches-an-altered-marker.md) | The untrusted-text fence catches an altered marker | Architecture | Accepted — 2026-10-05, board row W53, found by W52's round-2 reviewers |
 
 **This index was itself stale** until 2026-07-30: ADR-0002 had existed since
 2026-07-19 and was never listed here. A hand-maintained index is a derived fact
