@@ -29,6 +29,9 @@ neither.
 
 from __future__ import annotations
 
+import re
+import unicodedata
+
 #: Delimiters marking the untrusted block. Deliberately unusual so ordinary
 #: prose does not collide with them by accident.
 UNTRUSTED_BEGIN = "<<<UNTRUSTED_EVIDENCE_BEGIN>>>"
@@ -86,6 +89,87 @@ def flatten_for_prompt(value: str, *, max_chars: int) -> str:
     return flattened[:max_chars]
 
 
+#: What a forged marker is replaced with. A redaction never makes text longer:
+#: over a span shorter than this, only its first characters are written
+#: (ADR-0147 decision 2).
+_REDACTED = "[redacted-delimiter]"
+
+#: The two markers as their letters alone, which is how
+#: :func:`neutralize_delimiters` looks for them. Derived from the markers so
+#: the two cannot drift apart.
+_MARKER_LETTERS = re.compile(
+    "|".join(
+        re.escape("".join(ch for ch in marker if ch.isalnum()))
+        for marker in (UNTRUSTED_BEGIN, UNTRUSTED_END)
+    )
+)
+
+#: Hangul filler letters. Unicode counts them as letters, but they render as
+#: blank space, so one inside a marker hides it as well as a space would.
+#: (NFKC turns U+3164 and U+FFA0 into U+1160; all four are listed anyway.)
+_BLANK_LETTERS = frozenset("\u115f\u1160\u3164\uffa0")
+
+#: Cyrillic and Greek letters that look like one of the marker's letters
+#: (B C D E G I N R S T U V), folded to that Latin letter before the match.
+#: A fixed list of named characters, never a rule like "any non-Latin letter":
+#: a wildcard would match a long run of ordinary Russian or Japanese text.
+#: The Greek lunate sigma (U+03F2, U+03F9) is left out on purpose. The fold
+#: runs BEFORE the case is ignored: Greek small nu looks like v, but its
+#: capital looks like N.
+_LOOK_ALIKES: dict[str, str] = {
+    "\u0412": "B",  # CYRILLIC CAPITAL LETTER VE
+    "\u0392": "B",  # GREEK CAPITAL LETTER BETA
+    "\u0421": "C",  # CYRILLIC CAPITAL LETTER ES
+    "\u0441": "C",  # CYRILLIC SMALL LETTER ES
+    "\u0501": "D",  # CYRILLIC SMALL LETTER KOMI DE
+    "\u0415": "E",  # CYRILLIC CAPITAL LETTER IE
+    "\u0435": "E",  # CYRILLIC SMALL LETTER IE
+    "\u0395": "E",  # GREEK CAPITAL LETTER EPSILON
+    "\u050c": "G",  # CYRILLIC CAPITAL LETTER KOMI SJE
+    "\u0406": "I",  # CYRILLIC CAPITAL LETTER BYELORUSSIAN-UKRAINIAN I
+    "\u0456": "I",  # CYRILLIC SMALL LETTER BYELORUSSIAN-UKRAINIAN I
+    "\u04c0": "I",  # CYRILLIC LETTER PALOCHKA
+    "\u04cf": "I",  # CYRILLIC SMALL LETTER PALOCHKA
+    "\u0399": "I",  # GREEK CAPITAL LETTER IOTA
+    "\u039d": "N",  # GREEK CAPITAL LETTER NU
+    "\u0433": "R",  # CYRILLIC SMALL LETTER GHE
+    "\u0405": "S",  # CYRILLIC CAPITAL LETTER DZE
+    "\u0455": "S",  # CYRILLIC SMALL LETTER DZE
+    "\u0422": "T",  # CYRILLIC CAPITAL LETTER TE
+    "\u03a4": "T",  # GREEK CAPITAL LETTER TAU
+    "\u03c5": "U",  # GREEK SMALL LETTER UPSILON
+    "\u0474": "V",  # CYRILLIC CAPITAL LETTER IZHITSA
+    "\u0475": "V",  # CYRILLIC SMALL LETTER IZHITSA
+    "\u03bd": "V",  # GREEK SMALL LETTER NU
+}
+
+
+def _letters_of(ch: str) -> str:
+    """The letters and digits one character counts as when looking for a marker.
+
+    The character is NFKC-normalised first, so a fullwidth or compatibility
+    form reads as its plain letters (one character can give several, e.g.
+    U+FB06 gives "st"). Anything that is not a letter or digit gives nothing:
+    spaces, punctuation, brackets, combining marks, variation selectors and
+    invisible formatting characters, and the blank Hangul fillers. A
+    look-alike is folded to its Latin letter; every other letter is
+    upper-cased. Digits are kept, so a digit inside a marker breaks the match.
+    """
+    letters = []
+    for normal in unicodedata.normalize("NFKC", ch):
+        if normal in _LOOK_ALIKES:
+            letters.append(_LOOK_ALIKES[normal])
+        elif normal.isalnum() and normal not in _BLANK_LETTERS:
+            letters.extend(up for up in normal.upper() if up.isalnum())
+    return "".join(letters)
+
+
+def _is_bracket(ch: str) -> bool:
+    """True when *ch* reads, after NFKC, as nothing but ``<`` and ``>``."""
+    normal = unicodedata.normalize("NFKC", ch)
+    return bool(normal) and not normal.strip("<>")
+
+
 def neutralize_delimiters(text: str) -> str:
     """Stop untrusted prose from forging an end-of-evidence delimiter.
 
@@ -94,10 +178,46 @@ def neutralize_delimiters(text: str) -> str:
     read to the model as trusted prompt. Both delimiters are neutralized, not
     just the closer: a forged *opener* lets the text claim a second block and
     is the same class of escape.
+
+    A marker is found by its LETTERS, not its bytes (ADR-0147). The text is
+    read one character at a time through :func:`_letters_of`, remembering
+    which original character each letter came from, so a marker with a space,
+    an invisible or combining character, a look-alike letter, fullwidth forms,
+    another case or no brackets is still found. Where the letters spell
+    either marker, the ORIGINAL span from its first to its last letter,
+    widened over any run of ``<`` or ``>`` directly around it, is replaced
+    with ``[redacted-delimiter]``. The exact marker is therefore still
+    replaced whole, as before. Over a span shorter than the replacement (NFKC
+    can turn one character into several letters), the replacement is cut to
+    the span's length, so the output is never longer than the input.
+
+    Ordinary prose that spells the marker's words in order loses those words
+    inside the prompt; paraphrase, digit swaps and extra letters are not
+    caught. One pass, linear in the length of the text: each distinct
+    character is normalised once, and the search is a fixed-string pattern.
     """
-    return text.replace(UNTRUSTED_BEGIN, "[redacted-delimiter]").replace(
-        UNTRUSTED_END, "[redacted-delimiter]"
-    )
+    letters_of: dict[str, str] = {ch: _letters_of(ch) for ch in set(text)}
+    letters = "".join(letters_of[ch] for ch in text)
+    if _MARKER_LETTERS.search(letters) is None:
+        return text
+    # origin[k] is the index in *text* of the character letter k came from.
+    origin = [index for index, ch in enumerate(text) for _ in letters_of[ch]]
+    pieces: list[str] = []
+    kept_from = 0
+    for match in _MARKER_LETTERS.finditer(letters):
+        # A character NFKC turns into several letters can end one match and
+        # start the next; it is redacted once, by the first.
+        start = max(origin[match.start()], kept_from)
+        end = max(origin[match.end() - 1] + 1, start)
+        while start > kept_from and _is_bracket(text[start - 1]):
+            start -= 1
+        while end < len(text) and _is_bracket(text[end]):
+            end += 1
+        pieces.append(text[kept_from:start])
+        pieces.append(_REDACTED[: end - start])
+        kept_from = end
+    pieces.append(text[kept_from:])
+    return "".join(pieces)
 
 
 def fence(text: str) -> str:
