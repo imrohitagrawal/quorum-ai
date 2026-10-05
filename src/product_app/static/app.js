@@ -5170,6 +5170,38 @@
   // markers point at the listed sources — and that is all this now claims.
   const TRUST_DISCLOSURE_VERIFIED =
     "An independent judge model checked this answer's citations against its source list — an automated review, not a human fact-check. The cited pages themselves were not retrieved.";
+
+  // W29 (ADR-0148 decision 9). The verified disclosure for one run. With the
+  // page posture in effect (the readiness island's `source_pages_in_effect`,
+  // the server's one predicate, ADR-0116) and the run's own served counts, it
+  // states what was read: "Checked against N of M cited pages", N being the
+  // sources read as a page or a search excerpt and M the cited sources seen.
+  // N = 0 says no cited page could be read. With the posture off, or counts
+  // that are missing or impossible (not a whole number from 0 to M), it fails
+  // CLOSED to today's sentence, which never claims a page was read.
+  //
+  // Reads ONLY TRUST_DISCLOSURE_VERIFIED: tests/unit/test_w29_trust_note_copy.py
+  // lifts this function out and runs it under node with that one constant.
+  function verifiedTrustDisclosure(ev, pagesInEffect) {
+    const counts = ev && typeof ev === "object" ? ev : {};
+    const read = counts.source_pages_read;
+    const cited = counts.source_pages_cited;
+    const stated =
+      pagesInEffect === true &&
+      Number.isInteger(read) &&
+      Number.isInteger(cited) &&
+      read >= 0 &&
+      read <= cited;
+    if (!stated) return TRUST_DISCLOSURE_VERIFIED;
+    const lead = TRUST_DISCLOSURE_VERIFIED.replace(
+      " The cited pages themselves were not retrieved.",
+      "",
+    );
+    if (read === 0) {
+      return `${lead} It worked from titles and addresses only: no cited page could be read.`;
+    }
+    return `${lead} Checked against ${read} of ${cited} cited pages.`;
+  }
   // App-authored band labels for the verified treatment. Keys are the ONLY
   // bands the server can emit alongside a numeric score (build_trust_score);
   // anything else fails the verified guard and falls back to the unverified
@@ -5316,8 +5348,18 @@
     if (reportable && passedState && verifiedBand !== null) {
       box.dataset.state = "verified";
       box.dataset.band = verifiedBand;
+      // W29: the page posture comes from the readiness island; a missing
+      // island reads as off, which renders today's sentence.
+      const seed = window.LIVE_READINESS;
+      const pagesInEffect = Boolean(
+        seed && typeof seed === "object" && seed.source_pages_in_effect === true,
+      );
       box.appendChild(
-        mkEl("p", "result-trust-score-disclosure", TRUST_DISCLOSURE_VERIFIED),
+        mkEl(
+          "p",
+          "result-trust-score-disclosure",
+          verifiedTrustDisclosure(ev, pagesInEffect),
+        ),
       );
       const scoreLine = mkEl("p", "result-trust-score-verified-value");
       scoreLine.appendChild(
@@ -5469,6 +5511,9 @@
     debate_round_1: "Round 1",
     debate_round_2: "Round 2",
     synthesis: "Synthesis",
+    // W29 (ADR-0148 decision 8): the $0 row shown when the cited pages were
+    // read for the run's check.
+    source_fetch: "Pages",
     // Deliberately NO entry for the Layer-B advisory cost-stage row
     // (issue #110/#217): the frontend must contain no `judge` identifier at
     // all (D-5, tests/unit/test_evaluation_projection_has_no_judge.py), so
@@ -8293,6 +8338,8 @@
       debate_round_1: "Debate round 1",
       debate_round_2: "Debate round 2",
       synthesis: "Synthesis",
+      // W29 (ADR-0148 decision 8): fetching the cited pages, always $0.
+      source_fetch: "Reading cited pages",
     };
     const byModelRows = Array.isArray(breakdown && breakdown.by_model)
       ? breakdown.by_model

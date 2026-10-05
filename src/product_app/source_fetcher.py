@@ -5,8 +5,9 @@ WHAT THIS IS FOR
     supports, and until now it saw titles and URLs only. This module fetches
     the pages a run cited, as plain text with per-page provenance, under a
     closed egress policy. It is SHIPPED OFF (``quorum_source_fetch_enabled``
-    defaults to ``False``) and nothing in the run path calls it yet: wiring its
-    output into the judge is the second pull request of #447.
+    defaults to ``False``). Its one caller is ``evaluation.judge_source_pages``
+    (W29, ADR-0148), reached only when that setting is on and a judge is
+    configured, for a panel run's verdict.
 
 WHY IT DOES NOT REUSE ``credentialed_url.is_credential_safe``
     That module exists to send the OPERATOR'S KEY to OpenRouter safely, so it
@@ -50,8 +51,16 @@ THE EGRESS POLICY (docs/analysis/2026-09-24-447-source-fetch-failure-modes.md)
 WHAT IT CANNOT SEE, stated
     Whether a page changed since the model cited it (the provenance carries
     the fetch time and the server's ``Date``/``Last-Modified`` so the reader
-    can say so); robots.txt (not consulted in this pull request; the wiring
-    record decides); JavaScript-rendered content (the raw HTML only).
+    can say so); JavaScript-rendered content (the raw HTML only).
+
+ROBOTS.TXT (W29, ADR-0148 decision 3)
+    With ``respect_robots=True`` each host's ``/robots.txt`` is read ONCE per
+    call, through the same pinned path, limits and deadline as the pages
+    (``_fetch_one`` with ``raw=True``), and judged by :func:`robots_allows`,
+    which parses with ``RobotFileParser.parse``. ``RobotFileParser.read`` is
+    never used: it opens the URL with its own client, outside the pinned
+    address and the no-redirect rule. A page robots.txt does not allow is
+    reported as ``refused_robots`` and never requested.
 """
 
 from __future__ import annotations
@@ -64,6 +73,7 @@ import socket
 import ssl
 import threading
 import time
+import urllib.robotparser
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from html.parser import HTMLParser
@@ -83,6 +93,7 @@ Outcome = Literal[
     "http_error",
     "network_error",
     "skipped_cap",
+    "refused_robots",
 ]
 
 #: The identifying agent every fetch sends, with a contact URL.
@@ -329,7 +340,17 @@ def _fetch_one(
     max_bytes: int,
     max_text_chars: int,
     clock: Callable[[], float],
+    raw: bool = False,
+    robots_permit: Callable[[str, str], bool] | None = None,
 ) -> FetchedSource:
+    """One bounded GET.
+
+    ``raw`` (robots.txt only) keeps the decoded body as sent, lines intact,
+    uncut and with no usable-length floor: a robots file is parsed, not read
+    as page text, and is often far shorter than a page. ``robots_permit``,
+    when given, is asked with the URL's ``scheme://host[:port]`` and the URL
+    once the URL has passed the scheme and host checks, before anything is
+    dialled."""
     started = clock()
     if _FORBIDDEN_IN_A_URL.search(url):
         return _row(url, "refused_scheme", started=started, clock=clock)
@@ -343,6 +364,9 @@ def _fetch_one(
     host = parts.hostname
     if not host or parts.username is not None or parts.password is not None:
         return _row(url, "refused_host", started=started, clock=clock)
+    origin = f"{parts.scheme}://{parts.netloc.lower()}"
+    if robots_permit is not None and not robots_permit(origin, url):
+        return _row(url, "refused_robots", started=started, clock=clock)
     port = port or (443 if parts.scheme == "https" else 80)
     remaining = deadline - clock()
     if remaining <= 0:
@@ -369,6 +393,7 @@ def _fetch_one(
     status: int | None = None
     server_date: str | None = None
     last_modified: str | None = None
+    outcome: Outcome
     total = 0
     with _Watchdog(connection, remaining) as watchdog:
         try:
@@ -495,8 +520,11 @@ def _fetch_one(
                 decoded = body.decode(charset, errors="replace")
             except (LookupError, UnicodeError):
                 decoded = body.decode("utf-8", errors="replace")
-            text = extract_text(decoded, content_type, max_chars=max_text_chars)
-            outcome: Outcome = "fetched" if len(text) >= MIN_USABLE_TEXT_CHARS else "unusable"
+            if raw:
+                text, outcome = decoded, "fetched"
+            else:
+                text = extract_text(decoded, content_type, max_chars=max_text_chars)
+                outcome = "fetched" if len(text) >= MIN_USABLE_TEXT_CHARS else "unusable"
             return _row(
                 url,
                 outcome,
@@ -539,6 +567,39 @@ def _fetch_one(
             connection.close()
 
 
+def robots_allows(
+    robots_status: int | None, robots_body: str | None, url: str, user_agent: str
+) -> bool:
+    """Whether robots.txt lets ``user_agent`` fetch ``url`` (ADR-0148 decision 3).
+
+    ``robots_status`` is the status the pinned fetch read at ``/robots.txt``,
+    or ``None`` when nothing could be read (a timeout, a refused address, an
+    oversized or undecodable file). Following RFC 9309 a 4xx means no rules
+    apply; a 5xx means the site is unreachable and fails closed. A 3xx counts
+    as unreadable: following it would need a second pinned fetch. A 2xx body
+    is parsed with ``RobotFileParser.parse``, never ``.read``.
+    """
+    if robots_status is None:
+        return False
+    if 400 <= robots_status < 500:
+        return True
+    if not 200 <= robots_status < 300:
+        return False
+    parser = urllib.robotparser.RobotFileParser()
+    parser.parse((robots_body or "").splitlines())
+    return bool(parser.can_fetch(user_agent, url))
+
+
+def _robots_reading(row: FetchedSource) -> tuple[int | None, str | None]:
+    """What a raw robots.txt fetch read, as ``robots_allows`` takes it."""
+    if row.outcome == "fetched" and not row.truncated:
+        return row.final_status, row.text
+    # A 3xx or an error status is judged on the status alone; anything else
+    # (a timeout, a refusal, an oversized or non-text file) read nothing.
+    status = row.final_status if row.outcome in ("http_error", "refused_redirect") else None
+    return status, None
+
+
 def fetch_cited_pages(
     urls: Sequence[str],
     *,
@@ -548,6 +609,7 @@ def fetch_cited_pages(
     max_pages: int,
     max_text_chars: int,
     clock: Callable[[], float] = time.monotonic,
+    respect_robots: bool = False,
 ) -> tuple[FetchedSource, ...]:
     """Fetch ``urls`` in order, one row per distinct URL.
 
@@ -555,11 +617,34 @@ def fetch_cited_pages(
     have been attempted or the shared ``budget_seconds`` deadline passes; later
     URLs, and any beyond ``MAX_PAGES_PER_HOST`` for one host, are
     ``skipped_cap``. Never raises.
+
+    With ``respect_robots`` (W29, ADR-0148) each host's robots.txt is read once,
+    inside the same deadline, before its first page; a page it does not allow
+    is ``refused_robots`` and counts toward ``max_pages`` like a fetch, so the
+    caller's page-or-excerpt items stay within the page cap.
     """
     deadline = clock() + budget_seconds
     rows: list[FetchedSource] = []
     seen: set[str] = set()
     per_host: dict[str, int] = {}
+    robots: dict[str, tuple[int | None, str | None]] = {}
+
+    def permit(origin: str, url: str) -> bool:
+        # One robots.txt read per origin per call, inside the same deadline.
+        if origin not in robots:
+            robots[origin] = _robots_reading(
+                _fetch_one(
+                    f"{origin}/robots.txt",
+                    deadline=deadline,
+                    per_recv_seconds=per_recv_seconds,
+                    max_bytes=max_bytes,
+                    max_text_chars=max_text_chars,
+                    clock=clock,
+                    raw=True,
+                )
+            )
+        return robots_allows(*robots[origin], url, USER_AGENT)
+
     attempted = 0
     for raw in urls:
         url = raw.strip()
@@ -588,6 +673,7 @@ def fetch_cited_pages(
                 max_bytes=max_bytes,
                 max_text_chars=max_text_chars,
                 clock=clock,
+                robots_permit=permit if respect_robots else None,
             )
         )
     return tuple(rows)

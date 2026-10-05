@@ -223,8 +223,9 @@ class SourceReference(BaseModel):
     #: Kept in the run held in memory and NOWHERE else. ``exclude=True`` keeps
     #: it out of every serialised response and out of the OpenAPI schema
     #: (served models are rendered in serialisation mode); ``repr=False`` keeps
-    #: it out of any log line that prints a source. No prompt, judge evidence,
-    #: request or price reads it -- W29 decides how the judge does.
+    #: it out of any log line that prints a source. W29 (ADR-0148) is its one
+    #: reader: with ``quorum_source_fetch_enabled`` on, the judge reads it in
+    #: place of a page robots.txt does not allow (``evaluation.judge_source_pages``).
     excerpt: str = Field(default="", exclude=True, repr=False)
 
 

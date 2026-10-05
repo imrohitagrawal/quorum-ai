@@ -68,7 +68,7 @@ from product_app.costs import (
     CHARS_PER_TOKEN,
     GLOBAL_DAILY_CEILING_USD,
 )
-from product_app.evaluation import judge_configured
+from product_app.evaluation import judge_configured, judge_reads_pages
 from product_app.feedback_store import FeedbackStore, get_store
 from product_app.feedback_store import configure as configure_feedback_store
 from product_app.google_signin import (
@@ -252,6 +252,19 @@ if SENTRY_DSN:
 # serve our own ``/docs`` route that points at them, keeping the docs functional
 # WITHOUT widening the CSP.
 _VENDOR_PREFIX = "/static/vendor"
+
+
+def source_pages_in_effect() -> bool:
+    """Whether a panel run's judge reads the cited pages, for COPY (W29).
+
+    ADR-0148 decision 9, the ADR-0116 pattern: ONE server-side predicate,
+    ``evaluation.judge_reads_pages`` -- the same one the request-path judge
+    gates the fetch on and ``costs.py`` prices on -- served on ``/status`` and
+    in the readiness island, so the page's "Checked against N of M cited
+    pages" wording cannot follow the setting alone. The setting without a
+    configured judge reads nothing, and this says False.
+    """
+    return judge_reads_pages()
 
 
 def _peer_critique_in_effect(active_settings: Settings) -> bool:
@@ -1126,6 +1139,10 @@ def _render_workspace_html(account_controls: str = "", *, signed_in: bool = Fals
         # more reader (ADR-0116): the same ``_peer_critique_in_effect`` that
         # ``/status`` and the landing subhead read, never the flag alone.
         "peer_critique_in_effect": _peer_critique_in_effect(settings),
+        # W29 (ADR-0148 decision 9): the trust note reads this to decide
+        # whether a verified run's disclosure states the pages it was checked
+        # against. The same predicate /status serves.
+        "source_pages_in_effect": source_pages_in_effect(),
     }
     live_readiness_json = json.dumps(readiness_payload).replace("<", "\\u003c")
     # PR-0 / Bug 7: inject the actual default model ids into the
@@ -1606,6 +1623,11 @@ def status_snapshot() -> dict[str, object]:
         # (it reads arbitrary cited hosts), so its flag is reported like the
         # others (ADR-0013). State only. Shipped off.
         "source_fetch_enabled": settings.quorum_source_fetch_enabled,
+        # W29 (ADR-0148 decision 9): whether the judge actually reads the
+        # cited pages -- the setting AND a configured judge. Reported beside
+        # the flag, not in place of it (the ADR-0116 rule): the flag says what
+        # is configured, this says what a panel run does.
+        "source_pages_in_effect": source_pages_in_effect(),
         # W7 (ADR-0130). Whether Google sign-in can run: all three
         # GOOGLE_OAUTH_* settings set and the redirect URI well formed. A
         # boolean only; the client id, secret and redirect URI never appear.
