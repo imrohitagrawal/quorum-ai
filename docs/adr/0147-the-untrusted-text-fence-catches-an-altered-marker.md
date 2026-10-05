@@ -24,12 +24,16 @@ so this is fixed first.
 1. `neutralize_delimiters` finds a marker by its LETTERS, not its bytes. It reads the text as
    follows, keeping, for each character it reads, the position of the original character it
    came from:
-   - NFKC normalisation (fullwidth forms, compatibility characters);
+   - NFKC normalisation (fullwidth forms, compatibility characters), then each character is
+     decomposed (NFKD) and its accents (combining marks) are dropped, so a single-character
+     `É` or `İ` reads as `E` or `I`, the same as `E` followed by a separate accent (review
+     round 1 found the single-character form passing);
    - characters that are not letters or digits are skipped (spaces, punctuation, brackets,
      combining marks, variation selectors, invisible formatting characters), and so are the
      Hangul filler letters that render as blank (U+115F, U+1160, U+3164, U+FFA0);
    - a fixed look-alike map folds the Cyrillic and Greek letters that look like the marker's
-     letters (B C D E G I N R S T U V) to Latin; it is a list of named characters, never a
+     letters (B C D E G I N R S T U V) to Latin, both before and after upper-casing (so a
+     lower-case `т` meets the mapped capital `Т`); it is a list of named characters, never a
      wildcard;
    - case is ignored.
    Where the letters read `UNTRUSTEDEVIDENCEBEGIN` or `UNTRUSTEDEVIDENCEEND`, the original
@@ -41,7 +45,10 @@ so this is fixed first.
    replacement is cut to the span's length. Texts are cut to their limits before they are
    fenced, so growth would break those limits.
 3. The judge neutralises its joined evidence body once, through the same function, instead of
-   line by line.
+   line by line. This changes nothing reachable today: review round 1 built 324 judge prompts
+   with a marker split across every pair of adjacent parts and the output was the same both
+   ways, because a label (`MODEL_ANSWER_1:`) or a source number (`[2]`) always sits between
+   two parts. It guards a layout W29 may add, where excerpt text sits next to other text.
 4. No prompt text changes: the markers, the system rules, the prompt ids and every price stay
    as they are.
 
@@ -53,9 +60,7 @@ so this is fixed first.
 - **A random tag in each call's markers** (e.g. `<<<UNTRUSTED_EVIDENCE_END 3f9a>>>`, with the
   rule saying only the tagged marker ends the block). Stronger: a forged closer cannot know the
   tag. But it changes the judge's system prompt (its pinned hash, prompt id and paid golden
-  capture), the judge reserve (`$0.2949`, `$0.3283`, `$0.0334` in
-  `tests/unit/test_bound_covers_the_judge.py`), the debate bound pins, and makes prompts
-  differ call to call. Deferred to W29, which re-captures the judge anyway.
+  capture) and makes prompts differ call to call. Deferred to W29, which re-captures the judge anyway.
 - **Treat every non-Latin letter as a possible look-alike.** It would match any run of 20 or
   more Cyrillic or Japanese letters and redact ordinary answers.
 
@@ -63,9 +68,16 @@ so this is fixed first.
 
 - Altered markers in every fenced text are redacted, in prompts only; nothing a user sees
   changes.
-- Known false positive: prose that spells the marker's words in order, such as "untrusted
-  evidence ending", loses those words inside the prompt.
-- Known limits: paraphrase ("end of the untrusted block"), digit swaps (`UNTRU5TED`) and extra
-  letters inside the words are not caught. Whether a model obeys any altered marker is
+- Known false positives: any text whose letters, read with spaces, punctuation and emoji
+  skipped, contain the marker's letters in order loses that stretch inside the prompt:
+  "untrusted evidence ending" becomes `[redacted-delimiter]ing`, and the letters may run
+  across words ("a fun, trusted evidence endpoint"). Review round 1 ran the change over the
+  repository's own text (1,188 files, 19.4 million characters, the golden fixture included):
+  only the files that hold real markers changed.
+- Known limits: paraphrase ("end of the untrusted block"), digit swaps (`UNTRU5TED`), extra
+  letters inside the words, and look-alikes outside the map are not caught: small capitals
+  (`ᴜɴᴛʀᴜꜱᴛᴇᴅ`), regional-indicator letters, Cherokee, Armenian, `Đ`, and the Greek lunate
+  sigma `Ϲ` (left out because NFKC turns it into `Σ`). Whether a model obeys any altered marker is
   untested.
-- One more pass over each fenced text, linear in its length.
+- One more pass over each fenced text, linear in its length: review round 1 measured 1, 2, 4
+  and 8 million characters at 0.086, 0.169, 0.346 and 0.693 seconds.
