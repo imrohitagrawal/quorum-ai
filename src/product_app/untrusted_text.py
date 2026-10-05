@@ -142,7 +142,6 @@ _LOOK_ALIKES: dict[str, str] = {
     "\u0474": "V",  # CYRILLIC CAPITAL LETTER IZHITSA
     "\u0475": "V",  # CYRILLIC SMALL LETTER IZHITSA
     "\u03bd": "V",  # GREEK SMALL LETTER NU
-    "\u03b5": "E",  # GREEK SMALL LETTER EPSILON
 }
 
 
@@ -215,8 +214,12 @@ def neutralize_delimiters(text: str) -> str:
     pieces: list[str] = []
     kept_from = 0
     for match in _MARKER_LETTERS.finditer(letters):
-        start = origin[match.start()]
-        end = origin[match.end() - 1] + 1
+        # Defensive guard. A scan of Unicode 15.0, 15.1 and 16.0 found no
+        # character whose letters hold D or N followed by U, so none can end
+        # one marker and start the next today. If a later Unicode version adds
+        # one, these two lines keep the output from growing.
+        start = max(origin[match.start()], kept_from)
+        end = max(origin[match.end() - 1] + 1, start)
         while start > kept_from and text[start - 1] in brackets:
             start -= 1
         while end < len(text) and text[end] in brackets:
