@@ -5174,9 +5174,10 @@
   // W29 (ADR-0148 decision 9). The verified disclosure for one run. With the
   // page posture in effect (the readiness island's `source_pages_in_effect`,
   // the server's one predicate, ADR-0116) and the run's own served counts, it
-  // states what was read: "Checked against N of M cited pages", N being the
-  // sources read as a page or a search excerpt and M the cited sources seen.
-  // N = 0 says no cited page could be read. With the posture off, or counts
+  // states what was read: "Checked against N of M cited pages" ("cited page"
+  // when M is 1), N being the distinct cited addresses whose page was fetched
+  // and read (a search excerpt does not count) and M the distinct cited
+  // addresses seen. N = 0 says no cited page could be read. With the posture off, or counts
   // that are missing or impossible (not a whole number from 0 to M), it fails
   // CLOSED to today's sentence, which never claims a page was read.
   //
@@ -5198,9 +5199,9 @@
       "",
     );
     if (read === 0) {
-      return `${lead} It worked from titles and addresses only: no cited page could be read.`;
+      return `${lead} It worked from the titles, addresses and any search excerpts: no cited page could be read.`;
     }
-    return `${lead} Checked against ${read} of ${cited} cited pages.`;
+    return `${lead} Checked against ${read} of ${cited} cited ${cited === 1 ? "page" : "pages"}.`;
   }
   // App-authored band labels for the verified treatment. Keys are the ONLY
   // bands the server can emit alongside a numeric score (build_trust_score);

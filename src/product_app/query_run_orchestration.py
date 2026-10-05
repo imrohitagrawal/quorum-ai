@@ -82,6 +82,7 @@ from product_app.evaluation import (
     HallucinationRisk,
     JudgeCallOutcome,
     JudgeEvidence,
+    JudgeSourcePages,
     LayerASignals,
     PresentationConfidence,
     RunEvaluationResult,
@@ -2481,6 +2482,7 @@ class _MemoisedRunJudge:
                 return None
         service = EvalJudgeService()
         verdict: EvalJudgeVerdict | EvalJudgeQuickVerdict | None = None
+        reading: JudgeSourcePages | None = None
         try:
             # ``EvalJudgeService.evaluate`` is contractually non-raising (the
             # judge is advisory), but the finally block guarantees the future
@@ -2493,8 +2495,11 @@ class _MemoisedRunJudge:
                 # Quick runs never reach this line. Inside the slot, by the
                 # session's call; the slot time is measured before switch-on.
                 if judge_reads_pages():
+                    reading = judge_source_pages(self._initial_answers)
                     evidence = replace(
-                        evidence, source_pages=judge_source_pages(self._initial_answers)
+                        evidence,
+                        source_pages=reading.pages,
+                        source_page_same_as=reading.same_as,
                     )
                 verdict = service.evaluate(evidence, query_run_id=query_run_id)
         finally:
@@ -2506,10 +2511,11 @@ class _MemoisedRunJudge:
                 # ``finally`` that captures its usage, so the two can never
                 # describe different calls.
                 status=service.last_outcome,
+                # Counts only (decision 9): distinct addresses fetched and
+                # read, and distinct addresses cited. ``None`` when the judge
+                # was not sent pages (v1), so the served counts stay null.
                 source_pages=(
-                    (sum(1 for page in evidence.source_pages if page), len(evidence.source_pages))
-                    if evidence.source_pages
-                    else None
+                    (reading.read, reading.cited) if reading is not None and reading.pages else None
                 ),
             )
             with _judge_memo_lock:

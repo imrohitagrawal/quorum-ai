@@ -2364,6 +2364,7 @@ class CostEstimationService:
                 JUDGE_MAX_SOURCE_PAGES,
                 JUDGE_MAX_SOURCE_TITLE_LEN,
                 JUDGE_MAX_SOURCE_URL_LEN,
+                JUDGE_SAME_PAGE_LINE,
             )
             from product_app.synthesis import SYNTHESIS_SECTION_MAX_TOKENS
 
@@ -2390,11 +2391,27 @@ class CostEstimationService:
             judge_system_prompt = (
                 _JUDGE_PAGES_SYSTEM_PROMPT if price_judge_pages else _JUDGE_SYSTEM_PROMPT
             )
+            # Review round 1: every other source line can repeat an address
+            # whose page is above, and gets one "same page as" line. Priced at
+            # the format's widest (two-digit numbers on both sides) plus its
+            # newline, DERIVED from the format the builder uses, so the two
+            # cannot drift. A page item dwarfs such a line, so 8 pages plus
+            # the other 24 lines is the widest block the builder can emit.
+            same_page_line_chars = Decimal(
+                len(
+                    JUDGE_SAME_PAGE_LINE.format(
+                        line=JUDGE_MAX_SOURCE_LINES, earlier=JUDGE_MAX_SOURCE_LINES
+                    )
+                )
+                + 1
+            )
             judge_page_tokens = (
                 (
                     Decimal(JUDGE_MAX_SOURCE_PAGES)
                     * (Decimal(JUDGE_MAX_SOURCE_PAGE_CHARS) + _JUDGE_PAGE_ITEM_OVERHEAD_CHARS)
                     + _JUDGE_PAGES_SECTION_OVERHEAD_CHARS
+                    + Decimal(JUDGE_MAX_SOURCE_LINES - JUDGE_MAX_SOURCE_PAGES)
+                    * same_page_line_chars
                 )
                 / CHARS_PER_TOKEN
                 if price_judge_pages

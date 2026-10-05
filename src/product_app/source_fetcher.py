@@ -57,10 +57,11 @@ ROBOTS.TXT (W29, ADR-0148 decision 3)
     With ``respect_robots=True`` each host's ``/robots.txt`` is read ONCE per
     call, through the same pinned path, limits and deadline as the pages
     (``_fetch_one`` with ``raw=True``), and judged by :func:`robots_allows`,
-    which parses with ``RobotFileParser.parse``. ``RobotFileParser.read`` is
-    never used: it opens the URL with its own client, outside the pinned
-    address and the no-redirect rule. A page robots.txt does not allow is
-    reported as ``refused_robots`` and never requested.
+    the app's own RFC 9309 matcher. ``urllib.robotparser`` is not used:
+    ``.read`` opens the URL with its own client, outside the pinned address and
+    the no-redirect rule, and its matching allowed five kinds of path a file
+    forbids (ADR-0148 decision 3, review round 1). A page robots.txt does not
+    allow is reported as ``refused_robots`` and never requested.
 """
 
 from __future__ import annotations
@@ -73,7 +74,6 @@ import socket
 import ssl
 import threading
 import time
-import urllib.robotparser
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from html.parser import HTMLParser
@@ -567,6 +567,85 @@ def _fetch_one(
             connection.close()
 
 
+#: Work bounds on one robots.txt (ADR-0148 decision 3). The file itself is
+#: already capped at the fetcher's ``max_bytes`` (262,144 by default); these
+#: bound the matching. A rule longer than 2,048 characters, or a file with
+#: more than 4,096 Allow/Disallow lines, fails CLOSED: real files are far
+#: smaller, and refusing costs only the page (the excerpt is used instead).
+#: Matching is linear in the rule and the path: no regex is built from the
+#: file, only literal ``str.startswith``/``str.find`` between ``*`` wildcards.
+_ROBOTS_MAX_RULE_CHARS = 2_048
+_ROBOTS_MAX_RULES = 4_096
+
+
+class _RobotsTooLarge(ValueError):
+    """The file is over a work bound; the caller fails closed."""
+
+
+def _robots_rules(body: str, product_token: str) -> list[tuple[bool, str]]:
+    """The ``(allow, pattern)`` rules RFC 9309 section 2.2 applies to
+    ``product_token``: every group whose user-agent line equals it (ignoring
+    case) combined, else every ``*`` group combined, else none (allow all).
+
+    A group is one or more user-agent lines followed by its rules; a
+    user-agent line after a rule starts the next group. Lines other than
+    user-agent, allow and disallow are ignored. An empty rule matches nothing,
+    so an empty ``Disallow:`` allows everything. Raises ``_RobotsTooLarge``
+    over the work bounds above.
+    """
+    own: list[tuple[bool, str]] = []
+    star: list[tuple[bool, str]] = []
+    own_seen = False
+    agents: set[str] = set()
+    in_rules = False
+    rule_count = 0
+    for raw_line in body.removeprefix("\ufeff").splitlines():
+        key, sep, value = raw_line.split("#", 1)[0].partition(":")
+        key, value = key.strip().lower(), value.strip()
+        if not sep:
+            continue
+        if key == "user-agent":
+            if in_rules:
+                agents, in_rules = set(), False
+            agents.add(value.lower())
+            own_seen = own_seen or product_token in agents
+        elif key in ("allow", "disallow"):
+            in_rules = True
+            rule_count += 1
+            if rule_count > _ROBOTS_MAX_RULES or len(value) > _ROBOTS_MAX_RULE_CHARS:
+                raise _RobotsTooLarge(key)
+            if value:
+                rule = (key == "allow", value)
+                if product_token in agents:
+                    own.append(rule)
+                if "*" in agents:
+                    star.append(rule)
+    return own if own_seen else star
+
+
+def _robots_pattern_matches(pattern: str, target: str) -> bool:
+    """RFC 9309 section 2.2.3: ``*`` matches any run of characters and a
+    trailing ``$`` anchors the end; everything else is literal. Linear: the
+    literal pieces between ``*`` are found left to right, each from where the
+    last ended, which is exact for a pattern whose only wildcard is ``*``."""
+    anchored = pattern.endswith("$")
+    pieces = (pattern[:-1] if anchored else pattern).split("*")
+    if not target.startswith(pieces[0]):
+        return False
+    position = len(pieces[0])
+    for piece in pieces[1:-1]:
+        found = target.find(piece, position)
+        if found < 0:
+            return False
+        position = found + len(piece)
+    if len(pieces) == 1:
+        return not anchored or position == len(target)
+    last = pieces[-1]
+    if anchored:
+        return target.endswith(last) and len(target) - len(last) >= position
+    return target.find(last, position) >= 0
+
+
 def robots_allows(
     robots_status: int | None, robots_body: str | None, url: str, user_agent: str
 ) -> bool:
@@ -574,10 +653,12 @@ def robots_allows(
 
     ``robots_status`` is the status the pinned fetch read at ``/robots.txt``,
     or ``None`` when nothing could be read (a timeout, a refused address, an
-    oversized or undecodable file). Following RFC 9309 a 4xx means no rules
-    apply; a 5xx means the site is unreachable and fails closed. A 3xx counts
-    as unreadable: following it would need a second pinned fetch. A 2xx body
-    is parsed with ``RobotFileParser.parse``, never ``.read``.
+    oversized or undecodable file). RFC 9309 section 2.3.1: a 4xx means no
+    rules apply and a 5xx means the site is unreachable (fail closed). A 3xx
+    fails closed by the session's choice: following it would need a second
+    pinned fetch. A 2xx body is matched by the app's own RFC 9309 matcher
+    against the URL's path plus query: the longest matching rule wins and
+    ``Allow`` wins a tie. The product token is ``user_agent`` up to its "/".
     """
     if robots_status is None:
         return False
@@ -585,9 +666,18 @@ def robots_allows(
         return True
     if not 200 <= robots_status < 300:
         return False
-    parser = urllib.robotparser.RobotFileParser()
-    parser.parse((robots_body or "").splitlines())
-    return bool(parser.can_fetch(user_agent, url))
+    product_token = user_agent.split("/", 1)[0].strip().lower()
+    try:
+        rules = _robots_rules(robots_body or "", product_token)
+    except _RobotsTooLarge:
+        return False
+    parts = urlsplit(url)
+    target = (parts.path or "/") + (f"?{parts.query}" if parts.query else "")
+    best: tuple[int, bool] = (-1, True)
+    for allow, pattern in rules:
+        if _robots_pattern_matches(pattern, target):
+            best = max(best, (len(pattern), allow))
+    return best[1]
 
 
 def _robots_reading(row: FetchedSource) -> tuple[int | None, str | None]:
