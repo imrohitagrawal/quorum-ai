@@ -6,7 +6,7 @@ original, because a gate and an offline agent can read it and cannot read `gh`.
 
 Verified at: `4ba35cec0ce40f9dd48b9c1bf0b9aefeb862a28c`
 
-The board holds **50** rows, **14** of them unpinned.
+The board holds **51** rows, **15** of them unpinned.
 
 `scripts/check_open_work.py --check` reads every row's evidence off disk and
 refuses if a claim is false. It runs inside `make validate`, and
@@ -123,7 +123,7 @@ caught by any automated check and 10 of 16 by adversarial review
 | W26 | The citation gate reports `.tsx`, `.mdx` and `.pyi` citations under a truncated path nobody wrote | DONE | `ABSENT tests/unit/test_cited_paths_resolve.py :: def test_a_longer_extension_is_not_truncated_to_a_listed_shorter_one` | #469 | — |
 | W27 | 35 mutants of `_tavily_search` survive: the request's shape, its socket timeout and both of its log events are unasserted | DONE | `ABSENT src/product_app/providers.py :: _CONTENT_TYPE_HEADER: Final = "Content-Type"` | #465 | W25 |
 | W28 | BYOK: two postures, the party paying chooses — PLANNED by the owner 2026-09-23 (CHG-011 D8), delivery not decided (ADR-0121 PROPOSED; failure modes in `docs/analysis/2026-09-23-byok-failure-modes.md`) | PENDING | `PRESENT src/product_app/query_run_orchestration.py :: credential_source = ProviderCredentialSource.APP_OWNED` | — | owner decision; the token binding (CHG-011 D9) landed 2026-09-24 (ADR-0123) |
-| W29 | The judge reads the cited pages (#447, Route B): the fetcher is built behind a default-off setting (ADR-0124); the judge wiring — page text in the judge's evidence, the input reserve, the receipt row, the posture-keyed copy — is the next pull request | PENDING | `ABSENT src/product_app/evaluation.py :: source_pages` | #447 | the wiring pull request |
+| W29 | The judge reads the cited pages (#447, Route B): the fetcher is built behind a default-off setting (ADR-0124); the judge wiring — page text in the judge's evidence, the input reserve, the receipt row, the posture-keyed copy — is the next pull request | PENDING | `ABSENT src/product_app/evaluation.py :: source_pages` | #447 | W52, then the wiring pull request |
 | W30 | The per-network session limits count every visitor as the app's ingress address (CHG-022): take the visitor's address from what Fly's proxy forwards, measured first; the cap value stays 2 | DONE | `ABSENT src/product_app/auth.py :: def client_ip_of(` | — | — |
 | W31 | An allow-list of named, dated addresses or ranges (at most /24 IPv4, /48 IPv6) exempt from the per-network session limits only, never the spend limits (CHG-022) | DONE | `ABSENT src/product_app/config.py :: session_cap_exempt_networks` | — | W30 |
 | W32 | An invite link that lifts the session limit for whoever opens it, from any network, until an end date (CHG-022; planned now, not deferred) | DONE | `ABSENT src/product_app/config.py :: invite_link_signing_key` | — | W30 |
@@ -146,6 +146,7 @@ caught by any automated check and 10 of 16 by adversarial review
 | W49 | "Go to run" on a "one run at a time" card does not open the other run's result once this tab has finished or re-opened a run: `goToActiveRun` does not reset `state.terminalHandled`, so the poll that sees the run finish returns early and the page stays on the live-run view (measured by W37's test designer, 2026-10-04, with mocked responses). Once fixed, also reset `state.liveQueryText` there, or a follow-up would pair this tab's last question with that run's answer (ADR-0143) | UNPINNED | `—` | — | — |
 | W50 | The cost confirmation's Run button stays greyed out (`disabled`) and Ctrl+Enter does nothing after this path: Run now on a question, "New question", re-open that question from "This session", "Review & run", "See the estimate"; the way out is "Back to edit" then "Run now". Reproduced on `369ed5e` and on `main` (`4ba35ce`) by W37's round-2 product reviewer, 2026-10-04; the cause is unmeasured | UNPINNED | `—` | — | — |
 | W51 | "How it works" (the top bar's `enterLanding`) does not drop an estimate still loading, so an estimate requested on the composer opens the cost gate over the landing when it arrives (reproduced on `40249a6` by W48's break-it reviewer, 2026-10-05). W48 closes its tour when that happens; the stray cost gate itself is this row | UNPINNED | `—` | — | — |
+| W52 | Keep the short excerpt each search result carries (OpenRouter annotation text, Tavily `content`) with its source for the run, so W29's judge can read it for a cited page that robots.txt says not to fetch (CHG-028). Not shown on the page; bounded; fenced as untrusted; a `docs/48` row pending the owner's approval. Failure modes and an ADR first | UNPINNED | `—` | — | — |
 
 **STOP** marks a row that cannot be finished without a human decision — a money,
 cost or safety guardrail value that only real measurement could justify. Do not
@@ -766,7 +767,7 @@ forever with the defect closed (trap 12, measured on W12/#379). It now pins
 `ABSENT … :: if len(stance) < 2:`, verified absent on `origin/main` and present
 after.
 
-**W33–W43 — the 2026-09-28..30 owner session, added 2026-09-30** (W42 and W43 found by W34's reviews; W44 split from W42 on 2026-10-03; W45 and W46 found by W33's reviews; W47 and W48 added from the owner's decisions of 2026-10-04, CHG-027; W49 found by W37's test designer; W50 by W37's product reviewer; W51 by W48's break-it reviewer). Added
+**W33–W43 — the 2026-09-28..30 owner session, added 2026-09-30** (W42 and W43 found by W34's reviews; W44 split from W42 on 2026-10-03; W45 and W46 found by W33's reviews; W47 and W48 added from the owner's decisions of 2026-10-04, CHG-027; W49 found by W37's test designer; W50 by W37's product reviewer; W51 by W48's break-it reviewer; W52 from CHG-028). Added
 unpinned: each is built in its own pull request, and that pull request pins
 the row (W34 first, pinned by ADR-0139's pull request) with the needle its change adds or deletes (memory of this repo:
 "pin a needle the fix must add or delete", not a line the fix edits around).
