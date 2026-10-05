@@ -30,23 +30,30 @@ Escape key cancels a running run. "How it works" is the landing page itself.
    - the estimate hint above the cost card on the cost gate (`#cost-review-card`);
    - the trust-score hint above the trust score on a panel result (`#result-trust-score`,
      when it is shown);
-   - the History hint beside the signed-in History control (`#account-history`), on the
-     composer, only when that control is on the page.
+   - the History hint beside the signed-in History control (`#account-history`), shown on
+     the composer only, and only when that control is on the page; it never covers the
+     History control.
    A hint is a labelled note (`role="note"`) in the reading order, not a live region, and
    it takes no focus. "Got it" hides it and writes one `localStorage` key for that idea.
 3. **Storage is best effort.** A read that fails counts as "not seen", so the hint shows;
    "Got it" hides the hint for the life of the page even if the write fails; nothing
    throws.
-4. **The tour opens only from a "Take the tour" control**: one in the landing's nav row
-   beside "How it works", and one at the end of the example preview that the landing's
-   "How it works" scrolls to. The top bar's "How it works" opens the landing, where both
+4. **The tour opens only from a "Take the tour" control** (a button, since it does not
+   navigate): one in the landing's nav row beside "How it works", and one at the end of
+   the example preview that the landing's "How it works" scrolls to. **Neither may make
+   the landing taller**: the phone density check (`landing-cta-reachable.spec.ts`) had
+   about 26 px of room on `40249a6` (scroll height 1567 against its 1593.6 bound,
+   measured by the test designer), less than one button line, so both sit in lines the
+   landing already has. The top bar's "How it works" opens the landing, where both
    are. Nothing opens the tour on load, on a timer or from a stored flag. Opening it cancels
    a pending landing hand-off, as "How it works" already does, and keeps the typed
    question.
 5. **The tour is a modal dialog** (`role="dialog"`, `aria-modal="true"`, labelled by its
    heading, which names the step: "Step 2 of 5"): five steps of one or two sentences —
-   asking a question, the models, the estimate, the trust score, History — with Back,
-   Next (Done on the last) and "Skip the tour" on every step. Focus goes to the heading on
+   asking a question, the models, the estimate, the trust score, History — with Back
+   (shown but disabled on step 1), Next (Done on the last) and "Skip the tour" on every
+   step. The dialog sits outside the landing view in the page, so the landing's word
+   checks do not read it. Focus goes to the heading on
    open and on each step, Tab stays inside, Escape closes it and is handled inside the
    dialog only, and focus returns to the control that opened it. No animation.
 6. **Existing tests keep their pages**: the shared e2e boot fixture marks the three hints
@@ -69,10 +76,10 @@ Escape key cancels a running run. "How it works" is the landing page itself.
 
 - New keys in the visitor's browser storage: one per hint. No server storage, no new
   data kept; `docs/48` is unchanged.
-- The landing grows by one line (the preview's tour link); the phone density test is run
-  with its own setup before and after.
+- The landing does not grow: the two tour buttons sit in existing lines (decision 4).
 - Calls taken by the session (the owner may overturn any of them): (i) where each hint
   sits; (ii) the tour as five text steps in a dialog rather than pointing at live
   controls; (iii) two "Take the tour" controls, in the nav row and at the end of the
   preview; (iv) a blocked storage read shows the hint; (v) every word of the help text,
-  recorded in `app.js`'s help table and quoted in AC-059.
+  recorded in `app.js`'s help table (`helpTextTable`) and quoted in AC-059; (vi) the
+  tour buttons fitted into existing landing lines because of the density bound.
