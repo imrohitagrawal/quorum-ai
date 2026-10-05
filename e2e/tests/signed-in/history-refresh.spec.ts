@@ -1,4 +1,5 @@
 import { test, expect, type APIResponse, type BrowserContext, type Page, type Request } from "@playwright/test";
+import { markHelpSeen } from "../../fixtures/help";
 
 /**
  * THE SIGNED-IN BROWSER LANE (W33 slice D, ADR-0142) — the History panel asks
@@ -56,6 +57,9 @@ async function openWorkspace(page: Page) {
       window.localStorage.setItem("quorum.workspaceSeen", "1");
     } catch (_) {}
   });
+  // W48 (ADR-0145 decision 6): the one-time hints, the History hint among
+  // them, are not what this spec tests; help-history-hint.spec.ts does.
+  await markHelpSeen(page);
   await page.goto("/ui", { waitUntil: "domcontentloaded" });
   await expect(page.locator('[data-view="composer"]')).toBeVisible();
 }

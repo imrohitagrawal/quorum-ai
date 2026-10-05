@@ -1,5 +1,6 @@
 import { expect, Page } from "@playwright/test";
 import { waitForComposerReady } from "./stabilize";
+import { markHelpSeen } from "./help";
 
 /**
  * GOLDEN REALISTIC FIXTURE — real-shaped, "messy" LLM output.
@@ -1095,6 +1096,9 @@ export async function boot(page: Page) {
   await page.addInitScript(() => {
     try { window.localStorage.setItem("quorum.workspaceSeen", "1"); } catch (_) {}
   });
+  // W48 (ADR-0145 decision 6): the three one-time hints are marked seen too,
+  // so every spec booted here keeps the page it had before the hints existed.
+  await markHelpSeen(page);
   await page.goto("/ui", { waitUntil: "domcontentloaded" });
   await expect(page.locator('[data-view="composer"]')).toBeVisible();
   await waitForComposerReady(page);

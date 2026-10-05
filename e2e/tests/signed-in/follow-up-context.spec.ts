@@ -1,4 +1,5 @@
 import { test, expect, type Page, type Request } from "@playwright/test";
+import { markHelpSeen } from "../../fixtures/help";
 
 /**
  * W37 — the follow-up journey SIGNED IN (ADR-0143), on the signed-in lane
@@ -51,6 +52,9 @@ async function signIn(page: Page, account: { sub: string; email: string }) {
       window.localStorage.setItem("quorum.workspaceSeen", "1");
     } catch (_) {}
   });
+  // W48 (ADR-0145 decision 6): the one-time hints, the History hint among
+  // them, are not what this spec tests; help-history-hint.spec.ts does.
+  await markHelpSeen(page);
   await page.goto("/ui", { waitUntil: "domcontentloaded" });
   await expect(page.locator('[data-view="composer"]')).toBeVisible();
   await page.locator("#sign-in-google").click();

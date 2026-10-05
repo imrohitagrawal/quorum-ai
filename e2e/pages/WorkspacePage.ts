@@ -1,4 +1,5 @@
 import { Page, Locator, expect } from "@playwright/test";
+import { markHelpSeen } from "../fixtures/help";
 
 /**
  * Page Object for the Quorum-AI Workspace UI
@@ -117,6 +118,7 @@ export class WorkspacePage {
         /* private-mode / storage-disabled browsers: harmless, see app.js */
       }
     });
+    await markHelpSeen(this.page); // W48: the one-time hints are not what this page object drives
     await this.page.goto("/ui");
     await this.page.waitForLoadState("networkidle");
   }
