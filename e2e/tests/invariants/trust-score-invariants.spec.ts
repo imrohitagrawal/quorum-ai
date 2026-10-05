@@ -450,6 +450,41 @@ test.describe("trust-score invariants (FR-016)", () => {
     expect(whys.length).toBeGreaterThan(0);
   });
 
+  // ---- W29 (ADR-0148 decision 9): the judge reads the cited pages ----------
+  //
+  // A DEDICATED builder (AGENTS.md rule 13d): EVAL_VERIFIED_HIGH plus the two
+  // counts the server serves when the judge read pages. EVAL_VERIFIED_HIGH and
+  // goldenCompletedResp() are not mutated.
+  const evalVerifiedWithPages = (read: number | null, cited: number | null) => ({
+    ...(JSON.parse(JSON.stringify(EVAL_VERIFIED_HIGH)) as Record<string, unknown>),
+    source_pages_read: read,
+    source_pages_cited: cited,
+  });
+
+  test("W29: the verified disclosure follows the served page posture and the run's counts", async ({
+    page,
+  }) => {
+    // TURNS RED IF: /status stops serving the `source_pages_in_effect`
+    // predicate; with it off (CI's posture) served counts change today's
+    // sentence; or with it on the note does not state the run's own counts.
+    // The posture is read off /status, not assumed (the panel-size pattern).
+    const status = await (await page.request.get("/status")).json();
+    expect(typeof status.source_pages_in_effect).toBe("boolean");
+
+    await page.setViewportSize({ width: 1440, height: 1200 });
+    await driveWithEval(page, evalVerifiedWithPages(3, 5));
+    // Partner: this IS the verified branch, so the sentence below is its.
+    await expect(page.locator(SURFACE)).toHaveAttribute("data-state", "verified");
+    const disclosure = page.locator(`${SURFACE} .result-trust-score-disclosure`);
+    await expect(disclosure).toHaveCount(1);
+    if (status.source_pages_in_effect) {
+      await expect(disclosure).toContainText("Checked against 3 of 5 cited pages");
+      await expect(disclosure).not.toContainText("The cited pages themselves were not retrieved.");
+    } else {
+      await expect(disclosure).toHaveText(VERIFIED_DISCLOSURE);
+    }
+  });
+
   // ---- #290 readout: the number is explained --------------------------------
   //
   // "92 of 100 — high trust" named no scale and said nothing about what had
