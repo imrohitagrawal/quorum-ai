@@ -27,7 +27,10 @@ Escape key cancels a running run. "How it works" is the landing page itself.
 2. **Three hints, on by default, each once per device.** Each is an inline note placed
    next to what it explains, never inside it and never floating over it, with a "Got it"
    button:
-   - the estimate hint above the cost card on the cost gate (`#cost-review-card`);
+   - the estimate hint above the cost card on the cost gate (`#cost-review-card`), on a
+     run that can start (not on a blocked one, which has no range and nothing to
+     approve); on a phone, where the card used to open with the hint above the screen,
+     the gate opens with the hint at the top;
    - the trust-score hint above the trust score on a panel result (`#result-trust-score`,
      when it is shown);
    - the History hint beside the signed-in History control (`#account-history`), shown on
@@ -55,7 +58,8 @@ Escape key cancels a running run. "How it works" is the landing page itself.
    question.
 5. **The tour is a modal dialog** (`role="dialog"`, `aria-modal="true"`, labelled by its
    heading, which names the step: "Step 2 of 5"): five steps of one or two sentences —
-   asking a question, the models, the estimate, the trust score, History — with Back
+   asking a question, the models, the estimate, what was checked (the trust score),
+   History — with Back
    (shown but disabled on step 1), Next (Done on the last) and "Skip the tour" on every
    step. The dialog sits outside the landing view in the page, so the landing's word
    checks do not read it. Focus goes to the heading on
@@ -102,4 +106,11 @@ Escape key cancels a running run. "How it works" is the landing page itself.
   the tour cancels a pending hand-off; (xv) the owner's "in 'How it works'" read as the
   example preview that "How it works" scrolls to; (xvi) no animation; (xvii) a refused
   storage write still hides the hint for the page's life; (xviii) reopening the tour
-  starts at step 1; (xix) the tour closes when the view leaves the landing.
+  starts at step 1; (xix) the tour closes when the view leaves the landing; (xx) the
+  estimate hint is not shown on a blocked gate; (xxi) on a phone the gate opens with
+  the hint at the top instead of centring the card; (xxii) Ctrl/Cmd+Enter is ignored
+  while the tour is open; (xxiii) the landing header layout from 500 to 640 px (one
+  line, tighter gaps); (xxiv) hints are notes, not live regions, and take no focus;
+  (xxv) the help text names only what the page shows: the estimate hint uses the
+  card's labels, and the trust hint locates the box (it has no visible title) and the
+  tour calls that step "What was checked".
