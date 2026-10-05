@@ -113,9 +113,10 @@ _BLANK_LETTERS = frozenset("\u115f\u1160\u3164\uffa0")
 #: (B C D E G I N R S T U V), folded to that Latin letter before the match.
 #: A fixed list of named characters, never a rule like "any non-Latin letter":
 #: a wildcard would match a long run of ordinary Russian or Japanese text.
-#: The Greek lunate sigma (U+03F2, U+03F9) is left out on purpose. The fold
-#: runs BEFORE the case is ignored: Greek small nu looks like v, but its
-#: capital looks like N.
+#: The Greek lunate sigma (U+03F2, U+03F9) is left out on purpose. The map
+#: is applied BEFORE upper-casing, because Greek small nu looks like v but its
+#: capital looks like N, and again AFTER it, so a small letter whose capital is
+#: listed (Cyrillic т, в, Greek ι) meets that capital.
 _LOOK_ALIKES: dict[str, str] = {
     "\u0412": "B",  # CYRILLIC CAPITAL LETTER VE
     "\u0392": "B",  # GREEK CAPITAL LETTER BETA
@@ -141,6 +142,7 @@ _LOOK_ALIKES: dict[str, str] = {
     "\u0474": "V",  # CYRILLIC CAPITAL LETTER IZHITSA
     "\u0475": "V",  # CYRILLIC SMALL LETTER IZHITSA
     "\u03bd": "V",  # GREEK SMALL LETTER NU
+    "\u03b5": "E",  # GREEK SMALL LETTER EPSILON
 }
 
 
@@ -149,18 +151,22 @@ def _letters_of(ch: str) -> str:
 
     The character is NFKC-normalised first, so a fullwidth or compatibility
     form reads as its plain letters (one character can give several, e.g.
-    U+FB06 gives "st"). Anything that is not a letter or digit gives nothing:
-    spaces, punctuation, brackets, combining marks, variation selectors and
-    invisible formatting characters, and the blank Hangul fillers. A
-    look-alike is folded to its Latin letter; every other letter is
-    upper-cased. Digits are kept, so a digit inside a marker breaks the match.
+    U+FB06 gives "st"). Each result is then decomposed (NFKD) and its accents
+    (combining marks) dropped, so a single-character É or İ reads as E or I,
+    the same as E followed by a separate accent. Anything that is not a letter
+    or digit gives nothing: spaces, punctuation, brackets, variation selectors
+    and invisible formatting characters, and the blank Hangul fillers. A
+    look-alike is folded to its Latin letter before upper-casing and again
+    after it. Digits are kept, so a digit inside a marker breaks the match.
     """
     letters = []
     for normal in unicodedata.normalize("NFKC", ch):
-        if normal in _LOOK_ALIKES:
-            letters.append(_LOOK_ALIKES[normal])
-        elif normal.isalnum() and normal not in _BLANK_LETTERS:
-            letters.extend(up for up in normal.upper() if up.isalnum())
+        for base in unicodedata.normalize("NFKD", normal):
+            if base in _LOOK_ALIKES:
+                letters.append(_LOOK_ALIKES[base])
+            elif base.isalnum() and base not in _BLANK_LETTERS:
+                upper = (_LOOK_ALIKES.get(up, up) for up in base.upper())
+                letters.extend(up for up in upper if up.isalnum())
     return "".join(letters)
 
 
@@ -182,36 +188,38 @@ def neutralize_delimiters(text: str) -> str:
     A marker is found by its LETTERS, not its bytes (ADR-0147). The text is
     read one character at a time through :func:`_letters_of`, remembering
     which original character each letter came from, so a marker with a space,
-    an invisible or combining character, a look-alike letter, fullwidth forms,
-    another case or no brackets is still found. Where the letters spell
-    either marker, the ORIGINAL span from its first to its last letter,
-    widened over any run of ``<`` or ``>`` directly around it, is replaced
-    with ``[redacted-delimiter]``. The exact marker is therefore still
-    replaced whole, as before. Over a span shorter than the replacement (NFKC
-    can turn one character into several letters), the replacement is cut to
-    the span's length, so the output is never longer than the input.
+    an invisible or combining character, an accented or look-alike letter,
+    fullwidth forms, another case or no brackets is still found. Where the
+    letters spell either marker, the ORIGINAL span from its first to its last
+    letter, widened over any run of ``<`` or ``>`` directly around it, is
+    replaced with ``[redacted-delimiter]``. The exact marker is therefore
+    still replaced whole, as before. Over a span shorter than the replacement
+    (NFKC can turn one character into several letters), the replacement is
+    cut to the span's length, so the output is never longer than the input.
 
     Ordinary prose that spells the marker's words in order loses those words
     inside the prompt; paraphrase, digit swaps and extra letters are not
-    caught. One pass, linear in the length of the text: each distinct
-    character is normalised once, and the search is a fixed-string pattern.
+    caught. Linear in the length of the text: the letters of each distinct
+    character are worked out once; only when a marker is found, each distinct
+    character is checked once more for being a bracket; and the search is a
+    fixed-string pattern.
     """
-    letters_of: dict[str, str] = {ch: _letters_of(ch) for ch in set(text)}
+    distinct = set(text)
+    letters_of: dict[str, str] = {ch: _letters_of(ch) for ch in distinct}
     letters = "".join(letters_of[ch] for ch in text)
     if _MARKER_LETTERS.search(letters) is None:
         return text
+    brackets = {ch for ch in distinct if _is_bracket(ch)}
     # origin[k] is the index in *text* of the character letter k came from.
     origin = [index for index, ch in enumerate(text) for _ in letters_of[ch]]
     pieces: list[str] = []
     kept_from = 0
     for match in _MARKER_LETTERS.finditer(letters):
-        # A character NFKC turns into several letters can end one match and
-        # start the next; it is redacted once, by the first.
-        start = max(origin[match.start()], kept_from)
-        end = max(origin[match.end() - 1] + 1, start)
-        while start > kept_from and _is_bracket(text[start - 1]):
+        start = origin[match.start()]
+        end = origin[match.end() - 1] + 1
+        while start > kept_from and text[start - 1] in brackets:
             start -= 1
-        while end < len(text) and _is_bracket(text[end]):
+        while end < len(text) and text[end] in brackets:
             end += 1
         pieces.append(text[kept_from:start])
         pieces.append(_REDACTED[: end - start])
