@@ -132,18 +132,23 @@
   // it, and the tour's steps for those three ideas ARE the hints' words, so the
   // two cannot drift apart. Every sentence is the session's wording (ADR-0145
   // consequence v), checked against the code it describes and quoted in AC-059:
-  // the estimate's figures are renderCostGate's typical figure and its "up to"
-  // worst case; History's 5 and 30 are config.history_keep_count and
+  // the estimate's words are the ones the cost card shows ("estimated", "up
+  // to", "worst case") and never "typical" (its accuracy is unmeasured,
+  // ADR-0016); "nothing runs until you approve it" holds only when the
+  // estimate is asked for first ("Run now" on a low-cost run starts at once);
+  // the trust score's lists are "Checks fully met" and "Checks that fell
+  // short", and its basis line says it is not a judgement of whether the
+  // answer is correct; History's 5 and 30 are config.history_keep_count and
   // history_keep_days, and its rows hold no answer (account_history.py).
   // Self-contained: tests run this function alone under Node.
   function helpTextTable() {
     const hints = {
       estimate:
-        'The estimate shows what a run typically costs and an "up to" figure, the worst case it is priced at. ' +
-        "When you press See the estimate, nothing runs until you approve it.",
+        'The estimate shows an estimated cost for the run and an "up to" figure, the worst case it is priced at. ' +
+        "If you ask for the estimate first, nothing runs until you approve it.",
       trust:
-        "The trust score shows what was checked on this answer and what was not; the checks are automated, not a human fact-check. " +
-        "Read what it says before you rely on the answer.",
+        "The trust score shows which automated checks this answer met and which fell short, such as whether its citations point at a listed source. " +
+        "The checks do not judge whether the answer is correct.",
       history:
         "When you are signed in, History lists your newest 5 questions from the last 30 days. " +
         "It keeps each question and how the run went, never the answer.",
@@ -590,6 +595,15 @@
     // ``#status-meta`` render targets remain valid.
     const shell = document.getElementById("main-content");
     if (shell) shell.dataset.activeView = name;
+    // W48 review round 1 (ADR-0145 decision 5): the tour belongs to the
+    // landing. When the view leaves it while the tour is open (an estimate
+    // asked for earlier lands, or browser Back), close the tour and put focus
+    // on the new view's heading, not on the opener the landing just hid.
+    if (name !== "landing" && helpTourIsOpen()) {
+      closeHelpTour(false);
+      const heading = target.querySelector('h1[tabindex="-1"]');
+      if (heading) heading.focus({ preventScroll: true });
+    }
     syncViewHistory(name);
     // W48 (ADR-0145 decision 2): each hint belongs to one view.
     syncHelpHints();
@@ -8860,7 +8874,15 @@
       gateHeading ||
       (action === "block" ? gateBackButton : gateConfirmButton);
     if (focusTarget) focusTarget.focus({ preventScroll: true });
-    if (gateCard) {
+    // W48 review round 1 (ADR-0145): while the estimate hint is shown it is the
+    // first thing to read, so the opening scroll puts IT at the top of the
+    // screen, with the card right under it. Centring the card instead left the
+    // hint above the screen on a phone (390x844, 320x640). Instant, so the hint
+    // is in place as soon as the gate opens (and reduced-motion safe).
+    const estimateHint = el("help-hint-estimate");
+    if (estimateHint && !estimateHint.hidden) {
+      estimateHint.scrollIntoView({ behavior: "auto", block: "start" });
+    } else if (gateCard) {
       gateCard.scrollIntoView({
         behavior: prefersReducedMotion() ? "auto" : "smooth",
         block: "center",
@@ -10216,9 +10238,12 @@
   // W48 (ADR-0145) — help for new users: three one-time hints and a tour
   // ---------------------------------------------------------------------------
   //
-  // The owner's words (CHG-027 g): one short hint per new idea, each shown
-  // once per device with "Got it", and an optional tour opened only from a
-  // "Take the tour" button, never automatically. Both read helpTextTable().
+  // Paraphrasing the product owner's decision, CHG-027 (g), which is quoted
+  // verbatim in docs/19: one short hint per new idea, each shown once per
+  // device with "Got it", and an optional tour that only a "Take the tour"
+  // control opens, never automatically. The owner wrote "link"; these are
+  // buttons, because they open a dialog and go nowhere (ADR-0145 decision 4).
+  // Both read helpTextTable().
   // Journeys and failure modes:
   // docs/analysis/2026-10-05-w48-help-and-tour-journeys-and-failure-modes.md.
 
@@ -10352,7 +10377,10 @@
     renderHelpTourStep();
   }
 
-  function closeHelpTour() {
+  // ``refocus`` false is for a view change under the open tour: the opener is
+  // on the landing, which is being hidden, so setView focuses the new view's
+  // heading instead (ADR-0145 decision 5).
+  function closeHelpTour(refocus = true) {
     const layer = el("help-tour-layer");
     if (!layer || layer.hidden) return;
     layer.hidden = true;
@@ -10360,7 +10388,7 @@
     if (shell) shell.inert = false;
     const opener = helpTourOpener;
     helpTourOpener = null;
-    if (opener && typeof opener.focus === "function") opener.focus({ preventScroll: true });
+    if (refocus && opener && typeof opener.focus === "function") opener.focus({ preventScroll: true });
   }
 
   function moveHelpTour(delta) {
@@ -10381,14 +10409,22 @@
   // Keys while the tour is open, caught on the window in the CAPTURE phase so
   // they are handled before anything else on the page. Escape closes the tour
   // and stops there: it never reaches the page-wide handler, which cancels a
-  // running run (failure mode 2). Tab and Shift+Tab cycle through the tour's
-  // own buttons (failure mode 3).
+  // running run (failure mode 2). Ctrl/Cmd+Enter is swallowed. Tab and
+  // Shift+Tab cycle through the tour's own buttons (failure mode 3).
   function onHelpTourKeydown(event) {
     if (!helpTourIsOpen()) return;
     if (event.key === "Escape") {
       event.preventDefault();
       event.stopImmediatePropagation();
       closeHelpTour();
+      return;
+    }
+    // Ctrl/Cmd+Enter is the page-wide "estimate / confirm" shortcut; while the
+    // tour is open it does nothing at all, so it can never confirm a cost
+    // review hidden behind the dialog.
+    if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+      event.preventDefault();
+      event.stopImmediatePropagation();
       return;
     }
     if (event.key !== "Tab") return;

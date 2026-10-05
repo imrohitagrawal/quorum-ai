@@ -876,11 +876,13 @@
                 <span class="landing-brand-name">Quorum</span>
               </div>
               <div class="landing-nav">
-                <button id="landing-howitworks" class="landing-howitworks" type="button">How it works</button>
                 <!-- W48 (ADR-0145 decision 4): opens the optional tour, never
-                     anything else. Below 600px it sits on the brand line, so
+                     anything else. First in the nav row so that the keyboard
+                     order matches what the eye sees at every width: below
+                     500px it sits on the brand line, above "How it works", so
                      the header keeps its height (the phone density bound). -->
                 <button id="landing-tour" class="landing-howitworks landing-tour" type="button">Take the tour</button>
+                <button id="landing-howitworks" class="landing-howitworks" type="button">How it works</button>
                 <button id="landing-open-workspace" class="button button-secondary landing-open" type="button">Open the workspace</button>
               </div>
             </header>

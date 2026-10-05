@@ -6506,6 +6506,8 @@ html[data-theme="dark"] .landing-preview { background: var(--accent-soft); }
   color: var(--body);
 }
 .help-hint[hidden] { display: none; }
+/* Room above a hint when the cost gate scrolls it to the top of the screen. */
+.help-hint { scroll-margin-top: var(--space-3); }
 .help-hint-text {
   flex: 1 1 16rem;
   margin: 0;
@@ -6616,21 +6618,59 @@ html[data-theme="dark"] .landing-preview { background: var(--accent-soft); }
 }
 .help-tour-skip:hover { color: var(--ink); }
 
-@media (max-width: 600px) {
-  /* Decision 4, the phone density bound: `landing-cta-reachable.spec.ts`
-     requires the landing at 390x664 to stay under 1593.6px, and it was 1567
-     before W48 (measured with that spec's own setup). The header already
-     wraps there: the brand on one line, "How it works" and "Open the
-     workspace" on the next, and a third button does not fit beside them. So
-     below 600px the nav row's box is dropped (display: contents) and
-     "Take the tour" moves up to the brand line, which has room. A zero-height
+/* Decision 4: the "Take the tour" button in the nav row must not make the
+   landing's header taller anywhere the density check or a reader would
+   notice. Before W48 the header was ONE line from 500px up (brand + 16px +
+   the 293px nav row + 2 x 32px padding + the shell's 20px margins = 500px)
+   and wrapped to two lines below that. Measured on 2624970 (review round 1):
+   the extra button wrapped it to two lines at 501-625px. So:
+   - from 500px up the header never wraps (nowrap), and between 500 and 640px
+     its spacing tightens so the four items fit on one line in Geist; if a
+     wider fallback font is in use, the two text buttons shrink and wrap
+     their own words instead of pushing the row onto a second line;
+   - below 500px, where the header already wrapped, the phone layout below
+     moves "Take the tour" up to the brand line. */
+@media (min-width: 500px) {
+  .landing-header { flex-wrap: nowrap; }
+  .landing-brand { flex-shrink: 0; }
+  .landing-nav { min-width: 0; }
+  .landing-nav .landing-howitworks {
+    flex-shrink: 1;
+    min-width: 44px;
+    white-space: normal;
+    line-height: 1.2;
+  }
+  .landing-header .landing-open { flex-shrink: 0; }
+}
+@media (min-width: 500px) and (max-width: 640px) {
+  .landing-header { padding: 0 var(--space-4); gap: var(--space-3); }
+  .landing-nav { gap: var(--space-1); }
+  .landing-nav .landing-howitworks { padding: 0 var(--space-1); }
+  .landing-header .landing-open { padding: 0 var(--space-3); }
+}
+@media (min-width: 500px) and (max-width: 600px) {
+  /* The shell's margins are 10px here, so the header's own padding goes and
+     its edges line up with the column below; the nav type steps down a pixel. */
+  .landing-header { padding: 0; }
+  .landing-nav .landing-howitworks,
+  .landing-header .landing-open { font-size: 0.8125rem; }
+}
+
+@media (max-width: 499px) {
+  /* The phone density bound: `landing-cta-reachable.spec.ts` requires the
+     landing at 390x664 to stay under 1593.6px, and it was 1567 before W48
+     (measured with that spec's own setup). The header already wraps here:
+     the brand on one line, "How it works" and "Open the workspace" on the
+     next, and a third button does not fit beside them. So the nav row's box
+     is dropped (display: contents) and "Take the tour", which is FIRST in the
+     nav row's DOM, stays on the brand line, which has room; a zero-height
      break item keeps "How it works" and "Open the workspace" together on the
-     line below, and the row gap is taken out so the two lines (44px each)
-     stay inside the 90px the header had. The side padding drops from 32px
-     to 16px so that lower line still fits on one line at 375px and 360px
-     (it needs 293px; at 32px padding 360px leaves 276px and "Open the
-     workspace" fell to a third line, measured +40px). In the DOM the button
-     is still in the nav row, beside "How it works". */
+     line below. Because the button is first in the DOM as well as on screen,
+     Tab meets the controls in the order the eye does (WCAG 2.4.3). The row
+     gap is taken out so the two lines (44px each) stay inside the 90px the
+     header had, and the side padding drops from 32px to 16px so the lower
+     line still fits at 375px and 360px (it needs 293px; at 32px padding
+     360px leaves 276px, measured +40px). */
   .landing-header {
     justify-content: flex-start;
     column-gap: var(--space-4);
@@ -6644,11 +6684,11 @@ html[data-theme="dark"] .landing-preview { background: var(--accent-soft); }
     order: 2;
   }
   .landing-nav { display: contents; }
-  .landing-header .landing-brand { order: 0; }
-  .landing-header .landing-tour { order: 1; }
   .landing-header .landing-howitworks:not(.landing-tour) { order: 3; margin-top: 2px; }
   .landing-header .landing-open { order: 4; margin-top: 2px; }
+}
 
+@media (max-width: 600px) {
   .help-tour { padding: var(--space-5); }
 }
 /* The dark theme dims the page behind the tour further, so the dialog reads
