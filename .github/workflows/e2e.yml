@@ -385,7 +385,7 @@ jobs:
         # 428 -> 439 after W48 review round 1 (eleven more); the W48 builder
         # reported "439 tests executed" on f45c6cc. 439 -> 450 after round 2
         # (eleven more; added, not measured). Not re-run by the orchestrator; the hosted
-        # run of the W47 pull request must confirm it before merge.
+        # run of the W48 pull request must confirm it before merge.
         run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 450 --lane "invariants lane"
 
       - name: Clear the previous lane's JUnit report
