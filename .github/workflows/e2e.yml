@@ -211,6 +211,7 @@ jobs:
           tests/invariants/page-journey.spec.ts
           tests/invariants/limit-messages.spec.ts
           tests/invariants/follow-up-context.spec.ts
+          tests/invariants/help-and-tour.spec.ts
           --project=chromium
           --retries=0
 
@@ -378,9 +379,15 @@ jobs:
         # adds one test; the W47 builder (a subagent) reported "398 tests executed
         # (floor 397), 0 skipped" on a908e4d+3522a4f with the three local
         # overrides. 398 -> 408 after W47 review round 1 (limit-messages adds ten
-        # tests) and 408 -> 410 after round 2 (two more; added, not measured). Not re-run by the orchestrator; the hosted
-        # run of the W47 pull request must confirm it before merge.
-        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 410 --lane "invariants lane"
+        # tests) and 408 -> 410 after round 2 (two more; added, not measured).
+        # 410 -> 428 (W48, ADR-0145): help-and-tour.spec.ts adds 18 tests; added,
+        # not measured; the W48 builder reported "428 tests executed" on 2624970.
+        # 428 -> 439 after W48 review round 1 (eleven more); the W48 builder
+        # reported "439 tests executed" on f45c6cc. 439 -> 450 after round 2
+        # (eleven more); 450 -> 453 after the final check (three more; the 450
+        # were run by the orchestrator on 3218637). Not re-run at 453; the hosted
+        # run of the W48 pull request must confirm it before merge.
+        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 453 --lane "invariants lane"
 
       - name: Clear the previous lane's JUnit report
         run: rm -f e2e/results.xml
@@ -469,14 +476,15 @@ jobs:
           tests/signed-in/history-refresh.spec.ts
           tests/signed-in/follow-up-context.spec.ts
           tests/signed-in/shared-allowance.spec.ts
+          tests/signed-in/help-history-hint.spec.ts
           --config=playwright.signed-in.config.ts
           --project=chromium
           --retries=0
 
-      # EXECUTED-COUNT FLOOR, same reasoning as the lanes above. 22 is the three
+      # EXECUTED-COUNT FLOOR, same reasoning as the lanes above. 25 is the four
       # specs' whole test count (history-refresh 14, follow-up-context 1, W37;
-      # shared-allowance 7, W47 after review round 2 — added, to be confirmed by
-      # this lane's run);
+      # shared-allowance 7, W47 after review round 2; help-history-hint 3, W48 —
+      # 25 measured by the W48 test designer against its reference build);
       # the lane reported "15 executed, 15 passed" on 2026-10-04 (W37 builder).
       # History of the 14: MEASURED 2026-10-03 with the invocation above:
       # the first nine tests were red by design on 087dbb9 (7 of 9 failing) and
@@ -487,7 +495,7 @@ jobs:
       # 700 px): against b552d37's code the lane gave "12 passed", "2 failed",
       # red by design until their fix. Re-measure when that fix lands.
       - name: "signed-in History lane: floor on tests actually executed"
-        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 22 --lane "signed-in History lane"
+        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 25 --lane "signed-in History lane"
 
       - name: Clear the previous lane's JUnit report
         # Adversarial review (#162/#166): without this, a Playwright run that

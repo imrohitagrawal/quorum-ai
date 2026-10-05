@@ -1,6 +1,7 @@
 import { test, expect, Page } from "@playwright/test";
 import { waitForComposerReady } from "../../fixtures/stabilize";
 import { LIMIT_RESPONSES } from "../../fixtures/limit-responses";
+import { markHelpSeen } from "../../fixtures/help";
 
 /**
  * Behavioural regression suite for the design-comp parity change.
@@ -119,6 +120,7 @@ async function boot(page: Page) {
   await page.addInitScript(() => {
     try { window.localStorage.setItem("quorum.workspaceSeen", "1"); } catch (_) {}
   });
+  await markHelpSeen(page); // W48: the one-time hints are not what these suites test
   await page.goto("/ui", { waitUntil: "domcontentloaded" });
   await expect(page.locator('[data-view="composer"]')).toBeVisible();
   await waitForComposerReady(page);

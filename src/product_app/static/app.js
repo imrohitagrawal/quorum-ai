@@ -126,6 +126,59 @@
     }
     return [{ text: lead + "Press " }, ...ending];
   }
+
+  // W48 (ADR-0145 decision 1): the one table of help text. The three hints
+  // (the cost estimate, the trust score, History) and the five tour steps read
+  // it, and the tour's steps for those three ideas ARE the hints' words, so the
+  // two cannot drift apart. Every sentence is the session's wording (ADR-0145
+  // consequence v), checked against the code it describes and quoted in AC-059:
+  // the estimate hint names only figures the card labels ("Planning
+  // estimate" in its header, the large figure, and "estimated range"), never
+  // "typical" (accuracy unmeasured, ADR-0016) and never "up to" (no figure on
+  // the card carries that label); "nothing runs until you approve it" holds
+  // only when the estimate is asked for first ("Run now" on a low-cost run
+  // starts at once), and the hint is not shown on a blocked gate, which has
+  // no range and nothing to approve. The trust hint locates the box (it has
+  // no visible title; its name is "What was and was not checked") and says
+  // only what every branch of it shows -- that it reports what automated
+  // checks found -- plus that the checks do not judge correctness (the
+  // verified box's basis line; the unverified one says "not a fact-check");
+  // History's 5 and 30 are config.history_keep_count and
+  // history_keep_days, and its rows hold no answer (account_history.py).
+  // Self-contained: tests run this function alone under Node.
+  function helpTextTable() {
+    const hints = {
+      estimate:
+        'On the estimate, the large figure is the planning estimate for this run, and the "estimated range" shows how high the cost could go. ' +
+        "If you ask for the estimate first, nothing runs until you approve it.",
+      trust:
+        "The box under the summary cards says what automated checks found on this answer. " +
+        "The checks do not judge whether the answer is correct.",
+      history:
+        "When you are signed in, History lists your newest 5 questions from the last 30 days. " +
+        "It keeps each question and how the run went, never the answer.",
+    };
+    return {
+      hints,
+      tour: [
+        {
+          idea: "ask",
+          title: "Ask a question",
+          text: "Type one question in the box, as you would ask an expert. The example questions fill the box for you.",
+        },
+        {
+          idea: "models",
+          title: "The models",
+          text:
+            "By default four AI models answer, their answers are debated, and one final answer brings them together. " +
+            "You can choose three or two models instead, or a quick answer from one model.",
+        },
+        { idea: "estimate", title: "The cost estimate", text: hints.estimate },
+        { idea: "trust", title: "What was checked", text: hints.trust },
+        { idea: "history", title: "History", text: hints.history },
+      ],
+    };
+  }
   // W5 (ADR-0128). The body of an estimate or create request. A panel body is
   // byte-identical to the pre-W5 one: no `mode` key, the same key order. A
   // quick body sends slot 1 alone and `mode: "quick"`.
@@ -547,7 +600,21 @@
     // ``#status-meta`` render targets remain valid.
     const shell = document.getElementById("main-content");
     if (shell) shell.dataset.activeView = name;
+    // W48 review round 1 (ADR-0145 decision 5): the tour belongs to the
+    // landing. When the view leaves it while the tour is open (an estimate
+    // asked for earlier lands, or browser Back), close the tour and put focus
+    // on the new view's heading, not on the opener the landing just hid.
+    if (name !== "landing" && helpTourIsOpen()) {
+      closeHelpTour(false);
+      // The composer has no focusable heading: its question box is where
+      // every other way into the composer puts focus.
+      const heading =
+        target.querySelector('h1[tabindex="-1"]') || (name === "composer" ? queryTextarea : null);
+      if (heading) heading.focus({ preventScroll: true });
+    }
     syncViewHistory(name);
+    // W48 (ADR-0145 decision 2): each hint belongs to one view.
+    syncHelpHints();
   }
 
   // ---------------------------------------------------------------------------
@@ -3566,6 +3633,8 @@
       const band = el("result-verdict");
       if (band) delete band.dataset.consensus;
       renderQuickResult(result, res, question);
+      // W48: a quick answer has no trust score, so no trust-score hint.
+      syncHelpHints();
       return;
     }
     // A panel run after a quick one: show the three surfaces nothing else
@@ -3586,6 +3655,8 @@
     });
     renderTrustTriangle(result, res, fs, { isConsensus, aligned, total });
     renderTrustScore(result);
+    // W48 (ADR-0145 decision 2): the trust-score hint follows the trust score.
+    syncHelpHints();
     renderResultDebate(res);
     renderResultSynthesis(fs, res);
 
@@ -8811,7 +8882,16 @@
       gateHeading ||
       (action === "block" ? gateBackButton : gateConfirmButton);
     if (focusTarget) focusTarget.focus({ preventScroll: true });
-    if (gateCard) {
+    // W48 (ADR-0145 decision 2, call xxi): on a phone, centring the card left
+    // the estimate hint above the screen (390x844, 320x640), so while the hint
+    // shows the opening scroll puts IT at the top, instantly. On wider screens
+    // the gate opens as it always did: on a short desktop (1280x640) the
+    // hint-first scroll pushed the run button below the fold.
+    const estimateHint = el("help-hint-estimate");
+    const phone = typeof window.matchMedia === "function" && window.matchMedia("(max-width: 600px)").matches;
+    if (phone && estimateHint && !estimateHint.hidden) {
+      estimateHint.scrollIntoView({ behavior: "auto", block: "start" });
+    } else if (gateCard) {
       gateCard.scrollIntoView({
         behavior: prefersReducedMotion() ? "auto" : "smooth",
         block: "center",
@@ -10163,6 +10243,228 @@
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // W48 (ADR-0145) — help for new users: three one-time hints and a tour
+  // ---------------------------------------------------------------------------
+  //
+  // Paraphrasing the product owner's decision, CHG-027 (g), which is quoted
+  // verbatim in docs/19: one short hint per new idea, each shown once per
+  // device with "Got it", and an optional tour that only a "Take the tour"
+  // control opens, never automatically. The owner wrote "link"; these are
+  // buttons, because they open a dialog and go nowhere (ADR-0145 decision 4).
+  // Both read helpTextTable().
+  // Journeys and failure modes:
+  // docs/analysis/2026-10-05-w48-help-and-tour-journeys-and-failure-modes.md.
+
+  // One device-local flag per hint, like ``quorum.workspaceSeen``: a UX
+  // preference, not account state, so nothing is kept on the server.
+  const HELP_HINT_SEEN_PREFIX = "quorum.hintSeen.";
+  // Hints dismissed in THIS page: "Got it" hides a hint for the page's life
+  // even when the browser refuses the write (decision 3).
+  const helpHintsDismissed = new Set();
+
+  // Storage is best effort (decision 3): a read that throws counts as "not
+  // seen", so the hint shows rather than never being dismissable.
+  function helpHintSeen(idea) {
+    if (helpHintsDismissed.has(idea)) return true;
+    try {
+      return window.localStorage.getItem(HELP_HINT_SEEN_PREFIX + idea) === "1";
+    } catch (_) {
+      return false;
+    }
+  }
+
+  // Where each hint may show (decision 2): the estimate hint on the cost gate;
+  // the trust-score hint on a result whose trust score is shown (never on a
+  // quick answer, which has none); the History hint on the composer, only
+  // when the signed-in History control is on the page.
+  function helpHintPlaces() {
+    const shell = el("main-content");
+    const view = shell ? shell.dataset.activeView : "";
+    const trustScore = el("result-trust-score");
+    return {
+      // Not on a blocked gate: it has no range and nothing to approve, so the
+      // hint would be false there (ADR-0145 decision 2, call xx).
+      estimate: {
+        note: el("help-hint-estimate"),
+        show: view === "cost-gate" && Boolean(gateCard) && gateCard.dataset.band !== "block",
+      },
+      trust: {
+        note: el("help-hint-trust"),
+        show: view === "result" && Boolean(trustScore) && !trustScore.hidden,
+      },
+      history: {
+        note: el("help-hint-history"),
+        show: view === "composer" && Boolean(el("account-history")),
+      },
+    };
+  }
+
+  // Show or hide every hint for the page as it is now. Called after each view
+  // change and after a result renders its trust score. Never throws on a
+  // trimmed template: a missing note is skipped.
+  function syncHelpHints() {
+    const places = helpHintPlaces();
+    for (const idea of Object.keys(places)) {
+      const { note, show } = places[idea];
+      if (note) note.hidden = !(show && !helpHintSeen(idea));
+    }
+  }
+
+  // "Got it": hide the hint, remember it on this device if the browser lets
+  // us, and put focus on the heading of the same view (the button that had it
+  // is gone), so a keyboard user is never dropped on <body>.
+  function dismissHelpHint(idea) {
+    helpHintsDismissed.add(idea);
+    try {
+      window.localStorage.setItem(HELP_HINT_SEEN_PREFIX + idea, "1");
+    } catch (_) {
+      // Best effort: the hint stays hidden for this page all the same.
+    }
+    syncHelpHints();
+    const history = el("account-history");
+    const next = {
+      estimate: el("cost-gate-heading"),
+      trust: el("result-heading"),
+      history: history ? history.querySelector("summary") : null,
+    }[idea];
+    if (next) next.focus({ preventScroll: true });
+  }
+
+  // Fill each hint's text from the shared table and wire its "Got it".
+  function initHelpHints() {
+    const { hints } = helpTextTable();
+    const parts = {
+      estimate: [el("help-hint-estimate-text"), el("help-hint-estimate-dismiss")],
+      trust: [el("help-hint-trust-text"), el("help-hint-trust-dismiss")],
+      history: [el("help-hint-history-text"), el("help-hint-history-dismiss")],
+    };
+    for (const idea of Object.keys(parts)) {
+      const [text, dismiss] = parts[idea];
+      if (text) text.textContent = hints[idea];
+      if (dismiss) dismiss.addEventListener("click", () => dismissHelpHint(idea));
+    }
+    syncHelpHints();
+  }
+
+  // The tour (decision 5): a modal dialog of five text steps. ``helpTourOpener``
+  // is the button that opened it, where focus returns on close.
+  let helpTourStep = 0;
+  let helpTourOpener = null;
+
+  function helpTourIsOpen() {
+    const layer = el("help-tour-layer");
+    return Boolean(layer && !layer.hidden);
+  }
+
+  function renderHelpTourStep() {
+    const steps = helpTextTable().tour;
+    const step = steps[helpTourStep];
+    const heading = el("help-tour-heading");
+    const text = el("help-tour-text");
+    const back = el("help-tour-back");
+    const next = el("help-tour-next");
+    const done = el("help-tour-done");
+    const last = helpTourStep === steps.length - 1;
+    if (heading) heading.textContent = `Step ${helpTourStep + 1} of ${steps.length}: ${step.title}`;
+    if (text) text.textContent = step.text;
+    // Back is shown on every step and disabled on the first (decision 5).
+    if (back) back.disabled = helpTourStep === 0;
+    if (next) next.hidden = last;
+    if (done) done.hidden = !last;
+    // Focus goes to the heading on open and on every step, so a screen reader
+    // reads "Step N of 5" and the step's title first.
+    if (heading) heading.focus({ preventScroll: true });
+  }
+
+  // Open only from a click on a "Take the tour" button: no other caller.
+  function openHelpTour(opener) {
+    const layer = el("help-tour-layer");
+    if (!layer) return;
+    helpTourOpener = opener || null;
+    helpTourStep = 0;
+    layer.hidden = false;
+    // The page behind the dialog is inert while it is open, so neither a
+    // pointer nor a screen reader can reach it (aria-modal says the same).
+    const shell = el("main-content");
+    if (shell) shell.inert = true;
+    renderHelpTourStep();
+  }
+
+  // ``refocus`` false is for a view change under the open tour: the opener is
+  // on the landing, which is being hidden, so setView focuses the new view's
+  // heading instead (ADR-0145 decision 5).
+  function closeHelpTour(refocus = true) {
+    const layer = el("help-tour-layer");
+    if (!layer || layer.hidden) return;
+    layer.hidden = true;
+    const shell = el("main-content");
+    if (shell) shell.inert = false;
+    const opener = helpTourOpener;
+    helpTourOpener = null;
+    if (refocus && opener && typeof opener.focus === "function") opener.focus({ preventScroll: true });
+  }
+
+  function moveHelpTour(delta) {
+    const count = helpTextTable().tour.length;
+    helpTourStep = Math.max(0, Math.min(count - 1, helpTourStep + delta));
+    renderHelpTourStep();
+  }
+
+  // The tour's buttons that can take focus now, in order.
+  function helpTourFocusables() {
+    const dialog = el("help-tour");
+    if (!dialog) return [];
+    return Array.from(dialog.querySelectorAll("button")).filter(
+      (button) => !button.disabled && !button.hidden,
+    );
+  }
+
+  // Keys while the tour is open, caught on the window in the CAPTURE phase so
+  // they are handled before anything else on the page. Escape closes the tour
+  // and stops there: it never reaches the page-wide handler, which cancels a
+  // running run (failure mode 2). Ctrl/Cmd+Enter is swallowed. Tab and
+  // Shift+Tab cycle through the tour's own buttons (failure mode 3).
+  function onHelpTourKeydown(event) {
+    if (!helpTourIsOpen()) return;
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      closeHelpTour();
+      return;
+    }
+    // Ctrl/Cmd+Enter is the page-wide "estimate / confirm" shortcut; while the
+    // tour is open it does nothing at all, so it can never confirm a cost
+    // review hidden behind the dialog.
+    if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      return;
+    }
+    if (event.key !== "Tab") return;
+    const buttons = helpTourFocusables();
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    if (!buttons.length) return;
+    const at = buttons.indexOf(document.activeElement);
+    let to;
+    if (event.shiftKey) to = at <= 0 ? buttons.length - 1 : at - 1;
+    else to = at < 0 || at === buttons.length - 1 ? 0 : at + 1;
+    buttons[to].focus();
+  }
+
+  function initHelpTour() {
+    const back = el("help-tour-back");
+    const next = el("help-tour-next");
+    const done = el("help-tour-done");
+    const skip = el("help-tour-skip");
+    if (back) back.addEventListener("click", () => moveHelpTour(-1));
+    if (next) next.addEventListener("click", () => moveHelpTour(1));
+    if (done) done.addEventListener("click", closeHelpTour);
+    if (skip) skip.addEventListener("click", closeHelpTour);
+    window.addEventListener("keydown", onHelpTourKeydown, true);
+  }
+
   // Slice 7 (01 Landing) — the marketing front door.
   //
   // HONESTY / WIRING contract:
@@ -10416,6 +10718,18 @@
           behavior: prefersReducedMotion() ? "auto" : "smooth",
           block: "center",
         });
+      });
+    }
+
+    // W48 (ADR-0145 decision 4): the two "Take the tour" buttons, in the nav
+    // row and at the end of the preview. Like "How it works", opening the
+    // tour cancels a pending hand-off (failure mode 12), so the composer never
+    // takes over under the dialog; the typed question stays in the box.
+    for (const opener of [el("landing-tour"), el("landing-preview-tour")]) {
+      if (!opener) continue;
+      opener.addEventListener("click", () => {
+        cancelPendingHandoff();
+        openHelpTour(opener);
       });
     }
 
@@ -11277,6 +11591,9 @@
     initReadinessBannerToggle();
     initWorkflowKeyboard();
     initAccountControls();
+    // W48 (ADR-0145): the one-time hints and the optional tour.
+    initHelpHints();
+    initHelpTour();
     // PR8: wire the session-trail clear button and render the initial (empty) state.
     const trailClearBtn = el("session-trail-clear");
     if (trailClearBtn) {

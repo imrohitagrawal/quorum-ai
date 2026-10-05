@@ -8,6 +8,7 @@ import {
 } from "../../fixtures/golden-run";
 import { freeze, waitForComposerReady } from "../../fixtures/stabilize";
 import { LIMIT_RESPONSES } from "../../fixtures/limit-responses";
+import { markHelpSeen } from "../../fixtures/help";
 
 /**
  * AC-035 accessibility gate — a REAL axe-core drive over every SPA view in
@@ -160,6 +161,8 @@ async function boot(page: Page) {
   await page.addInitScript(() => {
     try { window.localStorage.setItem("quorum.workspaceSeen", "1"); } catch (_) {}
   });
+  // W48: hints are scanned by help-and-tour.spec.ts; these views stay as they were.
+  await markHelpSeen(page);
   await page.goto("/ui", { waitUntil: "domcontentloaded" });
   await expect(page.locator('[data-view="composer"]')).toBeVisible();
   // Wait until the four model slots are populated before interacting. The

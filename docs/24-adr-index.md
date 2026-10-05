@@ -147,6 +147,7 @@ ways, so the record shows what was believed on a date and what replaced it.
 | [ADR-0142](adr/0142-the-history-panel-asks-the-server-each-time-it-opens.md) | The History panel asks the server for its list each time it opens | Architecture | Accepted — 2026-10-03, board row W33 (slice D) |
 | [ADR-0143](adr/0143-a-follow-up-sends-the-previous-question-and-final-answer-to-every-answering-model.md) | A follow-up sends the previous question and final answer to every answering model | Architecture | Accepted — 2026-10-04, board row W37 |
 | [ADR-0144](adr/0144-anonymous-spend-is-counted-per-network.md) | Anonymous spend is counted per network | Architecture | Accepted — 2026-10-04, board row W47 |
+| [ADR-0145](adr/0145-new-users-get-one-time-hints-and-an-optional-tour-with-shared-text.md) | New users get one-time hints and an optional tour, with shared text | Architecture | Accepted — 2026-10-05, board row W48 |
 
 **This index was itself stale** until 2026-07-30: ADR-0002 had existed since
 2026-07-19 and was never listed here. A hand-maintained index is a derived fact

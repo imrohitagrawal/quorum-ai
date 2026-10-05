@@ -107,6 +107,16 @@
         </div>
       </header>
 
+      <!-- W48 (ADR-0145 decision 2): the History hint. A note in the page flow
+           just below the top bar, next to the signed-in History control and
+           never over it. app.js shows it on the composer only, only when
+           #account-history is on the page, until "Got it". The text comes from
+           helpTextTable() in app.js, shared with the tour. -->
+      <div id="help-hint-history" class="help-hint help-hint-history" role="note" aria-label="Tip: History" hidden>
+        <p id="help-hint-history-text" class="help-hint-text"></p>
+        <button id="help-hint-history-dismiss" class="button button-secondary help-hint-dismiss" type="button">Got it</button>
+      </div>
+
       <!-- PR1/#6: the top bar is hidden on landing / result / live-run /
            transcript (see app.css), which left those views with NO way to
            reach dark mode. This floating control is the toggle for exactly
@@ -428,6 +438,13 @@
               <span id="cost-gate-follow-up" class="cost-gate-question-meta" hidden>Following up on: &ldquo;<span id="cost-gate-follow-up-question"></span>&rdquo;</span>
             </div>
 
+            <!-- W48 (ADR-0145 decision 2): the estimate hint, above the card it
+                 explains and outside it. Shown until "Got it". -->
+            <div id="help-hint-estimate" class="help-hint" role="note" aria-label="Tip: the cost estimate" hidden>
+              <p id="help-hint-estimate-text" class="help-hint-text"></p>
+              <button id="help-hint-estimate-dismiss" class="button button-secondary help-hint-dismiss" type="button">Got it</button>
+            </div>
+
             <div id="cost-review-card" class="cost-review-card" data-band="require_confirmation">
               <div class="cost-review-card-head">
                 <span id="cost-review-band-label" class="cost-review-band-label">Cost review — your confirmation required</span>
@@ -657,6 +674,15 @@
 
               <div id="result-trust" class="result-trust" role="group" aria-label="Trust signals"></div>
 
+              <!-- W48 (ADR-0145 decision 2): the trust-score hint, above the
+                   trust score and never inside it (its D-2 rendering contract
+                   stays whole). Shown on a panel result when the trust score
+                   is shown, until "Got it". -->
+              <div id="help-hint-trust" class="help-hint" role="note" aria-label="Tip: what was checked" hidden>
+                <p id="help-hint-trust-text" class="help-hint-text"></p>
+                <button id="help-hint-trust-dismiss" class="button button-secondary help-hint-dismiss" type="button">Got it</button>
+              </div>
+
               <!-- FR-016 (S3): what was and was NOT checked. A SIBLING of
                    #result-trust, not a fourth trust card (D-12) — a fourth child
                    would break the 3-up grid and the ARIA group of #result-trust.
@@ -850,6 +876,12 @@
                 <span class="landing-brand-name">Quorum</span>
               </div>
               <div class="landing-nav">
+                <!-- W48 (ADR-0145 decision 4): opens the optional tour, never
+                     anything else. First in the nav row so that the keyboard
+                     order matches what the eye sees at every width: below
+                     500px it sits on the brand line, above "How it works", so
+                     the header keeps its height (the phone density bound). -->
+                <button id="landing-tour" class="landing-howitworks landing-tour" type="button">Take the tour</button>
                 <button id="landing-howitworks" class="landing-howitworks" type="button">How it works</button>
                 <button id="landing-open-workspace" class="button button-secondary landing-open" type="button">Open the workspace</button>
               </div>
@@ -930,7 +962,9 @@
               <span class="landing-preview-badge">Preview</span>
               <div class="landing-preview-body">
                 <p class="landing-preview-text">4 of 4 models agree &mdash; with one real disagreement worth your attention: the safe overlap window (9 vs 18 months). You get a verdict, a phased plan, 12 sources, and the round-by-round debate on record.</p>
-                <span class="landing-preview-caption">Illustrative &mdash; a product example, not a run you started.</span>
+                <!-- W48 (ADR-0145 decision 4): the preview's own "Take the tour",
+                     inline at the end of its last line so the landing is no taller. -->
+                <span class="landing-preview-caption">Illustrative &mdash; a product example, not a run you started. <button id="landing-preview-tour" class="landing-preview-tour" type="button">Take the tour</button></span>
               </div>
             </div>
 
@@ -1070,6 +1104,24 @@
         <div id="model-grid" class="model-grid" aria-live="polite" aria-atomic="true"></div>
       </section>
     </main>
+    <!-- W48 (ADR-0145 decision 5): the optional tour. A modal dialog OUTSIDE
+         the landing view (the landing's word checks read that view only),
+         opened only by a click on a "Take the tour" button. app.js fills the
+         heading and text from helpTextTable(), moves focus to the heading,
+         keeps Tab inside, closes on Escape (handled here, never reaching the
+         page-wide handler) and returns focus to the button that opened it. -->
+    <div id="help-tour-layer" class="help-tour-layer" hidden>
+      <div id="help-tour" class="help-tour" role="dialog" aria-modal="true" aria-labelledby="help-tour-heading" aria-describedby="help-tour-text">
+        <h2 id="help-tour-heading" class="help-tour-heading" tabindex="-1"></h2>
+        <p id="help-tour-text" class="help-tour-text"></p>
+        <div class="help-tour-actions">
+          <button id="help-tour-back" class="button button-secondary help-tour-button" type="button">Back</button>
+          <button id="help-tour-next" class="button button-primary help-tour-button" type="button">Next</button>
+          <button id="help-tour-done" class="button button-primary help-tour-button" type="button" hidden>Done</button>
+          <button id="help-tour-skip" class="help-tour-skip" type="button">Skip the tour</button>
+        </div>
+      </div>
+    </div>
     <script id="model-catalog-data" type="application/json">{{ model_catalog_json }}</script>
     <script>
       window.DEFAULT_MODEL_IDS = {{ default_model_ids_json }};

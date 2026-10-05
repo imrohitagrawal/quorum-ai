@@ -1,4 +1,5 @@
 import { test, expect } from "../../fixtures/test-data";
+import { markHelpSeen } from "../../fixtures/help";
 
 /**
  * Comprehensive accessibility tests for Quorum-AI
@@ -11,6 +12,7 @@ test.describe("Accessibility", () => {
     await page.addInitScript(() => {
       try { window.localStorage.setItem("quorum.workspaceSeen", "1"); } catch (_) {}
     });
+    await markHelpSeen(page); // W48: the one-time hints are not what these tests check
     await page.goto("/ui");
     await page.waitForLoadState("networkidle");
   });

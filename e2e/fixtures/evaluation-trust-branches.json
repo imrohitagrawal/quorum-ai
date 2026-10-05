@@ -1,0 +1,159 @@
+{
+  "_comment": "Built by tests/unit/test_trust_branch_fixtures.py with the server's own functions; do not edit by hand. EVAL_CAUTION_SLOT_MISSING renders the 'caution' trust box, EVAL_REFUSED the 'refused' one (W48 review).",
+  "EVAL_CAUTION_SLOT_MISSING": {
+    "schema_version": "s3-eval-v5",
+    "signals": {
+      "citation_coverage_ratio": 1.0,
+      "citation_marker_grounding": 1.0,
+      "unverifiable_marker_count": 0,
+      "unverifiable_marker_ratio": 0.0,
+      "agreement_ratio": 1.0,
+      "live_ratio": 1.0,
+      "completeness": 0.75,
+      "false_consensus_preserved": false,
+      "polar_disagreement_detected": false,
+      "disagreement_suppressed": false,
+      "decision_support_framing_present": true,
+      "high_stakes_warning_required": false,
+      "high_stakes_warning_present": false,
+      "uncertainty_surfaced": true,
+      "refusal_detected": false,
+      "run_wholly_refused": false
+    },
+    "faithfulness_label": "partial",
+    "hallucination_risk": "low",
+    "label_confidence": "reportable",
+    "trust": {
+      "support_verified": false,
+      "band": "unverified",
+      "score": null,
+      "diagnostics": {
+        "layer_a_composite_unverified": 96.25,
+        "contributions": [
+          {
+            "signal": "citation_marker_grounding",
+            "weight": 0.3,
+            "value": 1.0,
+            "contribution": 30.0
+          },
+          {
+            "signal": "live_ratio",
+            "weight": 0.2,
+            "value": 1.0,
+            "contribution": 20.0
+          },
+          {
+            "signal": "citation_coverage_ratio",
+            "weight": 0.15,
+            "value": 1.0,
+            "contribution": 15.0
+          },
+          {
+            "signal": "completeness",
+            "weight": 0.15,
+            "value": 0.75,
+            "contribution": 11.25
+          },
+          {
+            "signal": "disagreement_integrity",
+            "weight": 0.1,
+            "value": 1.0,
+            "contribution": 10.0
+          },
+          {
+            "signal": "uncertainty_surfaced",
+            "weight": 0.05,
+            "value": 1.0,
+            "contribution": 5.0
+          },
+          {
+            "signal": "decision_support_framing_present",
+            "weight": 0.05,
+            "value": 1.0,
+            "contribution": 5.0
+          }
+        ],
+        "panel_size_cap": false
+      }
+    },
+    "judge_status": null
+  },
+  "EVAL_REFUSED": {
+    "schema_version": "s3-eval-v5",
+    "signals": {
+      "citation_coverage_ratio": 1.0,
+      "citation_marker_grounding": 1.0,
+      "unverifiable_marker_count": 0,
+      "unverifiable_marker_ratio": 0.0,
+      "agreement_ratio": 1.0,
+      "live_ratio": 1.0,
+      "completeness": 1.0,
+      "false_consensus_preserved": false,
+      "polar_disagreement_detected": false,
+      "disagreement_suppressed": false,
+      "decision_support_framing_present": true,
+      "high_stakes_warning_required": false,
+      "high_stakes_warning_present": false,
+      "uncertainty_surfaced": true,
+      "refusal_detected": true,
+      "run_wholly_refused": true
+    },
+    "faithfulness_label": "partial",
+    "hallucination_risk": "low",
+    "label_confidence": "reportable",
+    "trust": {
+      "support_verified": false,
+      "band": "unverified",
+      "score": null,
+      "diagnostics": {
+        "layer_a_composite_unverified": 100.0,
+        "contributions": [
+          {
+            "signal": "citation_marker_grounding",
+            "weight": 0.3,
+            "value": 1.0,
+            "contribution": 30.0
+          },
+          {
+            "signal": "live_ratio",
+            "weight": 0.2,
+            "value": 1.0,
+            "contribution": 20.0
+          },
+          {
+            "signal": "citation_coverage_ratio",
+            "weight": 0.15,
+            "value": 1.0,
+            "contribution": 15.0
+          },
+          {
+            "signal": "completeness",
+            "weight": 0.15,
+            "value": 1.0,
+            "contribution": 15.0
+          },
+          {
+            "signal": "disagreement_integrity",
+            "weight": 0.1,
+            "value": 1.0,
+            "contribution": 10.0
+          },
+          {
+            "signal": "uncertainty_surfaced",
+            "weight": 0.05,
+            "value": 1.0,
+            "contribution": 5.0
+          },
+          {
+            "signal": "decision_support_framing_present",
+            "weight": 0.05,
+            "value": 1.0,
+            "contribution": 5.0
+          }
+        ],
+        "panel_size_cap": false
+      }
+    },
+    "judge_status": null
+  }
+}
