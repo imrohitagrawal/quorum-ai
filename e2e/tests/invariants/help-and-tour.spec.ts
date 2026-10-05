@@ -512,14 +512,19 @@ test.describe("W48 help for new users: one-time hints (ADR-0145 decisions 2 and 
   test("existing specs keep their pages: the shared boot marks every hint as seen", async ({ page }) => {
     // RED-IF: `boot()` in fixtures/golden-run.ts stops calling markHelpSeen, so
     // after the build the estimate hint would appear in every spec booted
-    // there (failure mode 8). Green on today's code by design (there are no
-    // hints yet); its partner is journey 1 above, which shows the hint when
-    // the keys are absent.
+    // there (failure mode 8). Journey 1 above shows the hint when the keys
+    // are absent.
     await boot(page);
     for (const key of Object.values(HELP_HINT_KEYS)) {
       expect(await page.evaluate((k) => localStorage.getItem(k), key), key).toBe("1");
     }
     await openCostGate(page);
+    // Positive partners (rule 7), in this test so the guard sees them: the
+    // cost gate really opened and the hint is in the page, so "hidden" below
+    // means "marked seen", not "never reached the gate" or "never rendered".
+    // RED-IF: the cost gate does not open, or the hint markup is removed.
+    await expect(page.locator("#cost-review-card")).toBeVisible();
+    await expect(hint(page, "estimate")).toBeAttached();
     await expect(hint(page, "estimate")).toBeHidden();
   });
 });
