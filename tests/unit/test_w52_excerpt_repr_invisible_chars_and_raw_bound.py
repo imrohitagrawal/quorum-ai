@@ -357,3 +357,14 @@ def test_whitespace_runs_inside_the_raw_window_still_do_not_spend_the_limit() ->
     multiple of it, so the 50-space run costs 49 characters of text."""
     raw = "a" * 2000 + " " * 50 + "b" * 2000 + "c" * 1_000_000
     assert _clean_search_excerpt(raw) == "a" * 2000 + " " + "b" * 1999
+
+
+def test_visible_text_behind_27000_removable_characters_is_still_kept_whole() -> None:
+    """The raw window pinned from below: 27,000 zero-width spaces then 5,000
+    visible characters fit the 32,000-character window, so the full 4,000 of
+    visible text survives.
+
+    RED IF: the raw window shrinks below 32,000 characters (eight times the
+    limit); at seven times the limit only 1,000 visible characters remain."""
+    raw = "​" * 27_000 + "a" * 5_000
+    assert _clean_search_excerpt(raw) == "a" * 4000

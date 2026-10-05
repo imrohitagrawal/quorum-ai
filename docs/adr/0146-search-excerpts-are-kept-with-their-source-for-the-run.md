@@ -32,13 +32,17 @@ page that may not be fetched needs that text.
    shown. Before any of this, the raw text is cut to eight times the limit (32,000
    characters), so cleaning work does not grow with a huge input; visible text behind
    more than about 28,000 removable characters is lost, which no measured excerpt
-   comes near.
+   comes near. Only these two categories are removed. This does not make the fence safe:
+   `neutralize_delimiters` matches the delimiter exactly, so a marker altered any other way
+   (a combining mark such as U+034F, a variation selector, a look-alike letter, a space)
+   still passes it, and removing more characters cannot close that. Making the fence
+   match an altered marker is board row W53, due before W29 puts an excerpt in a prompt.
 3. It is never serialised to a client: excluded from the run's response models and the
    OpenAPI schema (the field is `exclude=True`, and `repr=False` so a log line that prints
    a source does not carry it). It lives only in the run held in memory, for as long as
    the run does.
-4. It is never logged and never stored: telemetry keeps counting its length only; no
-   store gains a field.
+4. It is never logged and never stored: telemetry keeps counting only the raw OpenRouter
+   text's length, as before, and nothing of Tavily's; no store gains a field.
 5. Nothing else changes: no request, prompt, price or judge evidence. W29 decides how the
    judge reads it.
 
@@ -57,8 +61,9 @@ page that may not be fetched needs that text.
 - About 80,000 characters more per run if each of 4 answers carries the 5 annotations
   measured and every excerpt reaches the 4,000-character cut; the measured excerpts
   were about 2,000 characters, so about 40,000. The number of annotations per answer is
-  not capped in code, so this is an estimate at the measured count, not a bound, and
-  non-ASCII text takes 2 to 4 bytes per character in memory.
+  not capped in code, so this is an estimate at the measured count, not a bound. A Python
+  string takes 1, 2 or 4 bytes per character, set by its widest character, so the worst
+  case at that count is about 4 × 80,000 = 320 KB.
 - Calls taken by the session (the owner may overturn any of them): (i) the excerpt rides
   on `SourceReference`; (ii) the 4,000-character limit shared with fetched pages; (iii)
   never served to the page; (iv) Tavily's `content` is kept though its size is unmeasured.
