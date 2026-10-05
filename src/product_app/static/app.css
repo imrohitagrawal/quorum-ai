@@ -6486,3 +6486,171 @@ html[data-theme="dark"] .landing-preview { background: var(--accent-soft); }
     overflow-y: visible;
   }
 }
+
+/* ----- W48 (ADR-0145) — help for new users: hints and the tour ---------------
+
+   A hint is an inline note in the page flow, next to what it explains and
+   never over it (decision 2), so it is position: static and takes the full
+   width of its column. ``.help-hint`` sets display: flex, which would beat the
+   UA ``[hidden]`` rule, so hidden is restored explicitly. */
+.help-hint {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--info-border);
+  border-left: 4px solid var(--info);
+  border-radius: var(--radius-md);
+  background: var(--info-soft);
+  color: var(--body);
+}
+.help-hint[hidden] { display: none; }
+.help-hint-text {
+  flex: 1 1 16rem;
+  margin: 0;
+  font-size: 0.875rem;
+  line-height: 1.5;
+  color: var(--body);
+}
+.help-hint .help-hint-dismiss {
+  min-height: 44px;
+  padding: 0 var(--space-4);
+  font-size: 0.875rem;
+}
+/* The History hint sits under the top bar, on the side the History control
+   is on, at a reading width. */
+.help-hint-history {
+  align-self: flex-end;
+  max-width: 34rem;
+}
+
+/* "Take the tour" in the nav row reads like "How it works" beside it (it
+   shares that button's class). */
+.landing-tour { white-space: nowrap; }
+
+/* The preview's "Take the tour": inline at the end of the caption's last
+   line, in the caption's own size, so the preview is no taller (decision 4).
+   It keeps the page's 44px tap target (the critical CSS in workspace.html
+   gives every button min-height: 44px), and negative block margins take the
+   extra height back out of the line, so the line is as tall as before: the
+   margin box is 44px - 2 x 13px = 18px, under the caption's ~18.7px line. */
+.landing-preview-tour {
+  display: inline-block;
+  vertical-align: baseline;
+  margin: -13px 0 -13px 0.15em;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-style: normal;
+  font-weight: 600;
+  color: var(--ink);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+/* The tour (decision 5): a modal dialog over a dimmed page. No animation and
+   no transition, on any motion setting (failure mode 16). */
+.help-tour-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 3000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-4);
+  background: rgba(20, 23, 28, 0.45);
+}
+.help-tour-layer[hidden] { display: none; }
+.help-tour {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  width: min(30rem, 100%);
+  max-height: calc(100vh - 2 * var(--space-4));
+  overflow-y: auto;
+  padding: var(--space-6);
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  color: var(--body);
+  box-shadow: var(--shadow-lg);
+  /* !important, so the reduced-motion rule's 0.01ms (also !important, on *)
+     does not apply here either: the dialog has no transition at all. */
+  animation: none !important;
+  transition: none !important;
+}
+.help-tour-heading {
+  margin: 0;
+  font-size: 1.125rem;
+  line-height: 1.35;
+  color: var(--ink);
+}
+.help-tour-text {
+  margin: 0;
+  font-size: 1rem;
+  line-height: 1.55;
+  color: var(--body);
+}
+.help-tour-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+}
+.help-tour-skip {
+  min-height: 44px;
+  margin-left: auto;
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+  font-weight: 500;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.help-tour-skip:hover { color: var(--ink); }
+
+@media (max-width: 600px) {
+  /* Decision 4, the phone density bound: `landing-cta-reachable.spec.ts`
+     requires the landing at 390x664 to stay under 1593.6px, and it was 1567
+     before W48 (measured with that spec's own setup). The header already
+     wraps there: the brand on one line, "How it works" and "Open the
+     workspace" on the next, and a third button does not fit beside them. So
+     below 600px the nav row's box is dropped (display: contents) and
+     "Take the tour" moves up to the brand line, which has room. A zero-height
+     break item keeps "How it works" and "Open the workspace" together on the
+     line below, and the row gap is taken out so the two lines (44px each)
+     stay inside the 90px the header had. The side padding drops from 32px
+     to 16px so that lower line still fits on one line at 375px and 360px
+     (it needs 293px; at 32px padding 360px leaves 276px and "Open the
+     workspace" fell to a third line, measured +40px). In the DOM the button
+     is still in the nav row, beside "How it works". */
+  .landing-header {
+    justify-content: flex-start;
+    column-gap: var(--space-4);
+    row-gap: 0;
+    padding: 0 var(--space-4);
+  }
+  .landing-header::after {
+    content: "";
+    flex-basis: 100%;
+    height: 0;
+    order: 2;
+  }
+  .landing-nav { display: contents; }
+  .landing-header .landing-brand { order: 0; }
+  .landing-header .landing-tour { order: 1; }
+  .landing-header .landing-howitworks:not(.landing-tour) { order: 3; margin-top: 2px; }
+  .landing-header .landing-open { order: 4; margin-top: 2px; }
+
+  .help-tour { padding: var(--space-5); }
+}
+/* The dark theme dims the page behind the tour further, so the dialog reads
+   as the one thing on screen. */
+html[data-theme="dark"] .help-tour-layer { background: rgba(0, 0, 0, 0.6); }

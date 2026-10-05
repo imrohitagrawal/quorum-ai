@@ -14,7 +14,7 @@
 | FR-010 | Functional | Timeout and partial-result recovery | `docs/114-success-metrics.md`; `docs/115-release-scope.md` | Engineering lead | Must | AC-021, AC-022 | TEST-FR-010 | Not created | Not published | Draft |
 | FR-011 | Functional | Server-side provider key handling | `docs/01-product-brief.md`; `docs/115-release-scope.md` | Engineering lead | Must | AC-023, AC-024 | TEST-FR-011 | Not created | Not published | Draft |
 | FR-012 | Functional | Optional bring-your-own OpenRouter key | `docs/01-product-brief.md`; `docs/115-release-scope.md` | Product owner | Should | AC-025, AC-026 | TEST-FR-012 | Not created | Not published | Draft |
-| FR-013 | Functional | Query result presentation | `docs/01-product-brief.md`; `docs/114-success-metrics.md`; `docs/115-release-scope.md` | Product owner | Must | AC-027, AC-028, AC-055, AC-057 | TEST-FR-013 | Not created | Not published | Draft |
+| FR-013 | Functional | Query result presentation | `docs/01-product-brief.md`; `docs/114-success-metrics.md`; `docs/115-release-scope.md` | Product owner | Must | AC-027, AC-028, AC-055, AC-057, AC-059 | TEST-FR-013 | Not created | Not published | Draft |
 | NFR-001 | Non-functional | End-to-end query latency | `docs/114-success-metrics.md` | Engineering lead | Must | AC-021, AC-029 | TEST-NFR-001 | Not created | Not published | Draft |
 | NFR-002 | Non-functional | Cost per completed query | `docs/114-success-metrics.md` | Product owner | Must | AC-009, AC-010, AC-030 | TEST-NFR-002 | Not created | Not published | Draft |
 | NFR-003 | Non-functional | Citation coverage | `docs/114-success-metrics.md` | Product owner | Must | AC-011, AC-018, AC-031 | TEST-NFR-003 | Not created | Not published | Draft |
@@ -23,7 +23,7 @@
 | NFR-006 | Non-functional | Provider secret protection | `docs/115-release-scope.md` | Engineering lead | Must | AC-015, AC-023, AC-024, AC-026 | TEST-NFR-006 | Not created | Not published | Draft |
 | NFR-007 | Non-functional | Sensitive data minimization | `docs/13-open-questions.md`; `docs/115-release-scope.md` | Product owner | Must | AC-006, AC-033 | TEST-NFR-007 | Not created | Not published | Draft |
 | NFR-008 | Non-functional | High-stakes decision-support boundary | `docs/13-open-questions.md` | Product owner | Must | AC-005, AC-034 | TEST-NFR-008 | Not created | Not published | Draft |
-| NFR-009 | Non-functional | Accessibility baseline | `docs/115-release-scope.md` | Engineering lead | Must | AC-035 | TEST-NFR-009 | Not created | Not published | Draft |
+| NFR-009 | Non-functional | Accessibility baseline | `docs/115-release-scope.md` | Engineering lead | Must | AC-035, AC-059 | TEST-NFR-009 | Not created | Not published | Draft |
 | NFR-010 | Non-functional | Observability for MVP workflow | `docs/114-success-metrics.md`; `docs/115-release-scope.md` | Engineering lead | Must | AC-027, AC-036 | TEST-NFR-010 | Not created | Not published | Draft |
 | FR-014 | Functional | Durable terminal run-history persistence (R2) | `docs/09-roadmap.md`; `docs/43-privacy-data-governance.md`; `docs/48-data-retention.md` | Backend engineer | Must | AC-038, AC-039, AC-040 | TEST-FR-014 | Not created | Not published | Draft |
 | FR-015 | Functional | Per-run evaluation engine — deterministic Layer-A TrustScore + key-gated OFF-by-default LLM judge, wired into the request path (R2, P1) | `docs/09-roadmap.md`; `docs/42-ai-safety-grounding.md`; `docs/44-model-risk-register.md`; `docs/46-prompt-registry.md` | Backend engineer | Must | AC-041, AC-042, AC-043, AC-049 | TEST-FR-015 | Not created | Not published | Draft |
