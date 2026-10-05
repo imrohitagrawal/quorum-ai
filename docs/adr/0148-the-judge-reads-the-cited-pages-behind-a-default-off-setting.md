@@ -37,7 +37,10 @@ untrusted-text fence catch an altered marker. The owner's decisions:
    verdict, inside the same time budget as the pages, and parsed with
    `urllib.robotparser.RobotFileParser.parse` (never `.read`, which opens the URL itself and
    follows redirects). Following RFC 9309: a 4xx answer means fetching is allowed; a
-   timeout, a 5xx, an unreadable or oversized file means it is not (fail closed).
+   timeout, a 5xx, an unreadable or oversized file means it is not (fail closed). A 3xx
+   answer counts as unreadable: RFC 9309 lets a crawler follow up to five redirects, but
+   following one here would need a second pinned fetch; failing closed costs only the
+   page, and the excerpt is used instead.
 4. **What the judge reads per source**, in this order:
    - the page text, when robots.txt allows it and the page was fetched and usable;
    - the search excerpt (W52), when robots.txt disallows the page and an excerpt exists;
@@ -50,7 +53,9 @@ untrusted-text fence catch an altered marker. The owner's decisions:
    characters) and sit inside the judge's untrusted block, which W53's fence neutralises.
 6. **A new prompt.** Page reading uses a new prompt id, `PR-EVAL-JUDGE-v2`, with its own
    system prompt. `PR-EVAL-JUDGE-v1`, its pinned hash and its paid golden capture stay
-   byte-identical and are used whenever the setting is off.
+   byte-identical and are used whenever the setting is off. A stored evaluation records
+   the id of the prompt that actually judged it (today `to_eval_json` writes v1 as a fixed
+   value).
 7. **The judge's input reserve.** When the setting is on, the reserve adds the pages and
    excerpts: at most 8 items (the fetcher's page cap; excerpts replace pages, never add to
    them) of at most 4,000 characters each, both clamped to these LITERAL numbers so a
