@@ -13,7 +13,7 @@ The MVP is public but account-gated for execution. Users must be warned not to s
 | Model answers | AI-generated content | Result comparison and synthesis. | Store for result retrieval; no factual guarantee claims. | FR-007, FR-013 |
 | Debate outputs | AI-generated content | Explain disagreement and critique. | Store with run; preserve failures and uncertainty. | FR-008, FR-013 |
 | Synthesis | AI-generated content | Final decision-support answer. | Separate consensus/disagreement/uncertainty/recommendation. | FR-009 |
-| Source links/search metadata | Third-party retrieved content | Citation and grounding. | Preserve attribution; treat as untrusted input. | FR-006, NFR-003 |
+| Source links/search metadata, and search excerpts (W52, in memory only) | Third-party retrieved content | Citation and grounding. | Preserve attribution; treat as untrusted input. | FR-006, NFR-003 |
 | App provider keys | Secret | Default OpenRouter/Tavily/fallback access. | Server-side only; never in browser/logs/prompts/errors. | FR-011, NFR-006 |
 | BYO OpenRouter key | User secret | Expanded user-specific usage. | Account-scoped, protected, removable, never returned. | FR-012, NFR-006 |
 | Cost/latency/failure metadata | Operational metadata | Guardrails, observability, support. | Non-secret structured events; no raw prompts/secrets. | NFR-002, NFR-010 |

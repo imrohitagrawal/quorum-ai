@@ -21,11 +21,18 @@ page that may not be fetched needs that text.
    and Tavily's `content`. Anything that is not a non-empty string is no excerpt.
 2. The excerpt is cleaned (control characters removed, whitespace collapsed) and cut to
    the fetcher's page-text limit, `quorum_source_fetch_max_text_chars` (4,000 characters),
-   so an excerpt and a fetched page are bounded alike. In order: Unicode control
+   the setting meant for the fetcher's page text (W29's wiring passes it to the fetcher;
+   today only this cut reads it). In order: Unicode control
    characters (category Cc) other than whitespace are removed, whitespace runs collapse
    to one space and the ends are trimmed, then the text is cut (so a cut can end on a
-   space). Invisible formatting characters (category Cf, such as zero-width or
-   direction marks) are kept; W29's judge fence must allow for them.
+   space). Invisible formatting characters (category Cf: zero-width, direction controls,
+   the tag block) are removed too, after review round 1 showed a forged fence marker
+   with a zero-width character inside it passing the existing fence. Removing the
+   zero-width joiner splits joined emoji, which is harmless because the excerpt is never
+   shown. Before any of this, the raw text is cut to eight times the limit (32,000
+   characters), so cleaning work does not grow with a huge input; visible text behind
+   more than about 28,000 removable characters is lost, which no measured excerpt
+   comes near.
 3. It is never serialised to a client: excluded from the run's response models and the
    OpenAPI schema (the field is `exclude=True`, and `repr=False` so a log line that prints
    a source does not carry it). It lives only in the run held in memory, for as long as
@@ -47,8 +54,11 @@ page that may not be fetched needs that text.
 
 - New data kept: the excerpt text, per run, in memory only. `docs/48` gains a row,
   pending the owner's approval.
-- About 80 KB more per run at most (4 answers × 5 annotations measured × 4,000
-  characters), held as long as the run.
+- About 80,000 characters more per run if each of 4 answers carries the 5 annotations
+  measured and every excerpt reaches the 4,000-character cut; the measured excerpts
+  were about 2,000 characters, so about 40,000. The number of annotations per answer is
+  not capped in code, so this is an estimate at the measured count, not a bound, and
+  non-ASCII text takes 2 to 4 bytes per character in memory.
 - Calls taken by the session (the owner may overturn any of them): (i) the excerpt rides
   on `SourceReference`; (ii) the 4,000-character limit shared with fetched pages; (iii)
   never served to the page; (iv) Tavily's `content` is kept though its size is unmeasured.

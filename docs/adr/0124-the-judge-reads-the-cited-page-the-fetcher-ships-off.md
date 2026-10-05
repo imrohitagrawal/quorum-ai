@@ -15,6 +15,8 @@ to the judge, the input reserve, the receipt row and the posture-keyed copy
 not a measurement, is that fetcher plus wiring in one pull request would be
 four concerns and would not converge in two review rounds.
 
+**Update 2026-10-05:** ADR-0146 keeps the search excerpt (OpenRouter annotation text and Tavily `content`) with its source, and CHG-026 (d) with CHG-028 make it the judge's input for a page robots.txt disallows; this ADR's "no excerpt at all" and "never a substitute" describe the tree before that.
+
 ## Context
 
 The judge is asked whether an answer asserts only what its evidence
