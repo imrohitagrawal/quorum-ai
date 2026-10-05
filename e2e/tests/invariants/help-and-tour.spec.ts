@@ -15,6 +15,8 @@ import {
 } from "../../fixtures/golden-run";
 import { freeze, waitForComposerReady } from "../../fixtures/stabilize";
 import { LIMIT_RESPONSES } from "../../fixtures/limit-responses";
+// Built with the server's own functions by tests/unit/test_trust_branch_fixtures.py.
+import TRUST_BRANCHES from "../../fixtures/evaluation-trust-branches.json";
 import {
   HELP_HINT_IDS,
   HELP_HINT_KEYS,
@@ -1204,6 +1206,11 @@ test.describe("W48 review round 2 (ADR-0145): hint truth on every gate and every
     ["EVAL_CLEAN", EVAL_CLEAN],
     ["EVAL_LAUNDERED", EVAL_LAUNDERED],
     ["EVAL_VERIFIED_HIGH", EVAL_VERIFIED_HIGH],
+    // The "caution" box (one of four model slots without a usable answer) and
+    // the "refused" box (the panel declined): no variant in
+    // evaluation-variants.json renders either.
+    ["EVAL_CAUTION_SLOT_MISSING", TRUST_BRANCHES.EVAL_CAUTION_SLOT_MISSING],
+    ["EVAL_REFUSED", TRUST_BRANCHES.EVAL_REFUSED],
   ] as const) {
     test(`C: every claim the trust hint makes about the box is visible on the page (${label})`, async ({ page }) => {
       // RED-IF: the trust hint names "the trust score" (no visible text on
@@ -1215,6 +1222,15 @@ test.describe("W48 review round 2 (ADR-0145): hint truth on every gate and every
       // correct" is not a claim about what the box shows; the unit test pins it.
       await panelResultWith(page, ev);
       await expect(hint(page, "trust")).toBeVisible();
+      // Partner: the box really is the branch this case names.
+      const BOX_STATE: Record<string, string> = {
+        EVAL_CLEAN: "passed",
+        EVAL_LAUNDERED: "indeterminate",
+        EVAL_VERIFIED_HIGH: "verified",
+        EVAL_CAUTION_SLOT_MISSING: "caution",
+        EVAL_REFUSED: "refused",
+      };
+      await expect(page.locator("#result-trust-score")).toHaveAttribute("data-state", BOX_STATE[label]);
       const facts = await page.evaluate((hintId) => {
         const box = document.getElementById("result-trust-score") as HTMLElement;
         const cards = document.getElementById("result-trust") as HTMLElement;
@@ -1228,13 +1244,17 @@ test.describe("W48 review round 2 (ADR-0145): hint truth on every gate and every
           boxBelowCards: cards.getBoundingClientRect().height > 0 && box.getBoundingClientRect().top >= cards.getBoundingClientRect().bottom,
         };
       }, HELP_HINT_IDS.trust);
+      const notApplied = () => /could not be applied/i.test(facts.hint) && /could not be applied/i.test(facts.box);
       // Each row: a claim the hint may make, and what must be on the page for it to be true.
       const CLAIMS: { says: RegExp; holds: () => boolean; what: string }[] = [
         { says: /trust score/i, holds: () => /trust score/i.test(facts.pageText), what: 'the page shows the words "trust score"' },
         { says: /\bmet\b/i, holds: () => /\bmet\b/i.test(facts.box), what: "the box lists checks that were met" },
         { says: /fell short|falls short|fall short/i, holds: () => /fell short/i.test(facts.box), what: "the box lists checks that fell short" },
-        { says: /citation/i, holds: () => /citation/i.test(facts.box), what: "the box mentions citations" },
-        { says: /listed source|source list/i, holds: () => /\bsource/i.test(facts.box), what: "the box mentions sources" },
+        // "... including its citations and sources, or why they could not be
+        // applied": a box that says the checks could not be applied meets the
+        // alternative the hint offers, when the hint offers it.
+        { says: /citation/i, holds: () => /citation/i.test(facts.box) || notApplied(), what: "the box mentions citations (or says the checks could not be applied)" },
+        { says: /\bsources?\b|source list/i, holds: () => /\bsource/i.test(facts.box) || notApplied(), what: "the box mentions sources (or says the checks could not be applied)" },
         { says: /\bcheck(ed|s)?\b/i, holds: () => /\bcheck/i.test(facts.box), what: "the box mentions checks" },
         { says: /summary cards?/i, holds: () => facts.boxBelowCards, what: "the box sits under the summary cards" },
       ];
@@ -1270,4 +1290,51 @@ test.describe("W48 review round 2 (ADR-0145): hint truth on every gate and every
       expect(box.bottom, `#gate-confirm ${JSON.stringify(box)}`).toBeLessThanOrEqual(box.vh);
     });
   }
+});
+
+test.describe("W48 review round 2 follow-up (ADR-0145): where the estimate hint says the range is", () => {
+  test.skip(({ browserName }) => browserName !== "chromium", "the help lane runs on the reference engine only");
+
+  test("B: what the estimate hint says about where the range sits is true at 320, 390, 430 and 1280 px (real backend)", async ({ page }) => {
+    // RED-IF: the hint says the "estimated range" is "beside" (or next to)
+    // the figure while, at some width, the range sits on a line below it
+    // (3218637: "the "estimated range" beside it"). Partners: the gate is
+    // the allow band with the range shown, and the geometry is read at every
+    // width (a claim the hint does not make is not checked).
+    const where: Record<number, { sameRow: boolean; below: boolean; figure: number[]; range: number[] }> = {};
+    let hintText = "";
+    for (const width of [320, 390, 430, 1280]) {
+      await page.setViewportSize({ width, height: 900 });
+      if (width === 320) {
+        await bootWithoutHelpSeen(page);
+        await openCostGate(page);
+        await expect(page.locator("#cost-review-card")).toHaveAttribute("data-band", "allow");
+        await expect(page.locator("#cost-gate-range-wrap")).toBeVisible();
+        hintText = ((await page.locator(`#${HELP_HINT_IDS.estimate}-text`).textContent()) || "").replace(/\s+/g, " ");
+      }
+      where[width] = await page.evaluate(() => {
+        const f = (document.getElementById("cost-gate-total") as HTMLElement).getBoundingClientRect();
+        const r = (document.getElementById("cost-gate-range-wrap") as HTMLElement).getBoundingClientRect();
+        return {
+          sameRow: r.top < f.bottom && r.bottom > f.top && r.left >= f.right - 1,
+          below: r.top >= f.bottom - 1,
+          figure: [Math.round(f.left), Math.round(f.top), Math.round(f.right), Math.round(f.bottom)],
+          range: [Math.round(r.left), Math.round(r.top), Math.round(r.right), Math.round(r.bottom)],
+        };
+      });
+    }
+    expect(hintText.length).toBeGreaterThan(0);
+    expect(Object.keys(where)).toHaveLength(4);
+    const PLACES: { says: RegExp; holds: (w: (typeof where)[number]) => boolean; what: string }[] = [
+      { says: /\b(beside|next to|alongside|to the right of)\b/i, holds: (w) => w.sameRow, what: "the range sits beside the figure" },
+      { says: /\b(below|under(neath)?|beneath)\b/i, holds: (w) => w.below, what: "the range sits below the figure" },
+    ];
+    const wrong: string[] = [];
+    for (const place of PLACES.filter((p) => p.says.test(hintText))) {
+      for (const [width, w] of Object.entries(where)) {
+        if (!place.holds(w)) wrong.push(`${width}px: hint says ${place.says} but not ${place.what} (${JSON.stringify(w)})`);
+      }
+    }
+    expect(wrong, `"${hintText}"`).toEqual([]);
+  });
 });

@@ -295,6 +295,34 @@ def test_the_estimate_text_does_not_name_an_up_to_figure() -> None:
     assert not re.search(r"\bup to\b", text, re.IGNORECASE), text
 
 
+@needs_node
+def test_the_estimate_text_does_not_place_the_range_beside_the_figure() -> None:
+    """RED IF: the estimate hint says the range is "beside" (or next to) the
+    figure. Below about 430 px the "estimated range" sits on the line under
+    the figure, so the sentence is false on a phone; the browser half
+    (help-and-tour.spec.ts "B: what the estimate hint says about where the
+    range sits ...") measures it at 320, 390, 430 and 1280 px.
+    """
+    text = _help_table()["hints"]["estimate"]
+    assert re.search(r"\bestimate", text, re.IGNORECASE), text  # partner
+    assert not re.search(r"\b(beside|next to|alongside|to the right of)\b", text, re.IGNORECASE), (
+        text
+    )
+
+
+def test_the_trust_hints_accessible_name_does_not_say_trust_score() -> None:
+    """RED IF: ``#help-hint-trust``'s accessible name (its ``aria-label``)
+    says "trust score", a name no visible text on the page uses -- a screen
+    reader would announce the one word the hint text itself avoids. Partner:
+    the note has a non-empty label, so the check is not over nothing."""
+    page = _served_landing()
+    note = page.by_id.get("help-hint-trust")
+    assert note is not None, "no #help-hint-trust on the served page"
+    label = note["attrs"].get("aria-label", "")
+    assert label.strip(), "the trust hint has no aria-label"
+    assert not re.search(r"trust score", label, re.IGNORECASE), label
+
+
 # --- the two "Take the tour" controls on the served landing ---------------------
 
 
