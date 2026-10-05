@@ -132,22 +132,26 @@
   // it, and the tour's steps for those three ideas ARE the hints' words, so the
   // two cannot drift apart. Every sentence is the session's wording (ADR-0145
   // consequence v), checked against the code it describes and quoted in AC-059:
-  // the estimate's words are the ones the cost card shows ("estimated", "up
-  // to", "worst case") and never "typical" (its accuracy is unmeasured,
-  // ADR-0016); "nothing runs until you approve it" holds only when the
-  // estimate is asked for first ("Run now" on a low-cost run starts at once);
-  // the trust score's lists are "Checks fully met" and "Checks that fell
-  // short", and its basis line says it is not a judgement of whether the
-  // answer is correct; History's 5 and 30 are config.history_keep_count and
+  // the estimate hint names only figures the card labels ("Planning
+  // estimate" in its header, the large figure, and "estimated range"), never
+  // "typical" (accuracy unmeasured, ADR-0016) and never "up to" (no figure on
+  // the card carries that label); "nothing runs until you approve it" holds
+  // only when the estimate is asked for first ("Run now" on a low-cost run
+  // starts at once), and the hint is not shown on a blocked gate, which has
+  // no range and nothing to approve. The trust hint locates the box (it has
+  // no visible title; its name is "What was and was not checked") and says
+  // only what every branch of it shows -- checks, citations and sources, or
+  // why the checks could not be applied -- plus the box's own basis line, that
+  // it is not a judgement of whether the answer is correct; History's 5 and 30 are config.history_keep_count and
   // history_keep_days, and its rows hold no answer (account_history.py).
   // Self-contained: tests run this function alone under Node.
   function helpTextTable() {
     const hints = {
       estimate:
-        'The estimate shows an estimated cost for the run and an "up to" figure, the worst case it is priced at. ' +
+        'On the estimate, the large figure is the planning estimate for this run, and the "estimated range" beside it shows how high the cost could go. ' +
         "If you ask for the estimate first, nothing runs until you approve it.",
       trust:
-        "The trust score shows which automated checks this answer met and which fell short, such as whether its citations point at a listed source. " +
+        "The box under the summary cards says what automated checks found on this answer, including its citations and sources, or why they could not be applied. " +
         "The checks do not judge whether the answer is correct.",
       history:
         "When you are signed in, History lists your newest 5 questions from the last 30 days. " +
@@ -169,7 +173,7 @@
             "You can choose three or two models instead, or a quick answer from one model.",
         },
         { idea: "estimate", title: "The cost estimate", text: hints.estimate },
-        { idea: "trust", title: "The trust score", text: hints.trust },
+        { idea: "trust", title: "What was checked", text: hints.trust },
         { idea: "history", title: "History", text: hints.history },
       ],
     };
@@ -601,7 +605,10 @@
     // on the new view's heading, not on the opener the landing just hid.
     if (name !== "landing" && helpTourIsOpen()) {
       closeHelpTour(false);
-      const heading = target.querySelector('h1[tabindex="-1"]');
+      // The composer has no focusable heading: its question box is where
+      // every other way into the composer puts focus.
+      const heading =
+        target.querySelector('h1[tabindex="-1"]') || (name === "composer" ? queryTextarea : null);
       if (heading) heading.focus({ preventScroll: true });
     }
     syncViewHistory(name);
@@ -8874,13 +8881,14 @@
       gateHeading ||
       (action === "block" ? gateBackButton : gateConfirmButton);
     if (focusTarget) focusTarget.focus({ preventScroll: true });
-    // W48 review round 1 (ADR-0145): while the estimate hint is shown it is the
-    // first thing to read, so the opening scroll puts IT at the top of the
-    // screen, with the card right under it. Centring the card instead left the
-    // hint above the screen on a phone (390x844, 320x640). Instant, so the hint
-    // is in place as soon as the gate opens (and reduced-motion safe).
+    // W48 (ADR-0145 decision 2, call xxi): on a phone, centring the card left
+    // the estimate hint above the screen (390x844, 320x640), so while the hint
+    // shows the opening scroll puts IT at the top, instantly. On wider screens
+    // the gate opens as it always did: on a short desktop (1280x640) the
+    // hint-first scroll pushed the run button below the fold.
     const estimateHint = el("help-hint-estimate");
-    if (estimateHint && !estimateHint.hidden) {
+    const phone = typeof window.matchMedia === "function" && window.matchMedia("(max-width: 600px)").matches;
+    if (phone && estimateHint && !estimateHint.hidden) {
       estimateHint.scrollIntoView({ behavior: "auto", block: "start" });
     } else if (gateCard) {
       gateCard.scrollIntoView({
@@ -10274,7 +10282,12 @@
     const view = shell ? shell.dataset.activeView : "";
     const trustScore = el("result-trust-score");
     return {
-      estimate: { note: el("help-hint-estimate"), show: view === "cost-gate" },
+      // Not on a blocked gate: it has no range and nothing to approve, so the
+      // hint would be false there (ADR-0145 decision 2, call xx).
+      estimate: {
+        note: el("help-hint-estimate"),
+        show: view === "cost-gate" && Boolean(gateCard) && gateCard.dataset.band !== "block",
+      },
       trust: {
         note: el("help-hint-trust"),
         show: view === "result" && Boolean(trustScore) && !trustScore.hidden,
