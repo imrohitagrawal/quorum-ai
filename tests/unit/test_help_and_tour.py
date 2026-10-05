@@ -1,9 +1,11 @@
-"""W48 (ADR-0145): help for new users -- the shared help text and the two tour links.
+"""W48 (ADR-0145): help for new users -- the shared help text and the two tour buttons.
 
-The product owner's words (CHG-027 g): one short hint per new idea (the cost
-estimate, the trust score, History), each once per device with "Got it", and an
-optional tour opened only from a "Take the tour" link, *sharing its text with
-the hints*. ADR-0145 decision 1 puts that text in ONE table in ``app.js``.
+Paraphrasing the owner (verbatim in docs/19 CHG-027 g): one short hint per new
+idea (the cost estimate, the trust score, History), each once per device with
+"Got it", and an optional tour that only a "Take the tour" control opens,
+sharing its text with the hints. The owner's message says "link"; the page has
+two buttons, because they open a dialog and go nowhere (ADR-0145). ADR-0145
+decision 1 puts that text in ONE table in ``app.js``.
 
 The contract this file fixes for the build:
 
@@ -188,6 +190,67 @@ def test_the_sentence_counter_counts() -> None:
     assert _sentences("One. Two.") == 2
     assert _sentences("It costs up to $0.50 a run.") == 1
     assert _sentences("One. Two! Three?") == 3
+
+
+# --- review round 1: what the hint text may claim (B and C) ---------------------
+
+
+def _sentence_list(text: str) -> list[str]:
+    return [s for s in re.split(r"(?<=[.!?])\s+", text.strip()) if s]
+
+
+@needs_node
+def test_the_estimate_text_makes_no_typical_cost_claim() -> None:
+    """RED IF: the estimate hint (and so the tour's estimate step) says what a
+    run "typically" or "usually" costs, or calls a figure an average.
+
+    ADR-0016 records whether real cost tracks the estimate as UNVERIFIED, and
+    ``app.js`` (the live-run cost note, "NO 'typical cost is lower' line")
+    forbids exactly this sentence: one live run cost 2.33x its estimate. The
+    cost gate itself says "estimated", "Planning estimate" and "up to", never
+    "typical" (the browser half reads the gate: help-and-tour.spec.ts).
+    """
+    text = _help_table()["hints"]["estimate"]
+    # Positive partner: the text is about the estimate at all.
+    assert re.search(r"\bestimate", text, re.IGNORECASE), text
+    assert not re.search(r"\b(typical|typically|usually|average)\b", text, re.IGNORECASE), text
+
+
+@needs_node
+def test_nothing_runs_until_you_approve_is_said_only_with_its_condition() -> None:
+    """RED IF: the estimate text says "nothing runs until you approve" as a
+    plain fact. It is true only when the visitor asks for the estimate first:
+    "Run now" on an allow-band estimate starts the run with no approval. The
+    sentence that says it must carry its condition (when / if / after / once).
+
+    Green on a90fec3 (its sentence starts "When you press ..."); it guards the
+    rewrite that test_the_estimate_text_makes_no_typical_cost_claim and the
+    landing-button test force.
+    """
+    sentences = _sentence_list(_help_table()["hints"]["estimate"])
+    assert sentences  # partner: there is text to look at
+    for sentence in sentences:
+        if re.search(r"nothing (runs|starts|is run)", sentence, re.IGNORECASE):
+            assert re.search(r"\b(when|if|after|once)\b", sentence, re.IGNORECASE), sentence
+
+
+@needs_node
+def test_the_trust_text_says_the_checks_do_not_judge_correctness_and_no_human() -> None:
+    """RED IF: the trust-score hint mentions a "human fact-check" (no human is
+    involved anywhere, so naming one invites the reading that one happened),
+    or does not say that the checks are not a judgement of whether the answer
+    is correct -- the words of the page's own disclosure on the trust score
+    (``app.js``: "It is not a judgement of whether the answer is correct."),
+    or does not say what the page shows (what was "checked") rather than
+    leaning on the label "trust score" alone.
+    """
+    text = _help_table()["hints"]["trust"]
+    # Partner: the disclosure the hint must agree with is really on the page.
+    source = APP_JS.read_text(encoding="utf-8")
+    assert "not a judgement of whether the answer is correct" in source
+    assert not re.search(r"human\s+fact[- ]?check", text, re.IGNORECASE), text
+    assert re.search(r"whether the answer is correct", text, re.IGNORECASE), text
+    assert re.search(r"\bcheck(ed|s)\b", text, re.IGNORECASE), text
 
 
 # --- the two "Take the tour" controls on the served landing ---------------------

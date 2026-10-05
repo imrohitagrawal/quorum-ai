@@ -840,3 +840,276 @@ test.describe("W48 help for new users: the optional tour (ADR-0145 decisions 4 a
     expect(m.transitions.every((t) => t === 0)).toBe(true);
   });
 });
+
+/** The button names a help text tells the reader to press ("press X", "click X"...). */
+function namedButtons(text: string): string[] {
+  const names: string[] = [];
+  const re = /\b(?:press|click|tap|choose|use)\s+(?:the\s+)?["“]?([A-Z][A-Za-z']*(?:\s+[A-Za-z']+)*?)["”]?(?=\s*[,.;:!?]|\s+(?:to|and|or|for|button|first)\b|\s*$)/g;
+  for (let m = re.exec(text); m; m = re.exec(text)) names.push(m[1]);
+  return names;
+}
+
+/** The visible text of the cost gate, without the estimate hint itself. */
+async function costGateTextWithoutHint(page: Page): Promise<string> {
+  return page.evaluate((hintId) => {
+    const gate = document.querySelector('[data-view="cost-gate"]') as HTMLElement;
+    const copy = gate.cloneNode(true) as HTMLElement;
+    copy.querySelector(`#${hintId}`)?.remove();
+    // innerText of a detached node ignores CSS; read only what is shown.
+    const hiddenIds = Array.from(gate.querySelectorAll("[hidden]")).map((e) => e.id).filter(Boolean);
+    for (const id of hiddenIds) copy.querySelector(`#${id}`)?.remove();
+    return (copy.textContent || "").replace(/\s+/g, " ");
+  }, HELP_HINT_IDS.estimate);
+}
+
+/** Hold the real estimate response until `release()`; record when it is asked for. */
+async function holdEstimate(page: Page) {
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => (release = resolve));
+  const state = { asked: false };
+  // route.fetch() sends the request to the REAL backend once released, so the
+  // page gets a real estimate (and a real confirmation token: a create sent
+  // afterwards is a real, simulated $0 run). The hold is what lets the
+  // estimate land AFTER the tour has been opened on the landing, which is the
+  // race review round 1 reproduced.
+  await page.route("**/v1/query-runs/estimate", async (route) => {
+    state.asked = true;
+    await held;
+    const response = await route.fetch();
+    await route.fulfill({ response });
+  });
+  return { state, release: () => release() };
+}
+
+/** Record every run create the page sends, with whether the tour was open at that moment. */
+async function recordCreates(page: Page) {
+  await page.addInitScript(() => {
+    const w = window as unknown as { __creates: { tourOpen: boolean }[] };
+    w.__creates = [];
+    const orig = window.fetch.bind(window);
+    window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      const method = (init?.method || (input instanceof Request ? input.method : "GET")).toUpperCase();
+      if (method === "POST" && /\/v1\/query-runs$/.test(new URL(url, location.href).pathname)) {
+        const layer = document.getElementById("help-tour-layer");
+        w.__creates.push({ tourOpen: Boolean(layer && !layer.hidden) });
+      }
+      return orig(input, init);
+    };
+  });
+  return () => page.evaluate(() => (window as unknown as { __creates: { tourOpen: boolean }[] }).__creates);
+}
+
+/** Composer → See the estimate (held) → top-bar How it works → Take the tour → release. */
+async function estimateLandsUnderTheTour(page: Page) {
+  await boot(page);
+  const hold = await holdEstimate(page);
+  await page.locator("#query-text").fill(QUESTION);
+  await page.locator("#estimate-run").click();
+  await expect.poll(() => hold.state.asked).toBe(true);
+  await page.locator("#show-landing").click();
+  await expect(page.locator('[data-view="landing"]')).toBeVisible();
+  await openTour(page);
+  await expect(tour(page)).toBeVisible();
+  hold.release();
+  // Positive partner for everything after: the view really did leave the landing.
+  await expect(page.locator('[data-view="cost-gate"]')).toBeVisible({ timeout: 15000 });
+}
+
+test.describe("W48 review round 1 (ADR-0145): the tour and the page, the help text, phone layout", () => {
+  test.skip(({ browserName }) => browserName !== "chromium", "the help lane runs on the reference engine only");
+
+  test("A: an estimate that lands while the tour is open closes the tour and puts focus on the cost gate's heading", async ({ page }) => {
+    // RED-IF: setView("cost-gate") runs under the open tour and leaves it open
+    // (a90fec3: the dialog stays up over the cost gate, the page behind it
+    // inert), or focus ends anywhere but #cost-gate-heading (the opener on the
+    // hidden landing, or <body>).
+    test.setTimeout(60000);
+    await estimateLandsUnderTheTour(page);
+    await expect(tour(page)).toBeHidden();
+    await expect(page.locator("#cost-gate-heading")).toBeVisible();
+    await expect(page.locator("#cost-gate-heading")).toBeFocused();
+  });
+
+  for (const key of ["Control+Enter", "Meta+Enter"]) {
+    test(`A: ${key} never sends a run create while the tour is open; once it has closed, ${key} on the focused cost gate runs as before`, async ({ page }) => {
+      // RED-IF: the page-wide Ctrl/Cmd+Enter handler acts while the tour is
+      // open (a90fec3: it confirms the estimate under the dialog and POSTs
+      // /v1/query-runs). Partner, same test: with the tour closed and the cost
+      // gate visible and focused, the same key sends exactly one create, as it
+      // did before W48 — so the recorder sees creates and the key still works.
+      test.setTimeout(90000);
+      const creates = await recordCreates(page);
+      await estimateLandsUnderTheTour(page);
+      await page.keyboard.press(key);
+      await page.waitForTimeout(1500);
+      expect((await creates()).filter((c) => c.tourOpen), "creates sent while the tour was open").toEqual([]);
+
+      // The partner: make sure the tour is closed and the gate has focus, then press again.
+      if (await tour(page).isVisible()) await page.keyboard.press("Escape");
+      await expect(tour(page)).toBeHidden();
+      if ((await creates()).length === 0) {
+        await expect(page.locator('[data-view="cost-gate"]')).toBeVisible();
+        await page.locator("#cost-gate-heading").focus();
+        await page.keyboard.press(key);
+      }
+      await expect.poll(async () => (await creates()).filter((c) => !c.tourOpen).length).toBe(1);
+    });
+  }
+
+  test("A: Browser Back while the tour is open closes the tour and puts focus on the result's heading (mocked run)", async ({ page }) => {
+    // RED-IF: a popstate that changes the view leaves the tour open over the
+    // result (a90fec3), or focus ends on <body>, the hidden opener or anywhere
+    // but #result-heading.
+    await boot(page);
+    await routePanelRun(page);
+    await runToPanelResult(page); // history: composer, result
+    await page.locator("#result-new-question").click(); // history: composer, result, composer
+    await expect(page.locator('[data-view="composer"]')).toBeVisible();
+    await page.locator("#show-landing").click();
+    await expect(page.locator('[data-view="landing"]')).toBeVisible();
+    await openTour(page);
+    await expect(tour(page)).toBeVisible();
+    await page.goBack();
+    // Positive partner: Back really moved the page to the result view.
+    await expect(page.locator('[data-view="result"]')).toBeVisible();
+    await expect(tour(page)).toBeHidden();
+    await expect(page.locator("#result-heading")).toBeVisible();
+    await expect(page.locator("#result-heading")).toBeFocused();
+  });
+
+  test("B: the estimate hint uses only figure words the cost gate itself shows (no 'typical')", async ({ page }) => {
+    // RED-IF: the estimate hint names a kind of figure the gate does not show
+    // (a90fec3: "typically costs"; the gate shows "estimated", "Planning
+    // estimate", "estimated range" and "up to", and ADR-0016 marks the
+    // estimate's accuracy UNVERIFIED). Read from the gate the visitor is on.
+    await bootWithoutHelpSeen(page);
+    await openCostGate(page);
+    await expect(hint(page, "estimate")).toBeVisible();
+    const hintText = ((await hint(page, "estimate").textContent()) || "").replace(/\s+/g, " ").toLowerCase();
+    const gateText = (await costGateTextWithoutHint(page)).toLowerCase();
+    const FIGURE_WORDS = ["typical", "typically", "usually", "average", "up to", "worst case", "estimated", "range", "at most", "maximum", "minimum", "exact"];
+    const used = FIGURE_WORDS.filter((w) => new RegExp(`\\b${w}\\b`).test(hintText));
+    // Partners: the hint does describe the figures, and the gate text was read.
+    expect(used.length, `figure words in the hint: ${hintText}`).toBeGreaterThan(0);
+    expect(gateText).toContain("estimate");
+    const notOnGate = used.filter((w) => !new RegExp(`\\b${w}\\b`).test(gateText));
+    expect(notOnGate, `hint figure words the cost gate does not show (gate: ${gateText.slice(0, 400)})`).toEqual([]);
+  });
+
+  test("B: read on the landing, the tour names only buttons the visitor can see there", async ({ page }) => {
+    // RED-IF: a tour step tells the reader to press a button that is not on
+    // the landing (a90fec3, the estimate step: "press See the estimate"; the
+    // landing's button is "Estimate").
+    // Partners: the extractor finds a named button in a known sentence, and
+    // the visibility check finds the landing's own "Estimate" button.
+    expect(namedButtons("When you press See the estimate, nothing runs.")).toEqual(["See the estimate"]);
+    await page.goto("/ui", { waitUntil: "domcontentloaded" });
+    await expect(page.locator('[data-view="landing"]')).toBeVisible();
+    const visibleLandingButton = (name: string) =>
+      page.evaluate((n) => {
+        const view = document.querySelector('[data-view="landing"]') as HTMLElement;
+        return Array.from(view.querySelectorAll("button")).some(
+          (b) => (b.textContent || "").replace(/\s+/g, " ").trim().replace(/\s*→$/, "").toLowerCase() === n.toLowerCase() &&
+            b.getClientRects().length > 0 && getComputedStyle(b).visibility !== "hidden",
+        );
+      }, name);
+    expect(await visibleLandingButton("Estimate")).toBe(true);
+
+    await openTour(page);
+    const missing: string[] = [];
+    for (let step = 1; step <= TOUR_STEPS; step++) {
+      const text = ((await page.locator("#help-tour-text").textContent()) || "").replace(/\s+/g, " ");
+      for (const name of namedButtons(text)) {
+        if (!(await visibleLandingButton(name))) missing.push(`step ${step}: "${name}"`);
+      }
+      if (step < TOUR_STEPS) await tourButton(page, "Next").click();
+    }
+    expect(missing, "buttons the tour names that the landing does not show").toEqual([]);
+  });
+
+  for (const size of [
+    { width: 390, height: 844 },
+    { width: 320, height: 640 },
+  ]) {
+    test(`D: ${size.width}x${size.height}: on the first cost gate the estimate hint is on screen, and Approve and Back to edit still take the click`, async ({ page }) => {
+      // RED-IF: when the cost gate first opens, the estimate hint lies outside
+      // the viewport (above or below it) at this size, or #gate-confirm /
+      // #gate-back no longer receive a click at their centre.
+      await page.setViewportSize(size);
+      await bootWithoutHelpSeen(page);
+      await openCostGate(page);
+      await expect(hint(page, "estimate")).toBeVisible();
+      const box = await page.evaluate((id) => {
+        const r = (document.getElementById(id) as HTMLElement).getBoundingClientRect();
+        return { top: r.top, bottom: r.bottom, left: r.left, right: r.right, vh: window.innerHeight, vw: window.innerWidth };
+      }, HELP_HINT_IDS.estimate);
+      expect(box.top, `hint box ${JSON.stringify(box)}`).toBeGreaterThanOrEqual(0);
+      expect(box.bottom, `hint box ${JSON.stringify(box)}`).toBeLessThanOrEqual(box.vh);
+      expect(box.left).toBeGreaterThanOrEqual(0);
+      expect(box.right).toBeLessThanOrEqual(box.vw);
+      for (const id of ["gate-confirm", "gate-back"]) {
+        await page.locator(`#${id}`).scrollIntoViewIfNeeded();
+        const hit = await page.evaluate((control) => {
+          const el = document.getElementById(control) as HTMLElement;
+          const r = el.getBoundingClientRect();
+          const top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+          return { reaches: Boolean(top && (top === el || el.contains(top))), actual: top ? top.tagName + (top.id ? "#" + top.id : "") : "null" };
+        }, id);
+        expect(hit, `a click on #${id} landed on ${hit.actual}`).toMatchObject({ reaches: true });
+      }
+    });
+  }
+
+  for (const width of [500, 620]) {
+    test(`E: at ${width}px the landing header stays one line: the nav buttons share the brand's row`, async ({ page }) => {
+      // RED-IF: between 451 and 625px the header wraps to a second line
+      // (a90fec3: the below-600px rule forces a break after "Take the tour"
+      // even where the whole header fits on one line).
+      await page.setViewportSize({ width, height: 800 });
+      await page.goto("/ui", { waitUntil: "domcontentloaded" });
+      await expect(page.locator('[data-view="landing"]')).toBeVisible();
+      const rows = await page.evaluate(() => {
+        const ids = ["landing-howitworks", "landing-tour", "landing-open-workspace"];
+        const mid = (e: Element) => {
+          const r = e.getBoundingClientRect();
+          return Math.round(r.top + r.height / 2);
+        };
+        const brand = document.querySelector(".landing-brand") as HTMLElement;
+        return { brand: mid(brand), buttons: ids.map((id) => ({ id, mid: mid(document.getElementById(id) as HTMLElement) })) };
+      });
+      // Partner: all four are on the page (a missing one would read as mid 0).
+      expect(rows.brand).toBeGreaterThan(0);
+      for (const b of rows.buttons) {
+        expect(b.mid, `${b.id} sits on another line than the brand (${JSON.stringify(rows)})`).toBeGreaterThan(0);
+        expect(Math.abs(b.mid - rows.brand), `${b.id} vs the brand line (${JSON.stringify(rows)})`).toBeLessThanOrEqual(6);
+      }
+    });
+  }
+
+  test("E: at 390px the header's Tab order matches its visual order (WCAG 2.4.3)", async ({ page }) => {
+    // RED-IF: Tab visits the header buttons in a different order from how they
+    // read top-to-bottom, then left-to-right (a90fec3 moves "Take the tour"
+    // up to the brand line with CSS order, but Tab still meets "How it works"
+    // first).
+    await page.setViewportSize({ width: 390, height: 664 });
+    await page.goto("/ui", { waitUntil: "domcontentloaded" });
+    await expect(page.locator('[data-view="landing"]')).toBeVisible();
+    const ids = ["landing-howitworks", "landing-tour", "landing-open-workspace"];
+    const visual = await page.evaluate((list) => {
+      const boxes = list.map((id) => ({ id, r: (document.getElementById(id) as HTMLElement).getBoundingClientRect() }));
+      boxes.sort((a, b) => (Math.abs(a.r.top - b.r.top) > 6 ? a.r.top - b.r.top : a.r.left - b.r.left));
+      return boxes.map((b) => b.id);
+    }, ids);
+    const tabbed: string[] = [];
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+    for (let i = 0; i < 25 && tabbed.length < ids.length; i++) {
+      await page.keyboard.press("Tab");
+      const id = await page.evaluate(() => document.activeElement?.id ?? "");
+      if (ids.includes(id) && !tabbed.includes(id)) tabbed.push(id);
+    }
+    // Partner: Tab reached all three header buttons.
+    expect([...tabbed].sort()).toEqual([...ids].sort());
+    expect(tabbed, `Tab order vs visual order ${JSON.stringify(visual)}`).toEqual(visual);
+  });
+});
