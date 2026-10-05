@@ -21,9 +21,15 @@ page that may not be fetched needs that text.
    and Tavily's `content`. Anything that is not a non-empty string is no excerpt.
 2. The excerpt is cleaned (control characters removed, whitespace collapsed) and cut to
    the fetcher's page-text limit, `quorum_source_fetch_max_text_chars` (4,000 characters),
-   so an excerpt and a fetched page are bounded alike.
+   so an excerpt and a fetched page are bounded alike. In order: Unicode control
+   characters (category Cc) other than whitespace are removed, whitespace runs collapse
+   to one space and the ends are trimmed, then the text is cut (so a cut can end on a
+   space). Invisible formatting characters (category Cf, such as zero-width or
+   direction marks) are kept; W29's judge fence must allow for them.
 3. It is never serialised to a client: excluded from the run's response models and the
-   OpenAPI schema. It lives only in the run held in memory, for as long as the run does.
+   OpenAPI schema (the field is `exclude=True`, and `repr=False` so a log line that prints
+   a source does not carry it). It lives only in the run held in memory, for as long as
+   the run does.
 4. It is never logged and never stored: telemetry keeps counting its length only; no
    store gains a field.
 5. Nothing else changes: no request, prompt, price or judge evidence. W29 decides how the
