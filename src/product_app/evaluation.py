@@ -1922,8 +1922,12 @@ def _fenced_user_prompt(parts: list[str]) -> str:
     ``parts`` starts with ``JUDGE_EVIDENCE_START`` and ends with
     ``JUDGE_EVIDENCE_END``; only what lies between is untrusted. Shared by the
     panel and quick builders so the fence cannot differ between them.
+
+    The body is joined FIRST and neutralised once (ADR-0147 decision 3).
+    Neutralising part by part never saw a marker split across two evidence
+    lines, because each line held only half of it.
     """
-    body_text = "\n".join(_neutralize_delimiters(part) for part in parts[1:-1])
+    body_text = _neutralize_delimiters("\n".join(parts[1:-1]))
     return f"{JUDGE_EVIDENCE_START}\n{body_text}\n{JUDGE_EVIDENCE_END}"
 
 

@@ -282,8 +282,10 @@ def follow_up_user_prompt_extra_chars(context: dict[str, Any] | None) -> int:
     characters it is sent, so this is derived from the parts ``_user_prompt``
     actually inserts: the directive (joined to the others by one newline) and
     the opening lines (each followed by the newline that joins it to the next),
-    neutralised as the fence neutralises them. The previous answer is
-    flattened, so no delimiter can span the joins.
+    neutralised as the fence neutralises them. The fence neutralises the whole
+    block at once and reads past line breaks (ADR-0147), but the line that
+    follows these opens with "Two", "Three" or "Four", whose letters cannot
+    finish a marker, so neutralising these lines alone gives the same length.
     """
     directive, lines = _prior_synthesis_prompt_parts(context)
     if not directive:

@@ -4241,8 +4241,7 @@ def _clean_search_excerpt(value: object) -> str:
     is bounded by the limit, not by what the provider sent. Whitespace
     characters are kept long enough to separate words; every other control
     character (``Cc``) and invisible format character (``Cf``: zero-width,
-    direction controls, the tag block -- one inside a forged fence marker hides
-    it from ``neutralize_delimiters``) is removed; every whitespace run
+    direction controls, the tag block) is removed; every whitespace run
     collapses to one space and the ends are trimmed. THEN the text is cut to
     the limit -- cleaning first, so a run of whitespace cannot spend it. The
     limit is read at call time so a changed setting moves both cuts.
