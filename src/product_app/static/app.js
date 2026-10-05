@@ -140,18 +140,19 @@
   // starts at once), and the hint is not shown on a blocked gate, which has
   // no range and nothing to approve. The trust hint locates the box (it has
   // no visible title; its name is "What was and was not checked") and says
-  // only what every branch of it shows -- checks, citations and sources, or
-  // why the checks could not be applied -- plus the box's own basis line, that
-  // it is not a judgement of whether the answer is correct; History's 5 and 30 are config.history_keep_count and
+  // only what every branch of it shows -- that it reports what automated
+  // checks found -- plus that the checks do not judge correctness (the
+  // verified box's basis line; the unverified one says "not a fact-check");
+  // History's 5 and 30 are config.history_keep_count and
   // history_keep_days, and its rows hold no answer (account_history.py).
   // Self-contained: tests run this function alone under Node.
   function helpTextTable() {
     const hints = {
       estimate:
-        'On the estimate, the large figure is the planning estimate for this run, and the "estimated range" beside it shows how high the cost could go. ' +
+        'On the estimate, the large figure is the planning estimate for this run, and the "estimated range" shows how high the cost could go. ' +
         "If you ask for the estimate first, nothing runs until you approve it.",
       trust:
-        "The box under the summary cards says what automated checks found on this answer, including its citations and sources, or why they could not be applied. " +
+        "The box under the summary cards says what automated checks found on this answer. " +
         "The checks do not judge whether the answer is correct.",
       history:
         "When you are signed in, History lists your newest 5 questions from the last 30 days. " +

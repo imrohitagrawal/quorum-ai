@@ -497,8 +497,8 @@ The help text is one table (`helpTextTable()` in `app.js`); the tour's steps for
 
 1. Ask a question: "Type one question in the box, as you would ask an expert. The example questions fill the box for you."
 2. The models: "By default four AI models answer, their answers are debated, and one final answer brings them together. You can choose three or two models instead, or a quick answer from one model."
-3. The cost estimate, and the estimate hint: "On the estimate, the large figure is the planning estimate for this run, and the "estimated range" beside it shows how high the cost could go. If you ask for the estimate first, nothing runs until you approve it."
-4. What was checked, and the trust-score hint: "The box under the summary cards says what automated checks found on this answer, including its citations and sources, or why they could not be applied. The checks do not judge whether the answer is correct."
+3. The cost estimate, and the estimate hint: "On the estimate, the large figure is the planning estimate for this run, and the "estimated range" shows how high the cost could go. If you ask for the estimate first, nothing runs until you approve it."
+4. What was checked, and the trust-score hint: "The box under the summary cards says what automated checks found on this answer. The checks do not judge whether the answer is correct."
 5. History, and the History hint: "When you are signed in, History lists your newest 5 questions from the last 30 days. It keeps each question and how the run went, never the answer."
 
 - Requirement: FR-013; the keyboard, focus and screen-reader half is NFR-009
