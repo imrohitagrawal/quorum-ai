@@ -33,6 +33,7 @@ import json
 import logging
 import re
 import time
+import unicodedata
 from collections.abc import Iterator
 from dataclasses import asdict, dataclass
 from decimal import Decimal
@@ -214,6 +215,17 @@ class SourceReference(BaseModel):
     url: str
     provider: ProviderPath
     is_fallback: bool = False
+    #: W52 (ADR-0146): the passage the search returned with this source --
+    #: OpenRouter's annotation ``content`` or Tavily's result ``content``,
+    #: cleaned and cut by :func:`_clean_search_excerpt`. Empty when the search
+    #: sent none, and on the simulated and inline-Markdown paths.
+    #:
+    #: Kept in the run held in memory and NOWHERE else. ``exclude=True`` keeps
+    #: it out of every serialised response and out of the OpenAPI schema
+    #: (served models are rendered in serialisation mode); ``repr=False`` keeps
+    #: it out of any log line that prints a source. No prompt, judge evidence,
+    #: request or price reads it -- W29 decides how the judge does.
+    excerpt: str = Field(default="", exclude=True, repr=False)
 
 
 class CitationCoverage(BaseModel):
@@ -4211,9 +4223,28 @@ def _parse_tavily_results(payload: object) -> list[SourceReference]:
                 # ...but it is still not the MODEL's own citation, so this flag
                 # stays True and ``citation_coverage`` is deliberately unmoved.
                 is_fallback=True,
+                # W52: from the SAME result as the URL kept above, so a
+                # duplicate or dropped result never lends its text.
+                excerpt=_clean_search_excerpt(result.get("content")),
             ),
         )
     return references
+
+
+def _clean_search_excerpt(value: object) -> str:
+    """A search passage made safe to keep (W52, ADR-0146 decision 2).
+
+    Anything that is not a string is no excerpt. Whitespace characters are
+    kept long enough to separate words, every other Unicode control character
+    (category ``Cc``) is removed, every whitespace run collapses to one space
+    and the ends are trimmed. THEN the text is cut to the fetcher's page-text
+    limit, read at call time so a changed setting moves this bound too --
+    cleaning first, so a run of whitespace cannot spend the budget.
+    """
+    if not isinstance(value, str):
+        return ""
+    kept = "".join(ch for ch in value if ch.isspace() or unicodedata.category(ch) != "Cc")
+    return " ".join(kept.split())[: settings.quorum_source_fetch_max_text_chars]
 
 
 def _extract_message_content(payload: object) -> str:
@@ -4379,8 +4410,7 @@ def _extract_citations(
         # {"url", "title", "content", ...}}. Reading only the flat keys turned
         # 20 distinct annotations into zero sources. The nested block is read
         # first; the flat keys remain the fallback for a provider that sends
-        # them. Passage ``content`` is deliberately not carried here (#447
-        # pieces 2-3 need an input bound first, see #268).
+        # them.
         nested = annotation.get("url_citation")
         block = nested if isinstance(nested, dict) else {}
         raw_url = block.get("url") or annotation.get("url") or annotation.get("source") or ""
@@ -4390,12 +4420,16 @@ def _extract_citations(
             continue
         if not isinstance(title, str):
             title = f" citation {index}"
+        # W52 (ADR-0146): the passage ``content`` is kept as the excerpt, read
+        # from the block the URL came from -- never the other block's text.
+        url_block = block if block.get("url") else annotation
         references.append(
             SourceReference(
                 title=title,
                 url=sanitized,
                 provider=ProviderPath.OPENROUTER_SEARCH,
                 is_fallback=False,
+                excerpt=_clean_search_excerpt(url_block.get("content")),
             ),
         )
     # Workstream-2: parse inline markdown links from the message content as

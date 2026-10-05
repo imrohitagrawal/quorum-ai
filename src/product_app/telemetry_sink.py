@@ -210,14 +210,16 @@ TELEMETRY_FIELD_NAMES: frozenset[str] = frozenset(
         # about, persisted to disk.
         #
         # These exist because the 2026-09-06 paid run LOST this measurement.
-        # ``providers._extract_citations`` keeps only title and url, and
-        # ``SourceReference`` has no content field, so the answer to "do
+        # ``providers._extract_citations`` then kept only title and url, and
+        # ``SourceReference`` had no content field, so the answer to "do
         # ``:online`` annotations carry passage content?" was discarded at
         # parse time and no amount of reading telemetry afterwards could
         # recover it. One run, two answers: whether #447 can be closed
         # WITHOUT new outbound fetches, and whether the flat-``url`` read at
         # ``providers._extract_citations`` has been dead all along
-        # (ADR-0084).
+        # (ADR-0084). W52 (ADR-0146) now keeps the passage as
+        # ``SourceReference.excerpt``, in memory only; this field still
+        # records its LENGTH and never the text.
         #
         # ``annotation_content_chars`` is ABSENT rather than ``0`` when no
         # ``content`` key was present anywhere. The two are different answers
