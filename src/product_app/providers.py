@@ -3641,8 +3641,10 @@ class AnnotationShape:
     ``src/`` resolves one. Whether that can be fixed WITHOUT a new outbound
     fetcher turns on one unmeasured fact: do OpenRouter's ``:online``
     annotations carry passage CONTENT? The 2026-09-06 paid run could not answer
-    it, because :func:`_extract_citations` discards every field but title and
-    url at parse time.
+    it, because :func:`_extract_citations` then discarded every field but title
+    and url at parse time. W52 (ADR-0146) now keeps the passage as
+    ``SourceReference.excerpt``, in memory only; this shape still records
+    counts and a length, never the text.
 
     NEVER THE TEXT. Labels from closed sets, counts, and a LENGTH. Passage
     content is unbounded upstream text -- nobody here has weighed a real
@@ -4234,17 +4236,23 @@ def _parse_tavily_results(payload: object) -> list[SourceReference]:
 def _clean_search_excerpt(value: object) -> str:
     """A search passage made safe to keep (W52, ADR-0146 decision 2).
 
-    Anything that is not a string is no excerpt. Whitespace characters are
-    kept long enough to separate words, every other Unicode control character
-    (category ``Cc``) is removed, every whitespace run collapses to one space
-    and the ends are trimmed. THEN the text is cut to the fetcher's page-text
-    limit, read at call time so a changed setting moves this bound too --
-    cleaning first, so a run of whitespace cannot spend the budget.
+    Anything that is not a string is no excerpt. The raw text is first cut to
+    eight times the fetcher's page-text limit, so the per-character work below
+    is bounded by the limit, not by what the provider sent. Whitespace
+    characters are kept long enough to separate words; every other control
+    character (``Cc``) and invisible format character (``Cf``: zero-width,
+    direction controls, the tag block -- one inside a forged fence marker hides
+    it from ``neutralize_delimiters``) is removed; every whitespace run
+    collapses to one space and the ends are trimmed. THEN the text is cut to
+    the limit -- cleaning first, so a run of whitespace cannot spend it. The
+    limit is read at call time so a changed setting moves both cuts.
     """
     if not isinstance(value, str):
         return ""
-    kept = "".join(ch for ch in value if ch.isspace() or unicodedata.category(ch) != "Cc")
-    return " ".join(kept.split())[: settings.quorum_source_fetch_max_text_chars]
+    limit = settings.quorum_source_fetch_max_text_chars
+    raw = value[: limit * 8]
+    kept = "".join(ch for ch in raw if ch.isspace() or unicodedata.category(ch) not in ("Cc", "Cf"))
+    return " ".join(kept.split())[:limit]
 
 
 def _extract_message_content(payload: object) -> str:
