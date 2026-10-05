@@ -585,11 +585,11 @@ def test_on_each_source_gets_page_text_excerpt_or_nothing_by_the_rules(
 
 
 def test_on_the_verdict_serves_the_runs_counts(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Decision 9's N and M: N = sources the judge read a page or excerpt for
-    (the allowed page, the blocked page's excerpt, the closed site's excerpt:
-    3), M = the cited sources it saw (5).
-    RED IF: the counts are missing, swapped, count attempts instead of reads
-    (5 of 5), or count fetched pages only (1 of 5)."""
+    """Decision 9 as revised in review round 1: N = distinct cited addresses
+    whose page was FETCHED (only the allowed page: 1); a search excerpt is not
+    the page and does not count. M = distinct cited addresses the judge saw (5).
+    RED IF: the counts are missing or swapped, count attempts (5 of 5), or count
+    the two excerpts as checked pages (3 of 5)."""
     _enable_judge(monkeypatch)
     _pages_on(monkeypatch)
     _spies(monkeypatch)
@@ -597,7 +597,46 @@ def test_on_the_verdict_serves_the_runs_counts(monkeypatch: pytest.MonkeyPatch) 
         body = _get(_run([_standard_sources(sites)]))
     ev = body["evaluation"]
     assert ev["trust"]["support_verified"] is True
-    assert (ev["source_pages_read"], ev["source_pages_cited"]) == (3, 5)
+    assert (ev["source_pages_read"], ev["source_pages_cited"]) == (1, 5)
+
+
+def _fetched_and_excerpt_routes(fetched: int, excerpts: int) -> dict[tuple[str, str], Route]:
+    routes: dict[tuple[str, str], Route] = {}
+    for i in range(fetched):
+        routes[(f"f{i}.example", "/robots.txt")] = _NOT_FOUND
+        routes[(f"f{i}.example", "/page")] = _html(f"PAGEFETCHED{i} {_FILLER}")
+    for i in range(excerpts):
+        routes[(f"x{i}.example", "/robots.txt")] = _DISALLOW_ALL
+        routes[(f"x{i}.example", "/page")] = _html(f"PAGEEXCERPTONLY{i} {_FILLER}")
+    return routes
+
+
+@pytest.mark.parametrize(
+    ("fetched", "excerpts", "expected"),
+    [(3, 2, (3, 5)), (0, 2, (0, 2))],
+    ids=["three-fetched-two-excerpts", "no-page-fetched-two-excerpts"],
+)
+def test_an_excerpt_is_not_counted_as_a_checked_page(
+    monkeypatch: pytest.MonkeyPatch, fetched: int, excerpts: int, expected: tuple[int, int]
+) -> None:
+    """Decision 9, review round 1: counting an excerpt would say pages were
+    checked when none was fetched. RED IF: an excerpt is counted as a checked
+    page (5 of 5, or 2 of 2). Partner: the excerpts really were given to the
+    judge, and the fetched pages really were fetched."""
+    _enable_judge(monkeypatch)
+    _pages_on(monkeypatch)
+    spies = _spies(monkeypatch)
+    with _sites(_fetched_and_excerpt_routes(fetched, excerpts)) as sites:
+        sources = [_source(f"Fetched {i}", sites.url(f"f{i}.example")) for i in range(fetched)] + [
+            _source(f"Excerpt {i}", sites.url(f"x{i}.example"), f"EXCERPTONLY{i} passage")
+            for i in range(excerpts)
+        ]
+        body = _get(_run([sources]))
+        assert len(_page_gets(sites)) == fetched
+    ev = body["evaluation"]
+    assert (ev["source_pages_read"], ev["source_pages_cited"]) == expected
+    for i in range(excerpts):
+        assert f"EXCERPTONLY{i} passage" in spies.user_prompt
 
 
 def test_on_no_readable_page_serves_zero_of_m(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -684,6 +723,156 @@ def test_on_excerpts_replace_pages_never_add_to_them(monkeypatch: pytest.MonkeyP
     assert 1 <= len(filled) <= 8, len(filled)
     assert all(p.startswith("EXCERPTMANY") for p in filled)
     assert max(len(p) for p in pages) <= 4000
+
+
+# ---------------------------------------------------------------------------
+# Review round 1: a truncated robots.txt fails closed (decision 3).
+# ---------------------------------------------------------------------------
+
+_BIG_ROBOTS = b"User-agent: *\nAllow: /\n" + b"# a long comment line in a big file\n" * 9_000
+
+
+def _chunked(body: bytes, size: int = 8192) -> bytes:
+    out = b""
+    for i in range(0, len(body), size):
+        piece = body[i : i + size]
+        out += f"{len(piece):x}\r\n".encode() + piece + b"\r\n"
+    return out + b"0\r\n\r\n"
+
+
+def test_a_truncated_robots_file_fails_closed_on_both_paths(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Decision 3: a robots.txt over the fetcher's 262,144-byte cap is not
+    parsed, whether it arrives chunked with no Content-Length (cut by the read
+    loop) or declares its length (refused before the read). Both files START
+    with ``Allow: /``, so parsing the part that was read would allow the page.
+
+    RED IF: a truncated file is parsed (the page is then requested and its text
+    read instead of the excerpt). Partners: the file really is over the cap; a
+    small file on a third site does let its page be fetched; and each robots.txt
+    was asked for, so "no page request" is the decision, not a dead site."""
+    assert len(_BIG_ROBOTS) > 262_144
+    _enable_judge(monkeypatch)
+    _pages_on(monkeypatch)
+    spies = _spies(monkeypatch)
+    routes: dict[tuple[str, str], Route] = {
+        ("chunked.example", "/robots.txt"): (
+            "200 OK",
+            {"Content-Type": "text/plain", "Transfer-Encoding": "chunked"},
+            _chunked(_BIG_ROBOTS),
+        ),
+        ("chunked.example", "/page"): _html(f"PAGECHUNKEDSENTINEL {_FILLER}"),
+        ("declared.example", "/robots.txt"): (
+            "200 OK",
+            {"Content-Type": "text/plain", "Content-Length": str(len(_BIG_ROBOTS))},
+            _BIG_ROBOTS,
+        ),
+        ("declared.example", "/page"): _html(f"PAGEDECLAREDSENTINEL {_FILLER}"),
+        ("small.example", "/robots.txt"): (
+            "200 OK",
+            {"Content-Type": "text/plain"},
+            b"User-agent: *\nAllow: /\n",
+        ),
+        ("small.example", "/page"): _html(f"PAGESMALLSENTINEL {_FILLER}"),
+    }
+    with _sites(routes) as sites:
+        sources = [
+            _source("Chunked", sites.url("chunked.example"), "EXCERPTCHUNKED passage"),
+            _source("Declared", sites.url("declared.example"), "EXCERPTDECLARED passage"),
+            _source("Small", sites.url("small.example"), "EXCERPTSMALL passage"),
+        ]
+        run = _run([sources])
+        assert _evaluate(run) is not None
+        for host in ("chunked.example", "declared.example", "small.example"):
+            assert len(sites.requests_for(host, "/robots.txt")) == 1, host
+        assert sites.requests_for("chunked.example", "/page") == []
+        assert sites.requests_for("declared.example", "/page") == []
+        assert len(sites.requests_for("small.example", "/page")) == 1
+    pages = spies.pages
+    assert pages[0] == "EXCERPTCHUNKED passage"
+    assert pages[1] == "EXCERPTDECLARED passage"
+    assert "PAGESMALLSENTINEL" in pages[2]
+
+
+# ---------------------------------------------------------------------------
+# Review round 1: duplicate citations (decision 4).
+# ---------------------------------------------------------------------------
+
+
+def _page_lines(user_prompt: str) -> list[str]:
+    return [line for line in user_prompt.split("\n") if line.startswith("PAGE [")]
+
+
+def test_four_answers_citing_the_same_eight_addresses(monkeypatch: pytest.MonkeyPatch) -> None:
+    """32 source lines, 8 distinct addresses. Each address is fetched once and
+    given once; every later line with the same address says so, exactly
+    ``PAGE [i]: same page as [j]``, so the judge is never left thinking a page
+    it has could not be read.
+
+    RED IF: an address is fetched more than once; the cap counts lines (only
+    lines 1-8 would then be covered and lines 9-32 get nothing); a duplicate
+    gets no entry or its own copy of the page; or the served M counts lines
+    (32) instead of addresses (8). Partner: all 8 pages really are in the
+    prompt."""
+    _enable_judge(monkeypatch)
+    _pages_on(monkeypatch)
+    spies = _spies(monkeypatch)
+    routes: dict[tuple[str, str], Route] = {}
+    for k in range(8):
+        routes[(f"d{k}.example", "/robots.txt")] = _NOT_FOUND
+        routes[(f"d{k}.example", "/page")] = _html(f"PAGEDUP{k}X {_FILLER}")
+    with _sites(routes) as sites:
+        cited = [_source(f"Page {k}", sites.url(f"d{k}.example")) for k in range(8)]
+        body = _get(_run([cited, cited, cited, cited]))
+        for k in range(8):
+            assert len(sites.requests_for(f"d{k}.example", "/page")) == 1, k
+            assert len(sites.requests_for(f"d{k}.example", "/robots.txt")) == 1, k
+    assert len(spies.evidences[0].source_lines) == 32
+    user = spies.user_prompt
+    for k in range(8):
+        assert user.count(f"PAGEDUP{k}X") == 1, k
+    expected = [f"PAGE [{i}]:" for i in range(1, 9)] + [
+        f"PAGE [{i}]: same page as [{(i - 1) % 8 + 1}]" for i in range(9, 33)
+    ]
+    assert sorted(_page_lines(user)) == sorted(expected)
+    ev = body["evaluation"]
+    assert (ev["source_pages_read"], ev["source_pages_cited"]) == (8, 8)
+
+
+def test_ten_addresses_eight_fetched_duplicates_point_back(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """10 distinct addresses on answer 1 (lines 1-10); answer 2 cites the first
+    two again and the ninth (lines 11-13). The cap of 8 counts addresses, so
+    the first 8 are fetched; the ninth and tenth are beyond it and get no entry,
+    and so does line 13, which repeats the ninth. Lines 11 and 12 point back.
+
+    RED IF: the cap counts lines; an address beyond the cap is fetched or given
+    an entry; a duplicate of a fetched address gets no entry; or M counts lines
+    (13) instead of addresses (10). Partner: 8 pages were fetched."""
+    _enable_judge(monkeypatch)
+    _pages_on(monkeypatch)
+    spies = _spies(monkeypatch)
+    routes: dict[tuple[str, str], Route] = {}
+    for k in range(10):
+        routes[(f"m{k}.example", "/robots.txt")] = _NOT_FOUND
+        routes[(f"m{k}.example", "/page")] = _html(f"PAGEMIX{k}X {_FILLER}")
+    with _sites(routes) as sites:
+        cited = [_source(f"Page {k}", sites.url(f"m{k}.example")) for k in range(10)]
+        body = _get(_run([cited, [cited[0], cited[1], cited[8]]]))
+        for k in range(8):
+            assert len(sites.requests_for(f"m{k}.example", "/page")) == 1, k
+        for k in (8, 9):
+            assert sites.requests_for(f"m{k}.example", "/page") == [], k
+    assert len(spies.evidences[0].source_lines) == 13
+    expected = [f"PAGE [{i}]:" for i in range(1, 9)] + [
+        "PAGE [11]: same page as [1]",
+        "PAGE [12]: same page as [2]",
+    ]
+    assert sorted(_page_lines(spies.user_prompt)) == sorted(expected)
+    ev = body["evaluation"]
+    assert (ev["source_pages_read"], ev["source_pages_cited"]) == (8, 10)
 
 
 # ---------------------------------------------------------------------------

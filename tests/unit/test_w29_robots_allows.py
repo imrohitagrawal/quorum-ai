@@ -98,26 +98,106 @@ def test_rules_for_this_agent_bind_and_rules_for_another_do_not() -> None:
     assert _allows(200, theirs, "https://site.example/a") is True
 
 
-def test_robot_file_parser_read_is_never_called(monkeypatch: pytest.MonkeyPatch) -> None:
-    """ADR-0148 decision 3: ``.read`` fetches the URL itself, outside the
-    pinned path. RED IF: ``robots_allows`` (or anything it calls) uses it.
-    Partner: the spy is live, and ``parse`` IS called for a 2xx body."""
-    read_calls: list[Any] = []
-    parse_calls: list[Any] = []
-    real_parse = urllib.robotparser.RobotFileParser.parse
+def test_urllib_robotparser_is_not_used_at_all(monkeypatch: pytest.MonkeyPatch) -> None:
+    """ADR-0148 decision 3 (review round 1): robots.txt is matched by the app's
+    own RFC 9309 matcher. ``RobotFileParser.read`` would fetch outside the
+    pinned path, and ``.parse``/``.can_fetch`` carry the five wrong semantics
+    pinned below. RED IF: ``robots_allows`` calls any of the three (the spies
+    raise, so an allowed path would no longer come back True).
+    Partner: the decisions are still made -- one False, one True."""
+    calls: list[str] = []
 
-    def spy_read(self: urllib.robotparser.RobotFileParser) -> None:
-        read_calls.append(self)
-        raise AssertionError("RobotFileParser.read must never be called")
+    def refuse(name: str) -> Any:
+        def spy(self: urllib.robotparser.RobotFileParser, *args: Any) -> None:
+            calls.append(name)
+            raise AssertionError(f"RobotFileParser.{name} must not be used")
 
-    def spy_parse(self: urllib.robotparser.RobotFileParser, lines: Any) -> None:
-        parse_calls.append(lines)
-        real_parse(self, lines)
+        return spy
 
-    monkeypatch.setattr(urllib.robotparser.RobotFileParser, "read", spy_read)
-    monkeypatch.setattr(urllib.robotparser.RobotFileParser, "parse", spy_parse)
+    for name in ("read", "parse", "can_fetch"):
+        monkeypatch.setattr(urllib.robotparser.RobotFileParser, name, refuse(name))
 
     assert _allows(200, _PRIVATE, "https://site.example/private/x") is False
     assert _allows(200, _PRIVATE, "https://site.example/public") is True
-    assert read_calls == []
-    assert len(parse_calls) >= 1
+    assert calls == []
+
+
+# ---------------------------------------------------------------------------
+# Review round 1: the RFC 9309 matcher (ADR-0148 decision 3, section 2.2).
+# Every case is written out; the agent is the module's real USER_AGENT.
+# ---------------------------------------------------------------------------
+
+
+def _rfc(body: str, path: str) -> bool:
+    allowed = source_fetcher.robots_allows(
+        200, body, f"https://site.example{path}", source_fetcher.USER_AGENT
+    )
+    assert isinstance(allowed, bool), allowed
+    return allowed
+
+
+_OWN_GROUP_DISALLOWS_X = (
+    "User-agent: quorum-ai-source-check\nDisallow: /x\n\nUser-agent: *\nAllow: /\n"
+)
+
+
+@pytest.mark.parametrize(
+    ("body", "path"),
+    [
+        ("User-agent: *\nDisallow: /*/private/\n", "/a/private/x"),
+        ("User-agent: *\nDisallow: /*.pdf$\n", "/doc.pdf"),
+        ("User-agent: *\nAllow: /\nDisallow: /news\n", "/news/1"),
+        ("User-agent: *\nDisallow: /\n\nUser-agent: source\nAllow: /\n", "/p"),
+        ("\ufeffUser-agent: *\nDisallow: /\n", "/p"),
+        (_OWN_GROUP_DISALLOWS_X, "/x"),
+        (
+            "User-Agent: QUORUM-AI-SOURCE-CHECK\nDisallow: /x\n\nUser-agent: *\nAllow: /\n",
+            "/x",
+        ),
+    ],
+    ids=[
+        "wildcard-in-path",
+        "end-anchor",
+        "longest-match-disallow",
+        "other-token-is-not-a-substring-match",
+        "byte-order-mark",
+        "own-group-beats-star",
+        "own-group-ignoring-case",
+    ],
+)
+def test_rfc9309_refusals(body: str, path: str) -> None:
+    """Each of these is a path the file forbids and ``urllib.robotparser``
+    allowed (review round 1). RED IF: ``urllib.robotparser`` semantics come
+    back -- no ``*`` wildcard, no ``$`` anchor, first match instead of the
+    longest, a user-agent matched by substring, a byte-order mark breaking the
+    first line, or the ``*`` group chosen over our own."""
+    assert _rfc(body, path) is False
+
+
+@pytest.mark.parametrize(
+    ("body", "path"),
+    [
+        ("User-agent: *\nDisallow: /*.pdf$\n", "/doc.pdf?x=1"),
+        ("User-agent: *\nDisallow: /*.pdf$\n", "/doc.pdfx"),
+        ("User-agent: *\nAllow: /news/1\nDisallow: /news\n", "/news/1"),
+        ("User-agent: *\nDisallow: /page\nAllow: /page\n", "/page"),
+        ("User-agent: *\nAllow: /page\nDisallow: /page\n", "/page"),
+        ("User-agent: *\nDisallow:\n", "/anything"),
+        ("User-agent: quorum-ai-source-check\nAllow: /x\n\nUser-agent: *\nDisallow: /x\n", "/x"),
+    ],
+    ids=[
+        "end-anchor-with-query",
+        "end-anchor-longer-path",
+        "longest-match-allow",
+        "tie-allow-wins-disallow-first",
+        "tie-allow-wins-allow-first",
+        "empty-disallow-allows-all",
+        "own-group-allows-over-star",
+    ],
+)
+def test_rfc9309_permissions(body: str, path: str) -> None:
+    """The positive partners: a matcher that refuses everything fails here.
+    RED IF: ``$`` is ignored or treated as a prefix stop, the longest match
+    does not win, ``Allow`` loses a tie, an empty ``Disallow`` refuses, or the
+    ``*`` group is applied when our own group exists."""
+    assert _rfc(body, path) is True

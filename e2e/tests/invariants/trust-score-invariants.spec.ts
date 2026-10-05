@@ -485,6 +485,53 @@ test.describe("trust-score invariants (FR-016)", () => {
     }
   });
 
+  // Review round 1: CI serves the OFF posture, so the test above never renders
+  // the ON branch there. This one rewrites the served readiness island so the
+  // page reads `source_pages_in_effect: true`, and renders the ON sentences in
+  // a real browser. The island is inline JSON; the CSP admits inline script.
+  const VERIFIED_LEAD =
+    "An independent judge model checked this answer's citations against its source list — an automated review, not a human fact-check.";
+
+  async function serveIslandWithPagesOn(page: Page) {
+    const rewrites: number[] = [];
+    await page.route(/\/ui(\?[^/]*)?$/, async (route) => {
+      const response = await route.fetch();
+      const original = await response.text();
+      const body = original.replace(
+        /"source_pages_in_effect":\s*false/,
+        '"source_pages_in_effect": true',
+      );
+      rewrites.push(body === original ? 0 : 1);
+      await route.fulfill({ response, body });
+    });
+    return rewrites;
+  }
+
+  test("W29: the ON branch renders the run's counts and the no-page sentence", async ({ page }) => {
+    // TURNS RED IF: the page ignores the island's `source_pages_in_effect`;
+    // the N of M sentence or the N = 0 sentence differs by a character; or
+    // today's "not retrieved" sentence survives on a run whose pages were read.
+    await page.setViewportSize({ width: 1440, height: 1200 });
+    const rewrites = await serveIslandWithPagesOn(page);
+    await driveWithEval(page, evalVerifiedWithPages(3, 5));
+    // Partner: the island really was served OFF and rewritten ON, so the
+    // sentence below is the ON branch's, not a server that was already on.
+    expect(rewrites).toEqual([1]);
+    await expect(page.locator(SURFACE)).toHaveAttribute("data-state", "verified");
+    const disclosure = page.locator(`${SURFACE} .result-trust-score-disclosure`);
+    await expect(disclosure).toHaveText(`${VERIFIED_LEAD} Checked against 3 of 5 cited pages.`);
+    await expect(disclosure).not.toContainText("The cited pages themselves were not retrieved.");
+
+    await page.unrouteAll({ behavior: "ignoreErrors" });
+    const rewritesZero = await serveIslandWithPagesOn(page);
+    await driveWithEval(page, evalVerifiedWithPages(0, 5));
+    expect(rewritesZero).toEqual([1]);
+    await expect(page.locator(SURFACE)).toHaveAttribute("data-state", "verified");
+    await expect(page.locator(`${SURFACE} .result-trust-score-disclosure`)).toHaveText(
+      `${VERIFIED_LEAD} It worked from the titles, addresses and any search excerpts: no cited page could be read.`,
+    );
+  });
+
   // ---- #290 readout: the number is explained --------------------------------
   //
   // "92 of 100 — high trust" named no scale and said nothing about what had

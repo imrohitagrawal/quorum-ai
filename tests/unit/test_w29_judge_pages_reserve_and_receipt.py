@@ -280,3 +280,42 @@ def test_the_page_reserve_covers_the_widest_block_the_builder_can_emit() -> None
     assert widest_block >= reserve - 40, (widest_block, reserve)
     no_page_block = block(empty)
     assert 0 < no_page_block <= int(_JUDGE_PAGES_SECTION_OVERHEAD_CHARS), no_page_block
+
+
+def test_the_page_reserve_prices_the_v2_system_prompt_not_v1(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Decision 7: "plus the v2 system prompt's length in place of v1's".
+    Review round 1. The judge's input is priced at $1 per 1,000 tokens here
+    (a dedicated pin, 1,000 times the file's usual one) so a few hundred
+    characters move the bound by whole cents and quantisation cannot hide them.
+
+    With pages on, the judge sees the v2 system prompt instead of v1's, plus up
+    to 8 pages of 4,000 characters. So the bound must rise by at least
+    (32,000 + len(v2) - len(v1)) characters / 4 per token. RED IF: the reserve
+    still counts v1's length (it then rises by 32,000 + scaffolding only, which
+    is 552 characters short today). Partner: v2 really is longer than v1, so
+    the assertion is not satisfied by a zero difference."""
+    from product_app.evaluation import _JUDGE_PAGES_SYSTEM_PROMPT, _JUDGE_SYSTEM_PROMPT
+    from product_app.model_slots import openrouter_model_catalog_service
+
+    extra_prompt_chars = len(_JUDGE_PAGES_SYSTEM_PROMPT) - len(_JUDGE_SYSTEM_PROMPT)
+    assert extra_prompt_chars > 0
+
+    def bound(pages: bool) -> Decimal:
+        with monkeypatch.context() as mp:
+            real = openrouter_model_catalog_service.price_index
+            mp.setattr(
+                openrouter_model_catalog_service,
+                "price_index",
+                lambda: {**real(), "openai/gpt-5-mini": (Decimal("1.0"), Decimal("0.005"))},
+            )
+            _enable_judge(mp)
+            mp.setattr(settings, "quorum_source_fetch_enabled", pages)
+            estimate = cost_estimation_service.estimate(query_text=QUERY, model_slots=_slots())
+        assert estimate.max_cost_usd is not None
+        return estimate.max_cost_usd
+
+    delta = bound(True) - bound(False)
+    floor = (Decimal(32_000) + Decimal(extra_prompt_chars)) / Decimal(4) / Decimal(1000)
+    assert delta >= floor, f"pages raised the bound by {delta}; v2's prompt needs {floor}"

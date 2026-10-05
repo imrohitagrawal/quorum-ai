@@ -116,14 +116,37 @@ def test_the_note_states_the_runs_own_counts(harness: str) -> None:
     assert NOT_RETRIEVED not in one_of_eight
 
 
+#: Today's sentence without its last sentence: what every pages sentence
+#: starts with (``lead`` in ``app.js``).
+LEAD = (
+    "An independent judge model checked this answer's citations against its "
+    "source list — an automated review, not a human fact-check."
+)
+
+
 def test_no_page_read_says_so(harness: str) -> None:
-    """Decision 9: N = 0 says the judge worked from titles and addresses
-    because no cited page could be read. RED IF: N = 0 renders the same as
-    N > 0, or as today's sentence. Partner: N = 2 does not say it."""
+    """Decision 9 (review round 1): N = 0 says no cited page could be read and
+    the judge worked from the titles, addresses and any search excerpts. Exact
+    text. RED IF: the N = 0 sentence differs by a character (for example the
+    round-0 "titles and addresses only", which hid that excerpts were read), or
+    N = 0 renders today's sentence. Partner: N = 2 does not say it."""
     none_read, two_read = _run(harness, [(_ev(0, 4), True), (_ev(2, 4), True)])
-    assert "no cited page could be read" in none_read, none_read
-    assert none_read != TODAY
+    assert none_read == (
+        f"{LEAD} It worked from the titles, addresses and any search excerpts: "
+        "no cited page could be read."
+    )
     assert "no cited page could be read" not in two_read
+
+
+def test_one_cited_page_is_singular_and_more_are_plural(harness: str) -> None:
+    """Decision 9: "cited page" when M is 1. Exact text. RED IF: the singular
+    is wrong ("1 of 1 cited pages"), or the plural is dropped for M >= 2."""
+    one_of_one, one_of_two, three_of_five = _run(
+        harness, [(_ev(1, 1), True), (_ev(1, 2), True), (_ev(3, 5), True)]
+    )
+    assert one_of_one == f"{LEAD} Checked against 1 of 1 cited page."
+    assert one_of_two == f"{LEAD} Checked against 1 of 2 cited pages."
+    assert three_of_five == f"{LEAD} Checked against 3 of 5 cited pages."
 
 
 def test_setting_off_keeps_todays_sentence_even_with_counts(harness: str) -> None:
