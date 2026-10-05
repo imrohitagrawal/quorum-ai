@@ -6,7 +6,7 @@ original, because a gate and an offline agent can read it and cannot read `gh`.
 
 Verified at: `4ba35cec0ce40f9dd48b9c1bf0b9aefeb862a28c`
 
-The board holds **51** rows, **15** of them unpinned.
+The board holds **51** rows, **14** of them unpinned.
 
 `scripts/check_open_work.py --check` reads every row's evidence off disk and
 refuses if a claim is false. It runs inside `make validate`, and
@@ -146,7 +146,7 @@ caught by any automated check and 10 of 16 by adversarial review
 | W49 | "Go to run" on a "one run at a time" card does not open the other run's result once this tab has finished or re-opened a run: `goToActiveRun` does not reset `state.terminalHandled`, so the poll that sees the run finish returns early and the page stays on the live-run view (measured by W37's test designer, 2026-10-04, with mocked responses). Once fixed, also reset `state.liveQueryText` there, or a follow-up would pair this tab's last question with that run's answer (ADR-0143) | UNPINNED | `—` | — | — |
 | W50 | The cost confirmation's Run button stays greyed out (`disabled`) and Ctrl+Enter does nothing after this path: Run now on a question, "New question", re-open that question from "This session", "Review & run", "See the estimate"; the way out is "Back to edit" then "Run now". Reproduced on `369ed5e` and on `main` (`4ba35ce`) by W37's round-2 product reviewer, 2026-10-04; the cause is unmeasured | UNPINNED | `—` | — | — |
 | W51 | "How it works" (the top bar's `enterLanding`) does not drop an estimate still loading, so an estimate requested on the composer opens the cost gate over the landing when it arrives (reproduced on `40249a6` by W48's break-it reviewer, 2026-10-05). W48 closes its tour when that happens; the stray cost gate itself is this row | UNPINNED | `—` | — | — |
-| W52 | Keep the short excerpt each search result carries (OpenRouter annotation text, Tavily `content`) with its source for the run, so W29's judge can read it for a cited page that robots.txt says not to fetch (CHG-028). Not shown on the page; bounded; fenced as untrusted; a `docs/48` row pending the owner's approval. Failure modes and an ADR first | UNPINNED | `—` | — | — |
+| W52 | Keep the short excerpt each search result carries (OpenRouter annotation text, Tavily `content`) with its source for the run, so W29's judge can read it for a cited page that robots.txt says not to fetch (CHG-028). Not shown on the page; bounded; fenced as untrusted; a `docs/48` row pending the owner's approval. Failure modes and an ADR first (ADR-0146) | PENDING | `ABSENT src/product_app/providers.py :: excerpt: str` | — | — |
 
 **STOP** marks a row that cannot be finished without a human decision — a money,
 cost or safety guardrail value that only real measurement could justify. Do not
