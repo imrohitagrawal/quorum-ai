@@ -48,6 +48,16 @@ def test_a_4xx_answer_allows_the_page() -> None:
     assert _allows(410, "", "https://site.example/deep/page?q=1") is True
 
 
+def test_a_3xx_answer_counts_as_unreadable_and_refuses_the_page() -> None:
+    """ADR-0148 decision 3 (d3a7f99): following a robots.txt redirect would
+    need a second pinned fetch, so a 3xx answer counts as unreadable and the
+    page is not fetched. RED IF: a 3xx answer is treated as allowed (for
+    example by an "anything below 500 that is not 2xx" rule)."""
+    assert _allows(301, "", "https://site.example/a") is False
+    assert _allows(302, "", "https://site.example/a") is False
+    assert _allows(302, "User-agent: *\nAllow: /\n", "https://site.example/a") is False
+
+
 def test_a_5xx_answer_refuses_the_page() -> None:
     """RFC 9309 2.3.1.4: a 5xx means the site is unreachable; fail closed.
     RED IF: 500 or 503 is treated as allowed (for example by a

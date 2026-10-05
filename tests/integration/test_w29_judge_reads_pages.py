@@ -738,6 +738,49 @@ def test_on_page_text_is_cleaned_and_forged_markers_are_redacted(
 
 
 # ---------------------------------------------------------------------------
+# The stored evaluation names the prompt that judged it (ADR-0148, d3a7f99).
+# ---------------------------------------------------------------------------
+
+
+def _stored_prompt_id(monkeypatch: pytest.MonkeyPatch, *, pages: bool) -> object:
+    """Persist a judged panel run through ``_persist_terminal_run`` and read
+    the judge's ``prompt_id`` back from the run-history row -- the boundary
+    where ``RunEvaluation.to_eval_json`` output is stored."""
+    _enable_judge(monkeypatch)
+    if pages:
+        _pages_on(monkeypatch)
+    spies = _spies(monkeypatch)
+    with run_history_store.configure_for_tests() as history:
+        with _sites(_standard_routes()) as sites:
+            run = _run([_standard_sources(sites)])
+            qr._persist_terminal_run(run.query_run_id)
+        row = history.get(str(run.query_run_id))
+    assert len(spies.judge_calls) == 1  # the judge really judged this run
+    assert row is not None and row.eval_json is not None
+    judge = row.eval_json["judge"]
+    assert isinstance(judge, dict), row.eval_json
+    return judge.get("prompt_id")
+
+
+def test_a_run_judged_with_pages_is_stored_with_the_v2_prompt_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """RED IF: the stored id is a fixed value (today ``JUDGE_PROMPT_ID``, v1)
+    while the judge was sent the v2 prompt -- the stored verdict would then
+    claim a prompt that did not judge it."""
+    assert _stored_prompt_id(monkeypatch, pages=True) == "PR-EVAL-JUDGE-v2"
+
+
+def test_a_run_judged_without_pages_is_stored_with_the_v1_prompt_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The partner: with the setting off the stored id stays v1. GREEN TODAY.
+    RED IF: the id is fixed at v2, or keyed on the setting being merely
+    present."""
+    assert _stored_prompt_id(monkeypatch, pages=False) == "PR-EVAL-JUDGE-v1"
+
+
+# ---------------------------------------------------------------------------
 # F. The measured receipt.
 # ---------------------------------------------------------------------------
 
