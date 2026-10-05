@@ -219,16 +219,69 @@ def test_the_false_claim_appears_nowhere_in_the_served_bundle() -> None:
 
 
 def test_the_render_site_uses_the_constant_and_does_not_inline_copy() -> None:
-    """RED if the disclosure is hardcoded at the render site.
+    """RED if the verified disclosure is hardcoded instead of derived from
+    ``TRUST_DISCLOSURE_VERIFIED``.
 
     A reviewer left the constant honest and wrote the false sentence directly
     into the ``mkEl`` call — every constant-focused test passed. Pinning the
     text without pinning its USE is the exact vacuity this file was rewritten
-    to escape, reintroduced one level along."""
+    to escape, reintroduced one level along.
+
+    Since W29 (ADR-0148 decision 9) the render site passes the text through
+    ``verifiedTrustDisclosure(ev, pagesInEffect)``, which adds the page counts
+    when pages were read. So the pin is now two-step: the render site's ONLY
+    disclosure argument is that function, and every string the function
+    returns starts from the constant — either the constant itself or ``lead``,
+    which is the constant with its last sentence removed. Turns red if: the
+    render site passes any other expression (a literal, a template), the
+    function returns a literal or a template not built on ``lead``, ``lead``
+    stops being derived from the constant, or the approved sentence's opening
+    is spelled out anywhere in the function."""
     code = code_without_comments(APP_JS)
-    assert 'mkEl("p", "result-trust-score-disclosure", TRUST_DISCLOSURE_VERIFIED)' in code, (
-        "the verified disclosure must be rendered FROM the constant, not inlined"
+    render = _extract_js_function(code, "renderTrustScore")
+    # The third argument: a name, a call, a string literal or a template.
+    args = re.findall(
+        r'mkEl\(\s*"p",\s*"result-trust-score-disclosure",\s*'
+        r'([A-Za-z_]\w*(?:\([^)]*\))?|"[^"]*"|`[^`]*`)',
+        render,
     )
+    verified_args = [a for a in args if a.strip() != "TRUST_DISCLOSURE"]
+    assert [a.strip() for a in verified_args] == ["verifiedTrustDisclosure(ev, pagesInEffect)"], (
+        f"the verified disclosure must be rendered FROM the function, not inlined: {args}"
+    )
+    # Partner: the unverified branch's call is still found by the same pattern,
+    # so an empty match list cannot pass the assertion above vacuously.
+    assert [a.strip() for a in args].count("TRUST_DISCLOSURE") == 1, args
+
+    function = _extract_js_function(code, "verifiedTrustDisclosure")
+    returns = [r.strip() for r in re.findall(r"\breturn\s+([^;]+);", function)]
+    assert returns, "verifiedTrustDisclosure returns nothing the pattern can see"
+    for value in returns:
+        assert value == "TRUST_DISCLOSURE_VERIFIED" or value.startswith("`${lead} "), (
+            f"verifiedTrustDisclosure returns copy not built on the constant: {value}"
+        )
+    assert "TRUST_DISCLOSURE_VERIFIED" in returns  # the unchanged sentence is reachable
+    assert re.search(r"\bconst lead\s*=\s*TRUST_DISCLOSURE_VERIFIED\.replace\(", function), (
+        "`lead` must be derived from the constant"
+    )
+    assert APPROVED_VERIFIED_DISCLOSURE[:40] not in function
+
+
+def _extract_js_function(source: str, name: str) -> str:
+    """The text of ``function name(...) {...}`` by brace count."""
+    marker = f"function {name}("
+    assert marker in source, f"app.js has no `{marker}`"
+    start = source.index(marker)
+    brace = source.index("{", source.index(")", start))
+    depth = 0
+    for i in range(brace, len(source)):
+        if source[i] == "{":
+            depth += 1
+        elif source[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return source[start : i + 1]
+    raise AssertionError(f"unbalanced braces in {name}")
 
 
 def test_the_unverified_disclosure_is_untouched() -> None:

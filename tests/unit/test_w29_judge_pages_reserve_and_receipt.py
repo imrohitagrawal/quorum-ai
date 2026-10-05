@@ -233,3 +233,50 @@ def test_reconciliation_never_moves_a_zero_line(raw: list[Decimal], total: Decim
     lines = CostEstimationService._reconcile_usd_lines(raw, total)
     assert lines[-1] == Decimal("0")
     assert sum(lines) == total
+
+
+def test_the_page_reserve_covers_the_widest_block_the_builder_can_emit() -> None:
+    """Bucket B pin for ``costs._JUDGE_PAGE_ITEM_OVERHEAD_CHARS`` and
+    ``costs._JUDGE_PAGES_SECTION_OVERHEAD_CHARS``: measured against the REAL
+    v2 user prompt, not restated as numbers. The widest block is 8 pages of
+    4,000 characters numbered on two-digit SOURCES lines (25-32 of 32). The
+    block's size is the v2 user prompt minus the v1 user prompt of the same
+    evidence (v1 carries no page block).
+
+    Turns red if: the page format grows (a longer header, an extra separator)
+    past what the two constants reserve, or either constant is lowered below
+    what the format costs. Partner: the reserve is not slack by more than a
+    few characters, so an inflated constant is caught too."""
+    from product_app.costs import (
+        _JUDGE_PAGE_ITEM_OVERHEAD_CHARS,
+        _JUDGE_PAGES_SECTION_OVERHEAD_CHARS,
+    )
+    from product_app.evaluation import (
+        JudgeEvidence,
+        build_judge_pages_prompt,
+        build_judge_prompt,
+    )
+
+    lines = tuple(f"[{n}] Title {n} :: https://site{n}.example/page" for n in range(1, 33))
+    widest = tuple("" if n < 25 else "p" * 4000 for n in range(1, 33))
+    empty = ("",) * 32
+
+    def block(pages: tuple[str, ...]) -> int:
+        evidence = JudgeEvidence(
+            query_text="Q?",
+            answer_texts=("A [1].",),
+            source_lines=lines,
+            synthesis_sections=(),
+            source_pages=pages,
+        )
+        return len(build_judge_pages_prompt(evidence)[1]) - len(build_judge_prompt(evidence)[1])
+
+    reserve = 8 * (4000 + int(_JUDGE_PAGE_ITEM_OVERHEAD_CHARS)) + int(
+        _JUDGE_PAGES_SECTION_OVERHEAD_CHARS
+    )
+    widest_block = block(widest)
+    assert widest_block > 8 * 4000  # the pages really are in the block
+    assert widest_block <= reserve, (widest_block, reserve)
+    assert widest_block >= reserve - 40, (widest_block, reserve)
+    no_page_block = block(empty)
+    assert 0 < no_page_block <= int(_JUDGE_PAGES_SECTION_OVERHEAD_CHARS), no_page_block
