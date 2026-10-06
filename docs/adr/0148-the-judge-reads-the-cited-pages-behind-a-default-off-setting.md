@@ -3,8 +3,8 @@
 ## Status
 
 Accepted — 2026-10-06, board row W29 (#447), wiring only. The product owner decided what
-the judge reads and how it is described on 2026-10-04 (CHG-026 (d), (e)) and 2026-10-05
-(CHG-028). The design below is the session's; the owner may overturn any of it. Fetching
+the judge reads and how it is described in messages of 2026-09-28 to 2026-09-30 (CHG-026
+(d), (e)) and on 2026-10-05 (CHG-028). The design below is the session's; the owner may overturn any of it. Fetching
 stays OFF (`quorum_source_fetch_enabled = False` in code; `fly.toml` does not set it).
 Switching it on is a separate pull request, after the one paid measured run the owner must
 approve first (CHG-027: "ask me before the one paid measured run it needs"), and after the
@@ -42,7 +42,17 @@ untrusted-text fence catch an altered marker. The owner's decisions:
    matcher follows RFC 9309 section 2.2: the group whose user-agent line equals the app's
    product token `quorum-ai-source-check` (ignoring case), else the `*` group; rules of
    every matching group combined; the longest matching rule wins and `Allow` wins a tie;
-   `*` matches any characters and `$` ends the path; a leading byte-order mark is ignored.
+   `*` matches any characters and `$` ends the path. Before comparing, the rule and the
+   address's path and query are put in one form (RFC 9309 section 2.2.2): characters
+   outside ASCII are percent-encoded as UTF-8, a percent-encoded unreserved character
+   (letters, digits, `-`, `.`, `_`, `~`) is decoded, and hex digits are upper-cased, so
+   `/café`, `/caf%C3%A9` and `/caf%c3%a9` are one path, and `/~a` and `/%7Ea` another
+   (review round 2 fetched forbidden pages through both). Three choices are the
+   session's, not the RFC's: a leading byte-order mark is ignored; a user-agent line
+   binds the app only when it equals the product token exactly, so
+   `quorum-ai-source-check/0.1` does not (strict reading; some crawlers would match it);
+   and an address whose path and query are longer than 2,048 characters is not fetched,
+   because matching cost grows with the address length times the rule length.
    A 4xx answer means fetching is allowed and a 5xx or no answer means it is not, as RFC
    9309 section 2.3.1 says. Two answers fail closed by the session's choice, not the RFC's:
    a 3xx (the RFC asks a crawler to follow at least five redirects; following one here
@@ -56,7 +66,9 @@ untrusted-text fence catch an altered marker. The owner's decisions:
    A fetch that fails for another reason (timeout, too large, not text) falls back to the
    title and address, not the excerpt: CHG-026 (d) and CHG-028 name the excerpt for pages
    robots.txt disallows only.
-   Answers often cite the same address. Each distinct address is fetched and given to the
+   Answers often cite the same address. Addresses are compared without their fragment
+   (the part after `#`, which search results often add) and with the host in lower case.
+   Each distinct address is fetched and given to the
    judge once; a later source line with the same address says it is the same page as the
    earlier one, so the judge is never told a page it has could not be read. The 8-item cap
    counts distinct addresses.
@@ -109,16 +121,19 @@ untrusted-text fence catch an altered marker. The owner's decisions:
   reads included; a larger judge input and a higher price bound; the judge's quality on
   page text unmeasured until the paid run.
 - With the setting on, the shown estimate (`estimated_cost_usd`) does not include pages:
-  only the upper bound reserves for them, about $0.008 more per panel run with a judge
-  (review round 1). The typical judge input (`cost_judge_input_tokens = 7300`) must be
+  only the upper bound reserves for them: about $0.008 more per panel run with a judge at
+  the tests' default judge price of $0.001 per 1,000 tokens (review round 1), and $0.0021
+  at gpt-5-mini's catalog price of $0.00025 per 1,000 (review round 2; which model judges
+  in production is not checked here). The typical judge input (`cost_judge_input_tokens = 7300`) must be
   re-measured in the paid run before switch-on (W54).
 - The reserve counts 4 characters per token (ADR-0095's average, not a ceiling). Page text
   in Chinese, Japanese or code can take more tokens per character, so the paid run must
-  include a non-English page. Review round 1 measured the widest prompt the builder can emit
-  at 33 characters inside the reserve.
+  include a non-English page. Review round 2 measured the widest page block the builder can
+  emit (8 pages and 24 "same page as" lines) at 58 characters inside the reserve.
 - Calls taken by the session (the owner may overturn any of them): (i) fetching on the
   memo's owner branch, inside the slot; (ii) robots.txt fail-closed on a 3xx or an
   oversized file; (iii) no excerpt for a failed fetch; (iv) at most 8 page-or-excerpt items,
   one per distinct address; (v) a new prompt id; (vi) a search excerpt does not count as a
   checked page in "Checked against N of M"; (vii) the app's own robots.txt matcher rather
-  than a new dependency.
+  than a new dependency; (viii) a user-agent line with a version number does not bind the
+  app; (ix) addresses longer than 2,048 characters are not fetched.
