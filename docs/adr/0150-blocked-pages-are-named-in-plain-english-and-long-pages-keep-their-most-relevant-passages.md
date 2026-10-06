@@ -41,8 +41,11 @@ unchanged), but P does not count it.
 The run's `evaluation` gains `source_pages_preview`, null whenever `source_pages_read` is null
 (the judge was not sent pages: setting off, a quick run, no judge, or no cited source).
 
-Let N = pages read, P = pages checked by preview, M = distinct cited addresses, and
-F = M − N − P (failed, robots.txt unreadable, refused with no preview, or past the cap).
+Let N = pages read, P = pages a website's rules refused and checked by preview, M = distinct
+cited addresses, and F = M − N − P (failed, robots.txt unreadable, refused with no preview, or
+past the cap). A page in F whose robots.txt could not be read still sends its preview to the
+judge, so no sentence may say the rest were checked on titles and addresses only (review
+round 2 found the first wording did).
 
 ### 2. The sentences
 
@@ -58,11 +61,12 @@ its source list — an automated review, not a human fact-check." Then:
 | N > 0, P > 0, F > 0 | "Checked against N of M cited pages. For P of the other M−N, the website asks automated tools not to read its pages, so the check could only use the short preview the search engine showed." | Session |
 | N = 0, P = M, M > 1 | "No cited page could be read: the websites ask automated tools not to read their pages. The check used only the titles, addresses and the short previews the search engine showed." | Session wording, approved by the owner (CHG-029 (b)) |
 | N = 0, P = M = 1 | "No cited page could be read: the website asks automated tools not to read its pages. The check used only the title, address and the short preview the search engine showed." | Session (the approved sentence in the singular) |
-| N = 0, 0 < P < M | "No cited page could be read. For P of the M, the website asks automated tools not to read its pages, so the check could only use the short preview the search engine showed; for the rest it used the titles and addresses." | Session |
-| N = 0, P = 0 | "No cited page could be read. The check used only the titles and addresses." | Session (today's sentence mentions "search excerpts", which P = 0 shows were not used) |
+| N = 0, 0 < P < M | "No cited page could be read. For P of the M, the website asks automated tools not to read its pages, so the check could only use the short preview the search engine showed; for the rest it used the titles, addresses and any short previews the search engine showed." | Session |
+| N = 0, P = 0, M > 1 | "No cited page could be read. The check used only the titles, addresses and any short previews the search engine showed." | Session (today's meaning, in plainer words than "search excerpts") |
+| N = 0, P = 0, M = 1 | "No cited page could be read. The check used only the title, address and any short preview the search engine showed." | Session |
 
 Singular forms: "cited page" when M is 1 (as today); "For the other one," when P is 1 and
-F = 0; the N = 0, P = M = 1 row above. Impossible counts (not whole numbers, negative,
+F = 0; the N = 0, P = M = 1 and N = 0, P = 0, M = 1 rows above. Impossible counts (not whole numbers, negative,
 N + P > M) show the sentence used when page reading is off, which never claims a page was
 read, as today. "Posture off" in the table means page reading is switched off.
 
@@ -96,10 +100,18 @@ read, as today. "Posture off" in the table means page reading is switched off.
   is joined with a space, as `extract_text` does today.
 - Words: lower-cased runs of letters and digits, at least 3 characters, minus a fixed list of
   71 common English words. Each distinct word counts once per passage.
-- A page with no shared words (for example Chinese or Japanese, which has no spaces between
+- A page with no shared words (for example Chinese or Japanese, which have no spaces between
   words) keeps passages from the top in page order; one that does not fit is skipped and a
-  later, shorter one may fill the room left. Unlike today, it reads the main area, so menus
-  and footers are left out.
+  later, shorter one may fill the room left. When the page has a main area (`<main>`, an
+  `<article>`, or enough text outside menus and forms) it reads that, so menus and footers are
+  left out; otherwise it starts from the top of the whole text, as today.
+- Picking cuts to the smaller of 4,000 characters and the `quorum_source_fetch_max_text_chars`
+  setting, so a lowered setting still keeps whole passages (review round 2 found a later cut
+  splitting them).
+- Known limit, found in review round 2: an `<article>` that is never closed runs to the end of
+  the page, where a browser would close it at its parent's end. A page whose only article is
+  an unclosed teaser after the main text can then lose the main text. How often real pages do
+  this is not measured.
 - The v2 system prompt says a PAGE entry may be passages from the page with gaps marked
   " … ". v2 has no paid golden capture yet; the paid run captures it after this change.
 
@@ -153,15 +165,18 @@ judge prompts from the same fetched text: "first 4,000 characters" with today's
 - With the setting off, nothing visible changes; the API gains one null field.
 - With it on: the judge reads the most relevant passages of long pages; the trust note says
   when a website's rules asked tools not to read its pages.
-- Picking passages third-party text from deep in a page into the judge's prompt that the
+- Picking can bring third-party text from deep in a page into the judge's prompt that the
   first 4,000 characters would not have reached (for example a reader's comment that repeats
   the answers' words). It stays inside the untrusted block and the v2 prompt still says to
   ignore instructions in it.
 - On the synthetic pages measured, reading and picking cost little time in the run slot.
   Measured after review round 1 with `time.process_time` (best of 3, an Apple M4) for 8 pages
-  at the 262,144-byte cap and four 4,000-character answers: at most 0.492 s of CPU (nested
-  inline tags), and a memory peak of at most 5.5 MiB for one page (nested `<article>` tags;
-  the first version needed about 6 GB for that page). Script: the session's `time_pick.py`
+  at the 262,144-byte cap and four 4,000-character answers, on the page shapes built: about
+  0.5 s of CPU for nested inline tags, and up to 0.9 s for a page of 262,144 bytes of tiny
+  `<p>` blocks (review round 2), of which about 0.6 s is the parse today's `extract_text`
+  already pays; a memory peak of at most 5.5 MiB for one page (nested `<article>` tags; the
+  first version needed about 6 GB for that page). Production runs on a shared CPU (`fly.toml`),
+  so its times are not measured here. Script: the session's `time_pick.py`
   (not kept in the repository).
 - Unmeasured until the paid run: whether picked passages change verdicts compared with the
   first 4,000 characters, how often fetches fail, and the time picking adds in the run slot
