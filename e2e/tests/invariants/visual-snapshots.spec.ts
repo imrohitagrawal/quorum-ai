@@ -31,9 +31,13 @@ test.describe("visual snapshots (golden fixture)", () => {
   test("result view — verdict + trust triangle", async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 1200 });
     // W41 (ADR-0149): the same fonts every run, whatever Google answers.
-    await pinGoogleFonts(page);
+    const fonts = await pinGoogleFonts(page);
     await driveToResult(page);
     await stabilize(page);
+    // RED if the pin served no stylesheet: its route stopped matching, or its
+    // handler let the request through to Google (whose usual answer matches
+    // the saved copy, so no pixel would show it).
+    expect(fonts.served()).toBeGreaterThan(0);
     await expect(page).toHaveScreenshot("result-verdict.png", {
       fullPage: true,
       mask: masks(page),
@@ -44,10 +48,14 @@ test.describe("visual snapshots (golden fixture)", () => {
   test("transcript view — full debate", async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 1200 });
     // W41 (ADR-0149): the same fonts every run, whatever Google answers.
-    await pinGoogleFonts(page);
+    const fonts = await pinGoogleFonts(page);
     await driveToResult(page);
     await driveToTranscript(page);
     await stabilize(page);
+    // RED if the pin served no stylesheet: its route stopped matching, or its
+    // handler let the request through to Google (whose usual answer matches
+    // the saved copy, so no pixel would show it).
+    expect(fonts.served()).toBeGreaterThan(0);
     await expect(page).toHaveScreenshot("transcript-full.png", {
       fullPage: true,
       mask: masks(page),

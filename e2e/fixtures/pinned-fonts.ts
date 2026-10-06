@@ -8,10 +8,10 @@ import * as path from "path";
  *
  * Google sometimes answers the same request with a different build of the
  * Geist font (font addresses of the form `fonts.gstatic.com/l/font?kit=…`
- * instead of `fonts.gstatic.com/s/…`). Its weight-600 letters are slightly
- * wider, which moved the trust-score card's bold sentence and failed the
- * screenshot compare at random (644, 589 and 234 px, reproduced exactly by
- * replaying that build on CI). The saved copy names only the usual `/s/`
+ * instead of `fonts.gstatic.com/s/…`). Its letter widths at weights 550 to
+ * 650 differ by about one font unit, which moved the trust-score card's bold
+ * sentence and failed the screenshot compare at random (644, 589 and 234 px,
+ * reproduced exactly by replaying that build on CI). The saved copy names only the usual `/s/`
  * files, so every screenshot gets the same fonts. The font files still come
  * from Google.
  *
@@ -25,9 +25,18 @@ const RECORD = JSON.parse(fs.readFileSync(path.join(__dirname, "google-fonts.jso
 };
 const STYLESHEET = fs.readFileSync(path.join(__dirname, "google-fonts.css"));
 
-export async function pinGoogleFonts(page: Page): Promise<void> {
-  await page.route("https://fonts.googleapis.com/**", (route) => {
+/**
+ * Returns `served()`: how many stylesheet requests this route answered from
+ * the saved copy. Google's usual answer is byte-identical to that copy, so a
+ * pin that silently stopped matching would leave every screenshot green; the
+ * specs assert `served() > 0` to catch that.
+ */
+export async function pinGoogleFonts(page: Page): Promise<{ served: () => number }> {
+  let served = 0;
+  await page.route("https://fonts.googleapis.com/**", async (route) => {
     if (route.request().url() !== RECORD.url) return route.abort();
-    return route.fulfill({ status: 200, contentType: "text/css; charset=utf-8", body: STYLESHEET });
+    await route.fulfill({ status: 200, contentType: "text/css; charset=utf-8", body: STYLESHEET });
+    served += 1;
   });
+  return { served: () => served };
 }

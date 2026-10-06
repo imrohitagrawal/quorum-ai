@@ -1,15 +1,17 @@
 """W41: the screenshot specs load a SAVED font stylesheet, keep their tolerances,
 and keep the trust-score card's exact-text check.
 
-The decision (docs/19-change-control-log.md, CHG-031, which replaces CHG-027 (e)'s
-700 px and CHG-030's allowance): the trust-score screenshot flake was caused by
-Google Fonts sometimes answering the test browser with a different Geist build
-(font URLs of the form ``fonts.gstatic.com/l/font?kit=...``) whose weight-600
-letters are slightly wider. The owner chose: pin the stylesheet in the two
+The decision (docs/19-change-control-log.md, CHG-031, which replaces CHG-027
+(e)'s 700 px and CHG-030's allowance): the trust-score screenshot flake was
+caused by Google Fonts sometimes answering the test browser with a different
+Geist build (font URLs of the form ``fonts.gstatic.com/l/font?kit=...``) whose
+letter widths at weights 550 to 650 differ from the usual build's by about one
+font unit, in both directions (in the card's weight-600 sentence, 10 letters are
+wider and 26 narrower). The owner chose: pin the stylesheet in the two
 screenshot specs, keep ``maxDiffPixels: 120``, keep the exact-text check.
 ADR-0149 has the measurements.
 
-Four things must hold, and the tests below pin them:
+Five things must hold, and the tests below pin them:
 
 * T1, tolerances. Every ``toHaveScreenshot(`` call in
   ``trust-score-visual.spec.ts`` passes exactly ``{maxDiffPixels: 120}``; every
@@ -18,8 +20,15 @@ Four things must hold, and the tests below pin them:
   sets no screenshot option globally.
 * T2, the pin is CALLED. Each visual spec imports ``pinGoogleFonts`` from
   ``../../fixtures/pinned-fonts`` and, in every test, runs
-  ``await pinGoogleFonts(page);`` as a top-level statement before anything
-  loads the page (directly, or first thing in a local helper that loads it).
+  ``await pinGoogleFonts(page);`` (optionally ``const fonts = await ...``) as
+  a top-level statement before anything loads the page (directly, or first
+  thing in a local helper that loads it).
+* T2b, the pin is PROVEN at runtime. Every test asserts
+  ``expect(fonts.served()).toBeGreaterThan(0)`` before its ``toHaveScreenshot(``,
+  on the handle ``pinGoogleFonts`` returned (directly, or returned to the test
+  by the local helper that pinned). Google's usual live answer is byte-identical
+  to the saved copy, so a route that stops matching changes no pixel; this
+  assertion is the only thing that fails when it does.
 * T3, the saved stylesheet matches what the app asks for. If the template's font
   link changes, the fixture is stale and these tests stay red until it is
   re-captured.
@@ -37,13 +46,15 @@ to a ``.js`` file first and read through the public helper.
 The 120, the 0.01 and the five card lines are literals written here, not read
 back from the file under test (rule 7a).
 
-WHAT THESE TESTS CANNOT SEE. They read source, not a running browser: whether the
-route in ``pinned-fonts.ts`` really serves the saved file is proven by the e2e
-run, not here. ``mask`` is pinned as the call ``masks(page)``, not as what
-``stabilize.ts`` returns. A pin nested in any block (an ``if``, a loop, an
-arrow function) is not counted, but an early ``return`` before a top-level pin
-is not detected. CLI flags in ``e2e.yml`` (``--update-snapshots``,
-``--ignore-snapshots``) are not read.
+WHAT THESE TESTS CANNOT SEE. They read source, not a running browser. The
+runtime proof that the route in ``pinned-fonts.ts`` really served the saved file
+is the ``served() > 0`` assertion in each spec, which T2b pins in place; whether
+``served()`` counts honestly (and does not, say, return a constant) is the
+helper's own contract, reviewed there and not checked here. ``mask`` is pinned
+as the call ``masks(page)``, not as what ``stabilize.ts`` returns. A pin nested
+in any block (an ``if``, a loop, an arrow function) is not counted, but an early
+``return`` before a top-level pin is not detected. CLI flags in ``e2e.yml``
+(``--update-snapshots``, ``--ignore-snapshots``) are not read.
 
 WHAT TURNS EACH TEST RED is stated on the test.
 """
@@ -373,8 +384,26 @@ _FUNCTION_DEF = re.compile(
     r"|\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?\()"
 )
 _TEST_CALL = re.compile(r"(?<![\w$.])test\s*\(")
-#: The pin as a whole statement: at the start of the body or after ``{ ; }``.
-_PIN_STATEMENT = re.compile(r"(?:^|(?<=[{;}]))\s*await\s+pinGoogleFonts\s*\(\s*page\s*\)\s*;")
+_STATEMENT_START = r"(?:^|(?<=[{;}]))\s*"
+_NAME = r"[A-Za-z_$][\w$]*"
+#: The pin as a whole statement, at the start of the body or after ``{ ; }``,
+#: optionally binding its handle: ``const fonts = await pinGoogleFonts(page);``.
+_PIN_STATEMENT = re.compile(
+    _STATEMENT_START
+    + rf"(?:(?:const|let)\s+(?P<handle>{_NAME})\s*=\s*)?"
+    + r"await\s+pinGoogleFonts\s*\(\s*page\s*\)\s*;"
+)
+#: ``const NAME = await CALLEE(`` as a whole statement.
+_AWAITED_BINDING = re.compile(
+    _STATEMENT_START + rf"(?:const|let)\s+({_NAME})\s*=\s*await\s+({_NAME})\s*\("
+)
+_RETURN = re.compile(_STATEMENT_START + rf"return\s+({_NAME})\s*;")
+#: ``expect(NAME.served()).toBeGreaterThan(0);`` as a whole statement.
+_SERVED_CHECK = re.compile(
+    _STATEMENT_START
+    + rf"expect\s*\(\s*({_NAME})\s*\.\s*served\s*\(\s*\)\s*\)"
+    + r"\s*\.\s*toBeGreaterThan\s*\(\s*0\s*\)\s*;"
+)
 _GOTO = re.compile(r"\.goto\s*\(")
 
 
@@ -472,6 +501,47 @@ def _pin_order_per_test(spec: Path) -> list[str]:
     return [_first_page_event(body, local, loaders) for body in _test_bodies(code)]
 
 
+def _top_level(pattern: re.Pattern[str], body: str) -> list[re.Match[str]]:
+    """Matches of *pattern* that sit at depth 0 of *body* (not in any block)."""
+    return [m for m in pattern.finditer(body) if _depth_at(body, m.end() - 1) == 0]
+
+
+def _pin_handles(body: str, local: dict[str, str]) -> set[str]:
+    """Names in *body* bound to the handle ``pinGoogleFonts`` returned.
+
+    Directly (``const fonts = await pinGoogleFonts(page);``), or from a local
+    helper that binds that handle at its own top level and ``return``s it.
+    """
+    handles = {m.group("handle") for m in _top_level(_PIN_STATEMENT, body) if m.group("handle")}
+    for binding in _top_level(_AWAITED_BINDING, body):
+        name, callee = binding.groups()
+        if callee in local:
+            inner = _pin_handles(local[callee], {})
+            if any(r.group(1) in inner for r in _top_level(_RETURN, local[callee])):
+                handles.add(name)
+    return handles
+
+
+def _served_before_screenshot(body: str, local: dict[str, str]) -> str:
+    """``"ok"``, or why *body* does not prove the pin served before its screenshot."""
+    screenshot = _CALL.search(body)
+    if not screenshot:
+        return "no toHaveScreenshot("
+    handles = _pin_handles(body, local)
+    checks = [m for m in _top_level(_SERVED_CHECK, body) if m.group(1) in handles]
+    if not checks:
+        return f"no top-level expect(<pin handle>.served()).toBeGreaterThan(0) (handles: {handles})"
+    if checks[0].start() > screenshot.start():
+        return "the served() check comes after toHaveScreenshot("
+    return "ok"
+
+
+def _served_per_test(spec: Path) -> list[str]:
+    code = _code_of_file(spec)
+    local = _function_bodies(code)
+    return [_served_before_screenshot(body, local) for body in _test_bodies(code)]
+
+
 def test_the_pin_reader_tells_a_call_from_a_decoy() -> None:
     """RED if the pin reader counts a pin that does not run first (after
     ``boot(`` or ``page.goto(``, nested in an ``if`` block or an arrow function,
@@ -491,6 +561,35 @@ def test_the_pin_reader_tells_a_call_from_a_decoy() -> None:
     assert first(arrow) == "load"
     assert first("// await pinGoogleFonts(page);\n await boot(page);") == "load"
     assert first("await page.goto('/ui');\n await pinGoogleFonts(page);") == "load"
+    bound = "const fonts = await pinGoogleFonts(page);\n await boot(page);"
+    assert first(bound) == "pin", "POSITIVE PARTNER: a pin that keeps its handle"
+
+
+def test_the_served_reader_tells_a_proof_from_a_decoy() -> None:
+    """RED if the served() reader accepts a check that proves nothing: in a
+    comment, nested in a block, after the screenshot, on a handle that did not
+    come from ``pinGoogleFonts``, or with a bound other than ``> 0`` — or stops
+    accepting a real check, on a direct handle or one a local helper returned."""
+    shot = "\n await expect(page).toHaveScreenshot('a.png', { maxDiffPixels: 120 });"
+    pin = "const fonts = await pinGoogleFonts(page);\n await boot(page);\n "
+    check = "expect(fonts.served()).toBeGreaterThan(0);"
+
+    def verdict(body: str, local: dict[str, str] | None = None) -> str:
+        return _served_before_screenshot(_code_of(body), local or {})
+
+    assert verdict(pin + check + shot) == "ok", "POSITIVE PARTNER: a direct handle"
+    helper = {"drive": _code_of(pin + "await fill(page);\n return fonts;\n")}
+    via_helper = "const fonts = await drive(page);\n " + check + shot
+    assert verdict(via_helper, helper) == "ok", "POSITIVE PARTNER: a handle a helper returned"
+    no_return = {"drive": _code_of(pin + "await fill(page);\n")}
+    assert verdict(via_helper, no_return) != "ok", "a helper that returns no handle"
+    assert verdict(pin + "// " + check + shot) != "ok", "a check in a comment"
+    assert verdict(pin + "if (x) { " + check + " }" + shot) != "ok", "a nested check"
+    assert verdict(pin + shot + "\n " + check) != "ok", "a check after the screenshot"
+    fake = "const fonts = { served: () => 1 };\n await pinGoogleFonts(page);\n " + check
+    assert verdict(fake + shot) != "ok", "a handle not returned by pinGoogleFonts"
+    loose = check.replace("toBeGreaterThan(0)", "toBeGreaterThanOrEqual(0)")
+    assert verdict(pin + loose + shot) != "ok", "a bound that 0 satisfies"
 
 
 def test_each_visual_spec_imports_the_pin_from_the_fixture() -> None:
@@ -527,6 +626,22 @@ def test_every_visual_test_pins_the_fonts_before_the_page_loads() -> None:
         assert order == ["pin"] * len(order), (
             f"{spec.name}: per test, what happens first is {order}; every test must run "
             "`await pinGoogleFonts(page);` before the page loads (CHG-031)"
+        )
+
+
+def test_every_visual_test_proves_the_pin_served_before_its_screenshot() -> None:
+    """RED if any test in either visual spec stops asserting
+    ``expect(<handle>.served()).toBeGreaterThan(0)`` as a top-level statement
+    before its ``toHaveScreenshot(``, on the handle ``pinGoogleFonts`` returned
+    (the check deleted, left in a comment, moved after the screenshot, nested in
+    a block, or made on a handle the helper no longer returns). Also RED if a
+    spec has no test."""
+    for spec in VISUAL_SPECS:
+        verdicts = _served_per_test(spec)
+        assert verdicts, f"POSITIVE PARTNER: no test( callback found in {spec.name}"
+        assert verdicts == ["ok"] * len(verdicts), (
+            f"{spec.name}: per test, {verdicts}. Google's usual answer equals the saved "
+            "copy, so only served() > 0 shows the pin really served it (CHG-031)"
         )
 
 

@@ -51,7 +51,7 @@ const fulfil = (body: unknown, status = 200) => ({
 
 async function driveToTrustSurface(page: Page) {
   // W41 (ADR-0149): the same fonts every run, whatever Google answers.
-  await pinGoogleFonts(page);
+  const fonts = await pinGoogleFonts(page);
   await boot(page);
   await Promise.all([
     page.route("**/v1/query-runs/estimate", (r) =>
@@ -68,6 +68,7 @@ async function driveToTrustSurface(page: Page) {
   await page.getByRole("textbox").first().fill("What are the key metrics for measuring SaaS retention?");
   await page.locator("#run-now").click();
   await expect(page.locator("#result-verdict[data-consensus]")).toBeVisible({ timeout: 20000 });
+  return fonts;
 }
 
 test.describe("trust-score visual baselines (FR-016, advisory)", () => {
@@ -77,7 +78,7 @@ test.describe("trust-score visual baselines (FR-016, advisory)", () => {
     for (const width of [375, 768, 1440] as const) {
       test(`trust-score — ${theme} @ ${width}`, async ({ page }) => {
         await page.setViewportSize({ width, height: 1200 });
-        await driveToTrustSurface(page);
+        const fonts = await driveToTrustSurface(page);
         await page.evaluate((t) => document.documentElement.setAttribute("data-theme", t), theme);
         await stabilize(page);
 
@@ -113,6 +114,10 @@ test.describe("trust-score visual baselines (FR-016, advisory)", () => {
             "This question needed a safety caveat and the synthesis did not include one.",
           ]);
 
+        // RED if the pin served no stylesheet: its route stopped matching, or
+        // its handler let the request through to Google (whose usual answer
+        // matches the saved copy, so no pixel would show it).
+        expect(fonts.served()).toBeGreaterThan(0);
         await expect(surface).toHaveScreenshot(`trust-score-${theme}-${width}.png`, {
           maxDiffPixels: 120,
         });
