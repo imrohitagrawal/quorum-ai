@@ -84,8 +84,32 @@ test.describe("trust-score visual baselines (FR-016, advisory)", () => {
         await expect(surface).toBeVisible();
         await expect(surface).not.toBeEmpty();
 
+        // CHG-030: the screenshot allowance was widened to 700 px, and at 700 px
+        // a one-word or one-letter change in this card no longer fails the
+        // pixel compare. So the card's wording is pinned here instead: every
+        // visible line, exact, in order, and no more or fewer lines. Read from
+        // innerText, so it sees any visible element and skips hidden ones; the
+        // bullets are CSS list markers, not text, so they are not in the lines.
+        // Red if: any line's wording changes, a line is added, removed or
+        // reordered (e.g. "Structural checks passed" -> "Structural check passed"
+        // in app.js).
+        const cardLines = async () =>
+          (await surface.innerText())
+            .split("\n")
+            .map((line) => line.trim())
+            .filter((line) => line !== "");
+        await expect
+          .poll(cardLines)
+          .toEqual([
+            "Not verified — these are automated structural checks, not a fact-check.",
+            "Structural checks passed — citations were not verified against their sources.",
+            "Some citation markers did not point at a source on this run.",
+            "Not every answer that came back carried a primary source.",
+            "This question needed a safety caveat and the synthesis did not include one.",
+          ]);
+
         await expect(surface).toHaveScreenshot(`trust-score-${theme}-${width}.png`, {
-          maxDiffPixels: 120,
+          maxDiffPixels: 700,
         });
       });
     }

@@ -6,7 +6,7 @@ original, because a gate and an offline agent can read it and cannot read `gh`.
 
 Verified at: `4ba35cec0ce40f9dd48b9c1bf0b9aefeb862a28c`
 
-The board holds **55** rows, **17** of them unpinned.
+The board holds **55** rows, **16** of them unpinned.
 
 `scripts/check_open_work.py --check` reads every row's evidence off disk and
 refuses if a claim is false. It runs inside `make validate`, and
@@ -135,7 +135,7 @@ caught by any automated check and 10 of 16 by adversarial review
 | W38 | Starter questions: six audience groups, four complete questions each, with a wider high-stakes keyword list (CHG-026 j) | UNPINNED | `—` | — | — |
 | W39 | The engineering harness: agents run in a container with only the agent account's token; a signed-in real-backend journey lane with an execution-backed gate; release integrity; a slimmer AGENTS.md with tracked hooks; the skills audit (`docs/analysis/2026-09-29/NEXT-SESSION-PROMPT.md`, order steps 0–7; PROPOSED, confirm in plan mode) | UNPINNED | `—` | — | — |
 | W40 | The agent account's GitHub token expires 2026-12-29 (`NEXT-SESSION-PROMPT.md`, "Agent account DONE by the owner"); rotate it before then | UNPINNED | `—` | — | W39 |
-| W41 | The trust-score screenshot tolerance: 700 px, those screenshots only (CHG-027 e, replacing the 589 px of CHG-026 k; 644 px was seen on 2026-09-30, E2E run 36677984086, a docs-only merge) | UNPINNED | `—` | — | — |
+| W41 | The trust-score screenshot tolerance: 700 px, those screenshots only (CHG-027 e, replacing the 589 px of CHG-026 k; 644 px was seen on 2026-09-30, E2E run 36677984086, a docs-only merge), with an exact-text check of the card (CHG-030, ADR-0149) | DONE | `ABSENT e2e/tests/invariants/trust-score-visual.spec.ts :: maxDiffPixels: 700` | — | — |
 | W42 | The mutation gate's clean-test step inside `./mutants/` failed on PR #528 ("Failed to run clean test"): `tests/integration/test_spend_key.py::test_a_run_is_charged_under_the_spend_key` read `0.2104 == 0.1052` because `tests/conftest.py::_reset_state` never cleared the in-memory cost ring, and mutmut runs its clean tests in set order (the local half of PR #528's report moved to W44) | DONE | `ABSENT tests/conftest.py :: costs.cost_event_recorder.clear()` | — | — |
 | W43 | The empty question box is already red with "Question is required." on one plain load of `/ui` right after signing in, before anything is typed (four browser runs on 2026-09-30, W34's product review) (built in W33 slice A, ADR-0140 decision 9) | DONE | `ABSENT src/product_app/static/app.js :: const isInvalid = isEmpty && !!state.submissionAttempted;` | — | W33 |
 | W44 | Locally (macOS), `make mutation-baseline` on PR #528's head recorded 201 mutants as "segfault" in `test_context_carry.py::test_non_string_context_value_is_rejected_not_crashed`, a test that passes when run directly with a mutant on; mutmut 3.6 files exit -9 (SIGKILL, e.g. its own hard CPU limit) under the same label, so the cause is unmeasured. A fork reproduction outside mutmut, run by this session's investigator on 2026-10-03, did not crash (its scripts were not kept). Do not run mutmut locally until a runaway `gcloud` process chain is explained: it filled the user's process table twice on 2026-10-03, both times while a local mutmut run was in progress; the link is not proven and nothing in this repository calls `gcloud` | UNPINNED | `—` | — | W42 |
