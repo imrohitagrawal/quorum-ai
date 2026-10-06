@@ -1,7 +1,7 @@
 # Session Handoff
 
 ## Date/time
-2026-10-06T08:46:45+05:30
+2026-10-06T19:15:21+05:30
 
 ## Open work
 `docs/65-open-work.md` — the source of truth for what is open, what blocks what,
@@ -18,16 +18,16 @@ regenerated fresh every `make handoff`. The narrative above (what happened,
 what's next, the traps) lives in the dated doc it points to, not here.
 
 ## Current branch/worktree
-docs/session-handoff-2026-10-06
+docs/chg-029-owner-decisions
 
 ## Live state (measured fresh by this run, not hand-carried)
 Run `make handoff` again for current numbers instead of trusting this file
 once it ages -- every value below is read from git/gh/`/status` at
 generation time, per #134.
 
-- **`origin/main` tip:** `c8b1a543c0a8`
+- **`origin/main` tip:** `66f82e080b35`
 - **Last commit touching `src/`:** `ab547eef5578`
-- **Production vs. last `src/` commit:** production build_sha ab547ee is in sync with last src/ commit
+- **Production vs. last `src/` commit:** production build_sha 66f82e0 does NOT match last src/ commit ab547ee -- a deploy may be in flight or overdue
 - **pytest collected (no execution):** 5986
 - **e2e lane spec counts:** invariants: 26, ops: 2, degraded: 1
 - **Open issues:** 8
@@ -100,13 +100,12 @@ Operate, learn, and improve
 
 ## Git status
 ```text
-M docs/session-handoff.md
+clean
 ```
 
 ## Diff stat
 ```text
-docs/session-handoff.md | 21 ++++++++++++---------
- 1 file changed, 12 insertions(+), 9 deletions(-)
+no unstaged diff
 ```
 
 ## Completed in this session

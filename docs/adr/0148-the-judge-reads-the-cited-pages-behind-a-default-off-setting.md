@@ -98,7 +98,7 @@ untrusted-text fence catch an altered marker. The owner's decisions:
    readiness island, read by the page.
 10. **Data.** Page text, like the excerpt, is never served, logged or stored; it lives in the
     judge call only. `docs/48` gains a row for page text sent to the judge provider,
-    pending the owner's approval, beside W52's excerpt row.
+    pending the owner's approval, beside W52's excerpt row (both approved 2026-10-06, CHG-029).
 
 ## Rejected alternatives
 

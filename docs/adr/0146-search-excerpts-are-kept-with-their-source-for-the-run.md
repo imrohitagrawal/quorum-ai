@@ -57,7 +57,7 @@ page that may not be fetched needs that text.
 ## Consequences
 
 - New data kept: the excerpt text, per run, in memory only. `docs/48` gains a row,
-  pending the owner's approval.
+  pending the owner's approval (approved 2026-10-06, CHG-029).
 - About 80,000 characters more per run if each of 4 answers carries the 5 annotations
   measured and every excerpt reaches the 4,000-character cut; the measured excerpts
   were about 2,000 characters, so about 40,000. The number of annotations per answer is
