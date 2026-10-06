@@ -66,8 +66,12 @@ sentence, as today.
   with the run's answers, and keeps the highest-scoring passages that fit in 4,000
   characters, ties going to the earlier passage. The kept passages are joined in page order
   with " … " between them, separators counted inside the 4,000.
+- Neighbouring short blocks are joined into one passage while it stays within about 500
+  characters; the pieces of a split long block are never joined. Plain text (not HTML) longer
+  than the limit is split into blocks at blank lines. Text across inline tags inside one block
+  is joined with a space, as `extract_text` does today.
 - Words: lower-cased runs of letters and digits, at least 3 characters, minus a fixed list of
-  common English words. Each distinct word counts once per passage.
+  about 75 common English words. Each distinct word counts once per passage.
 - A page with no shared words (for example Chinese or Japanese, which has no spaces between
   words) keeps its first passages: the same as today.
 - The v2 system prompt says a PAGE entry may be passages from the page with gaps marked
@@ -117,6 +121,11 @@ judge prompts from the same fetched text: "first 4,000 characters" with today's
 - With the setting off, nothing visible changes; the API gains one null field.
 - With it on: the judge reads the most relevant passages of long pages; the trust note says
   when a website asked tools not to read its pages.
+- Picking costs little time in the run slot. Measured with `time.process_time` (best of 3, an
+  Apple M4, 8 pages at the 262,144-byte cap and four 4,000-character answers): 0.536 s of CPU
+  for the worst page shape built (nested inline tags), of which today's `extract_text` alone
+  costs 0.413 s; about 0.1 s more than today per 8 pages. The parse, not the picking, is most
+  of it. Script: the session's `time_pick.py` (not kept in the repository).
 - Unmeasured until the paid run: whether picked passages change verdicts compared with the
   first 4,000 characters, how often fetches fail, and the time picking adds in the run slot
   on real pages.
