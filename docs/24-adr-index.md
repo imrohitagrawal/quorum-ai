@@ -150,6 +150,7 @@ ways, so the record shows what was believed on a date and what replaced it.
 | [ADR-0145](adr/0145-new-users-get-one-time-hints-and-an-optional-tour-with-shared-text.md) | New users get one-time hints and an optional tour, with shared text | Architecture | Accepted — 2026-10-05, board row W48 |
 | [ADR-0146](adr/0146-search-excerpts-are-kept-with-their-source-for-the-run.md) | Search excerpts are kept with their source for the run | Architecture | Accepted — 2026-10-05, board row W52 |
 | [ADR-0147](adr/0147-the-untrusted-text-fence-catches-an-altered-marker.md) | The untrusted-text fence catches an altered marker | Architecture | Accepted — 2026-10-05, board row W53, found by W52's round-2 reviewers |
+| [ADR-0148](adr/0148-the-judge-reads-the-cited-pages-behind-a-default-off-setting.md) | The judge reads the cited pages, behind a default-off setting | Architecture | Accepted — 2026-10-06, board row W29 (#447), wiring only |
 
 **This index was itself stale** until 2026-07-30: ADR-0002 had existed since
 2026-07-19 and was never listed here. A hand-maintained index is a derived fact

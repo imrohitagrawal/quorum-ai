@@ -342,6 +342,14 @@ _JUDGE_EVIDENCE_SECTIONS = Decimal(5)
 #: drift from the format string it models.
 _JUDGE_SOURCE_LINE_OVERHEAD_CHARS = Decimal(10)
 
+#: W29 (ADR-0148 decision 7). Scaffolding ``evaluation._panel_judge_parts``
+#: adds around each page-or-excerpt item: ``"PAGE [NN]:"`` (10) and the two
+#: newlines it is joined on (2). And once per prompt: the ``"SOURCE_PAGES:"``
+#: header, ``"(no page could be read)"`` when nothing was, and their newlines
+#: -- 40 covers both. LITERALS, like the source-line overhead above.
+_JUDGE_PAGE_ITEM_OVERHEAD_CHARS = Decimal(12)
+_JUDGE_PAGES_SECTION_OVERHEAD_CHARS = Decimal(40)
+
 #: issue #16: the estimate is a realistic per-call token model. The old
 #: ``QUERY_COST_PER_1K_CHARS_USD`` / ``PER_CHAR_PROCESSING_USD`` synthetic
 #: per-character charges (and the flat ``DEBATE_FIXED_COST_USD`` /
@@ -1765,9 +1773,12 @@ class CostEstimationService:
         # run: estimate $0.0550, actual $0.0745, judge $0.0031 charged and
         # $0.0000 estimated. Local import to avoid a cycle
         # (evaluation -> debate -> costs).
-        from product_app.evaluation import judge_configured
+        from product_app.evaluation import judge_configured, judge_reads_pages
 
         price_judge = judge_configured()
+        # W29 (ADR-0148): a panel run's judge reads the cited pages. Quick
+        # mode never does, so its figures do not move with the setting.
+        price_judge_pages = mode != MODE_QUICK and judge_reads_pages()
         (
             initial_per_model,
             initial_total,
@@ -1792,6 +1803,7 @@ class CostEstimationService:
             synthesis_sections=Decimal(settings.cost_synthesis_sections),
             follow_up=follow_up,
             price_judge=price_judge,
+            price_judge_pages=price_judge_pages,
             judge_typical=True,
             quick=mode == MODE_QUICK,
         )
@@ -1837,6 +1849,12 @@ class CostEstimationService:
         if price_judge:
             stage_names.append("judge")
             stage_raw.append(judge_cost)
+        if price_judge_pages:
+            # W29 (ADR-0148 decision 8): fetching is free; the row is there so
+            # the step is visible. A raw zero gets no quantum from the
+            # largest-remainder reconciliation, so it stays exactly $0.
+            stage_names.append("source_fetch")
+            stage_raw.append(Decimal(0))
         stage_usd = self._reconcile_usd_lines(stage_raw, total)
         # The two debate rounds share one token model and must display equal,
         # but the largest-remainder tie-break can award the residual quantum to
@@ -1958,6 +1976,7 @@ class CostEstimationService:
         follow_up: _FollowUpTokens | None = None,
         price_round_two_prior_critique: bool = False,
         price_judge: bool = False,
+        price_judge_pages: bool = False,
         judge_typical: bool = False,
         quick: bool = False,
     ) -> tuple[list[Decimal], Decimal, Decimal, Decimal, Decimal, Decimal]:
@@ -1971,6 +1990,9 @@ class CostEstimationService:
         in both partitions (ADR-0064) — it is zero unless ``price_judge``.
         ``judge_typical`` (the point path only, ADR-0114) prices that judge
         from the typical settings, each clamped to its cap, instead of the caps.
+        ``price_judge_pages`` (W29, ADR-0148 decision 7) adds the cited pages
+        to the judge's input cap and prices the v2 system prompt instead of
+        v1's.
         Used with the realistic output floor + all
         ``cost_synthesis_sections`` sections for the displayed estimate
         (:meth:`_estimate_breakdown`) and with the enforced ``max_tokens`` cap +
@@ -2335,10 +2357,14 @@ class CostEstimationService:
             # local imports to avoid cycles: synthesis and evaluation both
             # import costs.
             from product_app.evaluation import (
+                _JUDGE_PAGES_SYSTEM_PROMPT,
                 _JUDGE_SYSTEM_PROMPT,
                 JUDGE_MAX_SOURCE_LINES,
+                JUDGE_MAX_SOURCE_PAGE_CHARS,
+                JUDGE_MAX_SOURCE_PAGES,
                 JUDGE_MAX_SOURCE_TITLE_LEN,
                 JUDGE_MAX_SOURCE_URL_LEN,
+                JUDGE_SAME_PAGE_LINE,
             )
             from product_app.synthesis import SYNTHESIS_SECTION_MAX_TOKENS
 
@@ -2355,11 +2381,48 @@ class CostEstimationService:
                 )
                 / CHARS_PER_TOKEN
             )
+            # W29 (ADR-0148 decision 7). With pages read the judge is sent the
+            # v2 system prompt and at most JUDGE_MAX_SOURCE_PAGES items of at
+            # most JUDGE_MAX_SOURCE_PAGE_CHARS characters (excerpts replace
+            # pages, never add to them). Both are the LITERALS
+            # ``judge_source_pages`` clamps the fetch to, never the settings,
+            # so a larger environment value cannot outgrow this reserve. With
+            # pages off this adds 0 and prices v1, so every pinned bound holds.
+            judge_system_prompt = (
+                _JUDGE_PAGES_SYSTEM_PROMPT if price_judge_pages else _JUDGE_SYSTEM_PROMPT
+            )
+            # Review round 1: every other source line can repeat an address
+            # whose page is above, and gets one "same page as" line. Priced at
+            # the format's widest (two-digit numbers on both sides) plus its
+            # newline, DERIVED from the format the builder uses, so the two
+            # cannot drift. A page item dwarfs such a line, so 8 pages plus
+            # the other 24 lines is the widest block the builder can emit.
+            same_page_line_chars = Decimal(
+                len(
+                    JUDGE_SAME_PAGE_LINE.format(
+                        line=JUDGE_MAX_SOURCE_LINES, earlier=JUDGE_MAX_SOURCE_LINES
+                    )
+                )
+                + 1
+            )
+            judge_page_tokens = (
+                (
+                    Decimal(JUDGE_MAX_SOURCE_PAGES)
+                    * (Decimal(JUDGE_MAX_SOURCE_PAGE_CHARS) + _JUDGE_PAGE_ITEM_OVERHEAD_CHARS)
+                    + _JUDGE_PAGES_SECTION_OVERHEAD_CHARS
+                    + Decimal(JUDGE_MAX_SOURCE_LINES - JUDGE_MAX_SOURCE_PAGES)
+                    * same_page_line_chars
+                )
+                / CHARS_PER_TOKEN
+                if price_judge_pages
+                else Decimal(0)
+            )
             judge_input_tokens = (
                 Decimal(settings.initial_answer_max_tokens) * Decimal(len(model_slots))
                 + _JUDGE_EVIDENCE_SECTIONS * Decimal(SYNTHESIS_SECTION_MAX_TOKENS)
-                + Decimal(len(_JUDGE_SYSTEM_PROMPT)) / CHARS_PER_TOKEN
+                + Decimal(len(judge_system_prompt)) / CHARS_PER_TOKEN
                 + judge_source_tokens
+                + judge_page_tokens
                 + query_tokens
             )
             judge_output_tokens = Decimal(settings.quorum_eval_judge_max_tokens)
@@ -2442,7 +2505,7 @@ class CostEstimationService:
         # ``/status.judge_enabled`` reports — so the figure the user approves
         # cannot drift from whether the call actually happens. Local import to
         # avoid a cycle (evaluation -> debate -> costs).
-        from product_app.evaluation import judge_configured
+        from product_app.evaluation import judge_configured, judge_reads_pages
 
         *_, raw_total = self._cost_components(
             query_text=query_text,
@@ -2472,6 +2535,9 @@ class CostEstimationService:
             # (ADR-0114).
             price_round_two_prior_critique=True,
             price_judge=judge_configured(),
+            # W29 (ADR-0148 decision 7): the same predicate as the point path,
+            # so the bound reserves for pages exactly when they are read.
+            price_judge_pages=mode != MODE_QUICK and judge_reads_pages(),
             # W5: the quick bound shares this arithmetic: the one answer at
             # its cap and the judge at its caps (ADR-0126).
             quick=mode == MODE_QUICK,
@@ -2770,6 +2836,7 @@ def build_measured_breakdown(
     judge: tuple[str, Decimal] | None = None,
     critique_by_model: list[tuple[str, str, Decimal]] | None = None,
     quick: bool = False,
+    source_fetch: bool = False,
 ) -> CostBreakdown:
     """Assemble a measured :class:`CostBreakdown` that re-sums to the total.
 
@@ -2800,6 +2867,9 @@ def build_measured_breakdown(
       here — the caller (``query_runs._actual_cost``) demotes the whole run
       to ``estimated`` first, so a possibly-billed, unpriced call is never
       silently absent from a ``"measured"`` total.
+    * ``source_fetch`` — the judge read the cited pages (W29, ADR-0148
+      decision 8): a ``source_fetch`` stage row at exactly $0, after the judge
+      row. Never set on a quick run, which reads no page.
 
     The writer row is named ``"Synthesis"`` (#290 / ADR-0093 decision 4). It
     used to read ``"Debate + synthesis"``, which was right while one moderator
@@ -2844,6 +2914,8 @@ def build_measured_breakdown(
     ]
     if judge is not None:
         raw_stage.append(("judge", judge_cost))
+    if source_fetch:
+        raw_stage.append(("source_fetch", Decimal("0")))
     stage_usd = CostEstimationService._reconcile_usd_lines([v for _, v in raw_stage], total)
     by_stage = [
         CostLineByStage(stage=name, usd=usd)

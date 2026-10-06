@@ -35,9 +35,10 @@ import contextlib
 import logging
 import time as _time_module
 from collections import OrderedDict
+from collections.abc import Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeoutError
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
@@ -73,6 +74,7 @@ from product_app.debate import (
     debate_stub_service,
 )
 from product_app.evaluation import (
+    JUDGE_PAGES_PROMPT_ID,
     EvalJudgeQuickVerdict,
     EvalJudgeService,
     EvalJudgeVerdict,
@@ -80,12 +82,15 @@ from product_app.evaluation import (
     HallucinationRisk,
     JudgeCallOutcome,
     JudgeEvidence,
+    JudgeSourcePages,
     LayerASignals,
     PresentationConfidence,
     RunEvaluationResult,
     TrustScore,
     evaluate_run,
     judge_configured,
+    judge_reads_pages,
+    judge_source_pages,
     presentation_confidence,
 )
 from product_app.feedback_store import ChargeOutcome
@@ -353,6 +358,14 @@ class QueryRunEvaluationProjection(BaseModel):
     #: free-text field, so no provider prose can ride out on it. The judge's
     #: rationale remains dropped, and this is not a ``judge`` key.
     judge_status: JudgeCallOutcome | None = None
+    #: W29 (ADR-0148 decision 9): N, the distinct cited addresses whose page
+    #: was fetched and read (a search excerpt does not count), and M, the
+    #: distinct cited addresses the judge saw -- "Checked against N of M cited
+    #: pages". Both ``None`` when the judge was not sent pages (the setting
+    #: off, a quick run, no judge, or no cited source); a v2 verdict with no
+    #: page fetched serves ``(0, M)``. Counts only.
+    source_pages_read: int | None = None
+    source_pages_cited: int | None = None
 
 
 class QueryRunResultResponse(BaseModel):
@@ -2191,6 +2204,12 @@ class _JudgeOutcome:
     #: demonstrated route; a reader must still treat ``None`` as "the service
     #: did not say", never as "no judge ran".
     status: JudgeCallOutcome | None = None
+    #: W29 (ADR-0148): ``(read, cited)`` when this call was sent the cited
+    #: pages (PR-EVAL-JUDGE-v2) -- the distinct cited addresses whose page was
+    #: fetched and read (excerpts do not count), and the distinct cited
+    #: addresses it saw; ``(0, M)`` when none was fetched -- else ``None``. Counts only: the page
+    #: text lives in the judge call and is never memoised.
+    source_pages: tuple[int, int] | None = None
 
 
 _judge_verdict_memo: OrderedDict[str, _JudgeOutcome] = OrderedDict()
@@ -2230,6 +2249,35 @@ def _judge_memo_touch(query_run_id: str) -> None:
     with _judge_memo_lock:
         if query_run_id in _judge_verdict_memo:
             _judge_verdict_memo.move_to_end(query_run_id)
+
+
+def _judge_source_pages_for(query_run_id: UUID) -> tuple[int, int] | None:
+    """``(read, cited)`` when this run's judge read the cited pages (W29), else
+    ``None``. Read from the memo, like :func:`_judge_status_for`."""
+    with _judge_memo_lock:
+        outcome = _judge_verdict_memo.get(str(query_run_id))
+    return None if outcome is None else outcome.source_pages
+
+
+def _with_source_pages(
+    result: RunEvaluationResult, source_pages: tuple[int, int] | None
+) -> RunEvaluationResult:
+    """Record on the evaluation that the judge read pages: the prompt id that
+    judged it (stored by ``to_eval_json``, ADR-0148 decision 6) and the two
+    counts the trust note states (decision 9). Unchanged when none were read."""
+    if source_pages is None:
+        return result
+    read, cited = source_pages
+    return replace(
+        result,
+        evaluation=result.evaluation.model_copy(
+            update={
+                "judge_prompt_id": JUDGE_PAGES_PROMPT_ID,
+                "source_pages_read": read,
+                "source_pages_cited": cited,
+            }
+        ),
+    )
 
 
 def _judge_status_for(query_run_id: UUID) -> JudgeCallOutcome | None:
@@ -2306,8 +2354,20 @@ class _MemoisedRunJudge:
     def verifies_support(self) -> bool:
         return EvalJudgeService.verifies_support
 
-    def __init__(self, query_run_id: str, account_id: UUID, *, quick: bool = False) -> None:
+    def __init__(
+        self,
+        query_run_id: str,
+        account_id: UUID,
+        *,
+        quick: bool = False,
+        initial_answers: Sequence[InitialModelAnswer] = (),
+    ) -> None:
         self._query_run_id = query_run_id
+        #: W29 (ADR-0148 decision 2): the answers whose cited pages the OWNER
+        #: branch reads, once per verdict, when ``judge_reads_pages()`` holds
+        #: for a panel run. The same list ``evaluate_run`` builds the evidence
+        #: from, so the pages align with its ``source_lines``.
+        self._initial_answers = list(initial_answers)
         #: W5 (ADR-0129): a quick run's judge is asked the verification-only
         #: prompt and parsed with the quick schema; a panel run's is not
         #: touched. Fixed per instance because a run's mode never changes.
@@ -2425,6 +2485,7 @@ class _MemoisedRunJudge:
                 return None
         service = EvalJudgeService()
         verdict: EvalJudgeVerdict | EvalJudgeQuickVerdict | None = None
+        reading: JudgeSourcePages | None = None
         try:
             # ``EvalJudgeService.evaluate`` is contractually non-raising (the
             # judge is advisory), but the finally block guarantees the future
@@ -2432,6 +2493,17 @@ class _MemoisedRunJudge:
             if self._quick:
                 verdict = service.evaluate_quick(evidence, query_run_id=query_run_id)
             else:
+                # W29 (ADR-0148 decisions 1-2): HERE, on the owner branch, so
+                # one verdict makes one fetch however many readers wait on it.
+                # Quick runs never reach this line. Inside the slot, by the
+                # session's call; the slot time is measured before switch-on.
+                if judge_reads_pages():
+                    reading = judge_source_pages(self._initial_answers)
+                    evidence = replace(
+                        evidence,
+                        source_pages=reading.pages,
+                        source_page_same_as=reading.same_as,
+                    )
                 verdict = service.evaluate(evidence, query_run_id=query_run_id)
         finally:
             outcome = _JudgeOutcome(
@@ -2442,6 +2514,12 @@ class _MemoisedRunJudge:
                 # ``finally`` that captures its usage, so the two can never
                 # describe different calls.
                 status=service.last_outcome,
+                # Counts only (decision 9): distinct addresses fetched and
+                # read, and distinct addresses cited. ``None`` when the judge
+                # was not sent pages (v1), so the served counts stay null.
+                source_pages=(
+                    (reading.read, reading.cited) if reading is not None and reading.pages else None
+                ),
             )
             with _judge_memo_lock:
                 _judge_verdict_memo[run_id] = outcome
@@ -2620,7 +2698,10 @@ def _request_path_judge(query_run: QueryRun) -> _MemoisedRunJudge | None:
     # Zero I/O to here. The money rails are read inside ``evaluate``, and only
     # when it is about to pay — never to decide whether a memo hit is served.
     return _MemoisedRunJudge(
-        str(query_run.query_run_id), _spend_key(query_run), quick=query_run.mode == MODE_QUICK
+        str(query_run.query_run_id),
+        _spend_key(query_run),
+        quick=query_run.mode == MODE_QUICK,
+        initial_answers=query_run.initial_answers,
     )
 
 
@@ -2791,6 +2872,7 @@ def _evaluate_terminal_run_with_suppression(
             requested_slot_count=requested_slot_count,
             query_run_id=str(query_run.query_run_id),
         )
+        result = _with_source_pages(result, _judge_source_pages_for(query_run.query_run_id))
         if judge.served_without_verdict:
             # This read gave up waiting on ANOTHER thread's in-flight judge
             # call and was served the suppressed shape on purpose. Memoising
@@ -2841,6 +2923,8 @@ def _evaluation_projection(
         ),
         trust=result.trust,
         judge_status=_judge_status_for(query_run.query_run_id),
+        source_pages_read=evaluation.source_pages_read,
+        source_pages_cited=evaluation.source_pages_cited,
     )
 
 
@@ -3274,6 +3358,7 @@ def _actual_cost(
             judge=judge_line,
             critique_by_model=critique_lines,
             quick=query_run.mode == MODE_QUICK,
+            source_fetch=judge_outcome is not None and judge_outcome.source_pages is not None,
         )
         return breakdown.total, breakdown, "measured"
     except (InvalidOperation, ArithmeticError, ValueError):

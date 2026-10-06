@@ -461,6 +461,21 @@ BUCKET_B_PIN_BEHAVIOUR = {
         "reserve; tests/unit/test_judge_evidence_source_lines_are_bounded.py measures "
         "the real emitted lines against it in both directions"
     ),
+    # --- Added 2026-10-06 with W29's page block (ADR-0148 decision 7) ---
+    "costs._JUDGE_PAGE_ITEM_OVERHEAD_CHARS": (
+        "assert the widest SOURCE_PAGES block build_judge_pages_prompt can emit "
+        "(8 pages at 4,000 characters on two-digit source numbers) still fits the "
+        "reserve this constant and the section overhead define -- it models the "
+        "'PAGE [NN]:' header and the two newlines around each page, so a literal "
+        "pin alone would not catch the format growing; tests/unit/"
+        "test_w29_judge_pages_reserve_and_receipt.py::"
+        "test_the_page_reserve_covers_the_widest_block_the_builder_can_emit"
+    ),
+    "costs._JUDGE_PAGES_SECTION_OVERHEAD_CHARS": (
+        "the once-per-prompt half of the same reserve: the 'SOURCE_PAGES:' header "
+        "and '(no page could be read)' line; pinned by the same behaviour test, "
+        "which also measures the block with no page read against it"
+    ),
     # --- Added 2026-08-10 with the #284 evaluation memo ---
     # #303: moved from query_runs.py to query_run_orchestration.py (ADR-0036).
     "query_run_orchestration._EVALUATION_MEMO_MAX": (

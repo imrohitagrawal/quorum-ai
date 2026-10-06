@@ -1399,6 +1399,16 @@ components:
           anyOf:
           - $ref: '#/components/schemas/JudgeCallOutcome'
           - type: 'null'
+        source_pages_read:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Source Pages Read
+        source_pages_cited:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Source Pages Cited
       type: object
       required:
       - schema_version

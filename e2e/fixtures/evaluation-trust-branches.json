@@ -76,7 +76,9 @@
         "panel_size_cap": false
       }
     },
-    "judge_status": null
+    "judge_status": null,
+    "source_pages_read": null,
+    "source_pages_cited": null
   },
   "EVAL_REFUSED": {
     "schema_version": "s3-eval-v5",
@@ -154,6 +156,8 @@
         "panel_size_cap": false
       }
     },
-    "judge_status": null
+    "judge_status": null,
+    "source_pages_read": null,
+    "source_pages_cited": null
   }
 }
