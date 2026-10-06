@@ -6,8 +6,10 @@ A page whose visible text is at most the limit is read exactly as today
 items, headings, table cells) from the main area: ``<main>`` when it holds at
 least 1,000 characters, else the longest ``<article>`` holding at least 1,000,
 else the page without nav/header/footer/aside/form when that leaves at least
-1,000, else the whole visible text (failure mode 5: an ASP.NET page wraps its
-whole body in one ``<form>``). Blocks are whitespace-collapsed and joined by
+1,000 characters AND at least half of the visible text (the half rule, review
+round 1), else the whole visible text (failure mode 5: an ASP.NET page wraps
+its whole body in one ``<form>``, and a page may wrap its article in one
+``<form>`` with a notice outside it). Blocks are whitespace-collapsed and joined by
 "\\n", capped at 262,144 characters.
 
 THE PAGES. Every text in these pages sits in a block element (``p``, ``li``,

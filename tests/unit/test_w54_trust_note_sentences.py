@@ -31,6 +31,15 @@ from typing import Any
 import pytest
 from tests.code_text import code_without_comments
 from tests.unit.test_w29_trust_note_copy import APP_JS, FUNCTION, LEAD, TODAY, _extract_function
+from tests.unit.test_w54_judge_source_pages_preview import (
+    EXCERPT,
+    FakeFetcher,
+    _answer,
+    _source,
+)
+
+from product_app import evaluation, source_fetcher
+from product_app.config import settings
 
 #: The session's sentence the owner approved (CHG-029 (b)), verbatim: "when
 #: some pages are blocked".
@@ -56,6 +65,27 @@ _PREVIEW = (
     "the website asks automated tools not to read its pages, so the check could only use "
     "the short preview the search engine showed"
 )
+#: The plural of ``_PREVIEW``, for P >= 2 in the two session-written rows only
+#: (ADR-0150 decision 2, review round 2: several blocked pages may be on
+#: several websites). The approved F = 0 row keeps ``_PREVIEW`` for every P.
+_PREVIEWS = (
+    "the websites ask automated tools not to read their pages, so the check could only use "
+    "the short previews the search engine showed"
+)
+#: ADR-0150 decision 2, review round 2 (failure mode 20): a page whose
+#: robots.txt could not be read still sends its preview, so the N = 0 rows
+#: never say "the titles and addresses" only.
+NONE_READ_NO_PREVIEW = (
+    "No cited page could be read. The check used only the titles, addresses and any short "
+    "previews the search engine showed."
+)
+NONE_READ_NO_PREVIEW_ONE = (
+    "No cited page could be read. The check used only the title, address and any short "
+    "preview the search engine showed."
+)
+_FOR_THE_REST = (
+    "for the rest it used the titles, addresses and any short previews the search engine showed"
+)
 
 
 def expected(n: int, p: int, m: int) -> str:
@@ -67,15 +97,14 @@ def expected(n: int, p: int, m: int) -> str:
         if m - n - p == 0:
             other = "one" if p == 1 else str(p)
             return f"{LEAD} {checked} For the other {other}, {_PREVIEW}."
-        return f"{LEAD} {checked} For {p} of the other {m - n}, {_PREVIEW}."
+        blocked = _PREVIEW if p == 1 else _PREVIEWS
+        return f"{LEAD} {checked} For {p} of the other {m - n}, {blocked}."
     if p == m:
         return f"{LEAD} {SINGLE_BLOCKED if m == 1 else APPROVED_ALL_BLOCKED}"
     if p == 0:
-        return f"{LEAD} No cited page could be read. The check used only the titles and addresses."
-    return (
-        f"{LEAD} No cited page could be read. For {p} of the {m}, {_PREVIEW}; "
-        "for the rest it used the titles and addresses."
-    )
+        return f"{LEAD} {NONE_READ_NO_PREVIEW_ONE if m == 1 else NONE_READ_NO_PREVIEW}"
+    blocked = _PREVIEW if p == 1 else _PREVIEWS
+    return f"{LEAD} No cited page could be read. For {p} of the {m}, {blocked}; {_FOR_THE_REST}."
 
 
 @pytest.fixture(autouse=True)
@@ -154,7 +183,7 @@ _ROWS = [
         1,
         2,
         5,
-        f"Checked against 1 of 5 cited pages. For 2 of the other 4, {_PREVIEW}.",
+        f"Checked against 1 of 5 cited pages. For 2 of the other 4, {_PREVIEWS}.",
     ),
     (0, 4, 4, APPROVED_ALL_BLOCKED),
     (0, 1, 1, SINGLE_BLOCKED),
@@ -162,10 +191,17 @@ _ROWS = [
         0,
         2,
         5,
-        f"No cited page could be read. For 2 of the 5, {_PREVIEW}; for the rest it used "
-        "the titles and addresses.",
+        f"No cited page could be read. For 2 of the 5, {_PREVIEWS}; {_FOR_THE_REST}.",
     ),
-    (0, 0, 3, "No cited page could be read. The check used only the titles and addresses."),
+    (
+        0,
+        1,
+        5,
+        f"No cited page could be read. For 1 of the 5, {_PREVIEW}; {_FOR_THE_REST}.",
+    ),
+    (0, 0, 3, NONE_READ_NO_PREVIEW),
+    (0, 0, 1, NONE_READ_NO_PREVIEW_ONE),
+    (4, 3, 7, APPROVED_SOME_BLOCKED.replace("3 of 5", "4 of 7").replace("other 2", "other 3")),
 ]
 
 
@@ -180,7 +216,10 @@ _ROWS = [
         "none-read-all-preview",
         "none-read-one-of-one-preview",
         "none-read-some-preview",
+        "none-read-one-preview-of-several",
         "none-read-no-preview",
+        "none-read-no-preview-one-cited",
+        "approved-row-keeps-the-singular-for-three",
     ],
 )
 def test_each_row_of_the_table_verbatim(
@@ -289,12 +328,17 @@ def test_the_sweep_matches_the_table_and_never_says_something_false(harness: str
     """Every (N, P, M) with 0 <= N, P, N + P <= M and M from 1 to 12: 454 of
     them. (M = 0 is left out: the server never serves counts with nothing
     cited, and two rows of the table would both match it.)
-    RED IF, for any of them: the sentence is not the table's; it mentions a
-    preview when P = 0; it says no cited page could be read when N > 0; it
+    RED IF, for any of them: the sentence is not the table's; it says a
+    website asked tools not to read its pages when P = 0, or mentions a
+    preview at all when P = 0 and N > 0; it says no cited page could be read when N > 0; it
     states a number that is not N, P, M or M - N; or it omits N and M when
-    pages were read; or the singular all-blocked sentence is not used for
-    (0, 1, 1). Partner: the sweep really covers the approved sentences, the
-    singular one, and every row (each row's shape appears)."""
+    pages were read; the singular all-blocked sentence is not used for
+    (0, 1, 1); a sentence with N = 0 says the check used "the titles and
+    addresses" only (false when a robots.txt could not be read but its preview
+    was sent, failure mode 20); a session-written row says "the website asks"
+    for two or more previews; or the approved F = 0 row changes with P.
+    Partner: the sweep really covers the approved sentences, the singular
+    one, and every row (each row's shape appears)."""
     assert len(_SWEEP) == 454
     texts = _run(harness, [(_ev(n, p, m), True) for n, p, m in _SWEEP])
     shapes: set[str] = set()
@@ -304,16 +348,55 @@ def test_the_sweep_matches_the_table_and_never_says_something_false(harness: str
         after = text.removeprefix(f"{LEAD} ")
         assert after != text, case
         if p == 0:
-            assert "preview" not in after, case
+            assert "automated tools" not in after, case
+            if n > 0:
+                assert "preview" not in after, case
         else:
-            assert "preview" in after, case
+            assert "automated tools not to read" in after, case
         if n > 0:
             assert "No cited page could be read" not in after, case
             assert after.startswith(f"Checked against {n} of {m} cited "), case
+        assert "titles and addresses." not in after, case
+        if n == 0:
+            assert "any short preview" in after or p == m, case
+        if p >= 2 and m - n - p > 0:
+            assert "the websites ask" in after, case
+        if p > 0 and n > 0 and m - n - p == 0:
+            assert "the website asks automated tools not to read its pages" in after, case
         numbers = {int(x) for x in re.findall(r"\d+", after)}
         assert numbers <= {n, p, m, m - n}, (case, numbers)
         shapes.add(re.sub(r"\d+", "#", after))
     assert f"{LEAD} {APPROVED_SOME_BLOCKED}" in texts
     assert f"{LEAD} {APPROVED_ALL_BLOCKED}" in texts
     assert texts[_SWEEP.index((0, 1, 1))] == f"{LEAD} {SINGLE_BLOCKED}"
-    assert len(shapes) >= 9, sorted(shapes)
+    assert len(shapes) >= 12, sorted(shapes)
+
+
+# ---------------------------------------------------------------------------
+# Why the N = 0 sentences mention previews (failure mode 20).
+# ---------------------------------------------------------------------------
+
+
+def test_a_preview_sent_for_an_unreadable_robots_file_is_not_denied_by_the_sentence(
+    harness: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review round 2. One cited page whose robots.txt answered 503: the
+    judge reads its search preview, yet P = 0, because the website asked
+    nothing. The sentence for the counts ``judge_source_pages`` returns must
+    not say the check used the title and address only. RED IF: the (0, 0, 1)
+    sentence says "titles and addresses" or "title and address" only.
+    Partners: the preview really is in what the judge reads, and P really is
+    0 for it, so the sentence below is the one this page gets."""
+    monkeypatch.setattr(settings, "quorum_source_fetch_max_text_chars", 4000)
+    monkeypatch.setattr(settings, "quorum_source_fetch_max_pages", 8)
+    url = "https://unreadable-robots.example/page"
+    monkeypatch.setattr(
+        source_fetcher, "fetch_cited_pages", FakeFetcher({url: ("robots_unchecked", "")})
+    )
+    reading = evaluation.judge_source_pages([_answer([_source(url, EXCERPT)])])
+    assert reading.pages == (EXCERPT,)
+    counts = (reading.read, reading.preview, reading.cited)
+    assert counts == (0, 0, 1)
+    (text,) = _run(harness, [(_ev(*counts), True)])
+    assert text == f"{LEAD} {NONE_READ_NO_PREVIEW_ONE}"
+    assert "short preview" in text

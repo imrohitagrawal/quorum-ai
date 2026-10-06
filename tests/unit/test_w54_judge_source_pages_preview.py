@@ -257,6 +257,58 @@ def test_pick_passages_gets_each_fetched_page_with_the_answers_and_never_an_exce
     assert EXCERPT in reading.pages  # partner: the excerpt did reach the judge
 
 
+@pytest.mark.parametrize(
+    ("setting", "expected_limit"),
+    [(1_000, 1_000), (4_000, 4_000), (40_000, 4_000)],
+    ids=["lowered", "default", "raised"],
+)
+def test_picking_cuts_to_the_smaller_of_4000_and_the_setting(
+    monkeypatch: pytest.MonkeyPatch, setting: int, expected_limit: int
+) -> None:
+    """ADR-0150 decision 3, failure mode 21: picking cuts to the smaller of
+    4,000 characters and ``quorum_source_fetch_max_text_chars``, so a lowered
+    setting still keeps whole passages. Counted on a spy around the real
+    function (one call per fetched page). RED IF: the limit passed is 4,000
+    whatever the setting (a lowered setting then cuts the picked text again,
+    in page order), or the setting is used unclamped (40,000 would outgrow
+    the reserve). The setting is restored by ``monkeypatch`` (rule 16a)."""
+    monkeypatch.setattr(settings, "quorum_source_fetch_max_text_chars", setting)
+    limits: list[int] = []
+    real = evaluation.pick_passages
+
+    def spy(text: str, claims: Any, *, limit: int) -> str:
+        limits.append(limit)
+        result: str = real(text, claims, limit=limit)
+        return result
+
+    monkeypatch.setattr(evaluation, "pick_passages", spy)
+    url = "https://set.example/page"
+    _install(monkeypatch, {url: ("fetched", block(5_000, "SETTINGPAGE"))})
+    _read([_answer([_source(url)])])
+    assert limits == [expected_limit]
+
+
+def test_a_lowered_setting_keeps_the_relevant_passage_whole(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Failure mode 21 by its effect. With the setting at 1,000, a page of
+    twelve 440-character blocks whose eleventh shares the answer's words: the
+    judge gets the first block and the eleventh, whole, with " … " between
+    (883 characters). RED IF: picking keeps 4,000 characters and the later
+    cut to 1,000 keeps the page's opening instead (the relevant passage is
+    lost and the last kept passage is cut mid-word)."""
+    monkeypatch.setattr(settings, "quorum_source_fetch_max_text_chars", 1_000)
+    blocks = [block(440, f"low{c}") for c in "abcdefghijkl"]
+    blocks[10] = block(440, "lowk", "Retention reached 90 percent in the 2024 survey.")
+    url = "https://lowered.example/page"
+    _install(monkeypatch, {url: ("fetched", "\n".join(blocks))})
+    reading = _read([_answer([_source(url)])])
+    expected = blocks[0] + SEP + blocks[10]
+    assert len(expected) == 883
+    assert reading.pages == (expected,)
+    assert reading.read == 1
+
+
 def test_a_long_excerpt_is_cut_not_picked(monkeypatch: pytest.MonkeyPatch) -> None:
     """Decision 5: "Excerpts are not passed through it." A 6,000-character
     excerpt whose only claim words sit near its end is cleaned and cut to its
