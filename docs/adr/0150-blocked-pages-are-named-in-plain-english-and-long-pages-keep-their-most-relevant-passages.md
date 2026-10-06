@@ -25,13 +25,24 @@ for are not built:
 
 ### 1. A served count of pages checked by their search preview
 
-`judge_source_pages` returns a third count, P: the distinct cited addresses whose page
-robots.txt refused and whose search excerpt reached the judge (non-empty after cleaning,
-inside the 8-item cap). A refused page with no usable excerpt is not counted. The run's
-`evaluation` gains `source_pages_preview`, null whenever `source_pages_read` is null.
+`judge_source_pages` returns a third count, P: the distinct cited addresses whose site's
+robots.txt (its rules for automated tools) was read and has a rule that does not allow the
+page, and whose search excerpt reached the judge (non-empty after cleaning, inside the 8-item
+cap). A refused page with no usable excerpt is not counted.
+
+Review round 1 found that ADR-0148's fail-closed cases were counted too: a robots.txt that
+could not be read (no answer, a 3xx or 5xx, a file over the size cap) and an address too long
+to check all came out as `refused_robots`, so the note would have said "the website asks
+automated tools not to read its pages" about sites that asked nothing. CHG-029 (b) keeps such
+pages within "Checked against N of M". The fetcher now reports them as `robots_unchecked`: the
+page is still not requested and the judge still reads its excerpt (ADR-0148 decision 4 is
+unchanged), but P does not count it.
+
+The run's `evaluation` gains `source_pages_preview`, null whenever `source_pages_read` is null
+(the judge was not sent pages: setting off, a quick run, no judge, or no cited source).
 
 Let N = pages read, P = pages checked by preview, M = distinct cited addresses, and
-F = M − N − P (failed, refused with no preview, or past the cap).
+F = M − N − P (failed, robots.txt unreadable, refused with no preview, or past the cap).
 
 ### 2. The sentences
 
@@ -43,15 +54,17 @@ its source list — an automated review, not a human fact-check." Then:
 | Posture off, or counts missing or impossible | Today's: "…The cited pages themselves were not retrieved." | ADR-0148 |
 | P missing (a run stored before this change) | Today's W29 sentences, unchanged | ADR-0148 |
 | N > 0, P = 0 | "Checked against N of M cited pages." | ADR-0148 |
-| N > 0, P > 0, F = 0 | "Checked against N of M cited pages. For the other P, the website asks automated tools not to read its pages, so the check could only use the short preview the search engine showed." | Owner (CHG-029 (b)) |
+| N > 0, P > 0, F = 0 | "Checked against N of M cited pages. For the other P, the website asks automated tools not to read its pages, so the check could only use the short preview the search engine showed." | Session wording, approved by the owner (CHG-029 (b)) |
 | N > 0, P > 0, F > 0 | "Checked against N of M cited pages. For P of the other M−N, the website asks automated tools not to read its pages, so the check could only use the short preview the search engine showed." | Session |
-| N = 0, P = M | "No cited page could be read: the websites ask automated tools not to read their pages. The check used only the titles, addresses and the short previews the search engine showed." | Owner (CHG-029 (b)) |
+| N = 0, P = M, M > 1 | "No cited page could be read: the websites ask automated tools not to read their pages. The check used only the titles, addresses and the short previews the search engine showed." | Session wording, approved by the owner (CHG-029 (b)) |
+| N = 0, P = M = 1 | "No cited page could be read: the website asks automated tools not to read its pages. The check used only the title, address and the short preview the search engine showed." | Session (the approved sentence in the singular) |
 | N = 0, 0 < P < M | "No cited page could be read. For P of the M, the website asks automated tools not to read its pages, so the check could only use the short preview the search engine showed; for the rest it used the titles and addresses." | Session |
 | N = 0, P = 0 | "No cited page could be read. The check used only the titles and addresses." | Session (today's sentence mentions "search excerpts", which P = 0 shows were not used) |
 
 Singular forms: "cited page" when M is 1 (as today); "For the other one," when P is 1 and
-F = 0. Impossible counts (not whole numbers, N + P > M) fail closed to the posture-off
-sentence, as today.
+F = 0; the N = 0, P = M = 1 row above. Impossible counts (not whole numbers, negative,
+N + P > M) show the sentence used when page reading is off, which never claims a page was
+read, as today. "Posture off" in the table means page reading is switched off.
 
 ### 3. Reading a page longer than 4,000 characters
 
@@ -59,21 +72,32 @@ sentence, as today.
 - Otherwise the fetcher keeps the page's text in blocks (paragraphs, list items, headings,
   table cells), from the main area: `<main>` when it holds at least 1,000 characters, else
   the longest `<article>` when it holds at least 1,000, else the page without `nav`,
-  `header`, `footer`, `aside` and `form` when that leaves at least 1,000, else the whole
-  visible text. The block text is capped at 262,144 characters (the fetcher's byte cap).
-- `pick_passages` splits the blocks into passages of about 500 characters (a block longer
+  `header`, `footer`, `aside` and `form` when that leaves at least 1,000 characters AND at
+  least half of the page's visible text, else the whole visible text. The half rule was
+  added in review round 1: a page wrapped in one `<form>` with a notice outside it kept only
+  the notice. Falling back to the whole text costs little, because picking then chooses the
+  relevant passages from it. The block text is capped at 262,144 characters
+  (`READING_TEXT_MAX_CHARS`, the same number as the fetcher's default byte cap).
+- Each article's blocks are recorded as one range of block positions when its tags open and
+  close, so the work grows with the number of tags and blocks, not with their product. Review
+  round 1 measured the first version at 15.9 s of CPU and 6 GB of memory on one page of
+  26,214 nested `<article>` tags (262,144 bytes); production has 512 MB.
+- `pick_passages` splits the blocks into passages of at most 500 characters (a block longer
   than that is split at a space), scores each passage by how many distinct words it shares
-  with the run's answers, and keeps the highest-scoring passages that fit in 4,000
-  characters, ties going to the earlier passage. The kept passages are joined in page order
-  with " … " between them, separators counted inside the 4,000.
-- Neighbouring short blocks are joined into one passage while it stays within about 500
+  with the run's answers, and keeps the best-scoring passages first, each one if it still
+  fits in 4,000 characters, ties going to the earlier passage. The kept passages are joined
+  in page order; " … " goes only where passages were skipped between them, never between two
+  neighbouring passages, and the separators count inside the 4,000.
+- Neighbouring short blocks are joined into one passage while it stays within 500
   characters; the pieces of a split long block are never joined. Plain text (not HTML) longer
   than the limit is split into blocks at blank lines. Text across inline tags inside one block
   is joined with a space, as `extract_text` does today.
 - Words: lower-cased runs of letters and digits, at least 3 characters, minus a fixed list of
-  about 75 common English words. Each distinct word counts once per passage.
+  71 common English words. Each distinct word counts once per passage.
 - A page with no shared words (for example Chinese or Japanese, which has no spaces between
-  words) keeps its first passages: the same as today.
+  words) keeps passages from the top in page order; one that does not fit is skipped and a
+  later, shorter one may fill the room left. Unlike today, it reads the main area, so menus
+  and footers are left out.
 - The v2 system prompt says a PAGE entry may be passages from the page with gaps marked
   " … ". v2 has no paid golden capture yet; the paid run captures it after this change.
 
@@ -92,14 +116,18 @@ judge prompts from the same fetched text: "first 4,000 characters" with today's
   (262,144) characters.
 - `fetch_cited_pages(..., long_pages: bool = False)`: with `long_pages=True` a fetched row's
   `text` is `reading_text(..., limit=max_text_chars)` instead of `extract_text(...)`; the
-  usable-text minimum applies to it unchanged. Robots.txt reading is unchanged.
+  usable-text minimum applies to it unchanged. Robots.txt is read as before; a page whose
+  robots.txt could not be read or checked gets the new outcome `robots_unchecked` instead of
+  `refused_robots` (decision 1), and is still not requested.
 - `evaluation.pick_passages(text: str, claims: Sequence[str], *, limit: int) -> str`: `text`
   unchanged when it is at most `limit` characters; otherwise rule 3's passages, at most
-  `limit` characters including the `" … "` separators. Pure: no I/O, no logging.
+  `limit` characters including the `" … "` separators. It reads and writes nothing else and
+  logs nothing.
 - `judge_source_pages` calls the fetcher with `long_pages=True`, and passes each fetched page
   through `pick_passages(row.text, answer_texts, limit=JUDGE_MAX_SOURCE_PAGE_CHARS)` before the
   cleaning and cut it does today. Excerpts are not passed through it.
-- `JudgeSourcePages.preview: int` (P); the judge's memo records `(read, cited, preview)`;
+- `JudgeSourcePages.preview: int` (P), counting `refused_robots` only; the judge's in-memory
+  record holds `(read, cited, preview)`;
   `RunEvaluation.source_pages_preview: int | None` (null whenever `source_pages_read` is null);
   the same field in `openapi.yaml`.
 - The page's `verifiedTrustDisclosure(ev, pagesInEffect)` reads `ev.source_pages_preview` and
@@ -113,15 +141,21 @@ judge prompts from the same fetched text: "first 4,000 characters" with today's
 - **Embeddings or a ranking model.** A new dependency or a paid call for each page.
 - **Counting pages refused by robots.txt whether or not a preview existed.** The sentence
   would then say a preview was used when none was.
-- **The owner's sentence "For the other P" in every case.** False when some unread pages
+- **The approved sentence "For the other P" in every case.** False when some unread pages
   failed for another reason.
+- **Counting every page robots.txt kept us from requesting** (the first version). False when
+  robots.txt simply could not be read (decision 1).
 
 ## Consequences
 
 - With the setting off, nothing visible changes; the API gains one null field.
 - With it on: the judge reads the most relevant passages of long pages; the trust note says
-  when a website asked tools not to read its pages.
-- Picking costs little time in the run slot. Measured with `time.process_time` (best of 3, an
+  when a website's rules asked tools not to read its pages.
+- Picking passages third-party text from deep in a page into the judge's prompt that the
+  first 4,000 characters would not have reached (for example a reader's comment that repeats
+  the answers' words). It stays inside the untrusted block and the v2 prompt still says to
+  ignore instructions in it.
+- On the synthetic pages measured, picking costs little time in the run slot. Measured with `time.process_time` (best of 3, an
   Apple M4, 8 pages at the 262,144-byte cap and four 4,000-character answers): 0.536 s of CPU
   for the worst page shape built (nested inline tags), of which today's `extract_text` alone
   costs 0.413 s; about 0.1 s more than today per 8 pages. The parse, not the picking, is most
