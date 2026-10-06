@@ -5227,6 +5227,9 @@
     if (preview === 0) {
       return `${lead} No cited page could be read. The check used only the titles and addresses.`;
     }
+    if (preview === cited && cited === 1) {
+      return `${lead} No cited page could be read: the website asks automated tools not to read its pages. The check used only the title, address and the short preview the search engine showed.`;
+    }
     if (preview === cited) {
       return `${lead} No cited page could be read: the websites ask automated tools not to read their pages. The check used only the titles, addresses and the short previews the search engine showed.`;
     }

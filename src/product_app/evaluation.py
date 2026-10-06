@@ -40,6 +40,7 @@ derived; where it was not derived from data, it says so.
 
 from __future__ import annotations
 
+import bisect
 import json
 import re
 from collections.abc import Callable, Sequence
@@ -1811,11 +1812,13 @@ class JudgeSourcePages:
     same_as: tuple[int, ...]
     read: int
     cited: int
-    #: W54 (ADR-0150 decision 1): P, the distinct cited addresses whose page
-    #: robots.txt refused and whose search excerpt reached the judge (non-empty
-    #: after cleaning, inside the 8-item cap). A refused page with no usable
-    #: excerpt is not counted, so the trust note never claims a preview that
-    #: was not used.
+    #: W54 (ADR-0150 decision 1): P, the distinct cited addresses whose site's
+    #: robots.txt was read and does not allow the page (``refused_robots``),
+    #: and whose search excerpt reached the judge (non-empty after cleaning,
+    #: inside the 8-item cap). A page with no usable excerpt, or whose
+    #: robots.txt could not be read (``robots_unchecked``), is not counted, so
+    #: the trust note never claims a preview or a site's request that was not
+    #: there.
     preview: int
 
 
@@ -1923,7 +1926,7 @@ def build_judge_evidence(
 #: W54 (ADR-0150 decision 3): what joins two kept passages of a page, counted
 #: inside the item's limit. The v2 system prompt names it to the judge.
 PASSAGE_SEPARATOR = " … "
-#: About this many characters per passage: a longer block is split at a
+#: At most this many characters per passage: a longer block is split at a
 #: space, and neighbouring short blocks are joined up to it.
 _PASSAGE_CHARS = 500
 #: Lower-cased runs of letters and digits; only runs of 3 or more count.
@@ -1952,40 +1955,53 @@ def _passage_words(text: str) -> set[str]:
     }
 
 
-def _split_block(block: str) -> list[str]:
-    """``block`` in pieces of at most ``_PASSAGE_CHARS``, each cut at the last
-    space that fits; a run with no space in it (Chinese, Japanese) is cut at
-    the limit instead, so it still yields its opening."""
-    pieces: list[str] = []
-    rest = block
-    while len(rest) > _PASSAGE_CHARS:
-        cut = rest.rfind(" ", 0, _PASSAGE_CHARS + 1)
+def _split_block(text: str, start: int, end: int) -> list[tuple[int, int]]:
+    """``text[start:end]`` in pieces of at most ``_PASSAGE_CHARS``, as
+    positions, each cut at the last space that fits; a run with no space in
+    it (Chinese, Japanese) is cut at the limit instead, so it still yields
+    its opening."""
+    pieces: list[tuple[int, int]] = []
+    while end - start > _PASSAGE_CHARS:
+        cut = text.rfind(" ", start, start + _PASSAGE_CHARS + 1) - start
         if cut <= 0:
             cut = _PASSAGE_CHARS
-        pieces.append(rest[:cut].rstrip())
-        rest = rest[cut:].lstrip()
-    if rest:
-        pieces.append(rest)
+        piece_end = start + cut
+        while text[piece_end - 1].isspace():
+            piece_end -= 1
+        pieces.append((start, piece_end))
+        start += cut
+        while text[start].isspace():
+            start += 1
+    pieces.append((start, end))
     return pieces
 
 
-def _passages(text: str) -> list[str]:
-    """The page's passages, in page order: one line is one block; a block
-    longer than ``_PASSAGE_CHARS`` is split, and neighbouring blocks that fit
-    together within it are joined by a line break."""
-    passages: list[str] = []
+_PASSAGE_LINE = re.compile(r"[^\n]+")
+
+
+def _passages(text: str) -> list[tuple[int, int]]:
+    """The page's passages, in page order, as ``[start, end)`` positions in
+    ``text``: one line is one block; a block longer than ``_PASSAGE_CHARS`` is
+    split, and neighbouring blocks that fit together within it are one
+    passage. What lies between two passages is the page's own text (a line
+    break, a space, or nothing)."""
+    passages: list[tuple[int, int]] = []
     joinable = False
-    for line in text.split("\n"):
-        block = line.strip()
-        if not block:
+    for line in _PASSAGE_LINE.finditer(text):
+        start, end = line.span()
+        while start < end and text[start].isspace():
+            start += 1
+        while end > start and text[end - 1].isspace():
+            end -= 1
+        if start == end:
             continue
-        if len(block) > _PASSAGE_CHARS:
-            passages.extend(_split_block(block))
+        if end - start > _PASSAGE_CHARS:
+            passages.extend(_split_block(text, start, end))
             joinable = False
-        elif joinable and len(passages[-1]) + 1 + len(block) <= _PASSAGE_CHARS:
-            passages[-1] += "\n" + block
+        elif joinable and end - passages[-1][0] <= _PASSAGE_CHARS:
+            passages[-1] = (passages[-1][0], end)
         else:
-            passages.append(block)
+            passages.append((start, end))
             joinable = True
     return passages
 
@@ -1996,24 +2012,48 @@ def pick_passages(text: str, claims: Sequence[str], *, limit: int) -> str:
 
     ``text`` is returned unchanged when it is at most ``limit`` characters.
     Otherwise each passage is scored by how many distinct words it shares
-    with the claims; the highest scores are kept while they fit, a tie going
-    to the earlier passage, and the kept passages are joined in page order by
-    ``PASSAGE_SEPARATOR``. A page sharing no word with the claims therefore
-    keeps its first passages. Pure: no I/O, no logging. Not an AI summary
-    (CHG-029 (c))."""
+    with the claims, and the best-scoring passages are taken first, each one
+    if the result still fits, a tie going to the earlier passage. The kept
+    passages come out in page order: neighbours joined by the page's own text
+    between them, and ``PASSAGE_SEPARATOR`` only where passages were skipped
+    (failure mode 19). A page sharing no word with the claims therefore keeps
+    passages from the top. Reads and writes nothing else and logs nothing.
+    Not an AI summary (CHG-029 (c))."""
     if len(text) <= limit:
         return text
-    passages = _passages(text)
+    spans = _passages(text)
     claim_words = _passage_words(" ".join(claims))
-    scores = [len(_passage_words(passage) & claim_words) for passage in passages]
-    kept: list[int] = []
+    scores = [len(_passage_words(text[start:end]) & claim_words) for start, end in spans]
+
+    def join_cost(left: int, right: int) -> int:
+        if right == left + 1:
+            return spans[right][0] - spans[left][1]
+        return len(PASSAGE_SEPARATOR)
+
+    kept: list[int] = []  # sorted, so each candidate's neighbours are found by bisection
     used = 0
-    for index in sorted(range(len(passages)), key=lambda i: (-scores[i], i)):
-        cost = len(passages[index]) + (len(PASSAGE_SEPARATOR) if kept else 0)
+    for index in sorted(range(len(spans)), key=lambda i: (-scores[i], i)):
+        at = bisect.bisect_left(kept, index)
+        before = kept[at - 1] if at > 0 else None
+        after = kept[at] if at < len(kept) else None
+        cost = spans[index][1] - spans[index][0]
+        if before is not None:
+            cost += join_cost(before, index)
+        if after is not None:
+            cost += join_cost(index, after)
+        if before is not None and after is not None:
+            cost -= join_cost(before, after)
         if used + cost <= limit:
-            kept.append(index)
+            kept.insert(at, index)
             used += cost
-    return PASSAGE_SEPARATOR.join(passages[index] for index in sorted(kept))
+    runs: list[str] = []
+    run_start = 0
+    for position, index in enumerate(kept):
+        last = position + 1 == len(kept) or kept[position + 1] != index + 1
+        if last:
+            runs.append(text[spans[kept[run_start]][0] : spans[index][1]])
+            run_start = position + 1
+    return PASSAGE_SEPARATOR.join(runs)
 
 
 def judge_source_pages(initial_answers: list[InitialModelAnswer]) -> JudgeSourcePages:
@@ -2028,8 +2068,9 @@ def judge_source_pages(initial_answers: list[InitialModelAnswer]) -> JudgeSource
 
     * the page text, when robots.txt allowed it and the page was fetched and
       usable;
-    * the search excerpt, when robots.txt did not allow the page (including an
-      unreadable robots.txt, which fails closed) and an excerpt exists;
+    * the search excerpt, when robots.txt did not allow the page
+      (``refused_robots``) or could not be read or checked, which fails closed
+      (``robots_unchecked``), and an excerpt exists;
     * "" otherwise -- a fetch that failed for another reason does NOT fall back
       to the excerpt (decision 4, a session call the owner may overturn).
 
@@ -2080,7 +2121,7 @@ def judge_source_pages(initial_answers: list[InitialModelAnswer]) -> JudgeSource
         raw = ""
         if row is not None and outcome == "fetched":
             raw = pick_passages(row.text, answer_texts, limit=JUDGE_MAX_SOURCE_PAGE_CHARS)
-        elif outcome == "refused_robots":
+        elif outcome in ("refused_robots", "robots_unchecked"):
             raw = excerpts.get(address, "")
         text = _clean_search_excerpt(raw)[:JUDGE_MAX_SOURCE_PAGE_CHARS]
         if text:
