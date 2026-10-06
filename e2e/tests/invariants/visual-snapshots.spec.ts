@@ -1,6 +1,7 @@
 import { test, expect } from "@playwright/test";
 import { driveToResult, driveToTranscript } from "../../fixtures/golden-run";
 import { stabilize, masks } from "../../fixtures/stabilize";
+import { pinGoogleFonts } from "../../fixtures/pinned-fonts";
 
 /**
  * VISUAL REGRESSION baselines (toHaveScreenshot) for the two views where the
@@ -29,6 +30,8 @@ test.describe("visual snapshots (golden fixture)", () => {
 
   test("result view — verdict + trust triangle", async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 1200 });
+    // W41 (ADR-0149): the same fonts every run, whatever Google answers.
+    await pinGoogleFonts(page);
     await driveToResult(page);
     await stabilize(page);
     await expect(page).toHaveScreenshot("result-verdict.png", {
@@ -40,6 +43,8 @@ test.describe("visual snapshots (golden fixture)", () => {
 
   test("transcript view — full debate", async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 1200 });
+    // W41 (ADR-0149): the same fonts every run, whatever Google answers.
+    await pinGoogleFonts(page);
     await driveToResult(page);
     await driveToTranscript(page);
     await stabilize(page);

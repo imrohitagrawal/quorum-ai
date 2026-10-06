@@ -6,6 +6,7 @@ import {
   withEvaluation,
   EVAL_MISSING_HIGH_STAKES,
 } from "../../fixtures/golden-run";
+import { pinGoogleFonts } from "../../fixtures/pinned-fonts";
 
 /**
  * FR-016 (S3) — trust-score element visual baselines.
@@ -49,6 +50,8 @@ const fulfil = (body: unknown, status = 200) => ({
 });
 
 async function driveToTrustSurface(page: Page) {
+  // W41 (ADR-0149): the same fonts every run, whatever Google answers.
+  await pinGoogleFonts(page);
   await boot(page);
   await Promise.all([
     page.route("**/v1/query-runs/estimate", (r) =>
@@ -84,12 +87,14 @@ test.describe("trust-score visual baselines (FR-016, advisory)", () => {
         await expect(surface).toBeVisible();
         await expect(surface).not.toBeEmpty();
 
-        // CHG-030: the screenshot allowance was widened to 700 px, and at 700 px
-        // a one-word or one-letter change in this card no longer fails the
-        // pixel compare. So the card's wording is pinned here instead: every
-        // visible line, exact, in order, and no more or fewer lines. Read from
-        // innerText, so it sees any visible element and skips hidden ones; the
-        // bullets are CSS list markers, not text, so they are not in the lines.
+        // CHG-031: a second guard beside the 120 px pixel compare below, and a
+        // deterministic one: it does not depend on fonts or pixels. It pins
+        // every line of the card, exact, in order, and no more or fewer lines.
+        // Its limits: it reads innerText, so it does NOT see text added by CSS
+        // `::before`/`::after` (the bullets are CSS list markers, so they are
+        // not in the lines either), and it DOES see text hidden with
+        // `opacity: 0`, which innerText still returns. Text under
+        // `display: none` or `visibility: hidden` is not in the lines.
         // Red if: any line's wording changes, a line is added, removed or
         // reordered (e.g. "Structural checks passed" -> "Structural check passed"
         // in app.js).
@@ -109,7 +114,7 @@ test.describe("trust-score visual baselines (FR-016, advisory)", () => {
           ]);
 
         await expect(surface).toHaveScreenshot(`trust-score-${theme}-${width}.png`, {
-          maxDiffPixels: 700,
+          maxDiffPixels: 120,
         });
       });
     }

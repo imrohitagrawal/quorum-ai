@@ -1,0 +1,8 @@
+{
+  "url": "https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;0,6..72,700;1,6..72,400;1,6..72,500&family=Geist:wght@400;500;550;600;650;700&family=Geist+Mono:wght@400;500;600&display=swap",
+  "sha1": "e7acd04313ee3e10ac62bd602de727e0f3d44a6a",
+  "bytes": 24940,
+  "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.7827.55 Safari/537.36",
+  "fetched_at": "2026-10-06T18:33Z",
+  "how": "curl -s --compressed -A <user_agent> -H 'Accept: text/css,*/*;q=0.1' -H 'Sec-Fetch-Dest: style' -H 'Sec-Fetch-Mode: no-cors' -H 'Sec-Fetch-Site: cross-site' <url>; the same bytes CI's test browser received in run 37504420419 (SHA-1 prefix e7acd04313ee). Re-capture when the font link in workspace.html changes (ADR-0149)."
+}
