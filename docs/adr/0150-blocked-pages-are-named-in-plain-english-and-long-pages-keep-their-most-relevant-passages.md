@@ -66,7 +66,11 @@ its source list — an automated review, not a human fact-check." Then:
 | N = 0, P = 0, M = 1 | "No cited page could be read. The check used only the title, address and any short preview the search engine showed." | Session |
 
 Singular forms: "cited page" when M is 1 (as today); "For the other one," when P is 1 and
-F = 0; the N = 0, P = M = 1 and N = 0, P = 0, M = 1 rows above. Impossible counts (not whole numbers, negative,
+F = 0; the N = 0, P = M = 1 and N = 0, P = 0, M = 1 rows above. In the two rows written by the
+session (N > 0, P > 0, F > 0 and N = 0, 0 < P < M), when P is 2 or more the blocked part reads
+"the websites ask automated tools not to read their pages, so the check could only use the
+short previews the search engine showed" (review round 2: several blocked pages may be on
+several websites). The approved F = 0 sentence is kept exactly as approved. Impossible counts (not whole numbers, negative,
 N + P > M) show the sentence used when page reading is off, which never claims a page was
 read, as today. "Posture off" in the table means page reading is switched off.
 
