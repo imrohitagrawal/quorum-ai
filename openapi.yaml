@@ -1409,6 +1409,11 @@ components:
           - type: integer
           - type: 'null'
           title: Source Pages Cited
+        source_pages_preview:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Source Pages Preview
       type: object
       required:
       - schema_version

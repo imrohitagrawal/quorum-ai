@@ -5177,31 +5177,60 @@
   // states what was read: "Checked against N of M cited pages" ("cited page"
   // when M is 1), N being the distinct cited addresses whose page was fetched
   // and read (a search excerpt does not count) and M the distinct cited
-  // addresses seen. N = 0 says no cited page could be read. With the posture off, or counts
-  // that are missing or impossible (not a whole number from 0 to M), it fails
-  // CLOSED to today's sentence, which never claims a page was read.
+  // addresses seen. With the posture off, or counts that are missing or
+  // impossible (not a whole number from 0 to M), it fails CLOSED to today's
+  // sentence, which never claims a page was read.
+  //
+  // W54 (ADR-0150 decision 2). P (`source_pages_preview`) is the cited pages a
+  // website asks automated tools not to read whose search preview reached the
+  // judge, and F = M - N - P the rest that were not read. Each (N, P, F) gets
+  // the table's sentence, which is true for it: the owner's "For the other P"
+  // only when F = 0. P missing or null (a run served before this change) keeps
+  // the W29 sentences; P present but not a whole number, or N + P > M, fails
+  // closed like the other counts.
   //
   // Reads ONLY TRUST_DISCLOSURE_VERIFIED: tests/unit/test_w29_trust_note_copy.py
-  // lifts this function out and runs it under node with that one constant.
+  // and test_w54_trust_note_sentences.py lift this function out and run it
+  // under node with that one constant.
   function verifiedTrustDisclosure(ev, pagesInEffect) {
     const counts = ev && typeof ev === "object" ? ev : {};
     const read = counts.source_pages_read;
     const cited = counts.source_pages_cited;
+    const preview = counts.source_pages_preview;
+    const known = preview !== undefined && preview !== null;
     const stated =
       pagesInEffect === true &&
       Number.isInteger(read) &&
       Number.isInteger(cited) &&
       read >= 0 &&
-      read <= cited;
+      read <= cited &&
+      (!known || (Number.isInteger(preview) && preview >= 0 && read + preview <= cited));
     if (!stated) return TRUST_DISCLOSURE_VERIFIED;
     const lead = TRUST_DISCLOSURE_VERIFIED.replace(
       " The cited pages themselves were not retrieved.",
       "",
     );
-    if (read === 0) {
+    const blocked =
+      "the website asks automated tools not to read its pages, so the check could only use the short preview the search engine showed";
+    if (read > 0) {
+      const checked = `Checked against ${read} of ${cited} cited ${cited === 1 ? "page" : "pages"}.`;
+      if (!known || preview === 0) return `${lead} ${checked}`;
+      if (read + preview === cited) {
+        return `${lead} ${checked} For the other ${preview === 1 ? "one" : preview}, ${blocked}.`;
+      }
+      return `${lead} ${checked} For ${preview} of the other ${cited - read}, ${blocked}.`;
+    }
+    if (!known) {
       return `${lead} It worked from the titles, addresses and any search excerpts: no cited page could be read.`;
     }
-    return `${lead} Checked against ${read} of ${cited} cited ${cited === 1 ? "page" : "pages"}.`;
+    // P = 0 first, so M = 0 (never served) cannot read as "all were blocked".
+    if (preview === 0) {
+      return `${lead} No cited page could be read. The check used only the titles and addresses.`;
+    }
+    if (preview === cited) {
+      return `${lead} No cited page could be read: the websites ask automated tools not to read their pages. The check used only the titles, addresses and the short previews the search engine showed.`;
+    }
+    return `${lead} No cited page could be read. For ${preview} of the ${cited}, ${blocked}; for the rest it used the titles and addresses.`;
   }
   // App-authored band labels for the verified treatment. Keys are the ONLY
   // bands the server can emit alongside a numeric score (build_trust_score);

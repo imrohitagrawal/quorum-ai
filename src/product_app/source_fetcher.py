@@ -302,6 +302,146 @@ def extract_text(body: str, content_type: str, *, max_chars: int) -> str:
     return " ".join(body.split())[:max_chars]
 
 
+#: W54 (ADR-0150 decision 5): the most block text :func:`reading_text` returns
+#: for a long page; the same number as the fetcher's default byte cap.
+READING_TEXT_MAX_CHARS = 262_144
+#: The area a long page is read from must hold at least this many characters
+#: of block text (ADR-0150 decision 3), or the next, wider area is used.
+_MAIN_AREA_MIN_CHARS = 1_000
+#: Elements that start and end a block of text. Every container the area rules
+#: below look at is one too, so the text between two boundaries always has one
+#: context.
+_BLOCK_TAGS = frozenset(
+    {
+        "address", "article", "aside", "blockquote", "body", "caption", "dd", "details",
+        "dialog", "div", "dl", "dt", "fieldset", "figcaption", "figure", "footer", "form",
+        "h1", "h2", "h3", "h4", "h5", "h6", "header", "hr", "html", "legend", "li", "main",
+        "nav", "ol", "p", "pre", "section", "summary", "table", "tbody", "td", "tfoot", "th",
+        "thead", "tr", "ul",
+    }
+)  # fmt: skip
+#: Page furniture, dropped from a long page only while what is left still
+#: holds enough text (failure mode 5: some sites wrap the whole page in one).
+_FURNITURE_TAGS = frozenset({"nav", "header", "footer", "aside", "form"})
+
+
+@dataclass(frozen=True)
+class _Block:
+    text: str
+    in_main: bool
+    articles: tuple[int, ...]
+    in_furniture: bool
+
+
+class _BlockExtractor(_TextExtractor):
+    """:class:`_TextExtractor` that also keeps the text in blocks, each with
+    the containers it sits in. ``parts`` is collected exactly as the parent
+    collects it, so the visible text read from it is ``extract_text``'s."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.blocks: list[_Block] = []
+        self._pending: list[str] = []
+        self._main = 0
+        self._furniture = 0
+        self._articles: list[int] = []
+        self._next_article = 0
+
+    def _flush(self) -> None:
+        text = " ".join(" ".join(self._pending).split())
+        self._pending = []
+        if text:
+            self.blocks.append(
+                _Block(text, self._main > 0, tuple(self._articles), self._furniture > 0)
+            )
+
+    def handle_starttag(self, tag: str, attrs: object) -> None:
+        super().handle_starttag(tag, attrs)
+        if tag not in _BLOCK_TAGS:
+            return
+        self._flush()
+        if tag == "main":
+            self._main += 1
+        elif tag == "article":
+            self._articles.append(self._next_article)
+            self._next_article += 1
+        elif tag in _FURNITURE_TAGS:
+            self._furniture += 1
+
+    def handle_endtag(self, tag: str) -> None:
+        super().handle_endtag(tag)
+        if tag not in _BLOCK_TAGS:
+            return
+        self._flush()
+        if tag == "main" and self._main:
+            self._main -= 1
+        elif tag == "article" and self._articles:
+            self._articles.pop()
+        elif tag in _FURNITURE_TAGS and self._furniture:
+            self._furniture -= 1
+
+    def handle_data(self, data: str) -> None:
+        before = len(self.parts)
+        super().handle_data(data)
+        if len(self.parts) > before:
+            self._pending.append(data)
+
+    def close(self) -> None:
+        super().close()
+        self._flush()
+
+
+def _joined_length(blocks: Sequence[str]) -> int:
+    return sum(len(block) for block in blocks) + max(0, len(blocks) - 1)
+
+
+def _main_area(blocks: Sequence[_Block]) -> list[str]:
+    """ADR-0150 decision 3: ``<main>``, else the longest ``<article>``, else
+    the page without its furniture, each only when it holds at least
+    ``_MAIN_AREA_MIN_CHARS``; else every block."""
+    main = [block.text for block in blocks if block.in_main]
+    if _joined_length(main) >= _MAIN_AREA_MIN_CHARS:
+        return main
+    articles: dict[int, list[str]] = {}
+    for block in blocks:
+        for article in block.articles:
+            articles.setdefault(article, []).append(block.text)
+    # max() keeps the first of equal lengths, so a tie goes to the earlier one.
+    longest = max(articles.values(), key=_joined_length, default=[])
+    if _joined_length(longest) >= _MAIN_AREA_MIN_CHARS:
+        return longest
+    unfurnished = [block.text for block in blocks if not block.in_furniture]
+    if _joined_length(unfurnished) >= _MAIN_AREA_MIN_CHARS:
+        return unfurnished
+    return [block.text for block in blocks]
+
+
+def reading_text(body: str, content_type: str, *, limit: int) -> str:
+    """What the judge's passage picking reads of a page (W54, ADR-0150).
+
+    When the visible text is at most ``limit`` characters it is exactly
+    ``extract_text(body, content_type, max_chars=limit)`` (failure mode 14: a
+    short page is read as before). Otherwise the main area's blocks, each with
+    its whitespace collapsed, joined by "\\n" and cut at
+    ``READING_TEXT_MAX_CHARS``. A plain-text page's blocks are its paragraphs
+    (runs of lines between blank lines)."""
+    if content_type == "text/html":
+        parser = _BlockExtractor()
+        parser.feed(body)
+        parser.close()
+        visible = " ".join(" ".join(parser.parts).split())
+        if len(visible) <= limit:
+            return visible
+        blocks = _main_area(parser.blocks)
+    else:
+        visible = " ".join(body.split())
+        if len(visible) <= limit:
+            return visible
+        paragraphs = (" ".join(chunk.split()) for chunk in re.split(r"\n[ \t\r\f\v]*\n", body))
+        blocks = [paragraph for paragraph in paragraphs if paragraph]
+    return "\n".join(blocks)[:READING_TEXT_MAX_CHARS]
+
+
 def _now_iso() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
@@ -343,6 +483,7 @@ def _fetch_one(
     clock: Callable[[], float],
     raw: bool = False,
     robots_permit: Callable[[str, str], bool] | None = None,
+    long_pages: bool = False,
 ) -> FetchedSource:
     """One bounded GET.
 
@@ -351,7 +492,8 @@ def _fetch_one(
     as page text, and is often far shorter than a page. ``robots_permit``,
     when given, is asked with the URL's ``scheme://host[:port]`` and the URL
     once the URL has passed the scheme and host checks, before anything is
-    dialled."""
+    dialled. ``long_pages`` reads the page with :func:`reading_text` instead
+    of :func:`extract_text`; the usable-length floor is the same."""
     started = clock()
     if _FORBIDDEN_IN_A_URL.search(url):
         return _row(url, "refused_scheme", started=started, clock=clock)
@@ -524,7 +666,10 @@ def _fetch_one(
             if raw:
                 text, outcome = decoded, "fetched"
             else:
-                text = extract_text(decoded, content_type, max_chars=max_text_chars)
+                if long_pages:
+                    text = reading_text(decoded, content_type, limit=max_text_chars)
+                else:
+                    text = extract_text(decoded, content_type, max_chars=max_text_chars)
                 outcome = "fetched" if len(text) >= MIN_USABLE_TEXT_CHARS else "unusable"
             return _row(
                 url,
@@ -754,6 +899,7 @@ def fetch_cited_pages(
     max_text_chars: int,
     clock: Callable[[], float] = time.monotonic,
     respect_robots: bool = False,
+    long_pages: bool = False,
 ) -> tuple[FetchedSource, ...]:
     """Fetch ``urls`` in order, one row per distinct URL.
 
@@ -769,6 +915,11 @@ def fetch_cited_pages(
     inside the same deadline, before its first page; a page it does not allow
     is ``refused_robots`` and counts toward ``max_pages`` like a fetch, so the
     caller's page-or-excerpt items stay within the page cap.
+
+    With ``long_pages`` (W54, ADR-0150) a page's text is
+    :func:`reading_text`: a page longer than ``max_text_chars`` keeps its main
+    area's blocks, up to ``READING_TEXT_MAX_CHARS``, for the caller to pick
+    passages from. Robots.txt is read the same way either way.
     """
     deadline = clock() + budget_seconds
     rows: list[FetchedSource] = []
@@ -821,6 +972,7 @@ def fetch_cited_pages(
                 max_text_chars=max_text_chars,
                 clock=clock,
                 robots_permit=permit if respect_robots else None,
+                long_pages=long_pages,
             )
         )
     return tuple(rows)

@@ -366,6 +366,11 @@ class QueryRunEvaluationProjection(BaseModel):
     #: page fetched serves ``(0, M)``. Counts only.
     source_pages_read: int | None = None
     source_pages_cited: int | None = None
+    #: W54 (ADR-0150 decision 1): P, the distinct cited addresses whose page
+    #: robots.txt refused and whose search excerpt reached the judge -- "the
+    #: check could only use the short preview the search engine showed".
+    #: ``None`` whenever ``source_pages_read`` is ``None``.
+    source_pages_preview: int | None = None
 
 
 class QueryRunResultResponse(BaseModel):
@@ -2204,12 +2209,13 @@ class _JudgeOutcome:
     #: demonstrated route; a reader must still treat ``None`` as "the service
     #: did not say", never as "no judge ran".
     status: JudgeCallOutcome | None = None
-    #: W29 (ADR-0148): ``(read, cited)`` when this call was sent the cited
-    #: pages (PR-EVAL-JUDGE-v2) -- the distinct cited addresses whose page was
-    #: fetched and read (excerpts do not count), and the distinct cited
-    #: addresses it saw; ``(0, M)`` when none was fetched -- else ``None``. Counts only: the page
-    #: text lives in the judge call and is never memoised.
-    source_pages: tuple[int, int] | None = None
+    #: W29 (ADR-0148): ``(read, cited, preview)`` when this call was sent the
+    #: cited pages (PR-EVAL-JUDGE-v2) -- the distinct cited addresses whose page
+    #: was fetched and read (excerpts do not count), the distinct cited
+    #: addresses it saw, and (W54, ADR-0150) the refused ones whose search
+    #: excerpt reached it; ``(0, M, P)`` when none was fetched -- else ``None``.
+    #: Counts only: the page text lives in the judge call and is never memoised.
+    source_pages: tuple[int, int, int] | None = None
 
 
 _judge_verdict_memo: OrderedDict[str, _JudgeOutcome] = OrderedDict()
@@ -2251,8 +2257,8 @@ def _judge_memo_touch(query_run_id: str) -> None:
             _judge_verdict_memo.move_to_end(query_run_id)
 
 
-def _judge_source_pages_for(query_run_id: UUID) -> tuple[int, int] | None:
-    """``(read, cited)`` when this run's judge read the cited pages (W29), else
+def _judge_source_pages_for(query_run_id: UUID) -> tuple[int, int, int] | None:
+    """``(read, cited, preview)`` when this run's judge read the cited pages (W29), else
     ``None``. Read from the memo, like :func:`_judge_status_for`."""
     with _judge_memo_lock:
         outcome = _judge_verdict_memo.get(str(query_run_id))
@@ -2260,14 +2266,15 @@ def _judge_source_pages_for(query_run_id: UUID) -> tuple[int, int] | None:
 
 
 def _with_source_pages(
-    result: RunEvaluationResult, source_pages: tuple[int, int] | None
+    result: RunEvaluationResult, source_pages: tuple[int, int, int] | None
 ) -> RunEvaluationResult:
     """Record on the evaluation that the judge read pages: the prompt id that
-    judged it (stored by ``to_eval_json``, ADR-0148 decision 6) and the two
-    counts the trust note states (decision 9). Unchanged when none were read."""
+    judged it (stored by ``to_eval_json``, ADR-0148 decision 6) and the three
+    counts the trust note states (ADR-0148 decision 9, ADR-0150 decision 1).
+    Unchanged when none were read."""
     if source_pages is None:
         return result
-    read, cited = source_pages
+    read, cited, preview = source_pages
     return replace(
         result,
         evaluation=result.evaluation.model_copy(
@@ -2275,6 +2282,7 @@ def _with_source_pages(
                 "judge_prompt_id": JUDGE_PAGES_PROMPT_ID,
                 "source_pages_read": read,
                 "source_pages_cited": cited,
+                "source_pages_preview": preview,
             }
         ),
     )
@@ -2515,10 +2523,13 @@ class _MemoisedRunJudge:
                 # describe different calls.
                 status=service.last_outcome,
                 # Counts only (decision 9): distinct addresses fetched and
-                # read, and distinct addresses cited. ``None`` when the judge
-                # was not sent pages (v1), so the served counts stay null.
+                # read, distinct addresses cited, and (ADR-0150) refused ones
+                # checked by their excerpt. ``None`` when the judge was not
+                # sent pages (v1), so the served counts stay null.
                 source_pages=(
-                    (reading.read, reading.cited) if reading is not None and reading.pages else None
+                    (reading.read, reading.cited, reading.preview)
+                    if reading is not None and reading.pages
+                    else None
                 ),
             )
             with _judge_memo_lock:
@@ -2925,6 +2936,7 @@ def _evaluation_projection(
         judge_status=_judge_status_for(query_run.query_run_id),
         source_pages_read=evaluation.source_pages_read,
         source_pages_cited=evaluation.source_pages_cited,
+        source_pages_preview=evaluation.source_pages_preview,
     )
 
 
