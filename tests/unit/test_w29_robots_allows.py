@@ -254,19 +254,25 @@ def test_4096_rules_are_accepted_and_one_more_fails_closed() -> None:
 
 
 def test_heavy_wildcard_rules_against_a_long_path_finish_quickly() -> None:
-    """4,000 rules of ``/*a*a*a*a*b`` against a path of 5,000 ``a``: no ``b``,
-    so nothing matches and the page is allowed. A backtracking matcher (a regex
-    built from the file) takes far longer than the bound on this shape.
+    """4,000 rules of ``/*a*a*a*a*b`` against a path of exactly 2,048
+    characters (``/`` and 2,047 ``a``), the longest address decision 3 lets
+    the matcher see: no ``b``, so nothing matches and the page is allowed. A
+    backtracking matcher (a regex built from the file) takes far longer than
+    the bound on this shape.
     RED IF: matching is not linear in the rule and the path, or the result is
-    wrong."""
+    wrong. Partner: a 2,048-character path ending in ``b`` IS matched by the
+    same rules (so the True above is not a matcher that matches nothing)."""
     body = "User-agent: *\n" + "Disallow: /*a*a*a*a*b\n" * 4000
-    path = "/" + "a" * 5000
+    path = "/" + "a" * 2047
+    assert len(path) == 2048
     started = time.monotonic()
     allowed = _rfc(body, path)
     elapsed = time.monotonic() - started
     assert allowed is True
     assert elapsed < 2.0, f"matching took {elapsed:.2f}s"
-    assert _rfc(body, path + "b") is False  # partner: the same rules do match
+    matching_path = "/" + "a" * 2046 + "b"
+    assert len(matching_path) == 2048
+    assert _rfc(body, matching_path) is False
 
 
 # ---------------------------------------------------------------------------
