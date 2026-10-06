@@ -17,6 +17,7 @@ Every expected value is a literal; each test names what turns it red.
 
 from __future__ import annotations
 
+import time
 import urllib.robotparser
 from typing import Any
 
@@ -201,3 +202,68 @@ def test_rfc9309_permissions(body: str, path: str) -> None:
     does not win, ``Allow`` loses a tie, an empty ``Disallow`` refuses, or the
     ``*`` group is applied when our own group exists."""
     assert _rfc(body, path) is True
+
+
+# ---------------------------------------------------------------------------
+# The matcher's work limits and multi-wildcard rules (ADR-0148 decision 3).
+# Boundary values are literals (AGENTS.md rules 7a and 8b): 2,048 characters a
+# rule and 4,096 rules a file are accepted; one more fails CLOSED.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("path", "allowed"),
+    [("/a1b2c3", False), ("/a1b2", True), ("/acb", True), ("/ab", True), ("/a1c", True)],
+    ids=[
+        "all-pieces-in-order",
+        "last-piece-missing",
+        "pieces-out-of-order",
+        "no-c",
+        "middle-piece-missing",
+    ],
+)
+def test_a_rule_with_two_wildcards_matches_its_pieces_in_order(path: str, allowed: bool) -> None:
+    """``Disallow: /a*b*c``: "/a", "b", "c" must appear in that order.
+    RED IF: multi-``*`` matching is wrong (a middle piece skipped, pieces found
+    out of order, or only the first ``*`` honoured)."""
+    assert _rfc("User-agent: *\nDisallow: /a*b*c\n", path) is allowed
+
+
+def test_a_rule_at_2048_characters_is_honoured_and_one_more_fails_closed() -> None:
+    """The file is ``Allow: /`` plus one ``Disallow`` that does not match /p,
+    so a PARSED file allows /p. At 2,048 characters the rule is parsed (True,
+    and it is honoured on a path it matches); at 2,049 the whole file fails
+    closed (False). RED IF: the limit moves either way."""
+    at_limit = "/x" + "y" * 2046
+    over_limit = "/x" + "y" * 2047
+    assert len(at_limit) == 2048 and len(over_limit) == 2049
+    body = "User-agent: *\nAllow: /\nDisallow: {}\n"
+    assert _rfc(body.format(at_limit), "/p") is True
+    assert _rfc(body.format(at_limit), at_limit) is False  # the long rule applies
+    assert _rfc(body.format(over_limit), "/p") is False
+
+
+def test_4096_rules_are_accepted_and_one_more_fails_closed() -> None:
+    """Rules that never match /p: a parsed file allows /p. RED IF: the rule
+    count limit moves either way (4,096 refused, or 4,097 accepted)."""
+    at_limit = "User-agent: *\n" + "Disallow: /x\n" * 4096
+    over_limit = "User-agent: *\n" + "Disallow: /x\n" * 4097
+    assert _rfc(at_limit, "/p") is True
+    assert _rfc(at_limit, "/x") is False  # partner: the rules are really read
+    assert _rfc(over_limit, "/p") is False
+
+
+def test_heavy_wildcard_rules_against_a_long_path_finish_quickly() -> None:
+    """4,000 rules of ``/*a*a*a*a*b`` against a path of 5,000 ``a``: no ``b``,
+    so nothing matches and the page is allowed. A backtracking matcher (a regex
+    built from the file) takes far longer than the bound on this shape.
+    RED IF: matching is not linear in the rule and the path, or the result is
+    wrong."""
+    body = "User-agent: *\n" + "Disallow: /*a*a*a*a*b\n" * 4000
+    path = "/" + "a" * 5000
+    started = time.monotonic()
+    allowed = _rfc(body, path)
+    elapsed = time.monotonic() - started
+    assert allowed is True
+    assert elapsed < 2.0, f"matching took {elapsed:.2f}s"
+    assert _rfc(body, path + "b") is False  # partner: the same rules do match
