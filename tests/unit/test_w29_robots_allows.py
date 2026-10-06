@@ -267,3 +267,130 @@ def test_heavy_wildcard_rules_against_a_long_path_finish_quickly() -> None:
     assert allowed is True
     assert elapsed < 2.0, f"matching took {elapsed:.2f}s"
     assert _rfc(body, path + "b") is False  # partner: the same rules do match
+
+
+# ---------------------------------------------------------------------------
+# Review round 2 (ADR-0148 decision 3): one form for rule and address,
+# the address cap, the strict product token, and matcher gaps.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("rule", "path"),
+    [
+        ("/~foo", "/%7Efoo"),
+        ("/~foo", "/%7efoo"),
+        ("/%7Efoo", "/~foo"),
+        ("/foo/bar/baz", "/foo/bar/%62%61%7A"),
+        ("/café", "/caf%C3%A9"),
+        ("/caf%C3%A9", "/café"),
+        ("/caf%c3%a9", "/caf%C3%A9"),
+        ("/ツ", "/%E3%83%84"),
+        ("/%E3%83%84", "/ツ"),
+    ],
+    ids=[
+        "tilde-rule-encoded-path",
+        "tilde-rule-lowercase-encoded-path",
+        "encoded-rule-tilde-path",
+        "rfc-example-encoded-letters",
+        "utf8-rule-encoded-path",
+        "encoded-rule-utf8-path",
+        "lowercase-hex-rule",
+        "katakana-rule-encoded-path",
+        "encoded-rule-katakana-path",
+    ],
+)
+def test_percent_encoding_is_normalised_before_matching(rule: str, path: str) -> None:
+    """RFC 9309 section 2.2.2: both sides in one form (non-ASCII as UTF-8
+    percent-encoding, unreserved characters decoded, hex upper-cased). Review
+    round 2 fetched forbidden pages through each spelling. RED IF: paths are
+    compared as raw strings."""
+    assert _rfc(f"User-agent: *\nDisallow: {rule}\n", path) is False
+
+
+@pytest.mark.parametrize(
+    ("rule", "path"),
+    [("/a%2Fb", "/a/b"), ("/~foo", "/~bar")],
+    ids=["encoded-slash-is-not-a-slash", "different-path"],
+)
+def test_normalisation_does_not_over_match(rule: str, path: str) -> None:
+    """Partners: ``%2F`` is a reserved character and stays encoded, so it is
+    not the path separator; and normalising does not make different paths
+    equal. RED IF: every percent-escape is decoded, or matching refuses
+    everything."""
+    assert _rfc(f"User-agent: *\nDisallow: {rule}\n", path) is True
+
+
+@pytest.mark.parametrize(
+    ("path", "allowed"),
+    [
+        ("/" + "a" * 2047, True),
+        ("/" + "a" * 2048, False),
+        ("/p?" + "q" * 2045, True),
+        ("/p?" + "q" * 2046, False),
+    ],
+    ids=["path-2048", "path-2049", "path-and-query-2048", "path-and-query-2049"],
+)
+def test_an_address_over_2048_characters_is_not_fetched(path: str, allowed: bool) -> None:
+    """Decision 3: an address whose path and query are longer than 2,048
+    characters is not fetched, even under ``Allow: /``. Exactly 2,048 is.
+    RED IF: there is no cap, or it moves either way."""
+    assert len(path) in (2048, 2049)
+    assert _rfc("User-agent: *\nAllow: /\n", path) is allowed
+
+
+@pytest.mark.parametrize(
+    "agent_line",
+    ["User-agent: quorum", "User-agent: quorum-ai-source-check/0.1"],
+    ids=["prefix", "with-version"],
+)
+def test_only_the_exact_product_token_binds_us(agent_line: str) -> None:
+    """Decision 3, the strict reading (ADR call viii): a prefix of our token,
+    or our token with a version, is another crawler's group, so the ``*``
+    group applies and allows /x. RED IF: prefix or version matching creeps in.
+    Partner: the exact token does bind us (False)."""
+    star_allows = "\n\nUser-agent: *\nAllow: /\n"
+    assert _rfc(f"{agent_line}\nDisallow: /{star_allows}", "/x") is True
+    assert _rfc(f"User-agent: quorum-ai-source-check\nDisallow: /{star_allows}", "/x") is False
+
+
+@pytest.mark.parametrize(
+    ("rule", "path", "allowed"),
+    [
+        ("/a*b*a", "/aba?no", False),
+        ("/a*b*a", "/axbya", False),
+        ("/a*b*a", "/ba", True),
+        ("/a*b*c*d", "/a1b2c3d", False),
+        ("/a*b*c*d", "/a1b2c3", True),
+        ("/a*aa$", "/aa", True),
+        ("/a*aa$", "/aaa", False),
+        ("/x$", "/x", False),
+        ("/x$", "/xy", True),
+    ],
+    ids=[
+        "middle-piece-after-previous-with-query",
+        "middle-piece-after-previous",
+        "first-piece-missing",
+        "three-wildcards-all-pieces",
+        "three-wildcards-last-missing",
+        "anchor-overlap-too-short",
+        "anchor-overlap-fits",
+        "lone-anchor-exact",
+        "lone-anchor-longer",
+    ],
+)
+def test_matcher_gaps_found_in_review_round_2(rule: str, path: str, allowed: bool) -> None:
+    """RED IF: a middle ``*`` piece is searched from the start instead of after
+    the previous piece, a middle piece is skipped when there are three or more
+    ``*``, the ``$`` end overlaps the piece before it, or a lone ``$`` anchor is
+    treated as a prefix."""
+    assert _rfc(f"User-agent: *\nDisallow: {rule}\n", path) is allowed
+
+
+def test_our_group_and_the_star_group_are_not_combined() -> None:
+    """RFC 9309 section 2.2.1: our own group replaces ``*``; it is not merged
+    with it. RED IF: the ``*`` group's Disallow still applies to us.
+    Partner: with no group of ours, the same ``*`` group refuses /x."""
+    star_refuses = "User-agent: *\nDisallow: /\n"
+    assert _rfc(f"User-agent: quorum-ai-source-check\nAllow: /\n\n{star_refuses}", "/x") is True
+    assert _rfc(star_refuses, "/x") is False

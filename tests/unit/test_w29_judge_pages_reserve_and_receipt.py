@@ -319,3 +319,68 @@ def test_the_page_reserve_prices_the_v2_system_prompt_not_v1(
     delta = bound(True) - bound(False)
     floor = (Decimal(32_000) + Decimal(extra_prompt_chars)) / Decimal(4) / Decimal(1000)
     assert delta >= floor, f"pages raised the bound by {delta}; v2's prompt needs {floor}"
+
+
+def test_the_reserve_covers_eight_pages_and_24_same_page_pointers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Review round 2: the widest page block is 8 pages of 4,000 characters
+    PLUS a "same page as" pointer on each of the other 24 source lines, and
+    the pointers must be priced. Measured against the REAL reserve, not the
+    constants: the judge's input is priced at $1 per 1,000 tokens (so one
+    character is $0.00025 and quantisation cannot hide a line), and the page
+    term is the bound's rise with pages on, less the v2 system prompt's extra
+    length.
+
+    The block here puts the pages on lines 25-32 and points lines 1-24 at
+    [32], so 15 pointers have two digits on both sides; it measures 32,798
+    characters today against a reserve of 32,832 for 32 lines.
+
+    RED IF: the 24-pointer term is removed from the reserve (it then covers
+    32,136), or cut to 16 pointers (32,600). Partner: the block really carries
+    the 24 pointers and the 8 pages, and the reserve is not slack by more
+    than 60 characters."""
+    from product_app.evaluation import (
+        _JUDGE_PAGES_SYSTEM_PROMPT,
+        _JUDGE_SYSTEM_PROMPT,
+        JudgeEvidence,
+        build_judge_pages_prompt,
+        build_judge_prompt,
+    )
+    from product_app.model_slots import openrouter_model_catalog_service
+
+    lines = tuple(f"[{n}] Title {n} :: https://site{n}.example/page" for n in range(1, 33))
+    evidence = JudgeEvidence(
+        query_text="Q?",
+        answer_texts=("A [1].",),
+        source_lines=lines,
+        synthesis_sections=(),
+        source_pages=tuple("" if n < 25 else "p" * 4000 for n in range(1, 33)),
+        source_page_same_as=tuple(32 if n < 25 else 0 for n in range(1, 33)),
+    )
+    user = build_judge_pages_prompt(evidence)[1]
+    pointers = [line for line in user.split("\n") if line.endswith(": same page as [32]")]
+    assert len(pointers) == 24
+    assert user.count("p" * 4000) == 8
+    block = len(user) - len(build_judge_prompt(evidence)[1])
+
+    def bound(pages: bool) -> Decimal:
+        with monkeypatch.context() as mp:
+            real = openrouter_model_catalog_service.price_index
+            mp.setattr(
+                openrouter_model_catalog_service,
+                "price_index",
+                lambda: {**real(), "openai/gpt-5-mini": (Decimal("1.0"), Decimal("0.005"))},
+            )
+            _enable_judge(mp)
+            mp.setattr(settings, "quorum_source_fetch_enabled", pages)
+            estimate = cost_estimation_service.estimate(query_text=QUERY, model_slots=_slots())
+        assert estimate.max_cost_usd is not None
+        return estimate.max_cost_usd
+
+    # Dollars at $1 per 1,000 tokens -> tokens -> characters (4 per token).
+    reserved_chars = (bound(True) - bound(False)) * Decimal(1000) * Decimal(4) - Decimal(
+        len(_JUDGE_PAGES_SYSTEM_PROMPT) - len(_JUDGE_SYSTEM_PROMPT)
+    )
+    assert block <= reserved_chars, (block, reserved_chars)
+    assert block >= reserved_chars - 60, (block, reserved_chars)

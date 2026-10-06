@@ -180,7 +180,7 @@ class Sites:
 @contextlib.contextmanager
 def _sites(routes: dict[tuple[str, str], Route]) -> Iterator[Sites]:
     def responder(conn: Any, request: dict[str, str]) -> None:
-        host = request.get("host", "").split(":")[0]
+        host = request.get("host", "").split(":")[0].lower()
         status, headers, body = routes.get((host, request[":path"]), _NOT_FOUND)
         respond(status, headers, body)(conn, request)
 
@@ -873,6 +873,83 @@ def test_ten_addresses_eight_fetched_duplicates_point_back(
     assert sorted(_page_lines(spies.user_prompt)) == sorted(expected)
     ev = body["evaluation"]
     assert (ev["source_pages_read"], ev["source_pages_cited"]) == (8, 10)
+
+
+# ---------------------------------------------------------------------------
+# Review round 2: fragments and host case (decision 4).
+# ---------------------------------------------------------------------------
+
+
+def _xtest_routes() -> dict[tuple[str, str], Route]:
+    return {
+        ("x.test", "/robots.txt"): _NOT_FOUND,
+        ("x.test", "/page"): _html(f"PAGEXTESTSENTINEL {_FILLER}"),
+        ("x.test", "/other"): _html(f"PAGEOTHERSENTINEL {_FILLER}"),
+    }
+
+
+def _all_requests_for(sites: Sites, path: str) -> list[dict[str, str]]:
+    return [r for r in list(sites.received) if r[":path"] == path]
+
+
+def test_a_fragment_or_host_case_does_not_make_a_new_page(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Decision 4 (review round 2): addresses are compared without the
+    fragment and with the host in lower case. Four citations of one page
+    (two fragments, none, and an upper-case host with a text fragment) are
+    one page: one fetch, one PAGE entry, three "same page as" lines, 1 of 1.
+
+    RED IF: fragments or host case make distinct pages (more than one fetch of
+    /page, several PAGE entries carrying the text, or M above 1)."""
+    _enable_judge(monkeypatch)
+    _pages_on(monkeypatch)
+    spies = _spies(monkeypatch)
+    with _sites(_xtest_routes()) as sites:
+        p = sites.port
+        sources = [
+            _source("Intro", f"http://x.test:{p}/page#intro"),
+            _source("Method", f"http://x.test:{p}/page#method"),
+            _source("Plain", f"http://x.test:{p}/page"),
+            _source("Text fragment", f"http://X.TEST:{p}/page#:~:text=foo"),
+        ]
+        body = _get(_run([sources]))
+        assert len(_all_requests_for(sites, "/page")) == 1
+        assert len(_all_requests_for(sites, "/robots.txt")) == 1
+    user = spies.user_prompt
+    assert user.count("PAGEXTESTSENTINEL") == 1
+    assert sorted(_page_lines(user)) == sorted(
+        [
+            "PAGE [1]:",
+            "PAGE [2]: same page as [1]",
+            "PAGE [3]: same page as [1]",
+            "PAGE [4]: same page as [1]",
+        ]
+    )
+    ev = body["evaluation"]
+    assert (ev["source_pages_read"], ev["source_pages_cited"]) == (1, 1)
+
+
+def test_two_paths_on_one_host_are_two_pages(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The partner: normalising the host and dropping the fragment does not
+    merge different paths. RED IF: addresses are compared by host alone."""
+    _enable_judge(monkeypatch)
+    _pages_on(monkeypatch)
+    spies = _spies(monkeypatch)
+    with _sites(_xtest_routes()) as sites:
+        p = sites.port
+        sources = [
+            _source("Page", f"http://x.test:{p}/page"),
+            _source("Other", f"http://x.test:{p}/other"),
+        ]
+        body = _get(_run([sources]))
+        assert len(_all_requests_for(sites, "/page")) == 1
+        assert len(_all_requests_for(sites, "/other")) == 1
+    user = spies.user_prompt
+    assert "PAGEXTESTSENTINEL" in user and "PAGEOTHERSENTINEL" in user
+    assert sorted(_page_lines(user)) == ["PAGE [1]:", "PAGE [2]:"]
+    ev = body["evaluation"]
+    assert (ev["source_pages_read"], ev["source_pages_cited"]) == (2, 2)
 
 
 # ---------------------------------------------------------------------------
