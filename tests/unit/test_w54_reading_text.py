@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import html
 import itertools
+import tracemalloc
 from typing import Any
 
 import pytest
@@ -192,10 +193,11 @@ def test_main_of_exactly_1000_is_kept_and_999_falls_through_to_the_longest_artic
 
 def test_without_main_or_a_long_article_the_furniture_is_dropped() -> None:
     """No ``<main>``, one 600-character article (under the floor): the page
-    minus nav, header, footer, aside and form, which leaves 1,800 characters.
-    RED IF: furniture survives, the short article is dropped (it is not
-    furniture), or document order is lost."""
-    content = [text_of(900, "BODYONE"), text_of(900, "BODYTWO")]
+    minus nav, header, footer, aside and form, which leaves 4,202 characters:
+    at least 1,000 and at least half the visible text (the half rule's
+    partner). RED IF: furniture survives, the short article is dropped (it is
+    not furniture), or document order is lost."""
+    content = [text_of(1800, "BODYONE"), text_of(1800, "BODYTWO")]
     form = "<form>" + p("FORMNEWSLETTER sign up here") + "</form>"
     article = "<article>" + p(text_of(600, "SMALLARTICLE")) + "</article>"
     inner = (
@@ -210,8 +212,10 @@ def test_without_main_or_a_long_article_the_furniture_is_dropped() -> None:
         + FOOTER
     )
     body = html_page(inner)
-    assert visible_length(body) > 4000
-    assert reading(body, 4000) == "\n".join([text_of(600, "SMALLARTICLE"), *content])
+    expected = "\n".join([text_of(600, "SMALLARTICLE"), *content])
+    assert len(expected) == 4202
+    assert 4000 < visible_length(body) <= 2 * len(expected)
+    assert reading(body, 4000) == expected
 
 
 def _aspnet_page() -> tuple[str, list[str]]:
@@ -247,6 +251,30 @@ def test_an_aspnet_page_wrapped_in_one_form_keeps_its_whole_text() -> None:
     body, expected_blocks = _aspnet_page()
     assert visible_length(body) > 4000
     assert reading(body, 4000) == "\n".join(expected_blocks)
+
+
+def test_an_article_wrapped_in_one_form_beside_a_notice_is_kept() -> None:
+    """The half rule (ADR-0150 decision 3, review round 1): a 5,700-character
+    article wrapped in one ``<form>`` with no ``<main>`` or ``<article>``, and
+    a 1,190-character notice outside it. Dropping the furniture leaves the
+    notice: over 1,000 characters, but under half the visible text, so the
+    whole visible text is kept. RED IF: the page without its furniture is
+    used whenever it keeps 1,000 characters (the judge then reads only the
+    notice). Partner: the furniture test above, where what is left is over
+    half, does drop the furniture."""
+    article = [text_of(1900, f"FORMARTICLE{i}") for i in range(3)]
+    notice = [text_of(595, "NOTICEONE"), text_of(594, "NOTICETWO")]
+    inner = (
+        '<form method="post" id="pageForm"><h1>FORMTITLE Retention study</h1>'
+        + "".join(p(b) for b in article)
+        + "</form>"
+        + "".join(p(b) for b in notice)
+    )
+    body = html_page(inner)
+    assert len("\n".join(notice)) == 1190
+    visible = visible_length(body)
+    assert visible > 2 * 1190, visible
+    assert reading(body, 4000) == "\n".join(["FORMTITLE Retention study", *article, *notice])
 
 
 def test_an_article_inside_header_is_kept() -> None:
@@ -313,6 +341,77 @@ def test_the_block_text_is_capped_at_262144_characters() -> None:
     assert len(result) == 262_144
     assert result == over_join[:262_144]
     assert source_fetcher.READING_TEXT_MAX_CHARS == 262_144
+
+
+# ---------------------------------------------------------------------------
+# Nested articles: memory and the longest article (failure mode 18).
+# ---------------------------------------------------------------------------
+
+#: The bound on ``reading_text``'s traced memory PEAK for one 262,144-byte page.
+#: The body is 0.25 MB; a parse that keeps a few small records per tag and per
+#: block (26,214 of each here) stays within a few tens of megabytes. 64 MB is
+#: one eighth of production's 512 MB, so eight pages read one after another
+#: cannot reach it; review round 1 measured the first version at about 6 GB on
+#: this page, nearly a hundred times this bound. Memory, not time: CI load
+#: changes how long a parse takes, not how much it allocates.
+_PEAK_BOUND_FULL = 64 * 1024 * 1024
+#: The same bound for a page one eighth the size. A linear parse needs about
+#: an eighth of the memory; a parse whose memory grows with nesting depth times
+#: blocks needs about a sixty-fourth of its 6 GB (about 100 MB) and fails here
+#: first, so a build with that defect fails in seconds instead of taking 6 GB.
+_PEAK_BOUND_EIGHTH = 8 * 1024 * 1024
+
+
+def _repeated(unit: str, size: int) -> str:
+    body = (unit * (size // len(unit) + 1))[:size]
+    assert len(body.encode()) == size
+    return body
+
+
+def _peak_bytes(body: str) -> int:
+    tracemalloc.start()
+    try:
+        # limit 1,000, so even the smallest page here (3,447 visible
+        # characters) takes the long path that builds blocks.
+        text = reading(body, 1000)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert text.startswith("x\nx"), text[:20]  # partner: the blocks really were read
+    return peak
+
+
+@pytest.mark.parametrize(
+    "unit", ["<article>x", "<section><article>x"], ids=["nested", "interleaved"]
+)
+def test_nested_articles_are_read_within_a_fixed_memory_bound(unit: str) -> None:
+    """Failure mode 18 (a crash at switch-on: production has 512 MB). One
+    page of nested ``<article>`` tags, and one interleaving ``<section>``, at
+    exactly 262,144 bytes (the fetcher's byte cap), read with a traced memory
+    peak under 64 MB; the page an eighth that size first, under 8 MB.
+    RED IF: memory grows with nesting depth times blocks (every enclosing
+    article recorded on every block): about 100 MB on the small page, 6 GB on
+    the full one. Partner: each page really is read (its blocks come back)."""
+    assert _peak_bytes(_repeated(unit, 32_768)) < _PEAK_BOUND_EIGHTH
+    assert _peak_bytes(_repeated(unit, 262_144)) < _PEAK_BOUND_FULL
+
+
+def test_the_longest_article_counts_the_text_of_articles_inside_it() -> None:
+    """Decision 3: an article's length is its own text including the articles
+    nested in it, and its blocks are returned in page order. Outer article A
+    holds 300 + (inner B: 800) + 300 characters; a separate article C holds
+    1,000. A is the longest. RED IF: an article counts only its own blocks
+    (C would win), B's text is lost from A, or A's blocks come out of order
+    (a range of block positions recorded wrongly)."""
+    a1, b, a2 = text_of(300, "OUTERSTART"), text_of(800, "INNERBODY"), text_of(300, "OUTEREND")
+    c = text_of(1000, "OTHERARTICLE")
+    inner = (
+        "<article>" + p(a1) + "<article>" + p(b) + "</article>" + p(a2) + "</article>"
+        "<article>" + p(c) + "</article>" + ASIDE + FOOTER
+    )
+    body = html_page(inner)
+    assert visible_length(body) > 4000
+    assert reading(body, 4000) == "\n".join([a1, b, a2])
 
 
 # ---------------------------------------------------------------------------

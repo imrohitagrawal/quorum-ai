@@ -167,24 +167,32 @@ def test_a_long_fetched_page_reaches_the_judge_as_its_most_relevant_passages(
 ) -> None:
     """Decision 3: twelve 444-character blocks; only the eleventh shares
     words with the answer (retention, percent, 2024, survey). The judge gets
-    that block and the first seven (ties to the earlier), in page order,
-    3,573 characters. RED IF: the page is cut at its first 4,000 characters
-    (today: the eleventh block is lost), the answers' texts are not what the
-    passages are scored against, or the result is not in page order."""
+    that block and the first seven (ties to the earlier), in page order: the
+    seven are neighbours, so they read as the page (their line breaks become
+    spaces when the item is cleaned), and " … " marks the one gap. 3,561
+    characters. RED IF: the page is cut at its first 4,000 characters (the
+    eleventh block is lost), the answers' texts are not what the passages are
+    scored against, the result is not in page order, or a separator stands
+    between two neighbours (failure mode 19)."""
     blocks = [block(444, f"blk{c}") for c in "abcdefghijkl"]
     blocks[10] = block(444, "blkk", "Retention reached 90 percent in the 2024 survey.")
     url = "https://long.example/page"
     _install(monkeypatch, {url: ("fetched", "\n".join(blocks))})
     reading = _read([_answer([_source(url)])])
-    expected = SEP.join([*blocks[:7], blocks[10]])
-    assert len(expected) == 3573
+    expected = " ".join(blocks[:7]) + SEP + blocks[10]
+    assert len(expected) == 3561
     assert reading.pages == (expected,)
     assert reading.read == 1 and reading.cited == 1
 
 
 def _fill_page(ninth: int) -> tuple[str, list[str]]:
-    kept = [block(442, f"fil{c}") for c in "abcdefgh"] + [block(ninth, "fili")]
-    return "\n".join([*kept, block(442, "filj")]), kept
+    """Nine passages sharing "retention" with the answer, each followed by a
+    450-character one sharing nothing, so every join between kept passages is
+    a gap: 8 x 442 + ``ninth`` + 8 separators."""
+    kept = [block(442, f"fil{c}", "retention") for c in "abcdefgh"]
+    kept.append(block(ninth, "fili", "retention"))
+    gaps = [block(450, f"gap{c}") for c in "abcdefghi"]
+    return "\n".join(b for pair in zip(kept, gaps, strict=True) for b in pair), kept
 
 
 def test_a_picked_item_is_exactly_4000_at_the_boundary_and_never_over(
@@ -367,6 +375,35 @@ def test_the_same_refused_address_cited_twice_is_counted_once(
     )
     assert reading.same_as == (0, 1)
     assert (reading.read, reading.cited, reading.preview) == (0, 1, 1)
+
+
+def test_a_robots_file_that_could_not_be_read_sends_the_excerpt_but_is_not_counted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Failure mode 17 (ADR-0150 decision 1): a page whose robots.txt could
+    not be read or checked is ``robots_unchecked``. The judge still reads its
+    excerpt (ADR-0148 decision 4 unchanged), but P does not count it: the
+    website asked nothing. RED IF: the excerpt is not sent for it, or P
+    counts it. Partner: a page refused by a real rule, beside it, IS counted."""
+    _install(
+        monkeypatch,
+        {
+            "https://unchecked.example/p": ("robots_unchecked", ""),
+            "https://refused.example/p": ("refused_robots", ""),
+        },
+    )
+    reading = _read(
+        [
+            _answer(
+                [
+                    _source("https://unchecked.example/p", f"{EXCERPT} unchecked"),
+                    _source("https://refused.example/p", f"{EXCERPT} refused"),
+                ]
+            )
+        ]
+    )
+    assert reading.pages == (f"{EXCERPT} unchecked", f"{EXCERPT} refused")
+    assert (reading.read, reading.cited, reading.preview) == (0, 2, 1)
 
 
 def test_a_failed_fetch_with_an_excerpt_is_not_counted(monkeypatch: pytest.MonkeyPatch) -> None:

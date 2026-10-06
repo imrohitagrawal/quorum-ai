@@ -86,8 +86,10 @@ read, as today. "Posture off" in the table means page reading is switched off.
   than that is split at a space), scores each passage by how many distinct words it shares
   with the run's answers, and keeps the best-scoring passages first, each one if it still
   fits in 4,000 characters, ties going to the earlier passage. The kept passages are joined
-  in page order; " … " goes only where passages were skipped between them, never between two
-  neighbouring passages, and the separators count inside the 4,000.
+  in page order; " … " goes only where passages were skipped between them, and the separators
+  count inside the 4,000. Two neighbouring kept passages are joined by the page's own text:
+  the line break between two blocks, the space between pieces of a split block, and nothing
+  between pieces of a run with no spaces.
 - Neighbouring short blocks are joined into one passage while it stays within 500
   characters; the pieces of a split long block are never joined. Plain text (not HTML) longer
   than the limit is split into blocks at blank lines. Text across inline tags inside one block

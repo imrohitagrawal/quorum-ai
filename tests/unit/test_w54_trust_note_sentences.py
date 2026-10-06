@@ -7,11 +7,11 @@ M = ``source_pages_cited``; F = M - N - P. It is lifted out of ``app.js`` and
 run under Node exactly as ``tests/unit/test_w29_trust_note_copy.py`` does
 (that file's harness is reused), so the SERVED source is measured.
 
-The owner's two sentences (CHG-029 (b), approved 2026-10-06) are pinned
-VERBATIM as literals, not rebuilt from parts. The other rows are the session's
-wording, recorded in ADR-0150's table; ``expected`` below is that table
-written as code, and the sweep compares every reachable (N, P, M) with M up to
-12 against it.
+The session's sentences the owner approved (CHG-029 (b), "I approve all your
+suggestions", 2026-10-06) are pinned VERBATIM as literals, not rebuilt from
+parts. The other rows are the session's wording, recorded in ADR-0150's table;
+``expected`` below is that table written as code, and the sweep compares every
+reachable (N, P, M) with M from 1 to 12 against it.
 
 Failure modes (``docs/analysis/2026-10-07-w54-blocked-wording-and-passages-failure-modes.md``):
 1 and 2 (a false claim about what was checked), 3 (old runs keep today's
@@ -32,17 +32,25 @@ import pytest
 from tests.code_text import code_without_comments
 from tests.unit.test_w29_trust_note_copy import APP_JS, FUNCTION, LEAD, TODAY, _extract_function
 
-#: CHG-029 (b), verbatim: "when some pages are blocked".
-OWNER_SOME_BLOCKED = (
+#: The session's sentence the owner approved (CHG-029 (b)), verbatim: "when
+#: some pages are blocked".
+APPROVED_SOME_BLOCKED = (
     "Checked against 3 of 5 cited pages. For the other 2, the website asks automated tools "
     "not to read its pages, so the check could only use the short preview the search engine "
     "showed."
 )
-#: CHG-029 (b), verbatim: "when all are blocked".
-OWNER_ALL_BLOCKED = (
+#: The session's sentence the owner approved (CHG-029 (b)), verbatim: "when
+#: all are blocked".
+APPROVED_ALL_BLOCKED = (
     "No cited page could be read: the websites ask automated tools not to read their pages. "
     "The check used only the titles, addresses and the short previews the search engine "
     "showed."
+)
+#: ADR-0150 decision 2's row N = 0, P = M = 1: the approved sentence in the
+#: singular (the session's wording).
+SINGLE_BLOCKED = (
+    "No cited page could be read: the website asks automated tools not to read its pages. "
+    "The check used only the title, address and the short preview the search engine showed."
 )
 _PREVIEW = (
     "the website asks automated tools not to read its pages, so the check could only use "
@@ -61,7 +69,7 @@ def expected(n: int, p: int, m: int) -> str:
             return f"{LEAD} {checked} For the other {other}, {_PREVIEW}."
         return f"{LEAD} {checked} For {p} of the other {m - n}, {_PREVIEW}."
     if p == m:
-        return f"{LEAD} {OWNER_ALL_BLOCKED}"
+        return f"{LEAD} {SINGLE_BLOCKED if m == 1 else APPROVED_ALL_BLOCKED}"
     if p == 0:
         return f"{LEAD} No cited page could be read. The check used only the titles and addresses."
     return (
@@ -106,25 +114,25 @@ def _ev(n: Any, p: Any, m: Any) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# The owner's sentences, verbatim.
+# The session's sentences the owner approved, verbatim.
 # ---------------------------------------------------------------------------
 
 
-def test_the_owners_sentence_when_some_pages_are_blocked(harness: str) -> None:
+def test_the_approved_sentence_when_some_pages_are_blocked(harness: str) -> None:
     """CHG-029 (b), N = 3, P = 2, M = 5 (F = 0). RED IF: the sentence differs
-    from the owner's by one character, or still says "robots.txt", or the
+    from the approved one by one character, or still says "robots.txt", or the
     old W29 sentence is shown (P ignored)."""
     (text,) = _run(harness, [(_ev(3, 2, 5), True)])
-    assert text == f"{LEAD} {OWNER_SOME_BLOCKED}"
+    assert text == f"{LEAD} {APPROVED_SOME_BLOCKED}"
     assert "robots" not in text
 
 
-def test_the_owners_sentence_when_all_pages_are_blocked(harness: str) -> None:
+def test_the_approved_sentence_when_all_pages_are_blocked(harness: str) -> None:
     """CHG-029 (b), N = 0, P = M = 4. RED IF: the sentence differs from the
-    owner's by one character, or today's "search excerpts" sentence is shown
-    (the phrase the owner said readers would not understand)."""
+    approved one by one character, or today's "search excerpts" sentence is shown
+    (ADR-0150's context: "search excerpts" means little to a reader)."""
     (text,) = _run(harness, [(_ev(0, 4, 4), True)])
-    assert text == f"{LEAD} {OWNER_ALL_BLOCKED}"
+    assert text == f"{LEAD} {APPROVED_ALL_BLOCKED}"
     assert "search excerpts" not in text and "robots" not in text
 
 
@@ -135,7 +143,7 @@ def test_the_owners_sentence_when_all_pages_are_blocked(harness: str) -> None:
 _ROWS = [
     # (N, P, M, the exact sentence after the lead)
     (3, 0, 5, "Checked against 3 of 5 cited pages."),
-    (3, 2, 5, OWNER_SOME_BLOCKED),
+    (3, 2, 5, APPROVED_SOME_BLOCKED),
     (
         2,
         1,
@@ -148,7 +156,8 @@ _ROWS = [
         5,
         f"Checked against 1 of 5 cited pages. For 2 of the other 4, {_PREVIEW}.",
     ),
-    (0, 4, 4, OWNER_ALL_BLOCKED),
+    (0, 4, 4, APPROVED_ALL_BLOCKED),
+    (0, 1, 1, SINGLE_BLOCKED),
     (
         0,
         2,
@@ -169,6 +178,7 @@ _ROWS = [
         "read-preview-and-failure",
         "read-two-previews-and-failures",
         "none-read-all-preview",
+        "none-read-one-of-one-preview",
         "none-read-some-preview",
         "none-read-no-preview",
     ],
@@ -178,7 +188,7 @@ def test_each_row_of_the_table_verbatim(
 ) -> None:
     """ADR-0150 decision 2, one row each, exact text. RED IF: any row's
     sentence differs by a character, a row is swapped with another (for
-    example the owner's "For the other P" used when some unread pages failed
+    example the approved "For the other P" used when some unread pages failed
     for another reason, which is false), or a row's numbers are wrong."""
     (text,) = _run(harness, [(_ev(n, p, m), True)])
     assert text == f"{LEAD} {sentence}"
@@ -276,12 +286,15 @@ _SWEEP = [(n, p, m) for m in range(1, 13) for n in range(m + 1) for p in range(m
 
 
 def test_the_sweep_matches_the_table_and_never_says_something_false(harness: str) -> None:
-    """All 454 reachable (N, P, M) with 0 <= N, P and N + P <= M <= 12.
+    """Every (N, P, M) with 0 <= N, P, N + P <= M and M from 1 to 12: 454 of
+    them. (M = 0 is left out: the server never serves counts with nothing
+    cited, and two rows of the table would both match it.)
     RED IF, for any of them: the sentence is not the table's; it mentions a
     preview when P = 0; it says no cited page could be read when N > 0; it
     states a number that is not N, P, M or M - N; or it omits N and M when
-    pages were read. Partner: the sweep really covers the owner's two cases
-    and every row (each row's shape appears)."""
+    pages were read; or the singular all-blocked sentence is not used for
+    (0, 1, 1). Partner: the sweep really covers the approved sentences, the
+    singular one, and every row (each row's shape appears)."""
     assert len(_SWEEP) == 454
     texts = _run(harness, [(_ev(n, p, m), True) for n, p, m in _SWEEP])
     shapes: set[str] = set()
@@ -300,6 +313,7 @@ def test_the_sweep_matches_the_table_and_never_says_something_false(harness: str
         numbers = {int(x) for x in re.findall(r"\d+", after)}
         assert numbers <= {n, p, m, m - n}, (case, numbers)
         shapes.add(re.sub(r"\d+", "#", after))
-    assert f"{LEAD} {OWNER_SOME_BLOCKED}" in texts
-    assert f"{LEAD} {OWNER_ALL_BLOCKED}" in texts
-    assert len(shapes) >= 8, sorted(shapes)
+    assert f"{LEAD} {APPROVED_SOME_BLOCKED}" in texts
+    assert f"{LEAD} {APPROVED_ALL_BLOCKED}" in texts
+    assert texts[_SWEEP.index((0, 1, 1))] == f"{LEAD} {SINGLE_BLOCKED}"
+    assert len(shapes) >= 9, sorted(shapes)

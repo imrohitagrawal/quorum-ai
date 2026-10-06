@@ -12,9 +12,10 @@ end to end, and a long page read through the whole judge path.
 THE HARNESS is W29's (``tests/integration/test_w29_judge_reads_pages.py``):
 loopback sites told apart by ``Host``, the real ``EvalJudgeService`` behind
 the one provider seam, spies on the fetcher and the judge. Its standard five
-sources give N = 1 (allowed), P = 2 (blocked and down: robots.txt refused,
-excerpt sent), and F = 2 (bare: refused with no excerpt; pdf: failed),
-M = 5.
+sources give N = 1 (allowed), P = 1 (blocked: a robots.txt rule refuses the
+page, excerpt sent), and F = 3 (down: robots.txt answers 503, so it was not
+read -- the excerpt is sent but not counted; bare: refused with no excerpt;
+pdf: failed), M = 5.
 
 Every test names what turns it red.
 """
@@ -177,14 +178,17 @@ def test_off_the_body_is_todays_plus_one_null_field(monkeypatch: pytest.MonkeyPa
 # ---------------------------------------------------------------------------
 
 
-def test_on_the_standard_run_serves_one_of_five_with_two_previews(
+def test_on_the_standard_run_serves_one_of_five_with_one_preview(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Decision 1 on real loopback sites: N = 1, M = 5, P = 2. The blocked
-    and down sites' excerpts reached the judge; the bare site had none; the
-    pdf failed. RED IF: P is missing or null, counts the excerpt-less refusal
-    or the failed page (3 or 4), or counts the fetched page. Partner: both
-    excerpts really are in the judge's prompt."""
+    """Decision 1 on real loopback sites: N = 1, M = 5, P = 1. Only the
+    blocked site's robots.txt was read and has a rule refusing the page. The
+    down site's robots.txt answered 503: its excerpt reaches the judge, but
+    the site asked nothing, so it is not counted (failure mode 17). The bare
+    site had no excerpt; the pdf failed. RED IF: P is missing or null, counts
+    the unreadable robots.txt (2), the excerpt-less refusal or the failed page,
+    or counts the fetched page. Partner: both excerpts really are in the
+    judge's prompt."""
     _enable_judge(monkeypatch)
     _pages_on(monkeypatch)
     spies = _spies(monkeypatch)
@@ -192,13 +196,58 @@ def test_on_the_standard_run_serves_one_of_five_with_two_previews(
         body = _get(_run([_standard_sources(sites)]))
     ev = body["evaluation"]
     assert ev["trust"]["support_verified"] is True
+    # ADR-0150 decision 1 (review round 1): P was 2 in the first version of
+    # this test, counting down.example, whose robots.txt answers 503 and so
+    # was never read. The correct value is 1.
     assert (ev["source_pages_read"], ev["source_pages_cited"], ev["source_pages_preview"]) == (
         1,
         5,
-        2,
+        1,
     )
     assert "EXCERPTBLOCKEDSENTINEL" in spies.user_prompt
     assert "EXCERPTDOWNSENTINEL" in spies.user_prompt
+
+
+_UNREADABLE_ROBOTS = {
+    "robots-503": ("503 Service Unavailable", {"Content-Type": "text/plain"}, b"down"),
+    "robots-301": ("301 Moved Permanently", {"Location": "https://elsewhere.example/"}, b""),
+    "robots-302": ("302 Found", {"Location": "/robots-moved.txt"}, b""),
+}
+
+
+@pytest.mark.parametrize("answer", sorted(_UNREADABLE_ROBOTS))
+def test_on_a_robots_file_that_could_not_be_read_is_not_a_preview(
+    monkeypatch: pytest.MonkeyPatch, answer: str
+) -> None:
+    """Failure mode 17, end to end: one cited page whose robots.txt answers
+    503, 301 or 302. The page is not requested, its excerpt reaches the
+    judge, and the served P is 0 -- the trust note must not say the website
+    asked tools not to read its pages. RED IF: P is 1 (the note's false
+    claim), the page is requested, or the excerpt is dropped. Partner:
+    robots.txt was asked for, and the excerpt is in the prompt."""
+    _enable_judge(monkeypatch)
+    _pages_on(monkeypatch)
+    spies = _spies(monkeypatch)
+    routes = {
+        ("unread.example", "/robots.txt"): _UNREADABLE_ROBOTS[answer],
+        ("unread.example", "/page"): (
+            "200 OK",
+            {"Content-Type": "text/html"},
+            b"<html><body><p>PAGEUNREADSENTINEL</p></body></html>",
+        ),
+    }
+    with _sites(routes) as sites:
+        url = sites.url("unread.example")
+        body = _get(_run([[_source("Unread", url, "EXCERPTUNREADSENTINEL the passage")]]))
+        assert sites.requests_for("unread.example", "/page") == []
+        assert len(sites.requests_for("unread.example", "/robots.txt")) == 1
+    ev = body["evaluation"]
+    assert (ev["source_pages_read"], ev["source_pages_cited"], ev["source_pages_preview"]) == (
+        0,
+        1,
+        0,
+    )
+    assert "EXCERPTUNREADSENTINEL" in spies.user_prompt
 
 
 def test_on_every_page_read_serves_a_zero_not_a_null(monkeypatch: pytest.MonkeyPatch) -> None:
