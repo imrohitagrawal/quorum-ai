@@ -2100,6 +2100,9 @@ def judge_source_pages(initial_answers: list[InitialModelAnswer]) -> JudgeSource
         long_pages=True,
     )
     answer_texts = tuple(answer.answer_text for answer in initial_answers)
+    # ADR-0150 decision 3: picking cuts to the smaller of the literal the
+    # reserve prices and the setting, the same clamp the fetch uses.
+    page_chars = min(settings.quorum_source_fetch_max_text_chars, JUDGE_MAX_SOURCE_PAGE_CHARS)
     by_url = {row.url: row for row in rows}
     excerpts: dict[str, str] = {}
     for source, address in zip(sources, addresses, strict=True):
@@ -2120,7 +2123,7 @@ def judge_source_pages(initial_answers: list[InitialModelAnswer]) -> JudgeSource
         outcome = row.outcome if row is not None and filled < JUDGE_MAX_SOURCE_PAGES else None
         raw = ""
         if row is not None and outcome == "fetched":
-            raw = pick_passages(row.text, answer_texts, limit=JUDGE_MAX_SOURCE_PAGE_CHARS)
+            raw = pick_passages(row.text, answer_texts, limit=page_chars)
         elif outcome in ("refused_robots", "robots_unchecked"):
             raw = excerpts.get(address, "")
         text = _clean_search_excerpt(raw)[:JUDGE_MAX_SOURCE_PAGE_CHARS]
@@ -2819,9 +2822,10 @@ class RunEvaluation(BaseModel):
     #: Counts only; the page text is never here.
     source_pages_read: int | None = None
     source_pages_cited: int | None = None
-    #: W54 (ADR-0150 decision 1): P, the distinct cited addresses whose page
-    #: robots.txt refused and whose search excerpt reached the judge. ``None``
-    #: whenever ``source_pages_read`` is ``None``.
+    #: W54 (ADR-0150 decision 1): P, the distinct cited addresses whose site's
+    #: robots.txt was read and does not allow the page (``refused_robots``),
+    #: and whose search excerpt reached the judge. ``None`` whenever
+    #: ``source_pages_read`` is ``None``.
     source_pages_preview: int | None = None
 
     def to_eval_json(self) -> dict[str, object]:

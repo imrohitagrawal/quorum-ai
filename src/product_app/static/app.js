@@ -5184,8 +5184,10 @@
   // W54 (ADR-0150 decision 2). P (`source_pages_preview`) is the cited pages a
   // website asks automated tools not to read whose search preview reached the
   // judge, and F = M - N - P the rest that were not read. Each (N, P, F) gets
-  // the table's sentence, which is true for it: the owner's "For the other P"
-  // only when F = 0. P missing or null (a run served before this change) keeps
+  // the table's sentence, which is true for it: the approved "For the other P"
+  // sentence (the session's wording, CHG-029 (b)) only when F = 0, kept as
+  // approved for every P; the two session-written rows with P >= 2 say
+  // "websites" and "previews". P missing or null (a run served before this change) keeps
   // the W29 sentences; P present but not a whole number, or N + P > M, fails
   // closed like the other counts.
   //
@@ -5212,20 +5214,27 @@
     );
     const blocked =
       "the website asks automated tools not to read its pages, so the check could only use the short preview the search engine showed";
+    const blockedMany =
+      "the websites ask automated tools not to read their pages, so the check could only use the short previews the search engine showed";
     if (read > 0) {
       const checked = `Checked against ${read} of ${cited} cited ${cited === 1 ? "page" : "pages"}.`;
       if (!known || preview === 0) return `${lead} ${checked}`;
       if (read + preview === cited) {
         return `${lead} ${checked} For the other ${preview === 1 ? "one" : preview}, ${blocked}.`;
       }
-      return `${lead} ${checked} For ${preview} of the other ${cited - read}, ${blocked}.`;
+      return `${lead} ${checked} For ${preview} of the other ${cited - read}, ${preview === 1 ? blocked : blockedMany}.`;
     }
     if (!known) {
       return `${lead} It worked from the titles, addresses and any search excerpts: no cited page could be read.`;
     }
     // P = 0 first, so M = 0 (never served) cannot read as "all were blocked".
+    // A page whose robots.txt could not be read still sends its preview, so
+    // these never say the titles and addresses alone.
+    if (preview === 0 && cited === 1) {
+      return `${lead} No cited page could be read. The check used only the title, address and any short preview the search engine showed.`;
+    }
     if (preview === 0) {
-      return `${lead} No cited page could be read. The check used only the titles and addresses.`;
+      return `${lead} No cited page could be read. The check used only the titles, addresses and any short previews the search engine showed.`;
     }
     if (preview === cited && cited === 1) {
       return `${lead} No cited page could be read: the website asks automated tools not to read its pages. The check used only the title, address and the short preview the search engine showed.`;
@@ -5233,7 +5242,7 @@
     if (preview === cited) {
       return `${lead} No cited page could be read: the websites ask automated tools not to read their pages. The check used only the titles, addresses and the short previews the search engine showed.`;
     }
-    return `${lead} No cited page could be read. For ${preview} of the ${cited}, ${blocked}; for the rest it used the titles and addresses.`;
+    return `${lead} No cited page could be read. For ${preview} of the ${cited}, ${preview === 1 ? blocked : blockedMany}; for the rest it used the titles, addresses and any short previews the search engine showed.`;
   }
   // App-authored band labels for the verified treatment. Keys are the ONLY
   // bands the server can emit alongside a numeric score (build_trust_score);

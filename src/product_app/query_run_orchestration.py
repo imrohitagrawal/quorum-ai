@@ -366,9 +366,10 @@ class QueryRunEvaluationProjection(BaseModel):
     #: page fetched serves ``(0, M)``. Counts only.
     source_pages_read: int | None = None
     source_pages_cited: int | None = None
-    #: W54 (ADR-0150 decision 1): P, the distinct cited addresses whose page
-    #: robots.txt refused and whose search excerpt reached the judge -- "the
-    #: check could only use the short preview the search engine showed".
+    #: W54 (ADR-0150 decision 1): P, the distinct cited addresses whose site's
+    #: robots.txt was read and does not allow the page (``refused_robots``),
+    #: and whose search excerpt reached the judge -- "the check could only use
+    #: the short preview the search engine showed".
     #: ``None`` whenever ``source_pages_read`` is ``None``.
     source_pages_preview: int | None = None
 
@@ -2271,7 +2272,7 @@ def _with_source_pages(
     """Record on the evaluation that the judge read pages: the prompt id that
     judged it (stored by ``to_eval_json``, ADR-0148 decision 6) and the three
     counts the trust note states (ADR-0148 decision 9, ADR-0150 decision 1).
-    Unchanged when none were read."""
+    Unchanged when the judge was not sent pages (``source_pages`` is None)."""
     if source_pages is None:
         return result
     read, cited, preview = source_pages
