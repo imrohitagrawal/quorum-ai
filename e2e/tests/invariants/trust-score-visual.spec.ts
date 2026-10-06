@@ -6,6 +6,7 @@ import {
   withEvaluation,
   EVAL_MISSING_HIGH_STAKES,
 } from "../../fixtures/golden-run";
+import { pinGoogleFonts } from "../../fixtures/pinned-fonts";
 
 /**
  * FR-016 (S3) — trust-score element visual baselines.
@@ -49,6 +50,8 @@ const fulfil = (body: unknown, status = 200) => ({
 });
 
 async function driveToTrustSurface(page: Page) {
+  // W41 (ADR-0149): the same fonts every run, whatever Google answers.
+  const fonts = await pinGoogleFonts(page);
   await boot(page);
   await Promise.all([
     page.route("**/v1/query-runs/estimate", (r) =>
@@ -65,6 +68,7 @@ async function driveToTrustSurface(page: Page) {
   await page.getByRole("textbox").first().fill("What are the key metrics for measuring SaaS retention?");
   await page.locator("#run-now").click();
   await expect(page.locator("#result-verdict[data-consensus]")).toBeVisible({ timeout: 20000 });
+  return fonts;
 }
 
 test.describe("trust-score visual baselines (FR-016, advisory)", () => {
@@ -74,7 +78,7 @@ test.describe("trust-score visual baselines (FR-016, advisory)", () => {
     for (const width of [375, 768, 1440] as const) {
       test(`trust-score — ${theme} @ ${width}`, async ({ page }) => {
         await page.setViewportSize({ width, height: 1200 });
-        await driveToTrustSurface(page);
+        const fonts = await driveToTrustSurface(page);
         await page.evaluate((t) => document.documentElement.setAttribute("data-theme", t), theme);
         await stabilize(page);
 
@@ -84,6 +88,36 @@ test.describe("trust-score visual baselines (FR-016, advisory)", () => {
         await expect(surface).toBeVisible();
         await expect(surface).not.toBeEmpty();
 
+        // CHG-031: a second guard beside the 120 px pixel compare below, and a
+        // deterministic one: it does not depend on fonts or pixels. It pins
+        // every line of the card, exact, in order, and no more or fewer lines.
+        // Its limits: it reads innerText, so it does NOT see text added by CSS
+        // `::before`/`::after` (the bullets are CSS list markers, so they are
+        // not in the lines either), and it DOES see text hidden with
+        // `opacity: 0`, which innerText still returns. Text under
+        // `display: none` or `visibility: hidden` is not in the lines.
+        // Red if: any line's wording changes, a line is added, removed or
+        // reordered (e.g. "Structural checks passed" -> "Structural check passed"
+        // in app.js).
+        const cardLines = async () =>
+          (await surface.innerText())
+            .split("\n")
+            .map((line) => line.trim())
+            .filter((line) => line !== "");
+        await expect
+          .poll(cardLines)
+          .toEqual([
+            "Not verified — these are automated structural checks, not a fact-check.",
+            "Structural checks passed — citations were not verified against their sources.",
+            "Some citation markers did not point at a source on this run.",
+            "Not every answer that came back carried a primary source.",
+            "This question needed a safety caveat and the synthesis did not include one.",
+          ]);
+
+        // RED if the pin served no stylesheet: its route stopped matching, or
+        // its handler let the request through to Google (whose usual answer
+        // matches the saved copy, so no pixel would show it).
+        expect(fonts.served()).toBeGreaterThan(0);
         await expect(surface).toHaveScreenshot(`trust-score-${theme}-${width}.png`, {
           maxDiffPixels: 120,
         });
