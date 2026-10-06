@@ -1,7 +1,7 @@
 # Session Handoff
 
 ## Date/time
-2026-10-04T00:00:48+05:30
+2026-10-06T08:46:45+05:30
 
 ## Open work
 `docs/65-open-work.md` — the source of truth for what is open, what blocks what,
@@ -11,25 +11,25 @@ line further down this file is the factory router's view of the lifecycle, not a
 work status.
 
 ## Latest narrative handoff
-`docs/analysis/2026-10-04-session-handoff.md` — read this for full context before editing. (today)
+`docs/analysis/2026-10-06-session-handoff.md` — read this for full context before editing. (today)
 
 This file is a mechanical snapshot (branch/git-status/skill-route/live state) —
 regenerated fresh every `make handoff`. The narrative above (what happened,
 what's next, the traps) lives in the dated doc it points to, not here.
 
 ## Current branch/worktree
-docs/handoff-2026-10-03
+docs/session-handoff-2026-10-06
 
 ## Live state (measured fresh by this run, not hand-carried)
 Run `make handoff` again for current numbers instead of trusting this file
 once it ages -- every value below is read from git/gh/`/status` at
 generation time, per #134.
 
-- **`origin/main` tip:** `90b678396e63`
-- **Last commit touching `src/`:** `90b678396e63`
-- **Production vs. last `src/` commit:** production build_sha 0ed72d2 does NOT match last src/ commit 90b6783 -- a deploy may be in flight or overdue
-- **pytest collected (no execution):** 5497
-- **e2e lane spec counts:** invariants: 24, ops: 2, degraded: 1
+- **`origin/main` tip:** `c8b1a543c0a8`
+- **Last commit touching `src/`:** `ab547eef5578`
+- **Production vs. last `src/` commit:** production build_sha ab547ee is in sync with last src/ commit
+- **pytest collected (no execution):** 5986
+- **e2e lane spec counts:** invariants: 26, ops: 2, degraded: 1
 - **Open issues:** 8
 - **Changed-lines coverage:** not computed here -- `make diff-cover` shares
   coverage data with every pytest-invoking target and races with them if run
@@ -41,6 +41,9 @@ generation time, per #134.
 - `proposal/268-web-search-context-tokens`
 - `w28/byok-pr1-plan`
 - `w29/judge-wiring-plan`
+- `w37/follow-up-context`
+- `w47/anonymous-spend-per-network`
+- `w48/help-and-tour`
 
 ## Current phase
 Operate, learn, and improve
@@ -97,12 +100,13 @@ Operate, learn, and improve
 
 ## Git status
 ```text
-clean
+M docs/session-handoff.md
 ```
 
 ## Diff stat
 ```text
-no unstaged diff
+docs/session-handoff.md | 21 ++++++++++++---------
+ 1 file changed, 12 insertions(+), 9 deletions(-)
 ```
 
 ## Completed in this session
