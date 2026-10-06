@@ -54,8 +54,9 @@ WHAT IT CANNOT SEE, stated
     can say so); JavaScript-rendered content (the raw HTML only).
 
 ROBOTS.TXT (W29, ADR-0148 decision 3)
-    With ``respect_robots=True`` each host's ``/robots.txt`` is read ONCE per
-    call, through the same pinned path, limits and deadline as the pages
+    With ``respect_robots=True`` each origin's (scheme, host and port)
+    ``/robots.txt`` is read ONCE per call, through the same pinned path,
+    limits and deadline as the pages
     (``_fetch_one`` with ``raw=True``), and judged by :func:`robots_allows`,
     the app's own RFC 9309 matcher. ``urllib.robotparser`` is not used:
     ``.read`` opens the URL with its own client, outside the pinned address and
@@ -572,10 +573,57 @@ def _fetch_one(
 #: bound the matching. A rule longer than 2,048 characters, or a file with
 #: more than 4,096 Allow/Disallow lines, fails CLOSED: real files are far
 #: smaller, and refusing costs only the page (the excerpt is used instead).
-#: Matching is linear in the rule and the path: no regex is built from the
-#: file, only literal ``str.startswith``/``str.find`` between ``*`` wildcards.
+#: No regex is built from the file: matching uses literal
+#: ``str.startswith``/``str.find`` between ``*`` wildcards, so one rule costs
+#: at most about the address length times the rule length, and the limits
+#: here and below bound the whole file's work.
 _ROBOTS_MAX_RULE_CHARS = 2_048
 _ROBOTS_MAX_RULES = 4_096
+#: The longest address path plus query (after percent-encoding is put in one
+#: form) that robots.txt is matched against. A longer one is not fetched
+#: (ADR-0148 decision 3, the session's choice): matching cost grows with the
+#: address length times the rule length. Exactly 2,048 characters is matched.
+_ROBOTS_MAX_ADDRESS_CHARS = 2_048
+
+#: RFC 3986 unreserved characters: a percent-encoding of one of these is
+#: decoded before matching (RFC 9309 section 2.2.2); every other escape stays.
+_UNRESERVED = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
+#: FIXED patterns (never built from a file) for the two normalising passes.
+_NON_ASCII = re.compile(r"[^\x00-\x7f]")
+_PERCENT_ESCAPE = re.compile(r"%([0-9A-Fa-f]{2})")
+
+
+def _robots_normalise(text: str) -> str:
+    """One form for a rule's path pattern and an address's path plus query
+    (RFC 9309 section 2.2.2): characters outside ASCII are percent-encoded as
+    UTF-8, an escape of an unreserved character is decoded, and every other
+    escape's hex digits are upper-cased (so ``%2F`` stays ``%2F``). ``*`` and
+    ``$`` are ASCII and untouched, so they stay operators in a pattern."""
+    encoded = _NON_ASCII.sub(
+        lambda m: "".join(f"%{b:02X}" for b in m.group(0).encode("utf-8", "surrogatepass")),
+        text,
+    )
+
+    def escape(m: re.Match[str]) -> str:
+        char = chr(int(m.group(1), 16))
+        return char if char in _UNRESERVED else f"%{m.group(1).upper()}"
+
+    return _PERCENT_ESCAPE.sub(escape, encoded)
+
+
+def _lower_host(authority: re.Match[str]) -> str:
+    userinfo, at, host_and_port = authority.group(2).rpartition("@")
+    return f"{authority.group(1)}{userinfo}{at}{host_and_port.lower()}"
+
+
+_ADDRESS_AUTHORITY = re.compile(r"^([A-Za-z][A-Za-z0-9+.-]*://)([^/?]*)")
+
+
+def canonical_address(url: str) -> str:
+    """The address a citation is compared and fetched by (ADR-0148 decision 4):
+    stripped, without its fragment (search results often add one), and with
+    the host lower-cased. Nothing else is rewritten."""
+    return _ADDRESS_AUTHORITY.sub(_lower_host, url.strip().split("#", 1)[0], count=1)
 
 
 class _RobotsTooLarge(ValueError):
@@ -615,7 +663,7 @@ def _robots_rules(body: str, product_token: str) -> list[tuple[bool, str]]:
             if rule_count > _ROBOTS_MAX_RULES or len(value) > _ROBOTS_MAX_RULE_CHARS:
                 raise _RobotsTooLarge(key)
             if value:
-                rule = (key == "allow", value)
+                rule = (key == "allow", _robots_normalise(value))
                 if product_token in agents:
                     own.append(rule)
                 if "*" in agents:
@@ -625,9 +673,12 @@ def _robots_rules(body: str, product_token: str) -> list[tuple[bool, str]]:
 
 def _robots_pattern_matches(pattern: str, target: str) -> bool:
     """RFC 9309 section 2.2.3: ``*`` matches any run of characters and a
-    trailing ``$`` anchors the end; everything else is literal. Linear: the
-    literal pieces between ``*`` are found left to right, each from where the
-    last ended, which is exact for a pattern whose only wildcard is ``*``."""
+    trailing ``$`` anchors the end; everything else is literal. The literal
+    pieces between ``*`` are found left to right, each from where the last
+    ended, which is exact for a pattern whose only wildcard is ``*``. Cost: at
+    most about the address length times the rule length (each ``str.find``),
+    bounded by ``_ROBOTS_MAX_ADDRESS_CHARS`` and ``_ROBOTS_MAX_RULE_CHARS``;
+    no backtracking."""
     anchored = pattern.endswith("$")
     pieces = (pattern[:-1] if anchored else pattern).split("*")
     if not target.startswith(pieces[0]):
@@ -657,10 +708,15 @@ def robots_allows(
     rules apply and a 5xx means the site is unreachable (fail closed). A 3xx
     fails closed by the session's choice: following it would need a second
     pinned fetch. A 2xx body is matched by the app's own RFC 9309 matcher
-    against the URL's path plus query: the longest matching rule wins and
-    ``Allow`` wins a tie. The product token is ``user_agent`` up to its "/".
+    against the URL's path plus query, both put in one percent-encoding form
+    first: the longest matching rule wins and ``Allow`` wins a tie. The
+    product token is ``user_agent`` up to its "/". An address whose path plus
+    query is longer than ``_ROBOTS_MAX_ADDRESS_CHARS`` is refused whatever the
+    file says.
     """
-    if robots_status is None:
+    parts = urlsplit(url)
+    target = _robots_normalise((parts.path or "/") + (f"?{parts.query}" if parts.query else ""))
+    if robots_status is None or len(target) > _ROBOTS_MAX_ADDRESS_CHARS:
         return False
     if 400 <= robots_status < 500:
         return True
@@ -671,8 +727,6 @@ def robots_allows(
         rules = _robots_rules(robots_body or "", product_token)
     except _RobotsTooLarge:
         return False
-    parts = urlsplit(url)
-    target = (parts.path or "/") + (f"?{parts.query}" if parts.query else "")
     best: tuple[int, bool] = (-1, True)
     for allow, pattern in rules:
         if _robots_pattern_matches(pattern, target):
@@ -703,12 +757,15 @@ def fetch_cited_pages(
 ) -> tuple[FetchedSource, ...]:
     """Fetch ``urls`` in order, one row per distinct URL.
 
+    Each URL is first reduced to :func:`canonical_address` (no fragment, host
+    in lower case), so two spellings of one page are one row and one fetch.
     Sequential, one GET per page, no retries. Stops dialling once ``max_pages``
     have been attempted or the shared ``budget_seconds`` deadline passes; later
     URLs, and any beyond ``MAX_PAGES_PER_HOST`` for one host, are
     ``skipped_cap``. Never raises.
 
-    With ``respect_robots`` (W29, ADR-0148) each host's robots.txt is read once,
+    With ``respect_robots`` (W29, ADR-0148) each origin's (scheme, host and
+    port) robots.txt is read once,
     inside the same deadline, before its first page; a page it does not allow
     is ``refused_robots`` and counts toward ``max_pages`` like a fetch, so the
     caller's page-or-excerpt items stay within the page cap.
@@ -737,7 +794,7 @@ def fetch_cited_pages(
 
     attempted = 0
     for raw in urls:
-        url = raw.strip()
+        url = canonical_address(raw)
         if not url or url in seen:
             continue
         seen.add(url)

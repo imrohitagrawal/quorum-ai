@@ -358,10 +358,12 @@ class QueryRunEvaluationProjection(BaseModel):
     #: free-text field, so no provider prose can ride out on it. The judge's
     #: rationale remains dropped, and this is not a ``judge`` key.
     judge_status: JudgeCallOutcome | None = None
-    #: W29 (ADR-0148 decision 9): how many cited sources the judge read a page
-    #: or search excerpt for, and how many cited sources it saw -- the N and M
-    #: of "Checked against N of M cited pages". Both ``None`` when no page was
-    #: read (the setting off, a quick run, or no judge). Counts only.
+    #: W29 (ADR-0148 decision 9): N, the distinct cited addresses whose page
+    #: was fetched and read (a search excerpt does not count), and M, the
+    #: distinct cited addresses the judge saw -- "Checked against N of M cited
+    #: pages". Both ``None`` when the judge was not sent pages (the setting
+    #: off, a quick run, no judge, or no cited source); a v2 verdict with no
+    #: page fetched serves ``(0, M)``. Counts only.
     source_pages_read: int | None = None
     source_pages_cited: int | None = None
 
@@ -2203,8 +2205,9 @@ class _JudgeOutcome:
     #: did not say", never as "no judge ran".
     status: JudgeCallOutcome | None = None
     #: W29 (ADR-0148): ``(read, cited)`` when this call was sent the cited
-    #: pages (PR-EVAL-JUDGE-v2) -- the sources it got a page or excerpt for,
-    #: and the cited sources it saw -- else ``None``. Counts only: the page
+    #: pages (PR-EVAL-JUDGE-v2) -- the distinct cited addresses whose page was
+    #: fetched and read (excerpts do not count), and the distinct cited
+    #: addresses it saw; ``(0, M)`` when none was fetched -- else ``None``. Counts only: the page
     #: text lives in the judge call and is never memoised.
     source_pages: tuple[int, int] | None = None
 
