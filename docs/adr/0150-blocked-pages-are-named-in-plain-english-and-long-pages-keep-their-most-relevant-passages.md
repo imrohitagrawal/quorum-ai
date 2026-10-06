@@ -157,11 +157,12 @@ judge prompts from the same fetched text: "first 4,000 characters" with today's
   first 4,000 characters would not have reached (for example a reader's comment that repeats
   the answers' words). It stays inside the untrusted block and the v2 prompt still says to
   ignore instructions in it.
-- On the synthetic pages measured, picking costs little time in the run slot. Measured with `time.process_time` (best of 3, an
-  Apple M4, 8 pages at the 262,144-byte cap and four 4,000-character answers): 0.536 s of CPU
-  for the worst page shape built (nested inline tags), of which today's `extract_text` alone
-  costs 0.413 s; about 0.1 s more than today per 8 pages. The parse, not the picking, is most
-  of it. Script: the session's `time_pick.py` (not kept in the repository).
+- On the synthetic pages measured, reading and picking cost little time in the run slot.
+  Measured after review round 1 with `time.process_time` (best of 3, an Apple M4) for 8 pages
+  at the 262,144-byte cap and four 4,000-character answers: at most 0.492 s of CPU (nested
+  inline tags), and a memory peak of at most 5.5 MiB for one page (nested `<article>` tags;
+  the first version needed about 6 GB for that page). Script: the session's `time_pick.py`
+  (not kept in the repository).
 - Unmeasured until the paid run: whether picked passages change verdicts compared with the
   first 4,000 characters, how often fetches fail, and the time picking adds in the run slot
   on real pages.
