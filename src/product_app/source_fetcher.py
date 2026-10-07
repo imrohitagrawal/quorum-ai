@@ -62,7 +62,10 @@ ROBOTS.TXT (W29, ADR-0148 decision 3)
     ``.read`` opens the URL with its own client, outside the pinned address and
     the no-redirect rule, and its matching allowed five kinds of path a file
     forbids (ADR-0148 decision 3, review round 1). A page robots.txt does not
-    allow is reported as ``refused_robots`` and never requested.
+    allow is reported as ``refused_robots`` and never requested. A page whose
+    robots.txt could not be read or checked is never requested either, but is
+    reported as ``robots_unchecked`` (W54, ADR-0150 decision 1): that site
+    asked nothing, so the trust note must not say it did.
 """
 
 from __future__ import annotations
@@ -95,7 +98,11 @@ Outcome = Literal[
     "network_error",
     "skipped_cap",
     "refused_robots",
+    "robots_unchecked",
 ]
+#: What robots.txt says about one page: a rule allows it, a rule does not, or
+#: the file could not be read or checked (W54, ADR-0150 decision 1).
+RobotsVerdict = Literal["allowed", "refused", "unchecked"]
 
 #: The identifying agent every fetch sends, with a contact URL.
 USER_AGENT = "quorum-ai-source-check/0.1 (+https://quorum.stackclimb.com)"
@@ -302,6 +309,163 @@ def extract_text(body: str, content_type: str, *, max_chars: int) -> str:
     return " ".join(body.split())[:max_chars]
 
 
+#: W54 (ADR-0150 decision 5): the most block text :func:`reading_text` returns
+#: for a long page; the same number as the fetcher's default byte cap.
+READING_TEXT_MAX_CHARS = 262_144
+#: The area a long page is read from must hold at least this many characters
+#: of block text (ADR-0150 decision 3), or the next, wider area is used.
+_MAIN_AREA_MIN_CHARS = 1_000
+#: Elements that start and end a block of text. Every container the area rules
+#: below look at is one too, so the text between two boundaries always has one
+#: context.
+_BLOCK_TAGS = frozenset(
+    {
+        "address", "article", "aside", "blockquote", "body", "caption", "dd", "details",
+        "dialog", "div", "dl", "dt", "fieldset", "figcaption", "figure", "footer", "form",
+        "h1", "h2", "h3", "h4", "h5", "h6", "header", "hr", "html", "legend", "li", "main",
+        "nav", "ol", "p", "pre", "section", "summary", "table", "tbody", "td", "tfoot", "th",
+        "thead", "tr", "ul",
+    }
+)  # fmt: skip
+#: Page furniture, dropped from a long page only while what is left still
+#: holds enough text (failure mode 5: some sites wrap the whole page in one).
+_FURNITURE_TAGS = frozenset({"nav", "header", "footer", "aside", "form"})
+
+
+class _BlockExtractor(_TextExtractor):
+    """:class:`_TextExtractor` that also keeps the text in blocks, with what
+    the area rules need about each. ``parts`` is collected exactly as the
+    parent collects it, so the visible text read from it is ``extract_text``'s.
+
+    Each ``<article>`` is recorded ONCE, as the range of block positions
+    between its opening and its closing tag (nested articles included), so the
+    work and memory grow with the number of tags plus blocks, never with
+    their product (failure mode 18; review round 1's measurement of the
+    first version is in ADR-0150 decision 3)."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.texts: list[str] = []
+        self.in_main: list[bool] = []
+        self.in_furniture: list[bool] = []
+        #: ``[start, end)`` block positions per article, in opening order.
+        self.articles: list[list[int]] = []
+        self._open_articles: list[int] = []
+        self._pending: list[str] = []
+        self._main = 0
+        self._furniture = 0
+
+    def _flush(self) -> None:
+        text = " ".join(" ".join(self._pending).split())
+        self._pending = []
+        if text:
+            self.texts.append(text)
+            self.in_main.append(self._main > 0)
+            self.in_furniture.append(self._furniture > 0)
+
+    def handle_starttag(self, tag: str, attrs: object) -> None:
+        super().handle_starttag(tag, attrs)
+        if tag not in _BLOCK_TAGS:
+            return
+        self._flush()
+        if tag == "main":
+            self._main += 1
+        elif tag == "article":
+            self._open_articles.append(len(self.articles))
+            self.articles.append([len(self.texts), -1])
+        elif tag in _FURNITURE_TAGS:
+            self._furniture += 1
+
+    def handle_endtag(self, tag: str) -> None:
+        super().handle_endtag(tag)
+        if tag not in _BLOCK_TAGS:
+            return
+        self._flush()
+        if tag == "main" and self._main:
+            self._main -= 1
+        elif tag == "article" and self._open_articles:
+            self.articles[self._open_articles.pop()][1] = len(self.texts)
+        elif tag in _FURNITURE_TAGS and self._furniture:
+            self._furniture -= 1
+
+    def handle_data(self, data: str) -> None:
+        before = len(self.parts)
+        super().handle_data(data)
+        if len(self.parts) > before:
+            self._pending.append(data)
+
+    def close(self) -> None:
+        super().close()
+        self._flush()
+        # An article never closed runs to the end of the page.
+        for index in self._open_articles:
+            self.articles[index][1] = len(self.texts)
+        self._open_articles = []
+
+
+def _joined_length(blocks: Sequence[str]) -> int:
+    return sum(len(block) for block in blocks) + max(0, len(blocks) - 1)
+
+
+def _main_area(parser: _BlockExtractor, visible_chars: int) -> list[str]:
+    """ADR-0150 decision 3: ``<main>``, else the longest ``<article>`` (its own
+    text, nested articles included), each when it holds at least
+    ``_MAIN_AREA_MIN_CHARS``; else the page without its furniture when that
+    keeps at least ``_MAIN_AREA_MIN_CHARS`` AND at least half of the visible
+    text (a page wrapped in one ``<form>`` beside a notice would otherwise
+    keep only the notice); else every block."""
+    texts = parser.texts
+    main = [text for text, inside in zip(texts, parser.in_main, strict=True) if inside]
+    if _joined_length(main) >= _MAIN_AREA_MIN_CHARS:
+        return main
+    # Prefix sums give each article's joined length in O(1), whatever the nesting.
+    prefix = [0]
+    for text in texts:
+        prefix.append(prefix[-1] + len(text))
+
+    def article_length(span: list[int]) -> int:
+        start, end = span
+        return prefix[end] - prefix[start] + max(0, end - start - 1)
+
+    # max() keeps the first of equal lengths, so a tie goes to the earlier one.
+    longest = max(parser.articles, key=article_length, default=None)
+    if longest is not None and article_length(longest) >= _MAIN_AREA_MIN_CHARS:
+        return texts[longest[0] : longest[1]]
+    unfurnished = [
+        text for text, inside in zip(texts, parser.in_furniture, strict=True) if not inside
+    ]
+    kept = _joined_length(unfurnished)
+    if kept >= _MAIN_AREA_MIN_CHARS and 2 * kept >= visible_chars:
+        return unfurnished
+    return texts
+
+
+def reading_text(body: str, content_type: str, *, limit: int) -> str:
+    """What the judge's passage picking reads of a page (W54, ADR-0150).
+
+    When the visible text is at most ``limit`` characters it is exactly
+    ``extract_text(body, content_type, max_chars=limit)`` (failure mode 14: a
+    short page is read as before). Otherwise the main area's blocks, each with
+    its whitespace collapsed, joined by "\\n" and cut at
+    ``READING_TEXT_MAX_CHARS``. A plain-text page's blocks are its paragraphs
+    (runs of lines between blank lines)."""
+    if content_type == "text/html":
+        parser = _BlockExtractor()
+        parser.feed(body)
+        parser.close()
+        visible = " ".join(" ".join(parser.parts).split())
+        if len(visible) <= limit:
+            return visible
+        blocks = _main_area(parser, len(visible))
+    else:
+        visible = " ".join(body.split())
+        if len(visible) <= limit:
+            return visible
+        paragraphs = (" ".join(chunk.split()) for chunk in re.split(r"\n[ \t\r\f\v]*\n", body))
+        blocks = [paragraph for paragraph in paragraphs if paragraph]
+    return "\n".join(blocks)[:READING_TEXT_MAX_CHARS]
+
+
 def _now_iso() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
@@ -342,7 +506,8 @@ def _fetch_one(
     max_text_chars: int,
     clock: Callable[[], float],
     raw: bool = False,
-    robots_permit: Callable[[str, str], bool] | None = None,
+    robots_permit: Callable[[str, str], RobotsVerdict] | None = None,
+    long_pages: bool = False,
 ) -> FetchedSource:
     """One bounded GET.
 
@@ -351,7 +516,8 @@ def _fetch_one(
     as page text, and is often far shorter than a page. ``robots_permit``,
     when given, is asked with the URL's ``scheme://host[:port]`` and the URL
     once the URL has passed the scheme and host checks, before anything is
-    dialled."""
+    dialled. ``long_pages`` reads the page with :func:`reading_text` instead
+    of :func:`extract_text`; the usable-length floor is the same."""
     started = clock()
     if _FORBIDDEN_IN_A_URL.search(url):
         return _row(url, "refused_scheme", started=started, clock=clock)
@@ -366,8 +532,11 @@ def _fetch_one(
     if not host or parts.username is not None or parts.password is not None:
         return _row(url, "refused_host", started=started, clock=clock)
     origin = f"{parts.scheme}://{parts.netloc.lower()}"
-    if robots_permit is not None and not robots_permit(origin, url):
+    verdict = "allowed" if robots_permit is None else robots_permit(origin, url)
+    if verdict == "refused":
         return _row(url, "refused_robots", started=started, clock=clock)
+    if verdict == "unchecked":
+        return _row(url, "robots_unchecked", started=started, clock=clock)
     port = port or (443 if parts.scheme == "https" else 80)
     remaining = deadline - clock()
     if remaining <= 0:
@@ -524,7 +693,10 @@ def _fetch_one(
             if raw:
                 text, outcome = decoded, "fetched"
             else:
-                text = extract_text(decoded, content_type, max_chars=max_text_chars)
+                if long_pages:
+                    text = reading_text(decoded, content_type, limit=max_text_chars)
+                else:
+                    text = extract_text(decoded, content_type, max_chars=max_text_chars)
                 outcome = "fetched" if len(text) >= MIN_USABLE_TEXT_CHARS else "unusable"
             return _row(
                 url,
@@ -700,7 +872,17 @@ def _robots_pattern_matches(pattern: str, target: str) -> bool:
 def robots_allows(
     robots_status: int | None, robots_body: str | None, url: str, user_agent: str
 ) -> bool:
-    """Whether robots.txt lets ``user_agent`` fetch ``url`` (ADR-0148 decision 3).
+    """Whether robots.txt lets ``user_agent`` fetch ``url`` (ADR-0148 decision 3):
+    :func:`robots_verdict` is ``"allowed"``. Every case that cannot be checked
+    fails closed."""
+    return robots_verdict(robots_status, robots_body, url, user_agent) == "allowed"
+
+
+def robots_verdict(
+    robots_status: int | None, robots_body: str | None, url: str, user_agent: str
+) -> RobotsVerdict:
+    """What robots.txt says about ``user_agent`` fetching ``url`` (ADR-0148
+    decision 3; the three-way answer is W54, ADR-0150 decision 1).
 
     ``robots_status`` is the status the pinned fetch read at ``/robots.txt``,
     or ``None`` when nothing could be read (a timeout, a refused address, an
@@ -710,28 +892,32 @@ def robots_allows(
     pinned fetch. A 2xx body is matched by the app's own RFC 9309 matcher
     against the URL's path plus query, both put in one percent-encoding form
     first: the longest matching rule wins and ``Allow`` wins a tie. The
-    product token is ``user_agent`` up to its "/". An address whose path plus
-    query is longer than ``_ROBOTS_MAX_ADDRESS_CHARS`` is refused whatever the
-    file says.
+    product token is ``user_agent`` up to its "/".
+
+    ``"refused"`` only when a file was read and a rule does not allow the
+    page. ``"unchecked"`` when nothing could be read, for a 3xx or 5xx, for a
+    file over the work bounds, and for an address whose path plus query is
+    longer than ``_ROBOTS_MAX_ADDRESS_CHARS``: the page is not fetched, but
+    the site did not ask for that.
     """
     parts = urlsplit(url)
     target = _robots_normalise((parts.path or "/") + (f"?{parts.query}" if parts.query else ""))
     if robots_status is None or len(target) > _ROBOTS_MAX_ADDRESS_CHARS:
-        return False
+        return "unchecked"
     if 400 <= robots_status < 500:
-        return True
+        return "allowed"
     if not 200 <= robots_status < 300:
-        return False
+        return "unchecked"
     product_token = user_agent.split("/", 1)[0].strip().lower()
     try:
         rules = _robots_rules(robots_body or "", product_token)
     except _RobotsTooLarge:
-        return False
+        return "unchecked"
     best: tuple[int, bool] = (-1, True)
     for allow, pattern in rules:
         if _robots_pattern_matches(pattern, target):
             best = max(best, (len(pattern), allow))
-    return best[1]
+    return "allowed" if best[1] else "refused"
 
 
 def _robots_reading(row: FetchedSource) -> tuple[int | None, str | None]:
@@ -754,6 +940,7 @@ def fetch_cited_pages(
     max_text_chars: int,
     clock: Callable[[], float] = time.monotonic,
     respect_robots: bool = False,
+    long_pages: bool = False,
 ) -> tuple[FetchedSource, ...]:
     """Fetch ``urls`` in order, one row per distinct URL.
 
@@ -767,8 +954,14 @@ def fetch_cited_pages(
     With ``respect_robots`` (W29, ADR-0148) each origin's (scheme, host and
     port) robots.txt is read once,
     inside the same deadline, before its first page; a page it does not allow
-    is ``refused_robots`` and counts toward ``max_pages`` like a fetch, so the
+    is ``refused_robots`` (or ``robots_unchecked`` when robots.txt could not
+    be read or checked) and counts toward ``max_pages`` like a fetch, so the
     caller's page-or-excerpt items stay within the page cap.
+
+    With ``long_pages`` (W54, ADR-0150) a page's text is
+    :func:`reading_text`: a page longer than ``max_text_chars`` keeps its main
+    area's blocks, up to ``READING_TEXT_MAX_CHARS``, for the caller to pick
+    passages from. Robots.txt is read the same way either way.
     """
     deadline = clock() + budget_seconds
     rows: list[FetchedSource] = []
@@ -776,7 +969,7 @@ def fetch_cited_pages(
     per_host: dict[str, int] = {}
     robots: dict[str, tuple[int | None, str | None]] = {}
 
-    def permit(origin: str, url: str) -> bool:
+    def permit(origin: str, url: str) -> RobotsVerdict:
         # One robots.txt read per origin per call, inside the same deadline.
         if origin not in robots:
             robots[origin] = _robots_reading(
@@ -790,7 +983,7 @@ def fetch_cited_pages(
                     raw=True,
                 )
             )
-        return robots_allows(*robots[origin], url, USER_AGENT)
+        return robots_verdict(*robots[origin], url, USER_AGENT)
 
     attempted = 0
     for raw in urls:
@@ -821,6 +1014,7 @@ def fetch_cited_pages(
                 max_text_chars=max_text_chars,
                 clock=clock,
                 robots_permit=permit if respect_robots else None,
+                long_pages=long_pages,
             )
         )
     return tuple(rows)

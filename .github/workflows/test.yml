@@ -35,11 +35,11 @@ jobs:
     # took 10m29s to 14m50s, and on 2026-09-28 run 36474898867 reached 100%
     # of the suite at 20:04:29 and was killed by the 15-minute limit at
     # 20:04:33, which left merged code undeployed (the deploy gate needs this
-    # job). 20 is the limit the other blocking push jobs that declare one
-    # already use, which the deploy gate's wait (GATE_TIMEOUT_SECONDS,
-    # deploy.yml) covers; going higher would also move that wait and the
-    # drift alarm's grace (ADR-0026).
-    timeout-minutes: 20
+    # job). 25, not 20 (ADR-0151, 2026-10-07): it took 15.2 min on 7e6c94c and
+    # the suite keeps growing; validate-and-test, which runs the same suite with
+    # coverage, was cancelled at 20. The deploy gate's wait (GATE_TIMEOUT_SECONDS,
+    # 1800s, deploy.yml) and the drift alarm's grace (2100s) moved with it.
+    timeout-minutes: 25
     steps:
       - name: Check out repository
         uses: actions/checkout@v4

@@ -15,7 +15,8 @@ Two durable invariants, enforced here so the class of bug cannot recur:
 
 1. The deploy gate's ``GATE_TIMEOUT_SECONDS`` must be >= the longest a required PUSH
    job may legitimately run — its declared ``timeout-minutes`` ceiling. The gate was
-   raised 900s → 1500s so it clears the 20-minute ceiling of the blocking push jobs
+   raised 900s → 1500s (and to 1800s on 2026-10-07, ADR-0151, for a 25-minute
+   ceiling) so it clears the ceiling of the blocking push jobs
    (perf-gate, api-contract, e2e) with headroom.
 2. The pathological advisory ``mutation-baseline`` job (30-minute ceiling, a per-PR
    changed-function concept meaningless on a push to main) is gated to
@@ -30,8 +31,10 @@ These are structural checks on the workflow YAML, in the default blocking suite.
 
 from __future__ import annotations
 
+import importlib.util
 import pathlib
 import re
+import sys
 from typing import Any
 
 import pytest
@@ -162,3 +165,32 @@ def test_the_mutation_job_is_pull_request_only(job_id: str) -> None:
         f"{job_id} must be gated to pull_request events so it cannot run on a push "
         "to main and stall the deploy gate (see this module's docstring)."
     )
+
+
+def test_the_scripts_fallback_wait_matches_deploy_yml() -> None:
+    """ADR-0151. ``scripts/deploy_gate.py`` falls back to DEFAULT_TIMEOUT_SECONDS
+    when GATE_TIMEOUT_SECONDS is unset; it said it matched deploy.yml and drifted
+    (left at 1500 when deploy.yml moved to 1800). RED IF the two differ."""
+    spec = importlib.util.spec_from_file_location(
+        "deploy_gate", _ROOT / "scripts" / "deploy_gate.py"
+    )
+    assert spec is not None and spec.loader is not None
+    gate = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = gate  # its dataclasses look the module up by name
+    spec.loader.exec_module(gate)
+    assert float(_deploy_gate()[1]) == gate.DEFAULT_TIMEOUT_SECONDS
+
+
+def test_the_drift_grace_outlasts_the_gates_whole_wait_plus_a_deploy() -> None:
+    """ADR-0151. The drift alarm's grace must exceed the gate's whole wait plus a
+    ~60 s deploy, or a gate still waiting reads as drift. Nothing tied the two
+    together: moving the gate alone stayed green. RED IF the gate's wait in
+    deploy.yml grows to within 60 s of the grace or past it."""
+    spec = importlib.util.spec_from_file_location(
+        "deploy_drift_check", _ROOT / "scripts" / "deploy_drift_check.py"
+    )
+    assert spec is not None and spec.loader is not None
+    drift = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = drift  # its dataclasses look the module up by name
+    spec.loader.exec_module(drift)
+    assert float(_deploy_gate()[1]) + 60 < drift.DEFAULT_GRACE_SECONDS
