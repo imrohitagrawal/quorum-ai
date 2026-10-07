@@ -55,15 +55,18 @@ from enum import Enum
 #:
 #:     795s 758s 734s 753s 792s 803s 734s 737s 744s   -> max 803s, median 753s
 #:
-#: The structural ceiling is `GATE_TIMEOUT_SECONDS = 1500` in deploy.yml plus a
-#: ~60s deploy job, i.e. ~1560s even when the gate waits its entire budget.
-#: 1800s clears that with headroom.
+#: A legitimate deploy is bounded by the slowest required push job (25 min since
+#: ADR-0151), then the gate and deploy jobs (about 1 min). The grace is also kept
+#: above the gate's whole wait (`GATE_TIMEOUT_SECONDS = 1800` in deploy.yml) plus
+#: a deploy, ~1860s, so a gate still waiting is never reported as drift.
+#: 2100s clears both. (Was 1800s against a 1500s gate; both moved on 2026-10-07
+#: when the full-suite jobs outgrew 20 minutes, ADR-0151.)
 #:
 #: An earlier draft used 2700s, sized against the 2071s of the 2026-08-07
 #: INCIDENT. That was the wrong calibration: sizing the grace to tolerate the
 #: failure means a repeat reads DEPLOY_IN_FLIGHT for its whole duration. Size it
 #: against the legitimate path instead.
-DEFAULT_GRACE_SECONDS = 1800.0
+DEFAULT_GRACE_SECONDS = 2100.0
 
 DEFAULT_STATUS_URL = "https://quorum-ai.fly.dev/status"
 
