@@ -14,8 +14,10 @@ loopback sites told apart by ``Host``, the real ``EvalJudgeService`` behind
 the one provider seam, spies on the fetcher and the judge. Its standard five
 sources give N = 1 (allowed), P = 1 (blocked: a robots.txt rule refuses the
 page, excerpt sent), and F = 3 (down: robots.txt answers 503, so it was not
-read -- the excerpt is sent but not counted; bare: refused with no excerpt;
-pdf: failed), M = 5.
+read -- the excerpt is sent but not counted in P; bare: refused with no
+excerpt; pdf: failed, and since ADR-0152 its excerpt is sent too), M = 5.
+ADR-0152's count Q (down and pdf) is tested in
+``tests/integration/test_w54_preview_other_is_served.py``.
 
 Every test names what turns it red.
 """
@@ -153,8 +155,10 @@ TODAY_EVALUATION = frozenset(
 def test_off_the_body_is_todays_plus_one_null_field(monkeypatch: pytest.MonkeyPatch) -> None:
     """Failure mode 4. RED IF: the field is missing, is not null with the
     setting off, or anything else in the top level or the evaluation is
-    added or removed. Partners: the evaluation is the verified one, and no
-    page was fetched."""
+    added or removed. ADR-0152 (W54 step 2) adds ONE more null field,
+    ``source_pages_preview_other``, to the expected set (failure mode 11:
+    "the API gains one null field"). Partners: the evaluation is the
+    verified one, and no page was fetched."""
     _enable_judge(monkeypatch)
     spies = _spies(monkeypatch)
     with _sites(_standard_routes()) as sites:
@@ -166,10 +170,12 @@ def test_off_the_body_is_todays_plus_one_null_field(monkeypatch: pytest.MonkeyPa
     assert "source_pages_preview" in ev, sorted(ev)
     assert ev["source_pages_preview"] is None
     assert ev["source_pages_read"] is None and ev["source_pages_cited"] is None
+    assert ev["source_pages_preview_other"] is None
     paths = _key_paths(body)
     assert {p for p in paths if "." not in p and "[" not in p} == TODAY_TOP_LEVEL
     assert {p for p in paths if p.startswith("evaluation")} == TODAY_EVALUATION | {
-        "evaluation.source_pages_preview"
+        "evaluation.source_pages_preview",
+        "evaluation.source_pages_preview_other",  # ADR-0152
     }
 
 
@@ -299,13 +305,15 @@ def _plain_result() -> Any:
 
 def test_the_memo_carries_read_cited_and_preview_onto_the_evaluation() -> None:
     """Decision 5: "the judge's memo records (read, cited, preview)", and
-    ``_with_source_pages`` puts all three on ``RunEvaluation``. RED IF: the
-    third count is not carried (or the tuple is still a pair), or the counts
-    are swapped. Partner: ``None`` leaves all three null and the prompt id
-    v1."""
+    ``_with_source_pages`` puts all three on ``RunEvaluation``. ADR-0152 made
+    the record four long, ``(read, cited, preview, preview_other)``; this
+    passed ``(1, 5, 2)`` until W54 step 2 (the fourth count is tested in
+    ``test_w54_preview_other_is_served.py``). RED IF: the third count is not
+    carried (or the tuple is still a pair), or the counts are swapped.
+    Partner: ``None`` leaves all three null and the prompt id v1."""
     result = _plain_result()
     assert result.evaluation.source_pages_preview is None
-    on = orchestration._with_source_pages(result, (1, 5, 2))
+    on = orchestration._with_source_pages(result, (1, 5, 2, 0))
     ev = on.evaluation
     assert (ev.source_pages_read, ev.source_pages_cited, ev.source_pages_preview) == (1, 5, 2)
     assert ev.judge_prompt_id == JUDGE_PAGES_PROMPT_ID

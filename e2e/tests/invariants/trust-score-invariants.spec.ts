@@ -551,6 +551,33 @@ test.describe("trust-score invariants (FR-016)", () => {
     );
   });
 
+  test("W54: the ON branch names the pages checked by their preview for another reason", async ({
+    page,
+  }) => {
+    // ADR-0152 decision 4, the shape the paid runs measured: 3 pages read, 4
+    // that could not be read (a PDF, two over the per-site limit, a timeout)
+    // checked by their search preview, no website refusing, 7 cited. The
+    // lead and the previews part, with no "other" (no rules part) and no
+    // rest part (N > 0).
+    // TURNS RED IF: the page ignores `source_pages_preview_other` (it then
+    // shows only "Checked against 3 of 7 cited pages."), or the sentence
+    // differs by a character on the served page.
+    await page.setViewportSize({ width: 1440, height: 1200 });
+    const rewrites = await serveIslandWithPagesOn(page);
+    await driveWithEval(page, {
+      ...evalVerifiedWithPages(3, 7),
+      source_pages_preview: 0,
+      source_pages_preview_other: 4,
+    });
+    // Partner: the island was served OFF and rewritten ON, and this is the
+    // verified branch, so the sentence below is the page-reading one.
+    expect(rewrites).toEqual([1]);
+    await expect(page.locator(SURFACE)).toHaveAttribute("data-state", "verified");
+    await expect(page.locator(`${SURFACE} .result-trust-score-disclosure`)).toHaveText(
+      `${VERIFIED_LEAD} Checked against 3 of 7 cited pages. For 4 cited pages that could not be read, the check used the short previews the search engine showed.`,
+    );
+  });
+
   // ---- #290 readout: the number is explained --------------------------------
   //
   // "92 of 100 — high trust" named no scale and said nothing about what had

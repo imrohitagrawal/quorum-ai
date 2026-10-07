@@ -41,8 +41,8 @@ measured then; production's model is `gpt-4.1-mini`.
 
 `costs.py` prices the page block (8 items of 4,000 characters and their framing) at 1 token
 per character instead of `CHARS_PER_TOKEN` (4). With `gpt-4.1-mini` at $0.40 per million
-input tokens, the maximum shown before a panel run rises by about $0.0096 when page reading is
-in effect, and not at all when it is off. One token per character covers the Japanese rate
+input tokens, the maximum shown before a panel run rises by $0.0098 (24,624 more tokens: the
+8 page items and their framing) when page reading is in effect, and not at all when it is off. One token per character covers the Japanese rate
 measured above (about 1 character per token, the session's split of a mixed prompt); it is not
 a proven ceiling, since rare characters and emoji can take more than one token each.
 
@@ -92,7 +92,9 @@ Two whole-sentence cases replace the parts:
 | N = 0, P = 0, Q = M = 1 | "No cited page could be read. The check used only the title, address and the short preview the search engine showed." |
 
 "Other" appears in the previews part only after a rules part, which it is set against.
-Parts are joined with a single space, in the order of the table. Impossible counts (not whole numbers, negative,
+Parts are joined with a single space, in the order of the table. When N = 0 and P = M, the
+approved all-blocked sentence begins "No cited page could be read:" itself, so it replaces the
+N = 0 lead rather than following it. A null Q counts as missing. Impossible counts (not whole numbers, negative,
 N + P + Q > M) show the sentence used when page reading is off, as before.
 
 ## Rejected alternatives
@@ -110,6 +112,6 @@ N + P + Q > M) show the sentence used when page reading is off, as before.
 - With page reading off, nothing visible changes; the API gains one null field.
 - With it on: more cited pages are checked against something (in the paid runs, 9 of 13 pages
   were unread and would now be checked by their preview where the search returned one); the
-  maximum shown before a panel run is about $0.0096 higher; the typical judge line shows
+  maximum shown before a panel run is $0.0098 higher; the typical judge line shows
   8,400 input tokens.
 - The golden capture for `PR-EVAL-JUDGE-v2` is made after this change, on the final prompt.
