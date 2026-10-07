@@ -166,6 +166,12 @@ only_mutate = ["src/product_app/*.py"]
 also_copy = [
   "scripts", "openapi.yaml", "configs", "docs", "policies", "profiles", "examples",
   "Makefile", ".github", "e2e/tests", "R2-S2-S4-ULTRACODE-PROMPT.md",
+  # ``e2e/playwright.config.ts`` and ``e2e/fixtures`` are read by
+  # tests/unit/test_trust_score_visual_tolerance.py (W41, ADR-0149): the
+  # config must set no screenshot tolerance, and the saved Google Fonts
+  # stylesheet and its pin live in fixtures. Missing, they made the mutation
+  # gate fail to collect stats on PR #546.
+  "e2e/playwright.config.ts", "e2e/fixtures",
   # ``PRODUCT_IDEA.md`` is read from ``REPO_ROOT`` by scripts/skill_router.py
   # (and therefore by tests/unit/test_skill_router_placeholder.py). Measured
   # with it absent: that spec fails inside ./mutants/ and mutmut aborts with

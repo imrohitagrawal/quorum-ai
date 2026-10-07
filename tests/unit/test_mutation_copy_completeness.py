@@ -94,6 +94,11 @@ ROOT_READING_MODULES = (
     "tests/unit/test_skill_router_placeholder.py",
     "tests/test_doc_gate_consistency.py",
     "tests/contract/test_golden_fixture_matches_served_schema.py",
+    # Reads e2e/playwright.config.ts and e2e/fixtures/ (W41, ADR-0149). The
+    # static check above sees only the root entry `e2e`, which `e2e/tests`
+    # already covers, so it could not see these two were missing: the
+    # mutation gate then failed to collect stats on PR #546.
+    "tests/unit/test_trust_score_visual_tolerance.py",
 )
 
 _ROOT_PATH_LITERAL = re.compile(r"^[A-Za-z0-9_.][A-Za-z0-9_.-]*(/[^\s]+)+$")
