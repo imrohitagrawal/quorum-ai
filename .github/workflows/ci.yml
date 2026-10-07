@@ -27,7 +27,7 @@ jobs:
     # Declared so the deploy-gate ceiling invariant (tests/unit/test_deploy_gate_
     # no_slow_push_jobs.py) covers this heaviest push job too — an uncapped job
     # defaults to 360 min and would be invisible to the ceiling math.
-    # 25, not 20 (ADR-0151): the 11 green runs before 2026-10-07 took 15.7 to
+    # 25, not 20 (ADR-0151): the last 11 green runs before 2026-10-07 took 15.7 to
     # 19.5 min, and PR #546 was cancelled at the 20-min limit twice (20.2 and 20.3 min).
     # The deploy gate's wait (1800s) and the drift grace (2100s) cover 25.
     timeout-minutes: 25

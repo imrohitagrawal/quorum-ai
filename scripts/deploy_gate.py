@@ -67,11 +67,13 @@ _SUCCESS = "success"
 #: push job may legitimately run — its declared ``timeout-minutes`` ceiling — or
 #: the gate fail-safes before a slow-but-valid job finishes and strands the
 #: deploy (the 2026-07-17..21 incident: the 30-min mutation job kept CI pending
-#: past the old 900s and every merge silently skipped). deploy.yml sets 1500s
-#: explicitly (clears the 20-min blocking-job ceiling); this fallback matches it.
-#: The invariant is pinned by tests/unit/test_deploy_gate_no_slow_push_jobs.py.
+#: past the old 900s and every merge silently skipped). deploy.yml sets 1800s
+#: explicitly (clears the 25-min ceiling of the slowest required push jobs,
+#: ADR-0151); this fallback matches it, and
+#: tests/unit/test_deploy_gate_no_slow_push_jobs.py pins both the match and the
+#: invariant.
 #: ``poll`` is frequent enough to deploy promptly once the last check turns green.
-DEFAULT_TIMEOUT_SECONDS = 1500.0
+DEFAULT_TIMEOUT_SECONDS = 1800.0
 DEFAULT_POLL_SECONDS = 15.0
 
 
