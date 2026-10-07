@@ -532,6 +532,25 @@ test.describe("trust-score invariants (FR-016)", () => {
     );
   });
 
+  test("W54: the ON branch names the pages a website asks tools not to read", async ({ page }) => {
+    // ADR-0150 decision 2, the row N > 0, P > 0, F = 0: 3 pages read, 2
+    // checked by their search preview, 5 cited. The sentence is the session's
+    // wording the owner approved (CHG-029 (b)), verbatim, in a real browser.
+    // TURNS RED IF: the page ignores `source_pages_preview` (it then shows
+    // only "Checked against 3 of 5 cited pages."), or the sentence differs by
+    // a character on the served page.
+    await page.setViewportSize({ width: 1440, height: 1200 });
+    const rewrites = await serveIslandWithPagesOn(page);
+    await driveWithEval(page, { ...evalVerifiedWithPages(3, 5), source_pages_preview: 2 });
+    // Partner: the island was served OFF and rewritten ON, and this is the
+    // verified branch, so the sentence below is the page-reading one.
+    expect(rewrites).toEqual([1]);
+    await expect(page.locator(SURFACE)).toHaveAttribute("data-state", "verified");
+    await expect(page.locator(`${SURFACE} .result-trust-score-disclosure`)).toHaveText(
+      `${VERIFIED_LEAD} Checked against 3 of 5 cited pages. For the other 2, the website asks automated tools not to read its pages, so the check could only use the short preview the search engine showed.`,
+    );
+  });
+
   // ---- #290 readout: the number is explained --------------------------------
   //
   // "92 of 100 — high trust" named no scale and said nothing about what had

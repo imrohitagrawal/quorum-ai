@@ -152,6 +152,7 @@ ways, so the record shows what was believed on a date and what replaced it.
 | [ADR-0147](adr/0147-the-untrusted-text-fence-catches-an-altered-marker.md) | The untrusted-text fence catches an altered marker | Architecture | Accepted — 2026-10-05, board row W53, found by W52's round-2 reviewers |
 | [ADR-0148](adr/0148-the-judge-reads-the-cited-pages-behind-a-default-off-setting.md) | The judge reads the cited pages, behind a default-off setting | Architecture | Accepted — 2026-10-06, board row W29 (#447), wiring only |
 | [ADR-0149](adr/0149-the-screenshot-tests-pin-the-google-fonts-stylesheet.md) | The screenshot tests pin the Google Fonts stylesheet | Architecture | Accepted — 2026-10-06, board row W41 |
+| [ADR-0150](adr/0150-blocked-pages-are-named-in-plain-english-and-long-pages-keep-their-most-relevant-passages.md) | Blocked pages are named in plain English, and long pages keep their most relevant passages | Architecture | Accepted — 2026-10-07, board row W54, first pull request (fetching still off) |
 | [ADR-0151](adr/0151-the-full-suite-jobs-get-25-minutes-and-the-gate-and-drift-grace-move-with-them.md) | The full-suite jobs get 25 minutes, and the deploy gate and drift grace move with them | Architecture | Accepted — 2026-10-07 |
 
 **This index was itself stale** until 2026-07-30: ADR-0002 had existed since

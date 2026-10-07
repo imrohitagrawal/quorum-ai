@@ -78,7 +78,8 @@
     },
     "judge_status": null,
     "source_pages_read": null,
-    "source_pages_cited": null
+    "source_pages_cited": null,
+    "source_pages_preview": null
   },
   "EVAL_REFUSED": {
     "schema_version": "s3-eval-v5",
@@ -158,6 +159,7 @@
     },
     "judge_status": null,
     "source_pages_read": null,
-    "source_pages_cited": null
+    "source_pages_cited": null,
+    "source_pages_preview": null
   }
 }
