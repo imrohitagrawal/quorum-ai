@@ -180,11 +180,13 @@ def test_the_shipped_grace_clears_the_worst_measured_deploy(drift: ModuleType) -
         deploying 08:50:47Z -> 34m31s (2071s), because its own merge triggered
         nothing and it rode the next merge's deploy.
 
-    Literals on both sides (rule 7a): the default must clear 2071s with real
-    headroom, and must not be so large that a genuine drift hides for hours.
+    Literals on both sides (rule 7a): the default must clear the gate's whole
+    wait plus a deploy (1800s + ~60s since ADR-0151; it was 1500s + ~60s) with
+    real headroom, and must not be so large that a genuine drift hides for hours.
+    RED IF the grace drops to the gate's ceiling or below, or grows past 40 min.
     """
-    assert drift.DEFAULT_GRACE_SECONDS > 1560
-    assert drift.DEFAULT_GRACE_SECONDS <= 2000
+    assert drift.DEFAULT_GRACE_SECONDS > 1860
+    assert drift.DEFAULT_GRACE_SECONDS <= 2400
 
 
 def test_a_drift_that_outlives_the_shipped_grace_alerts(drift: ModuleType) -> None:
