@@ -31,9 +31,10 @@ These are structural checks on the workflow YAML, in the default blocking suite.
 
 from __future__ import annotations
 
+import importlib.util
 import pathlib
-import sys
 import re
+import sys
 from typing import Any
 
 import pytest
@@ -170,9 +171,9 @@ def test_the_scripts_fallback_wait_matches_deploy_yml() -> None:
     """ADR-0151. ``scripts/deploy_gate.py`` falls back to DEFAULT_TIMEOUT_SECONDS
     when GATE_TIMEOUT_SECONDS is unset; it said it matched deploy.yml and drifted
     (left at 1500 when deploy.yml moved to 1800). RED IF the two differ."""
-    import importlib.util
-
-    spec = importlib.util.spec_from_file_location("deploy_gate", _ROOT / "scripts" / "deploy_gate.py")
+    spec = importlib.util.spec_from_file_location(
+        "deploy_gate", _ROOT / "scripts" / "deploy_gate.py"
+    )
     assert spec is not None and spec.loader is not None
     gate = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = gate  # its dataclasses look the module up by name
@@ -185,8 +186,6 @@ def test_the_drift_grace_outlasts_the_gates_whole_wait_plus_a_deploy() -> None:
     ~60 s deploy, or a gate still waiting reads as drift. Nothing tied the two
     together: moving the gate alone stayed green. RED IF the gate's wait in
     deploy.yml grows to within 60 s of the grace or past it."""
-    import importlib.util
-
     spec = importlib.util.spec_from_file_location(
         "deploy_drift_check", _ROOT / "scripts" / "deploy_drift_check.py"
     )
@@ -194,4 +193,4 @@ def test_the_drift_grace_outlasts_the_gates_whole_wait_plus_a_deploy() -> None:
     drift = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = drift  # its dataclasses look the module up by name
     spec.loader.exec_module(drift)
-    assert drift.DEFAULT_GRACE_SECONDS > float(_deploy_gate()[1]) + 60
+    assert float(_deploy_gate()[1]) + 60 < drift.DEFAULT_GRACE_SECONDS
