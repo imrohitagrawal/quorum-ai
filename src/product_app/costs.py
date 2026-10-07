@@ -2388,6 +2388,16 @@ class CostEstimationService:
             # ``judge_source_pages`` clamps the fetch to, never the settings,
             # so a larger environment value cannot outgrow this reserve. With
             # pages off this adds 0 and prices v1, so every pinned bound holds.
+            #
+            # W54 step 2 (ADR-0152 decision 1): the page block is priced at ONE
+            # token per character, not ``CHARS_PER_TOKEN``. Page text in
+            # Chinese, Japanese and similar scripts runs at about one character
+            # per token (a one-third-Japanese judge prompt measured 2.14
+            # characters per token on 2026-10-07; the session's split of it
+            # puts the Japanese text near 1). It covers that measured rate; it
+            # is not a proven ceiling (rare characters and emoji can take more
+            # than one token each). The system prompt is English the repo
+            # wrote, so it stays at ``CHARS_PER_TOKEN``.
             judge_system_prompt = (
                 _JUDGE_PAGES_SYSTEM_PROMPT if price_judge_pages else _JUDGE_SYSTEM_PROMPT
             )
@@ -2413,7 +2423,6 @@ class CostEstimationService:
                     + Decimal(JUDGE_MAX_SOURCE_LINES - JUDGE_MAX_SOURCE_PAGES)
                     * same_page_line_chars
                 )
-                / CHARS_PER_TOKEN
                 if price_judge_pages
                 else Decimal(0)
             )
@@ -2435,8 +2444,18 @@ class CostEstimationService:
                 # too. Without it the displayed judge line did not move with
                 # query length at all, and under-showed a maximum-length query
                 # by about $0.002 (found in review).
+                # W54 step 2 (ADR-0152 decision 2, CHG-032 (d)): when this
+                # run's judge reads pages the typical input is
+                # ``cost_judge_input_tokens_with_pages``; otherwise (pages off,
+                # no judge, a quick run) it stays ``cost_judge_input_tokens``.
+                # The same clamp applies to both.
+                typical_input = (
+                    settings.cost_judge_input_tokens_with_pages
+                    if price_judge_pages
+                    else settings.cost_judge_input_tokens
+                )
                 judge_input_tokens = min(
-                    Decimal(settings.cost_judge_input_tokens) + query_tokens,
+                    Decimal(typical_input) + query_tokens,
                     judge_input_tokens,
                 )
                 judge_output_tokens = min(

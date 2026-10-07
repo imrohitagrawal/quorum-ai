@@ -640,6 +640,15 @@ class Settings(BaseSettings):
     #: $0.0000 judge row beside a judge that fires.
     cost_judge_input_tokens: int = Field(default=7300, ge=1)
     cost_judge_output_tokens: int = Field(default=150, ge=1)
+    #: W54 step 2 (ADR-0152 decision 2, CHG-032 (d)): the TYPICAL judge input
+    #: the displayed estimate uses instead of ``cost_judge_input_tokens`` when
+    #: this run's judge reads the cited pages (a panel run with
+    #: ``evaluation.judge_reads_pages()`` true). The product owner chose this
+    #: figure, a rounding of the larger of the two judge inputs the 2026-10-07
+    #: paid runs measured with pages read; the measurement lives in ADR-0152
+    #: only. Clamped to the reserve like its sibling; ``ge=1`` for the same
+    #: reason.
+    cost_judge_input_tokens_with_pages: int = Field(default=8400, ge=1)
     #: Output-token floor for one synthesis section call (the reconciled
     #: answer). Synthesis fans out into up to ``cost_synthesis_sections``
     #: independent live calls, each re-sending the full context.

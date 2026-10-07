@@ -1414,6 +1414,11 @@ components:
           - type: integer
           - type: 'null'
           title: Source Pages Preview
+        source_pages_preview_other:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Source Pages Preview Other
       type: object
       required:
       - schema_version
