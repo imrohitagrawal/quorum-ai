@@ -30,7 +30,7 @@ PDFs have their own byte cap, 4,194,304 bytes (4 MiB): a new setting
 `pdf_text.MAX_PDF_BYTES`. A `Content-Length` over it is `too_large` before the body is read; a
 body larger than it is `too_large` and is never parsed (a cut PDF is unreadable). A body of
 exactly the cap is read, as with the 262,144-byte cap for web pages. A body the server itself
-cuts short is parsed; it fails as `unusable`.
+cuts short is parsed; every cut file measured came back `unusable`.
 The shared deadline and the 8-attempt cap are unchanged.
 
 ### 3. The sandbox
@@ -47,17 +47,21 @@ in a new session, so no parser runs in the app's process:
   (`RLIMIT_CPU`), address space 256 MiB (`RLIMIT_AS`), no core files, the lowest CPU priority
   (niceness 19); on Linux the child asks the kernel to kill it first under memory pressure
   (`oom_score_adj` 1000);
-- the parent kills the child's whole process group at the smaller of 3 s and the fetch budget
-  left, so a process the child started cannot hold the call open;
+- the parent stops waiting at the smaller of 3 s and the fetch budget left, and kills the
+  child's whole process group (so a process the child started is removed too) before it
+  collects the child, while the child still holds the group's id. On Linux (production and CI)
+  the parent waits for a normal exit without collecting the child (`os.pidfd_open`); elsewhere
+  it collects a child that exited normally and sends no group kill;
 - at most one PDF child runs per app process at a time; a PDF that finds one running is
   `unusable`;
 - lone surrogate characters (which pypdf can produce from a broken font map) are removed from
-  the text, and from every page text and preview in the judge's prompt.
+  the text, and from every page text and preview before it is counted and again in the judge's
+  prompt; an item with nothing left is not counted.
 
 The 256 MiB limit is unmeasured on Linux (macOS cannot set it). Tests that run on CI's Linux
 runners must show, under this limit, a 512 MiB allocation inside the child refused (the PDF
 comes back `unusable`) while a 32 MiB allocation is allowed, and a real 2,765-byte PDF whose
-font map expands one byte to 256 characters (532 MB in the child on macOS, where no limit
+font map expands one byte to 256 characters (532 MiB in the child on macOS, where no limit
 applies) stopped with the parent unharmed. Page reading is not switched on before those tests
 pass on CI.
 
@@ -91,7 +95,7 @@ reaches the judge (ADR-0152). Nothing raises into the run.
 - **PyMuPDF.** AGPL: a hosted service must offer its source or buy a licence.
 - **pdfminer.six.** No decompression limit (measured past 3 GB), and two recent advisories about
   unsafe loading of pickle files, one labelled code execution (CVE-2025-64512 and
-  CVE-2025-70559, fixed in 20251230).
+  CVE-2025-70559, fixed in 20251107 and 20251230).
 - **Keep the 262,144-byte cap for PDFs.** Five of the six sample PDFs were larger, and a cut PDF
   yields nothing.
 
@@ -103,7 +107,8 @@ reaches the judge (ADR-0152). Nothing raises into the run.
   PDF costs at most about 3 s of one run's budget and one short-lived process.
 - Residual risk: the child runs as the app's operating-system user, so a code-execution bug in the
   parser could do what that user can: on Linux, read the app's own environment, which holds its
-  secrets (`/proc/<parent>/environ`), reach the network and the database volume. The empty
+  secrets (`/proc/<parent>/environ`), reach the network and the database volume (inferred from
+  Linux's same-user access rules; not run). The empty
   environment protects against an accidental leak, not against such a bug. pypdf's recorded
   advisories are all denial of service; being pure Python does not rule out code execution
   (pdfminer.six, also pure Python, had one).
@@ -111,4 +116,9 @@ reaches the judge (ADR-0152). Nothing raises into the run.
   against advisories (`make security-scan` looks only for secrets), so upgrading it is a manual,
   routine step.
 - Each hostile PDF can still take up to 2 s of the machine's one shared CPU, at the lowest
-  priority.
+  priority. Whether that priority leaves an ordinary PDF too little CPU to finish inside 3 s
+  while the app is busy is unmeasured; a Linux-only test (a busy process on the same CPU) runs on
+  CI, and page reading is not switched on before it passes.
+- The image compiles bytecode when it is built (`--compile-bytecode`), so the child does not
+  import pypdf from source inside its CPU limit (0.17–0.19 s of CPU without bytecode against
+  0.04–0.05 s with it, measured on a Mac by the round-2 review).

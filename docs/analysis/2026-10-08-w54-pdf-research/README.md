@@ -18,7 +18,7 @@ PDFs. The fetcher reads only `text/html` and `text/plain`.
 |---|---|---|---|
 | pypdf 6.19.0 | BSD-3 | Python | No required dependencies; built-in limits on decompressed and declared stream sizes; 48 denial-of-service advisories in 12 months, all fixed, none code execution (sourced: GitHub advisories) |
 | pypdfium2 5.14.0 | BSD-3 / Apache-2.0 | native (PDFium) | 4–9 times faster on five of the six files, slightly slower on the sixth; PDFium has memory-safety CVEs (sourced) |
-| pdfminer.six 20260107 | MIT | Python | Two pickle-loading CVEs, CVE-2025-64512 (labelled code execution) and CVE-2025-70559, fixed 20251230 (sourced) |
+| pdfminer.six 20260107 | MIT | Python | Two pickle-loading CVEs, CVE-2025-64512 (labelled code execution) and CVE-2025-70559, fixed 20251107 and 20251230 (sourced) |
 | pdfplumber 0.11.10 | MIT | built on pdfminer | Heaviest |
 | PyMuPDF 1.28.2 | AGPL-3.0 or commercial | native (MuPDF) | AGPL's network clause: a hosted service must offer its source or buy a licence (sourced: PyMuPDF docs) |
 
@@ -27,8 +27,8 @@ PDFs. The fetcher reads only `text/html` and `text/plain`.
 - pypdf took 0.055–0.164 s per file (median of 3) and 2–9 MB of extra memory; pypdfium2
   0.009–0.072 s.
 - Text was readable in reading order from every library. pypdf garbled one Japanese font encoding
-  (`/90msp-RKSJ-H`: 51% garbled characters against 0.8%, counted by `quality.py` as U+FFFD,
-  private-use characters and `(cid:N)`); mapping it to `cp932` in pypdf's table made its output
+  (`/90msp-RKSJ-H`: 51% garbled characters against 0.8%, probably counted by `quality.py`, which counts U+FFFD,
+  private-use characters and `(cid:N)`; UNVERIFIED); mapping it to `cp932` in pypdf's table made its output
   match the others. The text dumps behind both were not kept, so these two are not re-derivable
   from this folder.
 - **A PDF cut short cannot be read** (`trunc_clean.jsonl`): no library returned readable text
