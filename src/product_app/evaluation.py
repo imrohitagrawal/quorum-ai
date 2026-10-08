@@ -2089,8 +2089,8 @@ def judge_source_pages(initial_answers: list[InitialModelAnswer]) -> JudgeSource
     THE CAP (ADR-0152 decision 5). Every page the fetcher ATTEMPTED (read,
     refused by a website's rules, robots.txt unreadable, failed, not a web
     page) takes its slot first, in source-line order; previews for pages it
-    never attempted (``skipped_cap``: over the per-site limit or past the
-    attempt cap) then fill the slots left, in source-line order. The fetcher
+    never attempted (``skipped_cap``: over the per-site limit, past the
+    attempt cap, or reached after the time budget ran out) then fill the slots left, in source-line order. The fetcher
     attempts at most 8 pages, so a read page, or a page a website's rules
     refused, is never displaced by a preview.
 

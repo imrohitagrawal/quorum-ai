@@ -47,7 +47,10 @@ per character instead of `CHARS_PER_TOKEN` (4). With `gpt-4.1-mini` at $0.40 per
 input tokens, the maximum shown before a panel run rises by $0.0098 (24,624 more tokens: the
 8 page items, their framing and the 24 "same page as" lines) when page reading is in effect,
 and not at all when it is off. One token per character covers the rate estimated
-from the Japanese run above (about 1.07 characters per token, the session's split of a mixed prompt); it is not a
+from the Japanese run above (about 1.07 characters per token: run 2's prompt had 6,276 Japanese characters of 18,029;
+the other 11,753 at run 1's 4.58 characters per token come to about 2,566 tokens, leaving about
+5,850 of the 8,416 for the Japanese text; the session's split, not a measurement of Japanese
+alone); it is not a
 proven ceiling, since rare characters and emoji can take more than one token each. The query and
 the source titles are still priced at 4 characters per token, as before this change; text in
 those scripts can take more there too (a known limit, not changed here).
@@ -75,14 +78,15 @@ read, the short preview the search engine returned.
 ### 4. The sentences
 
 Let R = M − N − P − Q (pages checked on title and address only). The lead sentence is
-unchanged. When Q is missing (a run served before this change), ADR-0150's sentences apply
-unchanged. Otherwise the note is built from parts, each true on its own:
+unchanged. When Q is missing (a run served before this change), ADR-0150's sentences apply,
+except that decision 7 below makes its approved sentence plural for P ≥ 2. Otherwise the note is built from parts, each true on its own:
 
 | Part | When | Text |
 |---|---|---|
 | Lead | N > 0 | "Checked against N of M cited pages." ("cited page" when M is 1) |
 | Lead | N = 0 | "No cited page could be read." |
-| Rules | P > 0 | ADR-0150's blocked sentence for the case, exactly as there: the approved "For the other P, …" when P = M − N (so Q = R = 0); the approved all-blocked sentence (and its singular) when N = 0 and P = M; otherwise "For P of the other M−N, …" (N > 0) or "For P of the M, …" (N = 0), singular or plural as ADR-0150 says, ending at "…the short preview(s) the search engine showed." with no tail about the rest |
+| Rules | P > 0 | ADR-0150's blocked sentence for the case, exactly as there: the approved "For the other P, …" when P = M − N (so Q = R = 0), in the plural for P ≥ 2
+(decision 7); the approved all-blocked sentence (and its singular) when N = 0 and P = M; otherwise "For P of the other M−N, …" (N > 0) or "For P of the M, …" (N = 0), singular or plural as ADR-0150 says, ending at "…the short preview(s) the search engine showed." with no tail about the rest |
 | Previews | Q = 1, P > 0 | "For 1 other cited page that could not be read, the check used the short preview the search engine showed." |
 | Previews | Q ≥ 2, P > 0 | "For Q other cited pages that could not be read, the check used the short previews the search engine showed." |
 | Previews | Q = 1, P = 0 | "For 1 cited page that could not be read, the check used the short preview the search engine showed." |
