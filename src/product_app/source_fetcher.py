@@ -514,10 +514,9 @@ def read_pdf_text(body: bytes, *, deadline_seconds: float) -> tuple[str, Outcome
     output, read here in bounded pieces (never past ``MAX_REPLY_BYTES`` + 1
     bytes). The child sets its own limits (``pdf_text.set_limits``). The
     whole group is killed with ``SIGKILL`` once the child has exited after
-    its reply (before the child is collected, on Linux; on macOS, where no
-    unreaped wait is used because only Linux runs in production and in CI,
-    the child is collected and the group is not killed: see
-    :func:`_end_group`), at the smaller of ``PDF_CHILD_WALL_SECONDS`` and
+    its reply (before the child is collected, on Linux; wherever
+    ``os.pidfd_open`` is missing or fails, macOS included, the child is
+    collected and the group is not killed: see :func:`_end_group`), at the smaller of ``PDF_CHILD_WALL_SECONDS`` and
     ``deadline_seconds``, or once the reply is over the ceiling, so a
     grandchild holding the pipe cannot hold the call. The one-child slot is
     freed on every path."""

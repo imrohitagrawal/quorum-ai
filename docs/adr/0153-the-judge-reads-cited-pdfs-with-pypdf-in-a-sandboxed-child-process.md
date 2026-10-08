@@ -50,8 +50,9 @@ in a new session, so no parser runs in the app's process:
 - the parent stops waiting at the smaller of 3 s and the fetch budget left, and kills the
   child's whole process group (so a process the child started is removed too) before it
   collects the child, while the child still holds the group's id. On Linux (production and CI)
-  the parent waits for a normal exit without collecting the child (`os.pidfd_open`); elsewhere
-  it collects a child that exited normally and sends no group kill;
+  the parent waits for a normal exit without collecting the child (`os.pidfd_open`); wherever
+  that call is missing or fails (macOS, an old Linux kernel, too many open files) it collects
+  a child that exited normally and sends no group kill;
 - at most one PDF child runs per app process at a time; a PDF that finds one running is
   `unusable`;
 - lone surrogate characters (which pypdf can produce from a broken font map) are removed from
@@ -119,6 +120,8 @@ reaches the judge (ADR-0152). Nothing raises into the run.
   priority. Whether that priority leaves an ordinary PDF too little CPU to finish inside 3 s
   while the app is busy is unmeasured; a Linux-only test (a busy process on the same CPU) runs on
   CI, and page reading is not switched on before it passes.
-- The image compiles bytecode when it is built (`--compile-bytecode`), so the child does not
-  import pypdf from source inside its CPU limit (0.17–0.19 s of CPU without bytecode against
-  0.04–0.05 s with it, measured on a Mac by the round-2 review).
+- The image compiles the app's packages to bytecode when it is built (`--compile-bytecode`).
+  The `python:slim` base image keeps no standard-library bytecode (read from its Dockerfile,
+  not run), so the child still compiles those modules on every PDF: measured on a Mac in that
+  state, importing pypdf took about 0.18 s of CPU with the packages compiled and about 0.28 s
+  without. Whether the copied `.pyc` files are used in the image is unchecked.
