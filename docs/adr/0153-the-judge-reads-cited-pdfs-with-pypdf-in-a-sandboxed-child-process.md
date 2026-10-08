@@ -44,8 +44,8 @@ in a new session, so no parser runs in the app's process:
   (a real reply is at most about 600 KB: 50,000 characters at up to 12 escaped bytes each);
 - the child is started with an empty environment (`env={}`);
 - operating-system limits are set in the child before parsing: CPU time 2 s soft, 3 s hard
-  (`RLIMIT_CPU`), address space 256 MiB (`RLIMIT_AS`), no core files, the lowest CPU priority
-  (niceness 19); on Linux the child asks the kernel to kill it first under memory pressure
+  (`RLIMIT_CPU`), address space 256 MiB (`RLIMIT_AS`), no core files, a lower CPU priority
+  (niceness 5; CI measured 19 too low, below); on Linux the child asks the kernel to kill it first under memory pressure
   (`oom_score_adj` 1000);
 - the parent stops waiting at the smaller of 3 s and the fetch budget left, and kills the
   child's whole process group (so a process the child started is removed too) before it
@@ -116,10 +116,11 @@ reaches the judge (ADR-0152). Nothing raises into the run.
 - pypdf issues about four denial-of-service advisories a month. No workflow checks dependencies
   against advisories (`make security-scan` looks only for secrets), so upgrading it is a manual,
   routine step.
-- Each hostile PDF can still take up to 2 s of the machine's one shared CPU, at the lowest
-  priority. Whether that priority leaves an ordinary PDF too little CPU to finish inside 3 s
-  while the app is busy is unmeasured; a Linux-only test (a busy process on the same CPU) runs on
-  CI, and page reading is not switched on before it passes.
+- Each hostile PDF can still take up to 2 s of the machine's one shared CPU, at a lower
+  priority. At niceness 19, CI measured an ordinary PDF timing out beside one busy process on
+  the same CPU (3.04, 3.17 and 3.22 s on three runners, PR #550). Niceness 5 is a calculation
+  from Linux's scheduler weights (about a quarter of a CPU against one busy process); the same
+  Linux-only test must pass on CI before page reading is switched on.
 - The image compiles the app's packages to bytecode when it is built (`--compile-bytecode`).
   The `python:slim` base image keeps no standard-library bytecode (read from its Dockerfile,
   not run), so the child still compiles those modules on every PDF: measured on a Mac in that

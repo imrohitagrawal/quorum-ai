@@ -16,8 +16,8 @@ HOW IT RUNS
 WHAT THE CHILD IS ALLOWED (ADR-0153 decision 3)
     CPU time 2 s soft, 3 s hard (``RLIMIT_CPU``; at the soft limit the
     kernel sends ``SIGXCPU``), address space 256 MiB (``RLIMIT_AS``; macOS
-    cannot set it, so that failure is ignored there), no core files, the
-    lowest CPU priority (niceness 19), and on Linux ``oom_score_adj`` 1000 so
+    cannot set it, so that failure is ignored there), no core files, a
+    lower CPU priority (niceness 5; it still uses the CPU), and on Linux ``oom_score_adj`` 1000 so
     the kernel kills the child first under memory pressure. The parent reads
     at most ``MAX_REPLY_BYTES`` + 1 bytes of its reply, and kills its whole
     process group with ``SIGKILL`` at the smaller of 3 s and the fetch budget
@@ -62,9 +62,13 @@ MAX_CHARS = 50_000
 CPU_SECONDS = 2
 ADDRESS_SPACE_BYTES = 256 * 2**20
 OOM_SCORE_ADJ = "1000"
-#: The child's CPU priority: the lowest. A PDF still uses the CPU, but it
-#: competes with the app's requests only at the lowest priority.
-NICENESS = 19
+#: The child's CPU priority: niceness 5, lower than the app's 0. A PDF still
+#: uses the CPU, only at a lower priority. 19 was measured too low on CI: a
+#: normal PDF timed out beside one busy niceness-0 process on the same CPU.
+#: 5 is a CALCULATION from Linux CFS weights (about a quarter of a CPU against
+#: one busy niceness-0 process), to be confirmed on CI by
+#: ``test_linux_r2_3_a_pdf_is_read_beside_a_busy_process_on_the_same_cpu``.
+NICENESS = 5
 #: The most bytes of reply the parent reads: 50,000 characters at most 12
 #: escaped bytes each is about 600 KB, so 1 MiB holds any real reply.
 MAX_REPLY_BYTES = 1_048_576
@@ -146,7 +150,7 @@ def read_reply(out: bytes) -> str:
 
 def set_limits(oom_score_adj_path: str = "/proc/self/oom_score_adj") -> None:
     """The child's own limits, set before anything else it does: CPU 2 s soft
-    and 3 s hard, no core files, address space 256 MiB, niceness 19 and
+    and 3 s hard, no core files, address space 256 MiB, niceness 5 and
     ``oom_score_adj`` 1000. A limit the platform cannot set (``RLIMIT_AS`` on
     macOS; ``oom_score_adj`` off Linux) is skipped. Skipping it leaves TIME
     bounded (the CPU limit and the parent's wall-clock kill) but not memory:
