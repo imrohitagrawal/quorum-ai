@@ -19,6 +19,7 @@ red.
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import os
 import selectors
@@ -83,20 +84,12 @@ def _slot_is_free() -> bool:
 # ---------------------------------------------------------------------------
 
 
-def test_r2_the_group_is_killed_before_the_child_is_reaped_on_a_normal_exit(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A REAL child reads a valid PDF and exits on its own. At the moment of
-    the first ``os.killpg`` on its group, the child must not yet be reaped:
-    ``Popen.returncode`` still None and the pid still present (a zombie
-    holds it, so the group id cannot have been reused). RED IF: the first
-    group kill comes after the reap (on 159286f: ``child.wait`` then
-    ``killpg``), no group kill is sent at all, or the child is left
-    unreaped afterwards. Partners: the outcome is still ``fetched`` with the
-    text intact and the exit status 0 (the kill after the exit changed
-    nothing)."""
-    spy = pdfs.ChildLaunches().install(monkeypatch)
-    at_kill: list[tuple[bool, bool]] = []  # (returncode still None, pid present)
+def _record_group_kills(
+    monkeypatch: pytest.MonkeyPatch, spy: pdfs.ChildLaunches
+) -> list[tuple[bool, bool]]:
+    """Spy on ``os.killpg``: for each kill of a launched child's group,
+    record (``Popen.returncode`` still None, the pid still present)."""
+    at_kill: list[tuple[bool, bool]] = []
     real_killpg = os.killpg
 
     def recording_killpg(pgid: int, sig: int) -> None:
@@ -106,14 +99,181 @@ def test_r2_the_group_is_killed_before_the_child_is_reaped_on_a_normal_exit(
         real_killpg(pgid, sig)
 
     monkeypatch.setattr(os, "killpg", recording_killpg)
+    return at_kill
+
+
+def test_r2_the_group_is_killed_before_the_child_is_reaped_on_a_normal_exit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A REAL child reads a valid PDF and exits on its own. The contract
+    depends on whether the platform can wait for an exit WITHOUT reaping;
+    production (Linux 5.3+) has ``os.pidfd_open`` and can, so both arms run
+    and neither is skipped.
+
+    Where ``os.pidfd_open`` exists: at the first ``os.killpg`` on the group,
+    the child is not yet reaped (``Popen.returncode`` None, the pid still
+    present: its zombie holds the group id). RED IF: the first group kill
+    comes after the reap, or no group kill is sent.
+
+    Elsewhere (macOS): the child is reaped and NO group kill is sent, since
+    its id may already be reused. RED IF: any group kill is sent (on
+    07605b6 the macOS ``kqueue`` wait still sends one).
+
+    Both arms, partners: the outcome is ``fetched`` with the text intact,
+    the exit status is 0, and the child is gone afterwards."""
+    spy = pdfs.ChildLaunches().install(monkeypatch)
+    at_kill = _record_group_kills(monkeypatch, spy)
     text, outcome = source_fetcher.read_pdf_text(pdfs.valid_pdf(), deadline_seconds=5.0)
     assert outcome == "fetched", outcome
     assert "PDFSENTINEL" in text
     (launch,) = spy.launches
-    assert at_kill, "the child's group was never killed"
-    assert at_kill[0] == (True, True), at_kill
+    if hasattr(os, "pidfd_open"):
+        assert at_kill, "the child's group was never killed"
+        assert at_kill[0] == (True, True), at_kill
+    else:
+        assert at_kill == [], at_kill
     assert launch.process.returncode == 0
     assert _gone(launch.pid)
+
+
+def _no_unreaped_wait(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Force the fallback on any platform: no wait without reaping."""
+    monkeypatch.setattr(source_fetcher, "_wait_for_exit_unreaped", lambda pid, timeout: None)
+
+
+def test_the_fallback_reaps_a_normal_child_and_sends_no_group_kill(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The fallback (``_wait_for_exit_unreaped`` returns None), on any
+    platform. RED IF: a group kill is sent after the child was reaped (its
+    group id may be reused), the child is left unreaped, or the outcome is
+    not ``fetched`` with its text."""
+    _no_unreaped_wait(monkeypatch)
+    spy = pdfs.ChildLaunches().install(monkeypatch)
+    at_kill = _record_group_kills(monkeypatch, spy)
+    text, outcome = source_fetcher.read_pdf_text(pdfs.valid_pdf(), deadline_seconds=5.0)
+    assert outcome == "fetched", outcome
+    assert "PDFSENTINEL" in text
+    (launch,) = spy.launches
+    assert at_kill == [], at_kill
+    assert launch.process.returncode == 0
+    assert _gone(launch.pid)
+
+
+def test_the_fallback_kills_a_child_that_never_exits_at_the_wall_kill(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The fallback's ``TimeoutExpired`` path: the child ends its reply but
+    keeps running, so ``child.wait`` times out. The child is then killed by
+    the GROUP kill (the only kill on that path), sent while it is still
+    unreaped, and collected afterwards. RED IF: the outcome is not
+    ``("", "timeout")``, the call does not end at the 3 s wall kill (between
+    2.9 and 4.0 s with 10 s of budget), no group kill is sent while the
+    child is unreaped, the child is left running, or the slot is left
+    taken."""
+    _no_unreaped_wait(monkeypatch)
+    spy = pdfs.ChildLaunches(
+        program=pdfs.closes_stdout_and_keeps_running(pdfs.EVIDENCE * 3)
+    ).install(monkeypatch)
+    at_kill = _record_group_kills(monkeypatch, spy)
+    started = time.monotonic()
+    result = source_fetcher.read_pdf_text(pdfs.valid_pdf(), deadline_seconds=10.0)
+    elapsed = time.monotonic() - started
+    assert result == ("", "timeout")
+    assert 2.9 <= elapsed < 4.0, elapsed
+    (launch,) = spy.launches
+    assert at_kill and at_kill[0] == (True, True), at_kill
+    assert launch.process.returncode is not None
+    assert _gone(launch.pid)
+    monkeypatch.undo()
+    assert _slot_is_free()
+
+
+# ---------------------------------------------------------------------------
+# _wait_for_exit_unreaped itself
+# ---------------------------------------------------------------------------
+
+
+def _python_child(code: str) -> subprocess.Popen[bytes]:
+    return subprocess.Popen([sys.executable, "-c", code], env=env_without_coverage())
+
+
+@pytest.mark.skipif(not hasattr(os, "pidfd_open"), reason="the pidfd arm exists on Linux only")
+def test_linux_an_exited_child_is_seen_without_being_reaped() -> None:
+    """RED IF: an exited child is not reported True, or the wait REAPS it
+    (``waitpid`` then still finds it: a reaped child would raise
+    ``ChildProcessError``)."""
+    child = _python_child("pass")
+    try:
+        time.sleep(0.5)  # it has exited by now; nothing has reaped it
+        assert source_fetcher._wait_for_exit_unreaped(child.pid, 2.0) is True
+        assert _exists(child.pid), "the zombie is gone: the wait reaped it"
+        pid, status = os.waitpid(child.pid, os.WNOHANG)
+        assert pid == child.pid and os.waitstatus_to_exitcode(status) == 0
+        child.returncode = 0
+    finally:
+        with contextlib.suppress(OSError):
+            child.kill()
+        with contextlib.suppress(ChildProcessError):
+            child.wait(timeout=5)
+
+
+@pytest.mark.skipif(not hasattr(os, "pidfd_open"), reason="the pidfd arm exists on Linux only")
+def test_linux_a_running_child_times_out_false() -> None:
+    """RED IF: a child still running after a 0.2 s wait is not reported
+    False, or the wait does not last about that long (0.15-1.0 s)."""
+    child = _python_child("import time\ntime.sleep(10)\n")
+    try:
+        started = time.monotonic()
+        result = source_fetcher._wait_for_exit_unreaped(child.pid, 0.2)
+        elapsed = time.monotonic() - started
+        assert result is False
+        assert 0.15 <= elapsed < 1.0, elapsed
+    finally:
+        child.kill()
+        child.wait(timeout=5)
+
+
+@pytest.mark.skipif(not hasattr(os, "pidfd_open"), reason="the pidfd arm exists on Linux only")
+def test_linux_a_failing_pidfd_open_falls_back_to_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An old kernel raises from ``pidfd_open``. RED IF: that raises into the
+    caller, or returns anything but None (the caller must then reap without
+    a group kill)."""
+
+    def no_pidfd(pid: int, flags: int = 0) -> int:
+        raise OSError(38, "Function not implemented")
+
+    monkeypatch.setattr(os, "pidfd_open", no_pidfd)
+    child = _python_child("pass")
+    try:
+        assert source_fetcher._wait_for_exit_unreaped(child.pid, 1.0) is None
+    finally:
+        child.wait(timeout=5)
+
+
+@pytest.mark.skipif(sys.platform == "linux", reason="Linux has the pidfd arm (tested above)")
+def test_off_linux_the_wait_returns_none_at_once() -> None:
+    """Off Linux there is no wait without reaping (the macOS ``kqueue``
+    branch was removed so every changed line can be covered on CI's Linux
+    runners). RED IF: for an exited child or a running one the function
+    returns anything but None, or does not return at once (under 0.1 s).
+    On 07605b6 the ``kqueue`` branch returns True and False."""
+    done = _python_child("pass")
+    running = _python_child("import time\ntime.sleep(10)\n")
+    try:
+        time.sleep(0.5)
+        started = time.monotonic()
+        results = (
+            source_fetcher._wait_for_exit_unreaped(done.pid, 1.0),
+            source_fetcher._wait_for_exit_unreaped(running.pid, 1.0),
+        )
+        elapsed = time.monotonic() - started
+        assert results == (None, None), results
+        assert elapsed < 0.1, elapsed
+    finally:
+        running.kill()
+        running.wait(timeout=5)
+        done.wait(timeout=5)
 
 
 def test_r2_a_child_ended_by_sigxcpu_is_still_a_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
