@@ -2090,9 +2090,10 @@ def judge_source_pages(initial_answers: list[InitialModelAnswer]) -> JudgeSource
     refused by a website's rules, robots.txt unreadable, failed, not a web
     page) takes its slot first, in source-line order; previews for pages it
     never attempted (``skipped_cap``: over the per-site limit, past the
-    attempt cap, or reached after the time budget ran out) then fill the slots left, in source-line order. The fetcher
-    attempts at most 8 pages, so a read page, or a page a website's rules
-    refused, is never displaced by a preview.
+    attempt cap, or reached after the time budget ran out) then fill the
+    slots left, in source-line order. The fetcher attempts at most 8 pages,
+    so a read page, or a page a website's rules refused, is never displaced
+    by a preview.
 
     A later line with the same address gets "" and points back to the first
     line when that line carries text. A fetched page is read whole
