@@ -102,10 +102,13 @@ approved all-blocked sentence begins "No cited page could be read:" itself, so i
 N = 0 lead rather than following it. A null Q counts as missing. Impossible counts (not whole numbers, negative,
 N + P + Q > M) show the sentence used when page reading is off, as before.
 
-### 5. The 8-item cap takes read pages first (review round 1)
+### 5. The 8-item cap takes attempted pages first (review round 1)
 
-Every fetched and read page takes a slot before any preview does; previews then fill the slots
-left, in source-line order. Review round 1 found the first version filling the cap in line
+Every page the fetcher attempted (read, refused by a website's rules, robots.txt unreadable,
+failed, not a web page) takes its slot first, in source-line order; previews for pages it never
+attempted (over the per-site limit) then fill the slots left, in source-line order. The fetcher
+attempts at most 8 pages, so every attempted page fits; a read page, or a page a website's rules
+refused, can never be displaced. Review round 1 found the first version filling the cap in line
 order: a page over the per-site limit is not an attempt, so its preview could take a slot ahead
 of a page fetched further down, which was then dropped, and the note could say "No cited page
 could be read" about a page that had been read. At most 8 pages are attempted, so read pages
