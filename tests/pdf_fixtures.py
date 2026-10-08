@@ -607,7 +607,15 @@ class ChildLaunches:
                         args = [argv[0], "-c", PROBE if spy.probe else spy.program]
                     if spy.hook_dir is not None:
                         args = [a for a in argv if a not in _HOOK_BLOCKING_FLAGS]
-                        base = dict(kwargs.get("env") or os.environ)
+                        # The code's OWN environment (``env={}`` is empty, not
+                        # absent). ``kwargs.get("env") or os.environ`` handed
+                        # the child the whole test environment, pytest-cov's
+                        # COV_CORE_* included, so under ``--cov`` the hook
+                        # child ran under coverage and spent its 3 s starting
+                        # up (CI run 2 on PR #550; reproduced on macOS with
+                        # ``--cov``, gone with ``--no-cov``).
+                        code_env = kwargs.get("env")
+                        base = dict(os.environ if code_env is None else code_env)
                         path = base.get("PYTHONPATH")
                         base["PYTHONPATH"] = (
                             spy.hook_dir if not path else spy.hook_dir + os.pathsep + path
@@ -630,12 +638,17 @@ class ChildLaunches:
         return self
 
 
-#: The import hook for the memory-limit test: allocates and TOUCHES
-#: ``W54_HOOK_ALLOC_MIB`` MiB when a ``PdfReader`` is made (so after any limit
-#: the child sets itself, and before parsing), and marks the extracted text so
-#: a test can prove the hook ran in the child.
+#: The import hook for the memory-limit test. It never imports pypdf itself:
+#: a ``sys.meta_path`` finder waits for the CHILD to import pypdf (which
+#: ``pdf_text`` does after ``set_limits``), lets the real module load, and
+#: only then wraps ``PdfReader.__init__`` (allocate and TOUCH
+#: ``W54_HOOK_ALLOC_MIB`` MiB, before parsing) and ``PageObject.extract_text``
+#: (append a marker, so a test can prove the hook ran in the child). With
+#: ``W54_HOOK_TRACE`` set, each step is appended to that file with the wall
+#: clock, the CPU seconds used, the limits in force and the niceness.
 SITECUSTOMIZE = """\
 import os
+import sys
 import time
 
 _MIB = int(os.environ.get("W54_HOOK_ALLOC_MIB", "0"))
@@ -643,8 +656,6 @@ _TRACE = os.environ.get("W54_HOOK_TRACE", "")
 
 
 def _trace(step):
-    # One line per step: wall clock, CPU seconds used so far, the limits in
-    # force and the niceness, so a CI failure says where the time went.
     if not _TRACE:
         return
     try:
@@ -662,37 +673,59 @@ def _trace(step):
         handle.write(line)
 
 
-_trace("start")
-try:
-    import pypdf
-except Exception as exc:  # noqa: BLE001
-    _trace("import pypdf FAILED " + repr(exc))
-    pypdf = None
-_trace("after import pypdf")
-if pypdf is not None:
-    _real_init = pypdf.PdfReader.__init__
-    _real_extract = pypdf.PageObject.extract_text
-    _held = []
+def _patch(pypdf):
+    real_init = pypdf.PdfReader.__init__
+    real_extract = pypdf.PageObject.extract_text
+    held = []
 
     def _init(self, *args, **kwargs):
         _trace("reader init: before allocation of %d MiB" % _MIB)
         if _MIB:
             try:
-                _held.append(b"m" * (_MIB << 20))
+                held.append(b"m" * (_MIB << 20))
             except BaseException as exc:
                 _trace("allocation FAILED " + repr(exc))
                 raise
         _trace("after allocation")
-        _real_init(self, *args, **kwargs)
+        real_init(self, *args, **kwargs)
         _trace("after reader init")
 
     def _extract(self, *args, **kwargs):
-        text = (_real_extract(self, *args, **kwargs) or "") + " HOOKRANMARKER"
+        text = (real_extract(self, *args, **kwargs) or "") + " HOOKRANMARKER"
         _trace("after extract_text of one page")
         return text
 
     pypdf.PdfReader.__init__ = _init
     pypdf.PageObject.extract_text = _extract
+
+
+class _PatchPypdfWhenImported:
+    # A meta-path finder: on the child's own ``import pypdf``, find the real
+    # module, and patch it right after it has executed.
+    def find_spec(self, name, path=None, target=None):
+        if name != "pypdf":
+            return None
+        sys.meta_path.remove(self)
+        import importlib.util
+
+        spec = importlib.util.find_spec(name)
+        if spec is None or spec.loader is None:
+            return spec
+        real_exec = spec.loader.exec_module
+
+        def exec_module(module):
+            real_exec(module)
+            _trace("pypdf imported by the child: before the lazy patch")
+            _patch(module)
+            _trace("lazy patch applied")
+
+        spec.loader.exec_module = exec_module
+        return spec
+
+
+_trace("start")
+sys.meta_path.insert(0, _PatchPypdfWhenImported())
+_trace("lazy patch installed (pypdf not imported)")
 """
 
 

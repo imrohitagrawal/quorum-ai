@@ -250,7 +250,11 @@ def test_linux_the_256_mib_address_space_limit_stops_a_memory_bomb(
     """Failure mode 3, the ADR's required CI proof. An import hook in the
     child (``tests.pdf_fixtures.SITECUSTOMIZE``) allocates and touches 512
     MiB when the reader is made, after any limit the child sets itself and
-    before parsing; every other launch argument is the code's own.
+    before parsing; every other launch argument, the empty environment
+    included, is the code's own. The hook patches pypdf only when the child
+    itself imports it (after ``set_limits``); it never imports pypdf at
+    start-up. When a case fails, the message carries the hook's timestamped
+    trace, the child's exit status, stderr and last ``/proc`` sample.
     RED IF: the child has no 256 MiB address-space limit (it then reads the
     PDF and returns its text), or the parent raises. Partners, in the same
     harness: with a 32 MiB allocation the same PDF is ``fetched`` and the
