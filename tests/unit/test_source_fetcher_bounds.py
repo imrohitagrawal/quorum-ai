@@ -156,17 +156,21 @@ def test_visible_text_is_extracted_and_scripts_are_not() -> None:
 
 def test_every_url_gets_a_row_and_the_caps_skip_the_rest() -> None:
     """Cardinality (rule 6b): one row per DISTINCT url handed in, in order;
-    past ``max_pages`` and past two pages on one host the rest are
-    ``skipped_cap`` and never dialled. RED IF: a cap is ignored (the server
-    counts more requests) or a url is dropped from the result."""
+    past ``max_pages`` and past four pages on one host the rest are
+    ``skipped_cap`` and never dialled. The per-site limit was 2 until ADR-0152
+    decision 6 (CHG-033 (a)) raised it to 4; this test then handed in four
+    pages and expected two fetched. RED IF: a cap is ignored (the server
+    counts more requests), the per-site limit is not exactly 4, or a url is
+    dropped from the result."""
     server = respond("200 OK", {"Content-Type": "text/plain"}, _TEXT)
     with serve(server) as (port, received):
         base = f"http://127.0.0.1:{port}"
-        urls = [f"{base}/1", f"{base}/1", f"{base}/2", f"{base}/3", f"{base}/4"]
+        urls = [f"{base}/1", f"{base}/1"] + [f"{base}/{i}" for i in range(2, 7)]
         rows = _fetch(urls, max_pages=8)
-        assert [row.url for row in rows] == [f"{base}/1", f"{base}/2", f"{base}/3", f"{base}/4"]
-        assert [row.outcome for row in rows] == ["fetched", "fetched", "skipped_cap", "skipped_cap"]
-        assert len(received) == source_fetcher.MAX_PAGES_PER_HOST == 2
+        assert [row.url for row in rows] == [f"{base}/{i}" for i in range(1, 7)]
+        assert [row.outcome for row in rows] == ["fetched"] * 4 + ["skipped_cap"] * 2
+        # ADR-0152 decision 6, CHG-033 (a): 4 per site (was 2).
+        assert len(received) == source_fetcher.MAX_PAGES_PER_HOST == 4
         received.clear()
         rows = _fetch([f"{base}/a", f"http://localhost:{port}/b"], max_pages=1)
         assert [row.outcome for row in rows] == ["fetched", "skipped_cap"]
@@ -358,7 +362,9 @@ def test_a_trailing_dot_does_not_open_a_second_per_host_bucket(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """``a.example`` and ``a.example.`` are the same host. RED IF: the
-    per-host key keeps the trailing dot, so one server is hit past the cap."""
+    per-host key keeps the trailing dot, so one server is hit past the cap.
+    Five spellings of one host since the per-site limit became 4 (ADR-0152
+    decision 6, CHG-033 (a); three spellings, the third skipped, before)."""
     monkeypatch.setattr(source_fetcher, "_resolve", lambda host, port: ["127.0.0.1"])
     with serve(respond("200 OK", {"Content-Type": "text/plain"}, _TEXT)) as (port, received):
         rows = _fetch(
@@ -366,10 +372,12 @@ def test_a_trailing_dot_does_not_open_a_second_per_host_bucket(
                 f"http://a.example:{port}/1",
                 f"http://a.example.:{port}/2",
                 f"http://A.EXAMPLE..:{port}/3",
+                f"http://a.example.:{port}/4",
+                f"http://A.example:{port}/5",
             ]
         )
-    assert [row.outcome for row in rows][2] == "skipped_cap"
-    assert len(received) == source_fetcher.MAX_PAGES_PER_HOST
+    assert [row.outcome for row in rows] == ["fetched"] * 4 + ["skipped_cap"]
+    assert len(received) == source_fetcher.MAX_PAGES_PER_HOST == 4
 
 
 @pytest.fixture

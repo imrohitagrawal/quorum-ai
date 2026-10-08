@@ -7,7 +7,7 @@ previews for pages a real fetch could not read.
   ``_with_source_pages`` puts all four on ``RunEvaluation``.
 * ``openapi.yaml`` serves the field as a nullable integer, not required.
 * On real loopback sites, a page that answers 500, a PDF, a page too short to
-  use and a page over the per-site limit each send their search preview to
+  use and a page over the per-site limit (4, ADR-0152 decision 6) each send their search preview to
   the judge and are counted in Q.
 
 THE HARNESS is W29's (``tests/integration/test_w29_judge_reads_pages.py``):
@@ -98,9 +98,7 @@ def test_on_the_standard_run_serves_q_and_sends_the_pdfs_preview(
 def _failing_routes() -> dict[tuple[str, str], Any]:
     return {
         ("ok.example", "/robots.txt"): _NOT_FOUND,
-        ("ok.example", "/a"): _html(f"PAGEOKA {_FILLER}"),
-        ("ok.example", "/b"): _html(f"PAGEOKB {_FILLER}"),
-        ("ok.example", "/c"): _html(f"PAGEOKC {_FILLER}"),
+        **{("ok.example", f"/{c}"): _html(f"PAGEOK{c.upper()} {_FILLER}") for c in "abcde"},
         ("err.example", "/robots.txt"): _NOT_FOUND,
         ("err.example", "/page"): (
             "500 Internal Server Error",
@@ -119,20 +117,23 @@ def test_on_real_failures_send_their_previews_and_count_in_q(
 ) -> None:
     """Decision 3 through the real fetcher: a 500 (``http_error``), a PDF
     (``refused_content_type``), a page under 200 characters (``unusable``) and
-    a third page on one host (``skipped_cap``, the per-site limit), each with
-    a preview; two pages on that host are read. (N, M, P, Q) = (2, 6, 0, 4).
+    a fifth page on one host (``skipped_cap``, the per-site limit), each with
+    a preview; four pages on that host are read. (N, M, P, Q) = (4, 8, 0, 4).
+    Until ADR-0152 decision 6 (CHG-033 (a)) raised the per-site limit from 2
+    to 4, this used three pages on the host and expected (2, 6, 0, 4).
     RED IF: any of the four previews is withheld or uncounted, N moves, or
-    the third page on the host is requested. Partner: each failure really was
+    the fifth page on the host is requested. Partner: each failure really was
     a failure on the wire (the 500, PDF and thin pages were requested once;
-    the third ok.example page never), and each preview is in the prompt."""
+    the fifth ok.example page never), and each preview is in the prompt."""
     _enable_judge(monkeypatch)
     _pages_on(monkeypatch)
     spies = _spies(monkeypatch)
     with _sites(_failing_routes()) as sites:
         sources = [
-            _source("A", sites.url("ok.example", "/a"), "EXCERPTOKA the a passage"),
-            _source("B", sites.url("ok.example", "/b"), "EXCERPTOKB the b passage"),
-            _source("C", sites.url("ok.example", "/c"), "EXCERPTOKC the third page"),
+            *[
+                _source(c, sites.url("ok.example", f"/{c}"), f"EXCERPTOK{c.upper()} the passage")
+                for c in "abcde"
+            ],
             _source("Err", sites.url("err.example"), "EXCERPTERR the server failed"),
             _source("Pdf", sites.url("pdf.example"), "EXCERPTPDF the document"),
             _source("Thin", sites.url("thin.example"), "EXCERPTTHIN the short page"),
@@ -142,13 +143,15 @@ def test_on_real_failures_send_their_previews_and_count_in_q(
         body = _get(run)
         for host in ("err.example", "pdf.example", "thin.example"):
             assert len(sites.requests_for(host, "/page")) == 1, host
-        assert sites.requests_for("ok.example", "/c") == []
-    assert _four(body["evaluation"]) == (2, 6, 0, 4)
+        for c in "abcd":
+            assert len(sites.requests_for("ok.example", f"/{c}")) == 1, c
+        assert sites.requests_for("ok.example", "/e") == []
+    assert _four(body["evaluation"]) == (4, 8, 0, 4)
     user = spies.user_prompt
-    for sentinel in ("EXCERPTOKC", "EXCERPTERR", "EXCERPTPDF", "EXCERPTTHIN"):
+    for sentinel in ("EXCERPTOKE", "EXCERPTERR", "EXCERPTPDF", "EXCERPTTHIN"):
         assert sentinel in user, sentinel
-    # The two pages read send their text, not their preview.
-    assert "PAGEOKA" in user and "EXCERPTOKA" not in user
+    # The four pages read send their text, not their preview.
+    assert "PAGEOKD" in user and "EXCERPTOKD" not in user
 
 
 def test_on_every_page_read_serves_q_as_zero_not_null(monkeypatch: pytest.MonkeyPatch) -> None:

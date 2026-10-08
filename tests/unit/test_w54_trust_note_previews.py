@@ -70,7 +70,9 @@ def _ev(n: Any, p: Any, q: Any, m: Any) -> dict[str, Any]:
 def _rules(n: int, p: int, m: int) -> str:
     """ADR-0150's blocked sentence for the case, ending at "...showed."."""
     if n > 0 and p == m - n:
-        return f"For the other {'one' if p == 1 else p}, {_PREVIEW}."
+        # The approved sentence, plural for P >= 2 (CHG-033 (d), ADR-0152
+        # decision 7); it was singular for every P until review round 1.
+        return f"For the other one, {_PREVIEW}." if p == 1 else f"For the other {p}, {_PREVIEWS}."
     blocked = _PREVIEW if p == 1 else _PREVIEWS
     if n > 0:
         return f"For {p} of the other {m - n}, {blocked}."
@@ -353,8 +355,9 @@ def test_the_sweep_matches_the_table_and_never_says_something_false(
     against a rules part); it claims titles and addresses (a rest part) when
     R = 0, or names a rest at all when N > 0; it omits the preview when Q > 0;
     it states a number that is not N, P, Q, M, M - N or R; or its parts are not
-    joined by single spaces. Partner: the sweep really covers the approved
-    sentences and every part's shape."""
+    joined by single spaces; or a blocked-page part is singular for P >= 2
+    or plural for P = 1 (CHG-033 (d)). Partner: the sweep really covers the
+    approved sentences and every part's shape."""
     assert len(_SWEEP) == 1000
     texts = _run(harness, [(_ev(*case), True) for case in _SWEEP])
     shapes: set[str] = set()
@@ -367,6 +370,14 @@ def test_the_sweep_matches_the_table_and_never_says_something_false(
         if p == 0:
             assert "automated tools" not in after, case
             assert "other" not in after, case
+        # CHG-033 (d), ADR-0152 decision 7: one blocked page is singular, two
+        # or more plural, in every sentence including the approved one.
+        if p == 1:
+            assert "the website asks automated tools not to read its pages" in after, case
+            assert "websites" not in after, case
+        if p >= 2:
+            assert "the websites ask automated tools not to read their pages" in after, case
+            assert "the website asks" not in after, case
         if n > 0:
             assert "No cited page could be read" not in after, case
             assert after.startswith(f"Checked against {n} of {m} cited "), case

@@ -239,9 +239,10 @@ def test_nine_failed_pages_count_eight(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_the_paid_runs_mix(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The shape the paid runs measured (ADR-0152's context): pages read, a
-    PDF, two over the per-site limit, a timeout, and a refused page and a
-    failed page without a preview. N = 2, M = 8, P = 1, Q = 4.
+    """Modelled on the paid runs (pages read, a PDF, two over the per-site
+    limit, a timeout), plus a page a website's rules refused (with a preview)
+    and a failed page without one, which the paid runs did not have.
+    N = 2, M = 8, P = 1, Q = 4.
     RED IF: N moves (decision 3 changes what is sent for UNREAD pages only),
     or any count differs. Partner: N + P + Q is exactly the number of items
     the judge was sent (each item counted once, in one count)."""

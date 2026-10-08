@@ -168,8 +168,8 @@ def test_the_page_term_at_productions_judge_price(monkeypatch: pytest.MonkeyPatc
     """Decision 1 with production's judge (``openai/gpt-4.1-mini``, $0.40 per
     million input tokens): the page block adds exactly $0.0131328 to the raw
     judge reserve (32,832 tokens), against $0.0032832 today -- a rise of
-    $0.0098496 (24,624 tokens). ADR-0152 rounds this to "about $0.0096"
-    (8 x 3,000 tokens, without the framing and pointers).
+    $0.0098496 (24,624 tokens). ADR-0152 states this as "$0.0098 (24,624
+    more tokens)".
     RED IF: the page block is priced at 4 characters per token ($0.0032832),
     or at any rate other than one token per character."""
     on = _judge_term(

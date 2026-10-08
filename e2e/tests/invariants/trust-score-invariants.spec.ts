@@ -535,7 +535,10 @@ test.describe("trust-score invariants (FR-016)", () => {
   test("W54: the ON branch names the pages a website asks tools not to read", async ({ page }) => {
     // ADR-0150 decision 2, the row N > 0, P > 0, F = 0: 3 pages read, 2
     // checked by their search preview, 5 cited. The sentence is the session's
-    // wording the owner approved (CHG-029 (b)), verbatim, in a real browser.
+    // wording the owner approved (CHG-029 (b)), in the plural the owner chose
+    // for two or more pages in CHG-033 (d) (ADR-0152 decision 7; it read "the
+    // website asks ... its pages ... the short preview" until then), verbatim,
+    // in a real browser.
     // TURNS RED IF: the page ignores `source_pages_preview` (it then shows
     // only "Checked against 3 of 5 cited pages."), or the sentence differs by
     // a character on the served page.
@@ -547,16 +550,17 @@ test.describe("trust-score invariants (FR-016)", () => {
     expect(rewrites).toEqual([1]);
     await expect(page.locator(SURFACE)).toHaveAttribute("data-state", "verified");
     await expect(page.locator(`${SURFACE} .result-trust-score-disclosure`)).toHaveText(
-      `${VERIFIED_LEAD} Checked against 3 of 5 cited pages. For the other 2, the website asks automated tools not to read its pages, so the check could only use the short preview the search engine showed.`,
+      `${VERIFIED_LEAD} Checked against 3 of 5 cited pages. For the other 2, the websites ask automated tools not to read their pages, so the check could only use the short previews the search engine showed.`,
     );
   });
 
   test("W54: the ON branch names the pages checked by their preview for another reason", async ({
     page,
   }) => {
-    // ADR-0152 decision 4, the shape the paid runs measured: 3 pages read, 4
-    // that could not be read (a PDF, two over the per-site limit, a timeout)
-    // checked by their search preview, no website refusing, 7 cited. The
+    // ADR-0152 decision 4, modelled on the paid runs: 3 pages read, 4 that
+    // could not be read (a PDF, two over the per-site limit, a timeout)
+    // checked by their search preview, assuming each had a preview, no
+    // website refusing, 7 cited. The
     // lead and the previews part, with no "other" (no rules part) and no
     // rest part (N > 0).
     // TURNS RED IF: the page ignores `source_pages_preview_other` (it then
