@@ -212,7 +212,7 @@ def test_set_limits_asks_for_the_adrs_four_limits(
     ``setrlimit`` is recorded, not applied. RED IF: the CPU limit is not 2 s
     soft, there are core files, the address space is not 268,435,456 bytes,
     or ``oom_score_adj`` is not written as 1000, or the niceness is not
-    asked for exactly once as ``(PRIO_PROCESS, 0, 19)``. Guard: this pytest
+    asked for exactly once as ``(PRIO_PROCESS, 0, 5)``. Guard: this pytest
     process's own niceness is unchanged (rule 16a: a real ``setpriority``
     here would lower the priority of every later test; it cannot be undone
     without privileges)."""
@@ -227,7 +227,7 @@ def test_set_limits_asks_for_the_adrs_four_limits(
         (resource.RLIMIT_CORE, (0, 0)),
         (resource.RLIMIT_AS, (268_435_456, 268_435_456)),
     ]
-    assert priorities == [(os.PRIO_PROCESS, 0, 19)]
+    assert priorities == [(os.PRIO_PROCESS, 0, 5)]
     assert adj.read_text(encoding="ascii") == "1000"
     assert os.getpriority(os.PRIO_PROCESS, 0) == before
 
@@ -252,7 +252,7 @@ def test_set_limits_skips_what_the_platform_cannot_set(
     priorities = _record_setpriority(monkeypatch)
     pdf_text.set_limits(str(tmp_path / "missing" / "oom_score_adj"))
     assert calls == [resource.RLIMIT_CPU, resource.RLIMIT_CORE, resource.RLIMIT_AS]
-    assert priorities == [(os.PRIO_PROCESS, 0, 19)]
+    assert priorities == [(os.PRIO_PROCESS, 0, 5)]
     assert os.getpriority(os.PRIO_PROCESS, 0) == before
 
 

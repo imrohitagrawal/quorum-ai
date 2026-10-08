@@ -22,9 +22,11 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import signal
 import subprocess
 import sys
 import threading
+import time
 import zlib
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
@@ -568,6 +570,11 @@ class ChildLaunches:
     #: Run in the child after ``fork``, before ``exec``, after any
     #: ``preexec_fn`` of the code's own (for example: pin it to one CPU).
     preexec: Callable[[], None] | None = None
+    #: When set, the child's stderr is appended to this file instead of the
+    #: code's own destination, so a failure can show a traceback (a
+    #: diagnostic only: it changes where the child's error text goes, not
+    #: what the child does).
+    stderr_path: str | None = None
     extra_env: dict[str, str] = field(default_factory=dict)
     launches: list[Launch] = field(default_factory=list)
     started: threading.Event = field(default_factory=threading.Event)
@@ -593,6 +600,9 @@ class ChildLaunches:
                         kwargs["cwd"] = spy.cwd
                     if spy.preexec is not None:
                         kwargs["preexec_fn"] = _chain(kwargs.get("preexec_fn"), spy.preexec)
+                    if spy.stderr_path is not None:
+                        stderr_sink = open(spy.stderr_path, "ab")  # noqa: SIM115
+                        kwargs["stderr"] = stderr_sink
                     if spy.probe or spy.program is not None:
                         args = [argv[0], "-c", PROBE if spy.probe else spy.program]
                     if spy.hook_dir is not None:
@@ -604,7 +614,11 @@ class ChildLaunches:
                         )
                         base.update(spy.extra_env)
                         kwargs["env"] = base
-                super().__init__(args, *rest, **kwargs)
+                try:
+                    super().__init__(args, *rest, **kwargs)
+                finally:
+                    if ours and spy.stderr_path is not None:
+                        stderr_sink.close()
                 if ours:
                     record.pid = self.pid
                     record.stdout_fd = self.stdout.fileno() if self.stdout else None
@@ -622,24 +636,60 @@ class ChildLaunches:
 #: a test can prove the hook ran in the child.
 SITECUSTOMIZE = """\
 import os
+import time
 
 _MIB = int(os.environ.get("W54_HOOK_ALLOC_MIB", "0"))
+_TRACE = os.environ.get("W54_HOOK_TRACE", "")
+
+
+def _trace(step):
+    # One line per step: wall clock, CPU seconds used so far, the limits in
+    # force and the niceness, so a CI failure says where the time went.
+    if not _TRACE:
+        return
+    try:
+        import resource
+
+        cpu = resource.getrlimit(resource.RLIMIT_CPU)
+        space = resource.getrlimit(resource.RLIMIT_AS)
+        nice = os.getpriority(os.PRIO_PROCESS, 0)
+    except Exception as exc:  # noqa: BLE001
+        cpu = space = nice = repr(exc)
+    line = "%.3f cpu=%.3f %s rlimit_cpu=%s rlimit_as=%s nice=%s\\n" % (
+        time.time(), time.process_time(), step, cpu, space, nice
+    )
+    with open(_TRACE, "a", encoding="utf-8") as handle:
+        handle.write(line)
+
+
+_trace("start")
 try:
     import pypdf
-except Exception:  # noqa: BLE001
+except Exception as exc:  # noqa: BLE001
+    _trace("import pypdf FAILED " + repr(exc))
     pypdf = None
+_trace("after import pypdf")
 if pypdf is not None:
     _real_init = pypdf.PdfReader.__init__
     _real_extract = pypdf.PageObject.extract_text
     _held = []
 
     def _init(self, *args, **kwargs):
+        _trace("reader init: before allocation of %d MiB" % _MIB)
         if _MIB:
-            _held.append(b"m" * (_MIB << 20))
+            try:
+                _held.append(b"m" * (_MIB << 20))
+            except BaseException as exc:
+                _trace("allocation FAILED " + repr(exc))
+                raise
+        _trace("after allocation")
         _real_init(self, *args, **kwargs)
+        _trace("after reader init")
 
     def _extract(self, *args, **kwargs):
-        return (_real_extract(self, *args, **kwargs) or "") + " HOOKRANMARKER"
+        text = (_real_extract(self, *args, **kwargs) or "") + " HOOKRANMARKER"
+        _trace("after extract_text of one page")
+        return text
 
     pypdf.PdfReader.__init__ = _init
     pypdf.PageObject.extract_text = _extract
@@ -681,3 +731,129 @@ def run_fresh_python(code: str, src_dir: str, **env: str) -> dict[str, Any]:
 
 
 Builder = Callable[[], bytes]
+
+
+# ---------------------------------------------------------------------------
+# Diagnostics for the Linux-only tests (CI is the only place they run)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class ChildMonitor:
+    """Samples ``/proc/<pid>/status`` and ``/proc/<pid>/stat`` of the first
+    child ``spy`` launches, every 20 ms while it exists, keeping the LAST
+    sample: VmPeak and VmRSS, the state, the niceness and the CPU seconds
+    used. The child is usually reaped by the time a test fails, so this is
+    the only way to know its memory and CPU at the end. Linux only (no
+    ``/proc`` elsewhere: the sample then stays empty)."""
+
+    spy: ChildLaunches
+    last: dict[str, str] = field(default_factory=dict)
+    _stop: threading.Event = field(default_factory=threading.Event)
+    _thread: threading.Thread | None = None
+
+    def start(self) -> ChildMonitor:
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+        return self
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=2)
+
+    def _run(self) -> None:
+        if not self.spy.started.wait(10) or not self.spy.launches:
+            return
+        pid = self.spy.launches[0].pid
+        ticks = os.sysconf("SC_CLK_TCK") if hasattr(os, "sysconf") else 100
+        while not self._stop.is_set():
+            try:
+                with open(f"/proc/{pid}/status", encoding="ascii") as handle:
+                    status = handle.read()
+                with open(f"/proc/{pid}/stat", encoding="ascii") as handle:
+                    stat = handle.read()
+            except OSError:
+                return
+            sample = {
+                line.split(":", 1)[0]: line.split(":", 1)[1].strip()
+                for line in status.splitlines()
+                if line.startswith(("VmPeak", "VmRSS", "State"))
+            }
+            fields = stat.rsplit(")", 1)[-1].split()
+            # After the command name: state is field 3; utime 14, stime 15,
+            # nice 19 (1-based, man 5 proc), so index n - 3 here.
+            sample["cpu_seconds"] = f"{(int(fields[11]) + int(fields[12])) / ticks:.2f}"
+            sample["nice"] = fields[16]
+            self.last = sample
+            time.sleep(0.02)
+
+
+def _exit_status(returncode: int | None) -> str:
+    if returncode is None:
+        return "not collected"
+    if returncode < 0:
+        try:
+            return f"{returncode} (killed by {signal.Signals(-returncode).name})"
+        except ValueError:
+            return f"{returncode} (killed by signal {-returncode})"
+    return f"{returncode} (exit code)"
+
+
+def _read_or(path: str, missing: str) -> str:
+    try:
+        with open(path, encoding="utf-8", errors="replace") as handle:
+            return handle.read()[-4000:]
+    except OSError as exc:
+        return f"{missing} ({exc.__class__.__name__})"
+
+
+def _top_processes() -> str:
+    """The 5 busiest processes: ``ps -eo pid,ni,pcpu,comm --sort=-pcpu``
+    (procps, Linux); BSD ``ps`` (macOS) takes ``-r`` instead."""
+    commands = (
+        ["ps", "-eo", "pid,ni,pcpu,comm", "--sort=-pcpu"],
+        ["ps", "-Ao", "pid,ni,pcpu,comm", "-r"],
+    )
+    for command in commands:
+        try:
+            done = subprocess.run(command, capture_output=True, text=True, timeout=5, check=False)
+        except (OSError, subprocess.SubprocessError) as exc:
+            last = repr(exc)
+            continue
+        if done.returncode == 0:
+            return "\n".join(done.stdout.splitlines()[:6])
+        last = done.stderr.strip()
+    return f"(ps failed: {last})"
+
+
+def child_diagnostics(
+    spy: ChildLaunches,
+    elapsed: float,
+    *,
+    monitor: ChildMonitor | None = None,
+    trace_path: str | None = None,
+) -> str:
+    """Everything CI can tell about one PDF child after a failure: elapsed
+    seconds, its exit status (SIGXCPU is -24, SIGKILL is -9), its stderr
+    (when ``spy.stderr_path`` is set), the hook's trace, its last
+    ``/proc`` sample, ``/proc/loadavg`` and the 5 busiest processes."""
+    launch = spy.launches[0] if spy.launches else None
+    returncode = launch.process.returncode if launch is not None and launch.process else None
+    alive = ""
+    if launch is not None and launch.pid is not None:
+        alive = _read_or(f"/proc/{launch.pid}/status", "(child gone)")
+        alive = "\n".join(line for line in alive.splitlines() if line.startswith("Vm"))
+    parts = [
+        f"elapsed={elapsed:.2f}s",
+        f"child pid={launch.pid if launch else None} exit={_exit_status(returncode)}",
+        f"child argv as the code built it={launch.args if launch else None}",
+        f"last /proc sample of the child: {monitor.last if monitor else None}",
+        f"child /proc status now: {alive or '(child gone)'}",
+        "child stderr:\n"
+        + (_read_or(spy.stderr_path, "(none)") if spy.stderr_path else "(not captured)"),
+        "hook trace:\n" + (_read_or(trace_path, "(no trace)") if trace_path else "(no hook)"),
+        "loadavg: " + _read_or("/proc/loadavg", "(no /proc/loadavg)").strip(),
+        "busiest processes:\n" + _top_processes(),
+    ]
+    return "\n".join(parts)

@@ -6,7 +6,9 @@
   counted (N, P or Q) and hides "(no page could be read)", yet is empty in
   the prompt.
 * R2-3 (break-it, a MEASUREMENT, Linux only) -- does a valid PDF still get
-  read at niceness 19 with one busy niceness-0 process on the same CPU?
+  read with one busy niceness-0 process on the same CPU? CI measured
+  ``timeout`` at 3.17 s with the child at niceness 19 (PR #550); the child
+  now runs at niceness 5.
 * Coverage of the reader's remaining paths: the outer guard, a child that
   ends its reply but does not exit, a child that never reads its input, and
   a child object without pipes.
@@ -29,6 +31,7 @@ import time
 import types
 import unicodedata
 from decimal import Decimal
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -414,7 +417,7 @@ def test_r2_1_readable_text_with_some_lone_surrogates_is_counted_and_sent(
 
 
 # ---------------------------------------------------------------------------
-# R2-3: niceness 19 against a busy neighbour on the same CPU (Linux)
+# R2-3: the child against a busy neighbour on the same CPU (Linux)
 # ---------------------------------------------------------------------------
 
 
@@ -422,16 +425,19 @@ def test_r2_1_readable_text_with_some_lone_surrogates_is_counted_and_sent(
     sys.platform != "linux", reason="os.sched_setaffinity is Linux-only; a CI measurement"
 )
 def test_linux_r2_3_a_pdf_is_read_beside_a_busy_process_on_the_same_cpu(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """A MEASUREMENT the session wants from CI. One busy loop at niceness 0
-    and the PDF child (niceness 19, set by the code) are pinned to the SAME
-    CPU: the busy loop pins itself, the child is pinned by the spy's
-    ``preexec`` seam (after fork, before exec; the code's own launch is
-    otherwise unchanged). Linux CFS gives niceness 19 about 1.4% of a CPU
-    against one niceness-0 thread, so this may be RED: that is what we want
-    to learn. RED IF: the valid PDF is not ``fetched``. Partner: the busy
-    loop was running before and after the read, so there was contention."""
+    """A MEASUREMENT from CI. One busy loop at niceness 0 and the PDF child
+    (niceness set by the code) are pinned to the SAME CPU: the busy loop
+    pins itself, the child is pinned by the spy's ``preexec`` seam (after
+    fork, before exec; the code's own launch is otherwise unchanged). At
+    niceness 19 (about 1.4% of a CPU against one niceness-0 thread under
+    CFS) CI measured ``timeout`` at 3.17 s (PR #550); at niceness 5 (weight
+    335 against 1,024, about a quarter: a calculation) it should be read.
+    RED IF: the valid PDF is not ``fetched``; the failure message carries
+    the child's exit status, stderr, last ``/proc`` sample, the load average
+    and the busiest processes. Partner: the busy loop was running before and
+    after the read, so there was contention."""
     # The affinity calls exist on Linux only; typed loosely so the type
     # check passes on macOS, where the skip mark keeps this test from running.
     linux_os: Any = os
@@ -452,14 +458,20 @@ def test_linux_r2_3_a_pdf_is_read_beside_a_busy_process_on_the_same_cpu(
         def pin() -> None:
             linux_os.sched_setaffinity(0, {cpu})
 
-        spy = pdfs.ChildLaunches(preexec=pin).install(monkeypatch)
+        stderr = tmp_path / "child-stderr.txt"
+        spy = pdfs.ChildLaunches(preexec=pin, stderr_path=str(stderr)).install(monkeypatch)
+        monitor = pdfs.ChildMonitor(spy).start()
         started = time.monotonic()
-        text, outcome = source_fetcher.read_pdf_text(pdfs.valid_pdf(), deadline_seconds=3.0)
+        try:
+            text, outcome = source_fetcher.read_pdf_text(pdfs.valid_pdf(), deadline_seconds=3.0)
+        finally:
+            monitor.stop()
         elapsed = time.monotonic() - started
         assert busy.poll() is None, "the busy loop stopped during the read"
         assert len(spy.launches) == 1
-        assert outcome == "fetched", (outcome, round(elapsed, 2))
-        assert "PDFSENTINEL" in text
+        why = f"outcome={outcome!r}\n" + pdfs.child_diagnostics(spy, elapsed, monitor=monitor)
+        assert outcome == "fetched", why
+        assert "PDFSENTINEL" in text, why
     finally:
         busy.kill()
         busy.wait(timeout=5)

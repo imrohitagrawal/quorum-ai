@@ -304,17 +304,21 @@ def test_a4_the_largest_real_reply_still_fits(monkeypatch: pytest.MonkeyPatch) -
 
 
 # ---------------------------------------------------------------------------
-# A5: the child runs at the lowest CPU priority
+# A5: the child runs at a lower CPU priority (niceness 5)
 # ---------------------------------------------------------------------------
 
 
-def test_a5_the_child_runs_at_niceness_19(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a5_the_child_runs_at_niceness_5(monkeypatch: pytest.MonkeyPatch) -> None:
     """Read from the operating system while the REAL child parses a
     CPU-burning PDF, wherever the code sets it (before ``exec`` or in the
-    child). RED IF: the child's niceness is not 19 (the app's own, 0, on
-    6c72f39). Partner: the app's own niceness is not 19, so the child's was
-    set for it, not inherited."""
-    assert os.getpriority(os.PRIO_PROCESS, 0) != 19
+    child). 5, not 19: CI measured niceness 19 starving a normal PDF beside
+    one busy process (PR #550, ``timeout`` at 3.17 s); niceness 5 has CFS
+    weight 335 against 1,024, about a quarter of a CPU (a calculation, not a
+    measurement). RED IF: the child's niceness is not 5. Partners: the app's
+    own niceness is not 5 (so the child's was set for it, not inherited) and
+    is unchanged after the call (the app itself was not lowered)."""
+    app_niceness = os.getpriority(os.PRIO_PROCESS, 0)
+    assert app_niceness != 5
     spy = pdfs.ChildLaunches().install(monkeypatch)
     done: list[tuple[str, str]] = []
     worker = threading.Thread(
@@ -334,13 +338,14 @@ def test_a5_the_child_runs_at_niceness_19(monkeypatch: pytest.MonkeyPatch) -> No
                 niceness = os.getpriority(os.PRIO_PROCESS, pid)
             except OSError:
                 break
-            if niceness == 19:
+            if niceness == 5:
                 break
             time.sleep(0.02)
     finally:
         worker.join(timeout=10)
-    assert niceness == 19, niceness
+    assert niceness == 5, niceness
     assert done and done[0][1] in {"timeout", "unusable"}
+    assert os.getpriority(os.PRIO_PROCESS, 0) == app_niceness
 
 
 # ---------------------------------------------------------------------------

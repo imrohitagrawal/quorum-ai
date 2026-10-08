@@ -257,18 +257,34 @@ def test_linux_the_256_mib_address_space_limit_stops_a_memory_bomb(
     hook's marker is in the text, so the hook really runs in the child and a
     refusal at 512 MiB is the limit, not a broken harness."""
     hook = pdfs.write_hook(str(tmp_path))
-    small = pdfs.ChildLaunches(hook_dir=hook, extra_env={"W54_HOOK_ALLOC_MIB": "32"})
-    small.install(monkeypatch)
-    text, outcome = source_fetcher.read_pdf_text(pdfs.valid_pdf(), deadline_seconds=5.0)
-    assert outcome == "fetched", outcome
-    assert "HOOKRANMARKER" in text
-    assert len(small.launches) == 1
 
-    big = pdfs.ChildLaunches(hook_dir=hook, extra_env={"W54_HOOK_ALLOC_MIB": "512"})
-    big.install(monkeypatch)
-    text, outcome = source_fetcher.read_pdf_text(pdfs.valid_pdf(), deadline_seconds=5.0)
-    assert (text, outcome) in {("", "unusable"), ("", "timeout")}, (outcome, text[:80])
-    assert len(big.launches) == 1
+    def run(mib: int) -> tuple[str, str, str]:
+        """One read with a ``mib`` MiB allocation; returns the text, the
+        outcome and, for a failure message, everything CI can tell."""
+        trace, stderr = tmp_path / f"trace-{mib}.txt", tmp_path / f"stderr-{mib}.txt"
+        spy = pdfs.ChildLaunches(
+            hook_dir=hook,
+            extra_env={"W54_HOOK_ALLOC_MIB": str(mib), "W54_HOOK_TRACE": str(trace)},
+            stderr_path=str(stderr),
+        )
+        spy.install(monkeypatch)
+        monitor = pdfs.ChildMonitor(spy).start()
+        started = time.monotonic()
+        try:
+            text, outcome = source_fetcher.read_pdf_text(pdfs.valid_pdf(), deadline_seconds=5.0)
+        finally:
+            monitor.stop()
+        elapsed = time.monotonic() - started
+        assert len(spy.launches) == 1
+        why = pdfs.child_diagnostics(spy, elapsed, monitor=monitor, trace_path=str(trace))
+        return text, outcome, f"outcome={outcome!r}\n{why}"
+
+    text, outcome, why = run(32)
+    assert outcome == "fetched", why
+    assert "HOOKRANMARKER" in text, why
+
+    text, outcome, why = run(512)
+    assert (text, outcome) in {("", "unusable"), ("", "timeout")}, f"text={text[:80]!r}\n{why}"
 
 
 def _proc_limits(pid: int) -> dict[str, tuple[str, str]]:
