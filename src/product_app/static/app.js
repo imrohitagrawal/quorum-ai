@@ -5185,28 +5185,50 @@
   // website asks automated tools not to read whose search preview reached the
   // judge, and F = M - N - P the rest that were not read. Each (N, P, F) gets
   // the table's sentence, which is true for it: the approved "For the other P"
-  // sentence (the session's wording, CHG-029 (b)) only when F = 0, kept as
-  // approved for every P; the two session-written rows with P >= 2 say
-  // "websites" and "previews". P missing or null (a run served before this change) keeps
+  // sentence (the session's wording, CHG-029 (b)) only when F = 0, singular
+  // for P = 1 and, since ADR-0152 decision 7 (CHG-033 (d)), plural for P >= 2
+  // like the two session-written rows ("websites", "previews"). P missing or null (a run served before this change) keeps
   // the W29 sentences; P present but not a whole number, or N + P > M, fails
   // closed like the other counts.
   //
-  // Reads ONLY TRUST_DISCLOSURE_VERIFIED: tests/unit/test_w29_trust_note_copy.py
-  // and test_w54_trust_note_sentences.py lift this function out and run it
-  // under node with that one constant.
+  // W54 step 2 (ADR-0152 decision 4). Q (`source_pages_preview_other`) is the
+  // cited pages that could not be read for any OTHER reason (a failed fetch, a
+  // PDF, a page over the per-site limit, a robots.txt that could not be read)
+  // whose search preview reached the judge; R = M - N - P - Q the rest, checked
+  // on title and address only. With Q present the note is built from parts,
+  // each true on its own, in the order of ADR-0152's table: the lead, the rules
+  // part (ADR-0150's sentence for P, without its tail about the rest), the
+  // previews part ("other" only after a rules part), and the rest part (only
+  // when N = 0). The two whole-sentence cases (every cited page had only a
+  // preview) replace the parts. When N = 0 and P = M the approved all-blocked
+  // sentence begins "No cited page could be read:" itself, so it replaces the
+  // N = 0 lead. Q missing or null keeps ADR-0150's sentences below, unchanged
+  // but for ADR-0152 decision 7 (CHG-033 (d)): on both paths the approved
+  // "For the other P" sentence is plural ("the websites ask ... their pages
+  // ... the short previews") for P >= 2, singular for P = 1;
+  // Q present with P missing, or not a whole number, or N + P + Q > M, fails
+  // closed like the other counts.
+  //
+  // Reads ONLY TRUST_DISCLOSURE_VERIFIED: tests/unit/test_w29_trust_note_copy.py,
+  // test_w54_trust_note_sentences.py and test_w54_trust_note_previews.py lift
+  // this function out and run it under node with that one constant.
   function verifiedTrustDisclosure(ev, pagesInEffect) {
     const counts = ev && typeof ev === "object" ? ev : {};
     const read = counts.source_pages_read;
     const cited = counts.source_pages_cited;
     const preview = counts.source_pages_preview;
+    const other = counts.source_pages_preview_other;
     const known = preview !== undefined && preview !== null;
+    const knownOther = other !== undefined && other !== null;
     const stated =
       pagesInEffect === true &&
       Number.isInteger(read) &&
       Number.isInteger(cited) &&
       read >= 0 &&
       read <= cited &&
-      (!known || (Number.isInteger(preview) && preview >= 0 && read + preview <= cited));
+      (!known || (Number.isInteger(preview) && preview >= 0 && read + preview <= cited)) &&
+      (!knownOther ||
+        (known && Number.isInteger(other) && other >= 0 && read + preview + other <= cited));
     if (!stated) return TRUST_DISCLOSURE_VERIFIED;
     const lead = TRUST_DISCLOSURE_VERIFIED.replace(
       " The cited pages themselves were not retrieved.",
@@ -5216,11 +5238,69 @@
       "the website asks automated tools not to read its pages, so the check could only use the short preview the search engine showed";
     const blockedMany =
       "the websites ask automated tools not to read their pages, so the check could only use the short previews the search engine showed";
+    const allBlockedOne =
+      "No cited page could be read: the website asks automated tools not to read its pages. The check used only the title, address and the short preview the search engine showed.";
+    const allBlockedMany =
+      "No cited page could be read: the websites ask automated tools not to read their pages. The check used only the titles, addresses and the short previews the search engine showed.";
+    if (knownOther) {
+      const rest = cited - read - preview - other;
+      if (read === 0 && preview === 0 && other === cited && cited === 1) {
+        return `${lead} No cited page could be read. The check used only the title, address and the short preview the search engine showed.`;
+      }
+      if (read === 0 && preview === 0 && other === cited && cited > 1) {
+        return `${lead} No cited page could be read. The check used only the titles, addresses and the short previews the search engine showed.`;
+      }
+      const parts = [];
+      if (read > 0) {
+        parts.push(`Checked against ${read} of ${cited} cited ${cited === 1 ? "page" : "pages"}.`);
+      }
+      if (read === 0 && preview > 0 && preview === cited) {
+        parts.push(cited === 1 ? allBlockedOne : allBlockedMany);
+      } else {
+        if (read === 0) parts.push("No cited page could be read.");
+        if (preview > 0 && read > 0 && read + preview === cited) {
+          parts.push(
+            preview === 1 ? `For the other one, ${blocked}.` : `For the other ${preview}, ${blockedMany}.`,
+          );
+        } else if (preview > 0 && read > 0) {
+          parts.push(
+            `For ${preview} of the other ${cited - read}, ${preview === 1 ? blocked : blockedMany}.`,
+          );
+        } else if (preview > 0) {
+          parts.push(`For ${preview} of the ${cited}, ${preview === 1 ? blocked : blockedMany}.`);
+        }
+      }
+      const otherWord = preview > 0 ? " other" : "";
+      if (other === 1) {
+        parts.push(
+          `For 1${otherWord} cited page that could not be read, the check used the short preview the search engine showed.`,
+        );
+      } else if (other > 1) {
+        parts.push(
+          `For ${other}${otherWord} cited pages that could not be read, the check used the short previews the search engine showed.`,
+        );
+      }
+      if (read === 0 && preview === 0 && other === 0) {
+        parts.push(
+          cited === 1
+            ? "The check used only the title and address."
+            : "The check used only the titles and addresses.",
+        );
+      } else if (read === 0 && rest > 0) {
+        parts.push(
+          rest === 1
+            ? "For the rest, it used the title and address."
+            : "For the rest, it used the titles and addresses.",
+        );
+      }
+      return `${lead} ${parts.join(" ")}`;
+    }
     if (read > 0) {
       const checked = `Checked against ${read} of ${cited} cited ${cited === 1 ? "page" : "pages"}.`;
       if (!known || preview === 0) return `${lead} ${checked}`;
       if (read + preview === cited) {
-        return `${lead} ${checked} For the other ${preview === 1 ? "one" : preview}, ${blocked}.`;
+        if (preview === 1) return `${lead} ${checked} For the other one, ${blocked}.`;
+        return `${lead} ${checked} For the other ${preview}, ${blockedMany}.`;
       }
       return `${lead} ${checked} For ${preview} of the other ${cited - read}, ${preview === 1 ? blocked : blockedMany}.`;
     }
@@ -5237,10 +5317,10 @@
       return `${lead} No cited page could be read. The check used only the titles, addresses and any short previews the search engine showed.`;
     }
     if (preview === cited && cited === 1) {
-      return `${lead} No cited page could be read: the website asks automated tools not to read its pages. The check used only the title, address and the short preview the search engine showed.`;
+      return `${lead} ${allBlockedOne}`;
     }
     if (preview === cited) {
-      return `${lead} No cited page could be read: the websites ask automated tools not to read their pages. The check used only the titles, addresses and the short previews the search engine showed.`;
+      return `${lead} ${allBlockedMany}`;
     }
     return `${lead} No cited page could be read. For ${preview} of the ${cited}, ${preview === 1 ? blocked : blockedMany}; for the rest it used the titles, addresses and any short previews the search engine showed.`;
   }

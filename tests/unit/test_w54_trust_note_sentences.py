@@ -41,12 +41,15 @@ from tests.unit.test_w54_judge_source_pages_preview import (
 from product_app import evaluation, source_fetcher
 from product_app.config import settings
 
-#: The session's sentence the owner approved (CHG-029 (b)), verbatim: "when
-#: some pages are blocked".
+#: The session's sentence the owner approved (CHG-029 (b)): "when some pages
+#: are blocked", in the plural for P >= 2 as the owner decided in CHG-033 (d)
+#: (ADR-0152 decision 7). Until W54 step 2 this pinned the singular wording,
+#: "For the other 2, the website asks automated tools not to read its pages,
+#: so the check could only use the short preview the search engine showed."
 APPROVED_SOME_BLOCKED = (
-    "Checked against 3 of 5 cited pages. For the other 2, the website asks automated tools "
-    "not to read its pages, so the check could only use the short preview the search engine "
-    "showed."
+    "Checked against 3 of 5 cited pages. For the other 2, the websites ask automated tools "
+    "not to read their pages, so the check could only use the short previews the search "
+    "engine showed."
 )
 #: The session's sentence the owner approved (CHG-029 (b)), verbatim: "when
 #: all are blocked".
@@ -65,9 +68,10 @@ _PREVIEW = (
     "the website asks automated tools not to read its pages, so the check could only use "
     "the short preview the search engine showed"
 )
-#: The plural of ``_PREVIEW``, for P >= 2 in the two session-written rows only
-#: (ADR-0150 decision 2, review round 2: several blocked pages may be on
-#: several websites). The approved F = 0 row keeps ``_PREVIEW`` for every P.
+#: The plural of ``_PREVIEW``, for P >= 2 (ADR-0150 decision 2, review round
+#: 2: several blocked pages may be on several websites). Since CHG-033 (d)
+#: (ADR-0152 decision 7) the approved F = 0 row uses it too for P >= 2; it
+#: kept ``_PREVIEW`` for every P before.
 _PREVIEWS = (
     "the websites ask automated tools not to read their pages, so the check could only use "
     "the short previews the search engine showed"
@@ -95,8 +99,10 @@ def expected(n: int, p: int, m: int) -> str:
         if p == 0:
             return f"{LEAD} {checked}"
         if m - n - p == 0:
-            other = "one" if p == 1 else str(p)
-            return f"{LEAD} {checked} For the other {other}, {_PREVIEW}."
+            # CHG-033 (d): plural for P >= 2 (was _PREVIEW for every P).
+            if p == 1:
+                return f"{LEAD} {checked} For the other one, {_PREVIEW}."
+            return f"{LEAD} {checked} For the other {p}, {_PREVIEWS}."
         blocked = _PREVIEW if p == 1 else _PREVIEWS
         return f"{LEAD} {checked} For {p} of the other {m - n}, {blocked}."
     if p == m:
@@ -148,9 +154,11 @@ def _ev(n: Any, p: Any, m: Any) -> dict[str, Any]:
 
 
 def test_the_approved_sentence_when_some_pages_are_blocked(harness: str) -> None:
-    """CHG-029 (b), N = 3, P = 2, M = 5 (F = 0). RED IF: the sentence differs
-    from the approved one by one character, or still says "robots.txt", or the
-    old W29 sentence is shown (P ignored)."""
+    """CHG-029 (b), N = 3, P = 2, M = 5 (F = 0), in the plural CHG-033 (d)
+    chose for two or more pages. RED IF: the sentence differs from the
+    approved one by one character (the singular "the website asks ... its
+    pages ... the short preview" is now a failure), or still says
+    "robots.txt", or the old W29 sentence is shown (P ignored)."""
     (text,) = _run(harness, [(_ev(3, 2, 5), True)])
     assert text == f"{LEAD} {APPROVED_SOME_BLOCKED}"
     assert "robots" not in text
@@ -219,7 +227,7 @@ _ROWS = [
         "none-read-one-preview-of-several",
         "none-read-no-preview",
         "none-read-no-preview-one-cited",
-        "approved-row-keeps-the-singular-for-three",
+        "approved-row-plural-for-three",  # CHG-033 (d); was singular
     ],
 )
 def test_each_row_of_the_table_verbatim(
@@ -335,8 +343,9 @@ def test_the_sweep_matches_the_table_and_never_says_something_false(harness: str
     pages were read; the singular all-blocked sentence is not used for
     (0, 1, 1); a sentence with N = 0 says the check used "the titles and
     addresses" only (false when a robots.txt could not be read but its preview
-    was sent, failure mode 20); a session-written row says "the website asks"
-    for two or more previews; or the approved F = 0 row changes with P.
+    was sent, failure mode 20); any sentence says "the website asks" for two
+    or more previews, or "the websites ask" for one (CHG-033 (d) made the
+    approved F = 0 row plural for P >= 2 too).
     Partner: the sweep really covers the approved sentences, the singular
     one, and every row (each row's shape appears)."""
     assert len(_SWEEP) == 454
@@ -359,10 +368,12 @@ def test_the_sweep_matches_the_table_and_never_says_something_false(harness: str
         assert "titles and addresses." not in after, case
         if n == 0:
             assert "any short preview" in after or p == m, case
-        if p >= 2 and m - n - p > 0:
-            assert "the websites ask" in after, case
-        if p > 0 and n > 0 and m - n - p == 0:
+        if p >= 2:
+            assert "the websites ask automated tools not to read their pages" in after, case
+            assert "the website asks" not in after, case
+        if p == 1:
             assert "the website asks automated tools not to read its pages" in after, case
+            assert "websites" not in after, case
         numbers = {int(x) for x in re.findall(r"\d+", after)}
         assert numbers <= {n, p, m, m - n}, (case, numbers)
         shapes.add(re.sub(r"\d+", "#", after))
