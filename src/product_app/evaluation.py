@@ -54,7 +54,7 @@ from urllib.parse import urlparse
 from markdown_it import MarkdownIt
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from product_app import source_fetcher
+from product_app import pdf_text, source_fetcher
 from product_app.config import settings
 from product_app.debate import AgreementSummary
 from product_app.providers import (
@@ -2113,6 +2113,9 @@ def judge_source_pages(initial_answers: list[InitialModelAnswer]) -> JudgeSource
         budget_seconds=settings.quorum_source_fetch_budget_seconds,
         per_recv_seconds=settings.quorum_source_fetch_timeout_seconds,
         max_bytes=settings.quorum_source_fetch_max_bytes,
+        # W54 step 3 (ADR-0153 decision 2): the PDF cap is clamped HERE, where
+        # it is used, so an assigned setting cannot pass the literal.
+        max_pdf_bytes=min(settings.quorum_source_fetch_max_pdf_bytes, pdf_text.MAX_PDF_BYTES),
         max_pages=min(settings.quorum_source_fetch_max_pages, JUDGE_MAX_SOURCE_PAGES),
         max_text_chars=min(
             settings.quorum_source_fetch_max_text_chars, JUDGE_MAX_SOURCE_PAGE_CHARS

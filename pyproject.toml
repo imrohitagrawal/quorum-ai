@@ -37,6 +37,7 @@ dependencies = [
   # answers, with no code change and no failing test. A version bump here
   # must be a reviewed decision, not a side effect of a rebuild.
   "markdown-it-py==4.2.0",
+  "pypdf==6.19.0",
 ]
 
 [project.optional-dependencies]
