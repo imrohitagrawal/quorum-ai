@@ -29,16 +29,19 @@ from tests.unit.test_bound_covers_the_judge import QUERY, _enable_judge, _pin_ca
 from product_app.config import settings
 from product_app.costs import CostEstimate, CostEstimationService, cost_estimation_service
 
-#: 8 items x 4,000 characters / 4 characters per token = 8,000 input tokens,
-#: at the pinned $0.001 per 1,000 = $0.0080. Written out, not computed from
+#: ADR-0152 decision 1 moved the page block to ONE token per character (it was
+#: 4 characters per token, so these were $0.0080 and $0.0110 until W54 step 2).
+#: 8 items x 4,000 characters at 1 token per character = 32,000 input tokens,
+#: at the pinned $0.001 per 1,000 = $0.0320. Written out, not computed from
 #: the constants under test (AGENTS.md rule 7a).
-_PAGES_TERM_FLOOR = Decimal("0.0080")
-#: An upper limit on the same term: the floor, plus room for the v2 system
-#: prompt's extra length (up to 8,000 more characters = $0.0020) and per-item
-#: scaffolding. A reserve that priced 32,000 TOKENS instead of 32,000
-#: characters ($0.032) lands far above it; that over-reserve moves panels
-#: into confirmation or BLOCK for nothing.
-_PAGES_TERM_CEILING = Decimal("0.0110")
+_PAGES_TERM_FLOOR = Decimal("0.0320")
+#: An upper limit on the same term: the floor, plus the framing and the 24
+#: "same page as" lines (832 characters = $0.000832) and room for the v2
+#: system prompt's extra length (up to 8,000 more characters at 4 per token =
+#: $0.0020). A reserve that priced the block at 4 tokens per character (or
+#: kept the old 1/4 rate on top of the new term) lands far above it; that
+#: over-reserve moves panels into confirmation or BLOCK for nothing.
+_PAGES_TERM_CEILING = Decimal("0.0350")
 
 
 def _estimate(
@@ -85,8 +88,9 @@ def test_reading_pages_raises_the_judge_reserve_by_eight_pages_of_text(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """RED IF: the reserve has no page term (the delta is 0), prices fewer
-    than 8 x 4,000 characters, or prices them as tokens (the delta passes
-    the ceiling)."""
+    than 8 x 4,000 characters at one token per character (ADR-0152: today's
+    4 characters per token is now BELOW the floor), or over-prices them (the
+    delta passes the ceiling)."""
     judge_only = _bound(_estimate(monkeypatch, judge=True, pages=False))
     with_pages = _bound(_estimate(monkeypatch, judge=True, pages=True))
     # Partner: the judge-on, pages-off bound is the figure the existing pin
@@ -291,11 +295,16 @@ def test_the_page_reserve_prices_the_v2_system_prompt_not_v1(
     characters move the bound by whole cents and quantisation cannot hide them.
 
     With pages on, the judge sees the v2 system prompt instead of v1's, plus up
-    to 8 pages of 4,000 characters. So the bound must rise by at least
-    (32,000 + len(v2) - len(v1)) characters / 4 per token. RED IF: the reserve
-    still counts v1's length (it then rises by 32,000 + scaffolding only, which
-    is 552 characters short today). Partner: v2 really is longer than v1, so
-    the assertion is not satisfied by a zero difference."""
+    to 8 pages of 4,000 characters. Since ADR-0152 the page block (32,832
+    characters with its framing and pointers) is priced at one token per
+    character and the system prompt still at 4 characters per token, so the
+    bound must rise by 32,832 + (len(v2) - len(v1)) / 4 tokens, within one
+    display quantum. (Until W54 step 2 this asserted a rise of at least
+    (32,000 + len(v2) - len(v1)) / 4 tokens; at the new rate the block's own
+    832-character slack would hide a v1-priced prompt, so the floor is now
+    exact.) RED IF: the reserve still counts v1's length (the rise is then
+    short by about 200 tokens = $0.2). Partner: v2 really is longer than v1,
+    so the assertion is not satisfied by a zero difference."""
     from product_app.evaluation import _JUDGE_PAGES_SYSTEM_PROMPT, _JUDGE_SYSTEM_PROMPT
     from product_app.model_slots import openrouter_model_catalog_service
 
@@ -317,8 +326,10 @@ def test_the_page_reserve_prices_the_v2_system_prompt_not_v1(
         return estimate.max_cost_usd
 
     delta = bound(True) - bound(False)
-    floor = (Decimal(32_000) + Decimal(extra_prompt_chars)) / Decimal(4) / Decimal(1000)
-    assert delta >= floor, f"pages raised the bound by {delta}; v2's prompt needs {floor}"
+    floor = (Decimal(32_832) + Decimal(extra_prompt_chars) / Decimal(4)) / Decimal(1000)
+    assert delta >= floor - Decimal("0.0001"), (
+        f"pages raised the bound by {delta}; v2's prompt needs {floor}"
+    )
 
 
 def test_the_reserve_covers_eight_pages_and_24_same_page_pointers(
@@ -328,16 +339,19 @@ def test_the_reserve_covers_eight_pages_and_24_same_page_pointers(
     PLUS a "same page as" pointer on each of the other 24 source lines, and
     the pointers must be priced. Measured against the REAL reserve, not the
     constants: the judge's input is priced at $1 per 1,000 tokens (so one
-    character is $0.00025 and quantisation cannot hide a line), and the page
-    term is the bound's rise with pages on, less the v2 system prompt's extra
-    length.
+    character of page block is $0.001 since ADR-0152 -- $0.00025 before -- and
+    quantisation cannot hide a line), and the page term is the bound's rise
+    with pages on, less the v2 system prompt's extra length at 4 characters
+    per token.
 
     The block here puts the pages on lines 25-32 and points lines 1-24 at
     [32], so 15 pointers have two digits on both sides; it measures 32,798
     characters today against a reserve of 32,832 for 32 lines.
 
     RED IF: the 24-pointer term is removed from the reserve (it then covers
-    32,136), or cut to 16 pointers (32,600). Partner: the block really carries
+    32,136), or cut to 16 pointers (32,600), or the block is priced at any
+    rate but one token per character (ADR-0152; at the old 4 characters per
+    token the reserve reads 8,208 here). Partner: the block really carries
     the 24 pointers and the 8 pages, and the reserve is not slack by more
     than 60 characters."""
     from product_app.evaluation import (
@@ -378,9 +392,11 @@ def test_the_reserve_covers_eight_pages_and_24_same_page_pointers(
         assert estimate.max_cost_usd is not None
         return estimate.max_cost_usd
 
-    # Dollars at $1 per 1,000 tokens -> tokens -> characters (4 per token).
-    reserved_chars = (bound(True) - bound(False)) * Decimal(1000) * Decimal(4) - Decimal(
+    # Dollars at $1 per 1,000 tokens -> tokens; the page block is one token per
+    # character (ADR-0152 decision 1; this multiplied by 4 until W54 step 2),
+    # and the v2 prompt's extra length is still 4 characters per token.
+    reserved_chars = (bound(True) - bound(False)) * Decimal(1000) - Decimal(
         len(_JUDGE_PAGES_SYSTEM_PROMPT) - len(_JUDGE_SYSTEM_PROMPT)
-    )
+    ) / Decimal(4)
     assert block <= reserved_chars, (block, reserved_chars)
     assert block >= reserved_chars - 60, (block, reserved_chars)

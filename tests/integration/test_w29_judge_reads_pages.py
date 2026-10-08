@@ -26,9 +26,13 @@ source                 robots.txt       page                   the judge reads
 allowed.example/page   404 (allowed)    200 text/html          the page text
 blocked.example/page   Disallow: /      (never requested)      the search excerpt
 bare.example/page      Disallow: /      (never requested)      "" (no excerpt)
-pdf.example/page       404 (allowed)    200 application/pdf    "" -- NOT the excerpt
+pdf.example/page       404 (allowed)    200 application/pdf    the search excerpt (*)
 down.example/page      503 (closed)     (never requested)      the search excerpt
 =====================  ===============  =====================  =======================
+
+(*) Since ADR-0152 (W54 step 2), which overturned ADR-0148 call (iii): a page
+that could not be read for any reason sends its search excerpt. Until then the
+PDF's excerpt was withheld.
 """
 
 from __future__ import annotations
@@ -532,7 +536,8 @@ def test_on_each_source_gets_page_text_excerpt_or_nothing_by_the_rules(
     ``source_lines``; the allowed page's TEXT is not what the judge reads (or
     its excerpt is read instead); the robots-disallowed page is fetched, or
     its excerpt is not used; a disallowed page with no excerpt gets anything;
-    the failed fetch (not text) falls back to its excerpt; a 5xx robots.txt
+    the failed fetch (not text) does NOT send its excerpt (ADR-0152 decision 3;
+    until W54 step 2 the opposite was asserted); a 5xx robots.txt
     is not treated as closed; robots.txt is read with ``RobotFileParser.read``
     or more than once per host; or the v2 prompt is not the one sent."""
     _enable_judge(monkeypatch)
@@ -567,7 +572,7 @@ def test_on_each_source_gets_page_text_excerpt_or_nothing_by_the_rules(
     assert "EXCERPTALLOWEDSENTINEL" not in pages[0]
     assert pages[1] == EXCERPT_BLOCKED
     assert pages[2] == ""
-    assert pages[3] == ""
+    assert pages[3] == EXCERPT_PDF  # ADR-0152 decision 3 (was "" until W54 step 2)
     assert pages[4] == EXCERPT_DOWN
     assert "PAGEALLOWEDTWO" in pages[5]
 
@@ -577,7 +582,10 @@ def test_on_each_source_gets_page_text_excerpt_or_nothing_by_the_rules(
     user = spies.user_prompt
     assert PAGE_ALLOWED in user and "PAGEALLOWEDTWO" in user
     assert "EXCERPTBLOCKEDSENTINEL" in user and "EXCERPTDOWNSENTINEL" in user
-    for absent in ("EXCERPTPDFSENTINEL", "EXCERPTALLOWEDSENTINEL", PAGE_BLOCKED, PAGE_DOWN):
+    # ADR-0152 decision 3: the PDF's excerpt is sent (it was in this absent
+    # list until W54 step 2).
+    assert "EXCERPTPDFSENTINEL" in user
+    for absent in ("EXCERPTALLOWEDSENTINEL", PAGE_BLOCKED, PAGE_DOWN):
         assert absent not in user, absent
     # The system prompt interpolates no evidence.
     for sentinel in (PAGE_ALLOWED, "EXCERPTBLOCKEDSENTINEL"):
@@ -642,7 +650,9 @@ def test_an_excerpt_is_not_counted_as_a_checked_page(
 def test_on_no_readable_page_serves_zero_of_m(monkeypatch: pytest.MonkeyPatch) -> None:
     """N = 0 is a served 0, not ``None``: the copy must be able to say no page
     could be read (failure mode 8). RED IF: a run whose pages were all
-    unreadable serves ``None`` or a non-zero read count."""
+    unreadable serves ``None`` or a non-zero read count. Since ADR-0152 the
+    PDF's excerpt reaches the judge (``("", "")`` until W54 step 2); the
+    refused page with no excerpt still gets nothing."""
     _enable_judge(monkeypatch)
     _pages_on(monkeypatch)
     spies = _spies(monkeypatch)
@@ -657,7 +667,7 @@ def test_on_no_readable_page_serves_zero_of_m(monkeypatch: pytest.MonkeyPatch) -
         0,
         2,
     )
-    assert spies.pages == ("", "")
+    assert spies.pages == (EXCERPT_PDF, "")
 
 
 def _many_sources(sites: Sites, n: int, *, excerpt_len: int = 0) -> list[list[SourceReference]]:

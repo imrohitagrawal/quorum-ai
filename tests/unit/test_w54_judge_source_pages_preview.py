@@ -458,11 +458,15 @@ def test_a_robots_file_that_could_not_be_read_sends_the_excerpt_but_is_not_count
     assert (reading.read, reading.cited, reading.preview) == (0, 2, 1)
 
 
-def test_a_failed_fetch_with_an_excerpt_is_not_counted(monkeypatch: pytest.MonkeyPatch) -> None:
-    """ADR-0148 call (iii), unchanged: a page that failed for another reason
-    does not fall back to its excerpt, so it is neither read nor a preview.
+def test_a_failed_fetch_with_an_excerpt_is_not_counted_in_p(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ADR-0152 decision 3 overturned ADR-0148 call (iii): a page that failed
+    for another reason now sends its excerpt (until W54 step 2 this test
+    asserted ``pages == ("", "")``), and is counted in Q, never in P.
     RED IF: P counts any page with an excerpt rather than refused pages
-    whose excerpt reached the judge."""
+    whose excerpt reached the judge, or the failed pages' excerpts are not
+    sent (Q = 0)."""
     _install(
         monkeypatch,
         {
@@ -480,5 +484,6 @@ def test_a_failed_fetch_with_an_excerpt_is_not_counted(monkeypatch: pytest.Monke
             )
         ]
     )
-    assert reading.pages == ("", "")
+    assert reading.pages == (EXCERPT, EXCERPT)
     assert (reading.read, reading.cited, reading.preview) == (0, 2, 0)
+    assert reading.preview_other == 2
