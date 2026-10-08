@@ -33,9 +33,10 @@ first 4,000 characters (7,474).
 Production's judge is `openai/gpt-4.1-mini` (CHG-032 (b), (f)); several earlier records name
 `openai/gpt-5-mini` as the shipped judge (for example the "shipped configuration" in
 `tests/evals/golden/measured/judge_behaviour_2026-08-07.json`). Those records describe what was
-measured then; production's model is `gpt-4.1-mini`, which ADR-0102, 0110, 0113, 0114, 0115,
-0120, 0125, 0126 and 0143 already record (ADR-0126 from the 2026-09-10 telemetry, CHG-007);
-ADR-0021 calls `gpt-5-mini` the shipped judge.
+measured then; production's model is `gpt-4.1-mini`, which ADR-0110, 0113, 0114, 0115, 0120,
+0126 and 0143 already record as production's judge (from the 2026-09-10 telemetry, CHG-007);
+ADR-0102 and ADR-0125 use it as a measuring condition only; ADR-0021 calls `gpt-5-mini` the
+shipped judge.
 
 ## Decision
 
@@ -45,8 +46,8 @@ ADR-0021 calls `gpt-5-mini` the shipped judge.
 per character instead of `CHARS_PER_TOKEN` (4). With `gpt-4.1-mini` at $0.40 per million
 input tokens, the maximum shown before a panel run rises by $0.0098 (24,624 more tokens: the
 8 page items, their framing and the 24 "same page as" lines) when page reading is in effect,
-and not at all when it is off. One token per character covers the Japanese rate estimated
-above (about 1.07 characters per token, the session's split of a mixed prompt); it is not a
+and not at all when it is off. One token per character covers the rate estimated
+from the Japanese run above (about 1.07 characters per token, the session's split of a mixed prompt); it is not a
 proven ceiling, since rare characters and emoji can take more than one token each. The query and
 the source titles are still priced at 4 characters per token, as before this change; text in
 those scripts can take more there too (a known limit, not changed here).
@@ -106,25 +107,25 @@ N + P + Q > M) show the sentence used when page reading is off, as before.
 
 Every page the fetcher attempted (read, refused by a website's rules, robots.txt unreadable,
 failed, not a web page) takes its slot first, in source-line order; previews for pages it never
-attempted (over the per-site limit) then fill the slots left, in source-line order. The fetcher
+attempted (`skipped_cap`: over the per-site limit, past the 8-attempt cap, or reached after
+the time budget ran out) then fill the slots left, in source-line order. The fetcher
 attempts at most 8 pages, so every attempted page fits; a read page, or a page a website's rules
 refused, can never be displaced. Review round 1 found the first version filling the cap in line
 order: a page over the per-site limit is not an attempt, so its preview could take a slot ahead
 of a page fetched further down, which was then dropped, and the note could say "No cited page
-could be read" about a page that had been read. At most 8 pages are attempted, so read pages
-always fit.
+could be read" about a page that had been read.
 
 ### 6. Four pages per site (CHG-033 (a))
 
 `MAX_PAGES_PER_HOST` rises from 2 to 4. The fetcher still attempts at most 8 pages within the
 same 8-second budget, so the reserve and the run-slot bound do not move. In the paid runs, 6 of
-13 cited pages were over the limit of 2: 2 web pages the judge could then read, and 4 PDFs.
+13 cited pages were over the limit of 2: 2 web pages that could then be attempted, and 4 PDFs.
 Of the 9 unread pages, 7 were PDFs (2 refused as not web pages, 4 over the limit, 1 timeout);
 reading PDFs is W54 step 3 (CHG-033 (a)).
 
 ### 7. The approved sentence in the plural (CHG-033 (d))
 
-When P = M − N and P ≥ 2, the approved sentence reads "For the other P, the websites ask
+When P = M − N, N ≥ 1 and P ≥ 2, the approved sentence reads "For the other P, the websites ask
 automated tools not to read their pages, so the check could only use the short previews the
 search engine showed." P = 1 keeps "For the other one, the website asks … its pages, … the
 short preview …".
