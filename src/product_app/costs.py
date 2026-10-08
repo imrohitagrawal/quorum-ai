@@ -2393,10 +2393,11 @@ class CostEstimationService:
             # token per character, not ``CHARS_PER_TOKEN``. Page text in
             # Chinese, Japanese and similar scripts runs at about one character
             # per token (a one-third-Japanese judge prompt measured 2.14
-            # characters per token on 2026-10-07; the session's split of it
-            # puts the Japanese text near 1). It covers that measured rate; it
-            # is not a proven ceiling (rare characters and emoji can take more
-            # than one token each). The system prompt is English the repo
+            # characters per token on 2026-10-07). It covers the rate estimated
+            # from the paid run (about 1.07 characters per token, the session's
+            # split of that mixed prompt, not a measurement of Japanese text
+            # alone); it is not a proven ceiling (rare characters and emoji can
+            # take more than one token each). The system prompt is English the repo
             # wrote, so it stays at ``CHARS_PER_TOKEN``.
             judge_system_prompt = (
                 _JUDGE_PAGES_SYSTEM_PROMPT if price_judge_pages else _JUDGE_SYSTEM_PROMPT

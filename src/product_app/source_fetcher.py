@@ -113,8 +113,10 @@ READABLE_CONTENT_TYPES = frozenset({"text/html", "text/plain"})
 #: reported as ``unusable`` and the reader treats it as not fetched.
 MIN_USABLE_TEXT_CHARS = 200
 #: At most this many pages from any one host per call, so one server is not
-#: hit for every citation a run makes.
-MAX_PAGES_PER_HOST = 2
+#: hit for every citation a run makes. 4 since ADR-0152 decision 6 (CHG-033
+#: (a)); it was 2. The call still attempts at most ``max_pages`` pages within
+#: the same budget, so the judge's reserve and the run-slot bound do not move.
+MAX_PAGES_PER_HOST = 4
 #: Chunk size of each bounded read.
 READ_CHUNK_BYTES = 8192
 

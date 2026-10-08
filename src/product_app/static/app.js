@@ -5185,9 +5185,9 @@
   // website asks automated tools not to read whose search preview reached the
   // judge, and F = M - N - P the rest that were not read. Each (N, P, F) gets
   // the table's sentence, which is true for it: the approved "For the other P"
-  // sentence (the session's wording, CHG-029 (b)) only when F = 0, kept as
-  // approved for every P; the two session-written rows with P >= 2 say
-  // "websites" and "previews". P missing or null (a run served before this change) keeps
+  // sentence (the session's wording, CHG-029 (b)) only when F = 0, singular
+  // for P = 1 and, since ADR-0152 decision 7 (CHG-033 (d)), plural for P >= 2
+  // like the two session-written rows ("websites", "previews"). P missing or null (a run served before this change) keeps
   // the W29 sentences; P present but not a whole number, or N + P > M, fails
   // closed like the other counts.
   //
@@ -5202,7 +5202,10 @@
   // when N = 0). The two whole-sentence cases (every cited page had only a
   // preview) replace the parts. When N = 0 and P = M the approved all-blocked
   // sentence begins "No cited page could be read:" itself, so it replaces the
-  // N = 0 lead. Q missing or null keeps ADR-0150's sentences below, unchanged;
+  // N = 0 lead. Q missing or null keeps ADR-0150's sentences below, unchanged
+  // but for ADR-0152 decision 7 (CHG-033 (d)): on both paths the approved
+  // "For the other P" sentence is plural ("the websites ask ... their pages
+  // ... the short previews") for P >= 2, singular for P = 1;
   // Q present with P missing, or not a whole number, or N + P + Q > M, fails
   // closed like the other counts.
   //
@@ -5256,7 +5259,9 @@
       } else {
         if (read === 0) parts.push("No cited page could be read.");
         if (preview > 0 && read > 0 && read + preview === cited) {
-          parts.push(`For the other ${preview === 1 ? "one" : preview}, ${blocked}.`);
+          parts.push(
+            preview === 1 ? `For the other one, ${blocked}.` : `For the other ${preview}, ${blockedMany}.`,
+          );
         } else if (preview > 0 && read > 0) {
           parts.push(
             `For ${preview} of the other ${cited - read}, ${preview === 1 ? blocked : blockedMany}.`,
@@ -5294,7 +5299,8 @@
       const checked = `Checked against ${read} of ${cited} cited ${cited === 1 ? "page" : "pages"}.`;
       if (!known || preview === 0) return `${lead} ${checked}`;
       if (read + preview === cited) {
-        return `${lead} ${checked} For the other ${preview === 1 ? "one" : preview}, ${blocked}.`;
+        if (preview === 1) return `${lead} ${checked} For the other one, ${blocked}.`;
+        return `${lead} ${checked} For the other ${preview}, ${blockedMany}.`;
       }
       return `${lead} ${checked} For ${preview} of the other ${cited - read}, ${preview === 1 ? blocked : blockedMany}.`;
     }
