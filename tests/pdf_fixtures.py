@@ -366,8 +366,10 @@ def flooder(total_bytes: int, progress_path: str) -> str:
     """A child program that writes ``total_bytes`` of ``x`` to stdout in
     65,536-byte blocks and, after EACH block the pipe accepted, records the
     running total in ``progress_path``: what the parent let it write, which
-    is what the parent read plus at most one pipe buffer and one block (the
-    break-it session's ``_probe_flood`` wrote 1.5 GB)."""
+    is what the parent read plus at most one pipe buffer and one block.
+    Against the reader before round 1, the break-it session's
+    ``_probe_flood`` made the parent's memory grow without bound until the
+    child was killed."""
     return (
         "import os, sys\n"
         "sys.stdin.buffer.read()\n"
@@ -456,8 +458,9 @@ def tounicode_expansion_pdf() -> bytes:
     """The break-it session's b4: one code byte maps to 256 characters (a
     512-byte destination), and the page shows that byte 1,900,000 times, a
     content stream under the 2,000,000-byte decompression limit. The file is
-    2,765 bytes; the session measured the child at 532 MB on macOS, where no
-    address-space limit can be set, with no pypdf limit applying."""
+    2,765 bytes; the session measured the child at 532 MiB (558,000,000
+    bytes) on macOS, where no address-space limit can be set, with no pypdf
+    limit applying."""
     dest = b"0041" * 256
     cmap = (
         b"/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapName /X def "
@@ -479,6 +482,51 @@ def tounicode_expansion_pdf() -> bytes:
     )
 
 
+def _chain(first: Callable[[], None] | None, second: Callable[[], None]) -> Callable[[], None]:
+    def both() -> None:
+        if first is not None:
+            first()
+        second()
+
+    return both
+
+
+def closes_stdout_and_keeps_running(text: str) -> str:
+    """A child program that reads its input, writes a VALID reply, closes its
+    stdout (the parent sees the end of the reply) and then keeps running for
+    10 s without CPU: only the parent's deadline can end it (the break-it
+    session's ``close_keep_running``)."""
+    return (
+        "import json, os, sys, time\n"
+        "sys.stdin.buffer.read()\n"
+        f"sys.stdout.buffer.write(json.dumps({{'text': {text!r}}}).encode('ascii'))\n"
+        "sys.stdout.buffer.flush()\n"
+        "os.close(1)\n"
+        "time.sleep(10)\n"
+    )
+
+
+def replies_without_reading(text: str) -> str:
+    """A child program that NEVER reads its input: it closes it at once,
+    waits 0.3 s, then writes a valid reply and exits, so a large body meets
+    a closed pipe (``BrokenPipeError`` in the parent) BEFORE the reply ends."""
+    return (
+        "import json, os, sys, time\n"
+        "os.close(0)\n"
+        "time.sleep(0.3)\n"
+        f"sys.stdout.buffer.write(json.dumps({{'text': {text!r}}}).encode('ascii'))\n"
+    )
+
+
+#: A child program that reads its input and then sends ITSELF ``SIGXCPU``,
+#: as the 2 s CPU limit would (core files off first).
+SELF_SIGXCPU = (
+    "import os, resource, signal, sys\n"
+    "resource.setrlimit(resource.RLIMIT_CORE, (0, 0))\n"
+    "sys.stdin.buffer.read()\n"
+    "os.kill(os.getpid(), signal.SIGXCPU)\n"
+)
+
 #: Interpreter flags that would stop an import hook from loading; stripped
 #: only when a hook is injected.
 _HOOK_BLOCKING_FLAGS = frozenset({"-I", "-E", "-S", "-s"})
@@ -493,6 +541,8 @@ class Launch:
     #: The parent's end of the child's stdout pipe, so a test can tell the
     #: reads of THIS pipe from every other ``os.read`` in the process.
     stdout_fd: int | None = None
+    #: The ``Popen`` object itself, so a test can see whether it was reaped.
+    process: Any = None
 
 
 @dataclass
@@ -515,6 +565,9 @@ class ChildLaunches:
     hook_dir: str | None = None
     cwd: str | None = None
     strip_flags: frozenset[str] = frozenset()
+    #: Run in the child after ``fork``, before ``exec``, after any
+    #: ``preexec_fn`` of the code's own (for example: pin it to one CPU).
+    preexec: Callable[[], None] | None = None
     extra_env: dict[str, str] = field(default_factory=dict)
     launches: list[Launch] = field(default_factory=list)
     started: threading.Event = field(default_factory=threading.Event)
@@ -538,6 +591,8 @@ class ChildLaunches:
                         args = [a for a in argv if a not in spy.strip_flags]
                     if spy.cwd is not None:
                         kwargs["cwd"] = spy.cwd
+                    if spy.preexec is not None:
+                        kwargs["preexec_fn"] = _chain(kwargs.get("preexec_fn"), spy.preexec)
                     if spy.probe or spy.program is not None:
                         args = [argv[0], "-c", PROBE if spy.probe else spy.program]
                     if spy.hook_dir is not None:
@@ -553,6 +608,7 @@ class ChildLaunches:
                 if ours:
                     record.pid = self.pid
                     record.stdout_fd = self.stdout.fileno() if self.stdout else None
+                    record.process = self
                     spy.launches.append(record)
                     spy.started.set()
 
