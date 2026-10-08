@@ -115,7 +115,9 @@ always fit.
 
 `MAX_PAGES_PER_HOST` rises from 2 to 4. The fetcher still attempts at most 8 pages within the
 same 8-second budget, so the reserve and the run-slot bound do not move. In the paid runs, 6 of
-13 cited pages were over the limit of 2; 3 of those were web pages the judge could then read.
+13 cited pages were over the limit of 2: 2 web pages the judge could then read, and 4 PDFs.
+Of the 9 unread pages, 7 were PDFs (2 refused as not web pages, 4 over the limit, 1 timeout);
+reading PDFs is W54 step 3 (CHG-033 (a)).
 
 ### 7. The approved sentence in the plural (CHG-033 (d))
 
