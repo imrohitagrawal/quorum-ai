@@ -27,7 +27,8 @@ effect. Every other type outside `text/html` and `text/plain` stays `refused_con
 
 PDFs have their own byte cap, 4,194,304 bytes (4 MiB), as a LITERAL clamp on a new setting
 `quorum_source_fetch_max_pdf_bytes`. A `Content-Length` over it is `too_large` before the body
-is read; a body that reaches it is `too_large` and is never parsed (a cut PDF is unreadable).
+is read; a body larger than it is `too_large` and is never parsed (a cut PDF is unreadable). A
+body of exactly the cap is read, as with the 262,144-byte cap for web pages.
 The shared deadline and the 8-attempt cap are unchanged.
 
 ### 3. The sandbox
