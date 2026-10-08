@@ -22,8 +22,8 @@ The paid runs of 2026-10-07 (CHG-032 (a), (c)), on the session's machine:
 | Why the others were not read | 1 PDF, 2 over the per-site limit, 1 timeout | 1 PDF, 4 over the per-site limit |
 | Pages a website's rules refused | 0 | 0 |
 | Page fetching inside the run slot | 8.0 s (the whole budget) | 2.4 s |
-| Time the run held its slot | about 66 s | 79.6 s |
-| Cost | $0.1077 (shown as estimated: one answer call timed out and may have been billed) | $0.0992 (measured) |
+| Time the run held its slot | not measured (the timer was added after run 1; the result arrived after 66.6 s, an upper limit) | 79.6 s |
+| Cost | $0.1077, the pre-run estimate; the actual cost is unknown because one answer call timed out and may have been billed | $0.0992 (measured) |
 
 Four judge-only calls with `gpt-4.1-mini` on run 1's evidence cost $0.0127. The clean
 comparison (each of run 1's three pages fetched once, read both ways) gave the same verdict,
@@ -33,7 +33,9 @@ first 4,000 characters (7,474).
 Production's judge is `openai/gpt-4.1-mini` (CHG-032 (b), (f)); several earlier records name
 `openai/gpt-5-mini` as the shipped judge (for example the "shipped configuration" in
 `tests/evals/golden/measured/judge_behaviour_2026-08-07.json`). Those records describe what was
-measured then; production's model is `gpt-4.1-mini`.
+measured then; production's model is `gpt-4.1-mini`, which ADR-0102, 0110, 0113, 0114, 0115,
+0120, 0125, 0126 and 0143 already record (ADR-0126 from the 2026-09-10 telemetry, CHG-007);
+ADR-0021 calls `gpt-5-mini` the shipped judge.
 
 ## Decision
 
@@ -42,9 +44,12 @@ measured then; production's model is `gpt-4.1-mini`.
 `costs.py` prices the page block (8 items of 4,000 characters and their framing) at 1 token
 per character instead of `CHARS_PER_TOKEN` (4). With `gpt-4.1-mini` at $0.40 per million
 input tokens, the maximum shown before a panel run rises by $0.0098 (24,624 more tokens: the
-8 page items and their framing) when page reading is in effect, and not at all when it is off. One token per character covers the Japanese rate
-measured above (about 1 character per token, the session's split of a mixed prompt); it is not
-a proven ceiling, since rare characters and emoji can take more than one token each.
+8 page items, their framing and the 24 "same page as" lines) when page reading is in effect,
+and not at all when it is off. One token per character covers the Japanese rate estimated
+above (about 1.07 characters per token, the session's split of a mixed prompt); it is not a
+proven ceiling, since rare characters and emoji can take more than one token each. The query and
+the source titles are still priced at 4 characters per token, as before this change; text in
+those scripts can take more there too (a known limit, not changed here).
 
 ### 2. The typical judge input is 8,400 tokens with page reading in effect
 
@@ -97,6 +102,28 @@ approved all-blocked sentence begins "No cited page could be read:" itself, so i
 N = 0 lead rather than following it. A null Q counts as missing. Impossible counts (not whole numbers, negative,
 N + P + Q > M) show the sentence used when page reading is off, as before.
 
+### 5. The 8-item cap takes read pages first (review round 1)
+
+Every fetched and read page takes a slot before any preview does; previews then fill the slots
+left, in source-line order. Review round 1 found the first version filling the cap in line
+order: a page over the per-site limit is not an attempt, so its preview could take a slot ahead
+of a page fetched further down, which was then dropped, and the note could say "No cited page
+could be read" about a page that had been read. At most 8 pages are attempted, so read pages
+always fit.
+
+### 6. Four pages per site (CHG-033 (a))
+
+`MAX_PAGES_PER_HOST` rises from 2 to 4. The fetcher still attempts at most 8 pages within the
+same 8-second budget, so the reserve and the run-slot bound do not move. In the paid runs, 6 of
+13 cited pages were over the limit of 2; 3 of those were web pages the judge could then read.
+
+### 7. The approved sentence in the plural (CHG-033 (d))
+
+When P = M − N and P ≥ 2, the approved sentence reads "For the other P, the websites ask
+automated tools not to read their pages, so the check could only use the short previews the
+search engine showed." P = 1 keeps "For the other one, the website asks … its pages, … the
+short preview …".
+
 ## Rejected alternatives
 
 - **Count page text by UTF-8 bytes** (a token never covers less than one byte for the byte-level
@@ -112,6 +139,7 @@ N + P + Q > M) show the sentence used when page reading is off, as before.
 - With page reading off, nothing visible changes; the API gains one null field.
 - With it on: more cited pages are checked against something (in the paid runs, 9 of 13 pages
   were unread and would now be checked by their preview where the search returned one); the
-  maximum shown before a panel run is $0.0098 higher; the typical judge line shows
-  8,400 input tokens.
+  maximum shown before a panel run is $0.0098 higher; the judge's typical line is
+  priced from 8,400 input tokens plus the question (about $0.0004 more than 7,300 at
+  `gpt-4.1-mini`'s price).
 - The golden capture for `PR-EVAL-JUDGE-v2` is made after this change, on the final prompt.
