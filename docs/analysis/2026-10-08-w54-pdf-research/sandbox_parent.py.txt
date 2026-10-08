@@ -1,0 +1,18 @@
+import asyncio, sys, time, json, os
+PY=os.path.join(os.path.dirname(os.path.abspath(__file__)),'.venv/bin/python'); W=os.path.join(os.path.dirname(os.path.abspath(__file__)),'sandbox_worker.py')
+async def extract(data, lib, deadline=3.0):
+    t0=time.perf_counter()
+    p=await asyncio.create_subprocess_exec(PY,W,stdin=asyncio.subprocess.PIPE,stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.PIPE,env={**os.environ,"W_LIB":lib})
+    try:
+        out,err=await asyncio.wait_for(p.communicate(data),deadline); status=f"rc={p.returncode}"
+    except asyncio.TimeoutError:
+        p.kill(); await p.wait(); out=b""; err=b""; status="WALL_KILLED"
+    el=time.perf_counter()-t0
+    chars=len(json.loads(out)["text"]) if out.startswith(b"{") else None
+    return dict(lib=lib,status=status,wall=round(el,3),chars=chars,err=err.decode(errors='replace').strip().splitlines()[-1][:110] if err.strip() else None)
+async def main():
+    for f in sys.argv[1:]:
+        d=open(f,'rb').read()
+        for lib in ("pypdfium2","pypdf"):
+            r=await extract(d,lib); print(f.split('/')[-1][:28].ljust(28), r)
+asyncio.run(main())

@@ -1,0 +1,11 @@
+import asyncio,sys
+sys.argv=[sys.argv[0]]
+import importlib.util
+spec=importlib.util.spec_from_file_location("sp","sandbox_parent.py"); sp=importlib.util.module_from_spec(spec)
+src=open("sandbox_parent.py").read().replace("asyncio.run(main())","")
+exec(compile(src,"sandbox_parent.py","exec"),sp.__dict__)
+async def go():
+    d=open("attacks/a3c_textops_3.9MB_x10pages.pdf","rb").read()
+    print("rlimit_cpu=2, wall=10 ->", await sp.extract(d,"pypdf",deadline=10.0))
+    print("rlimit_cpu=2, wall=1  ->", await sp.extract(d,"pypdf",deadline=1.0))
+asyncio.run(go())

