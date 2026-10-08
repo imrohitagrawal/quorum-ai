@@ -343,6 +343,142 @@ PROBE = (
 #: costs one failing test 10 s, not a hang.
 SLEEPER = "import sys, time\nsys.stdin.buffer.read()\ntime.sleep(10)\n"
 
+
+def forker(pid_path: str, *, sleep_seconds: int = 8) -> str:
+    """A child program that reads its input, forks a grandchild that sleeps
+    ``sleep_seconds`` while HOLDING the inherited stdout pipe, writes the
+    grandchild's pid to ``pid_path``, and exits at once (the break-it
+    session's ``_probe_fork``, which held a 3 s call for 12.02 s)."""
+    return (
+        "import os, sys, time\n"
+        "sys.stdin.buffer.read()\n"
+        "pid = os.fork()\n"
+        "if pid == 0:\n"
+        f"    time.sleep({sleep_seconds})\n"
+        "    os._exit(0)\n"
+        f"with open({pid_path!r}, 'w') as handle:\n"
+        "    handle.write(str(pid))\n"
+        "os._exit(0)\n"
+    )
+
+
+def flooder(total_bytes: int, progress_path: str) -> str:
+    """A child program that writes ``total_bytes`` of ``x`` to stdout in
+    65,536-byte blocks and, after EACH block the pipe accepted, records the
+    running total in ``progress_path``: what the parent let it write, which
+    is what the parent read plus at most one pipe buffer and one block (the
+    break-it session's ``_probe_flood`` wrote 1.5 GB)."""
+    return (
+        "import os, sys\n"
+        "sys.stdin.buffer.read()\n"
+        "out = sys.stdout.buffer\n"
+        "block = b'x' * 65536\n"
+        "sent = 0\n"
+        f"while sent < {total_bytes}:\n"
+        "    out.write(block)\n"
+        "    out.flush()\n"
+        "    sent += len(block)\n"
+        # Written aside and renamed, so a kill mid-write never leaves the
+        # file empty (measured: a truncate-then-write lost the count).
+        f"    with open({progress_path!r} + '.tmp', 'w') as handle:\n"
+        "        handle.write(str(sent))\n"
+        f"    os.replace({progress_path!r} + '.tmp', {progress_path!r})\n"
+    )
+
+
+def reply_of_exactly(size: int, unit: str, count: int) -> str:
+    """A child program whose whole reply is ``json.dumps({"text": unit *
+    count})`` followed by spaces, ``size`` bytes in all: still one valid JSON
+    object (trailing whitespace is allowed), so only a size limit can refuse
+    it. The text is built IN the child, so the program stays short (Linux
+    caps one argument at 131,072 bytes)."""
+    body = json.dumps({"text": unit * count}).encode("ascii")
+    pad = size - len(body)
+    assert pad >= 0, (size, len(body))
+    return (
+        "import json, sys\n"
+        "sys.stdin.buffer.read()\n"
+        f"text = {unit!r} * {count}\n"
+        f"body = json.dumps({{'text': text}}).encode('ascii') + b' ' * {pad}\n"
+        f"assert len(body) == {size}, len(body)\n"
+        "sys.stdout.buffer.write(body)\n"
+    )
+
+
+#: 50,000 characters whose JSON form is as long as a real reply's can be: each
+#: is outside the Basic Multilingual Plane, so ``json.dumps`` (ASCII) writes
+#: it as a 12-byte surrogate-pair escape. The reply is 600,012 bytes
+#: (measured), under the 1,048,576-byte ceiling.
+ESCAPED_UNIT, ESCAPED_COUNT = "\U0001f600", 50_000
+
+
+def tounicode_pdf(content_codes: bytes, mapping: dict[bytes, bytes]) -> bytes:
+    """One page showing ``content_codes`` (single bytes) in a Helvetica font
+    whose ToUnicode CMap maps each code in ``mapping`` (one byte) to the
+    UTF-16BE hex destination given (for example ``{b"A": b"D800"}``)."""
+    entries = b" ".join(
+        b"<" + code.hex().upper().encode() + b"> <" + dest + b">" for code, dest in mapping.items()
+    )
+    cmap = (
+        b"/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapName /X def "
+        b"1 begincodespacerange <00> <FF> endcodespacerange "
+        + b"%d beginbfchar " % len(mapping)
+        + entries
+        + b" endbfchar endcmap CMapName currentdict /CMap defineresource pop end end"
+    )
+    return build(
+        [
+            b"<< /Type /Catalog /Pages 2 0 R >>",
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R "
+            b"/Resources << /Font << /F1 6 0 R >> >> >>",
+            stream(b"BT /F1 12 Tf 72 700 Td (" + _escape(content_codes) + b") Tj ET"),
+            stream(cmap),
+            b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding "
+            b"/ToUnicode 5 0 R >>",
+        ]
+    )
+
+
+def surrogate_pdf() -> bytes:
+    """The break-it session's A1: code ``S`` maps to the lone high surrogate
+    U+D800, ``T`` to the lone low surrogate U+DC00 and ``B`` to ``A``. The
+    page shows 300 ``B``, an ``S`` after the 1st, 3rd and 5th run of 50 and a
+    ``T`` after the 2nd, 4th and 6th, so no surrogate is next to another (an
+    adjacent D800 DC00 pair survives the JSON reply as ONE valid character,
+    U+10000, measured). Measured on pypdf 6.19.0 / 6c72f39: ``read_pdf_text``
+    returns it ``fetched``, with 3 U+D800 and 3 U+DC00 among 300 ``A``."""
+    codes = b"".join(b"B" * 50 + (b"S" if run % 2 == 0 else b"T") for run in range(6))
+    return tounicode_pdf(codes, {b"S": b"D800", b"T": b"DC00", b"B": b"0041"})
+
+
+def tounicode_expansion_pdf() -> bytes:
+    """The break-it session's b4: one code byte maps to 256 characters (a
+    512-byte destination), and the page shows that byte 1,900,000 times, a
+    content stream under the 2,000,000-byte decompression limit. The file is
+    2,765 bytes; the session measured the child at 532 MB on macOS, where no
+    address-space limit can be set, with no pypdf limit applying."""
+    dest = b"0041" * 256
+    cmap = (
+        b"/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapName /X def "
+        b"1 begincodespacerange <00> <FF> endcodespacerange 1 beginbfchar <41> <"
+        + dest
+        + b"> endbfchar endcmap CMapName currentdict /CMap defineresource pop end end"
+    )
+    return build(
+        [
+            b"<< /Type /Catalog /Pages 2 0 R >>",
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R "
+            b"/Resources << /Font << /F1 6 0 R >> >> >>",
+            stream(b"BT /F1 12 Tf 72 700 Td (" + b"A" * 1_900_000 + b") Tj ET"),
+            stream(cmap),
+            b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding "
+            b"/ToUnicode 5 0 R >>",
+        ]
+    )
+
+
 #: Interpreter flags that would stop an import hook from loading; stripped
 #: only when a hook is injected.
 _HOOK_BLOCKING_FLAGS = frozenset({"-I", "-E", "-S", "-s"})
@@ -363,28 +499,42 @@ class ChildLaunches:
 
     ``probe=True`` swaps the program for :data:`PROBE` (same interpreter,
     same keyword arguments); ``program`` swaps it for any other ``-c``
-    source the same way (for example :data:`SLEEPER`). ``hook_dir`` prepends a directory holding a
-    ``sitecustomize.py`` to the child's ``PYTHONPATH`` (and strips the flags
-    that disable it), adding ``extra_env``; the code under test's own
-    environment, limits and working directory are kept."""
+    source the same way (for example :data:`SLEEPER`). ``hook_dir``
+    prepends a directory holding a ``sitecustomize.py`` to the child's
+    ``PYTHONPATH`` (and strips the flags that disable it), adding
+    ``extra_env``. ``cwd`` replaces the child's working directory (where
+    ``-m`` finds ``product_app``), and ``strip_flags`` removes interpreter
+    flags from the code's own argv. Everything else the code under test
+    chose (environment, limits, session, priority) is kept."""
 
     probe: bool = False
     program: str | None = None
     hook_dir: str | None = None
+    cwd: str | None = None
+    strip_flags: frozenset[str] = frozenset()
     extra_env: dict[str, str] = field(default_factory=dict)
     launches: list[Launch] = field(default_factory=list)
     started: threading.Event = field(default_factory=threading.Event)
 
     def install(self, monkeypatch: Any) -> ChildLaunches:
         spy = self
-        real = subprocess.Popen
+        # A second install in one test REPLACES the first instead of wrapping
+        # it: chained spies would apply the first spy's swaps after the
+        # second's (measured: a later ``cwd`` or ``extra_env`` was undone).
+        real = getattr(subprocess.Popen, "_w54_real_popen", subprocess.Popen)
 
         class SpyPopen(real):  # type: ignore[misc,valid-type]
+            _w54_real_popen = real
+
             def __init__(self, args: Any, *rest: Any, **kwargs: Any) -> None:
                 argv = [str(a) for a in args] if not isinstance(args, (str, bytes)) else [str(args)]
                 ours = any(CHILD_MODULE in a for a in argv)
                 record = Launch(args=argv, env=kwargs.get("env"), kwargs=dict(kwargs))
                 if ours:
+                    if spy.strip_flags:
+                        args = [a for a in argv if a not in spy.strip_flags]
+                    if spy.cwd is not None:
+                        kwargs["cwd"] = spy.cwd
                     if spy.probe or spy.program is not None:
                         args = [argv[0], "-c", PROBE if spy.probe else spy.program]
                     if spy.hook_dir is not None:
