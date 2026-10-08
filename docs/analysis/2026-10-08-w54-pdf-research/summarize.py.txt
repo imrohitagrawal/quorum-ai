@@ -1,0 +1,7 @@
+import json,sys,statistics as st,collections
+rows=[json.loads(l) for l in open(sys.argv[1])]
+g=collections.defaultdict(list)
+for r in rows: g[(r['pdf'],r['lib'],r['trunc'])].append(r)
+for k,v in g.items():
+    r=v[0]
+    print(f"{k[0][:34]:34} {k[1]:10} tr={k[2]:<8} pages={r['npages']} wall_med={st.median(x['wall_s'] for x in v):.3f} cpu_med={st.median(x['cpu_s'] for x in v):.3f} rssΔ={max(x['rss_delta_mb'] for x in v)} tm={max(x['tracemalloc_peak_mb'] for x in v)} chars={r['chars']} err={r['err']}")

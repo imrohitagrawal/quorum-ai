@@ -1,0 +1,18 @@
+"""Child: set own rlimits FIRST, read PDF bytes on stdin, print JSON text on stdout."""
+import resource, sys, json, os
+cpu=int(os.environ.get("W_CPU","2")); mem=int(os.environ.get("W_MEM_MB","256"))<<20
+resource.setrlimit(resource.RLIMIT_CPU,(cpu,cpu+1))
+try: resource.setrlimit(resource.RLIMIT_AS,(mem,mem))
+except (ValueError,OSError) as e: sys.stderr.write(f"RLIMIT_AS not settable here: {e}\n")
+lib=os.environ.get("W_LIB","pypdfium2"); data=sys.stdin.buffer.read(); out=[]
+if lib=="pypdfium2":
+    import pypdfium2 as pdfium
+    doc=pdfium.PdfDocument(data)
+    for i in range(min(10,len(doc))): out.append(doc[i].get_textpage().get_text_range())
+else:
+    import io,pypdf
+    from pypdf._configuration import Configuration, CURRENT_CONFIGURATION
+    c=4_000_000; CURRENT_CONFIGURATION.set(Configuration().with_overwrites(zlib_maximum_output_length=c,maximum_declared_stream_length=c,array_based_stream_maximum_output_length=c,lzw_maximum_output_length=c,run_length_maximum_output_length=c))
+    r=pypdf.PdfReader(io.BytesIO(data))
+    for p in r.pages[:10]: out.append(p.extract_text() or "")
+sys.stdout.write(json.dumps({"text":"\n".join(out)[:20000]}))

@@ -757,6 +757,11 @@ class Settings(BaseSettings):
     quorum_source_fetch_budget_seconds: float = 8.0
     #: Bytes read per page before it is cut and marked truncated.
     quorum_source_fetch_max_bytes: int = 262_144
+    #: Bytes a cited PDF may have (W54 step 3, ADR-0153 decision 2). A larger
+    #: PDF is ``too_large`` and never parsed: a cut PDF is unreadable. Clamped
+    #: to the literal 4,194,304 (``pdf_text.MAX_PDF_BYTES``) where it is used,
+    #: in ``evaluation.judge_source_pages``, so a larger value has no effect.
+    quorum_source_fetch_max_pdf_bytes: int = 4_194_304
     #: Pages fetched per run; the rest are reported as skipped.
     quorum_source_fetch_max_pages: int = 8
     #: Characters of extracted text kept per page.
@@ -766,13 +771,14 @@ class Settings(BaseSettings):
         "quorum_source_fetch_timeout_seconds",
         "quorum_source_fetch_budget_seconds",
         "quorum_source_fetch_max_bytes",
+        "quorum_source_fetch_max_pdf_bytes",
         "quorum_source_fetch_max_pages",
         "quorum_source_fetch_max_text_chars",
         mode="after",
     )
     @classmethod
     def _source_fetch_bounds_are_real(cls, value: float, info: Any) -> float:
-        # ONE validator for the five source-fetch bounds: each decorated
+        # ONE validator for the six source-fetch bounds: each decorated
         # function is a unit mutmut skips, and
         # tests/unit/test_mutation_test_set_integrity.py caps their number. ``isfinite`` first: NaN
         # compares False to every bound, so a pure range check accepts it.

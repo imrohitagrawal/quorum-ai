@@ -1,0 +1,24 @@
+import io,re,sys,glob,os,warnings,logging
+logging.disable(logging.CRITICAL)
+import pypdf, pymupdf, pypdfium2 as pdfium, pdfplumber
+from pdfminer.high_level import extract_text
+N=10
+def ex(lib,data):
+    if lib=='pypdf':
+        r=pypdf.PdfReader(io.BytesIO(data)); return "\n".join((p.extract_text() or "") for p in r.pages[:N])
+    if lib=='pdfminer': return extract_text(io.BytesIO(data),maxpages=N)
+    if lib=='pdfplumber':
+        with pdfplumber.open(io.BytesIO(data)) as p: return "\n".join((pg.extract_text() or "") for pg in p.pages[:N])
+    if lib=='pymupdf':
+        d=pymupdf.open(stream=data,filetype='pdf'); return "\n".join(d[i].get_text() for i in range(min(N,d.page_count)))
+    if lib=='pypdfium2':
+        d=pdfium.PdfDocument(data); return "\n".join(d[i].get_textpage().get_text_range() for i in range(min(N,len(d))))
+cjk=re.compile(r'[぀-ヿ一-鿿＀-￯]')
+bad=re.compile(r'[�-]|\(cid:\d+\)')
+for f in sorted(glob.glob('pdfs/*.pdf')):
+    data=open(f,'rb').read()
+    for lib in ['pypdf','pdfminer','pdfplumber','pymupdf','pypdfium2']:
+        t=ex(lib,data); b=os.path.basename(f)[:-4]
+        open(f'texts/{b}.{lib}.txt','w').write(t)
+        ns=re.sub(r'\s','',t)
+        print(f"{b[:30]:30} {lib:10} nonspace={len(ns):6} cjk={len(cjk.findall(t)):6} bad={len(bad.findall(t)):4}")

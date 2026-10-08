@@ -35,7 +35,10 @@ THE EGRESS POLICY (docs/analysis/2026-09-24-447-source-fetch-failure-modes.md)
     * Bytes are bounded on the READ ARGUMENT and the loop, never by slicing
       after an unbounded read (AGENTS 8b). ``Content-Length`` is a cheap
       pre-check, not the bound. The content type is checked BEFORE the body is
-      read; only ``text/html`` and ``text/plain`` are read.
+      read; only ``text/html`` and ``text/plain`` are read, and
+      ``application/pdf`` on the long-pages path (W54 step 3, ADR-0153), under
+      its own byte cap and parsed only in a sandboxed child process
+      (:func:`read_pdf_text`, ``pdf_text.py``).
     * Time is bounded by ONE total deadline shared by every page of one call,
       enforced two ways: the name lookup runs in a worker thread joined with
       the remaining time, and a watchdog timer armed before the request
@@ -73,16 +76,25 @@ from __future__ import annotations
 import contextlib
 import http.client
 import ipaddress
+import os
 import re
+import select
+import selectors
+import signal
 import socket
 import ssl
+import subprocess
+import sys
 import threading
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from html.parser import HTMLParser
+from pathlib import Path
 from typing import Literal
 from urllib.parse import quote, urlsplit
+
+from product_app import pdf_text
 
 Outcome = Literal[
     "fetched",
@@ -106,8 +118,11 @@ RobotsVerdict = Literal["allowed", "refused", "unchecked"]
 
 #: The identifying agent every fetch sends, with a contact URL.
 USER_AGENT = "quorum-ai-source-check/0.1 (+https://quorum.stackclimb.com)"
-#: The only content types whose body is read at all.
+#: The only content types whose body is read at all, apart from PDFs.
 READABLE_CONTENT_TYPES = frozenset({"text/html", "text/plain"})
+#: Read as a PDF, in a sandboxed child, on the long-pages path only (W54 step
+#: 3, ADR-0153 decision 1). Nothing is sniffed: another type stays refused.
+PDF_CONTENT_TYPE = "application/pdf"
 #: A page whose extracted text is shorter than this is a login shell, a
 #: consent wall or a bot challenge far more often than evidence, so it is
 #: reported as ``unusable`` and the reader treats it as not fetched.
@@ -468,6 +483,210 @@ def reading_text(body: str, content_type: str, *, limit: int) -> str:
     return "\n".join(blocks)[:READING_TEXT_MAX_CHARS]
 
 
+#: The parent kills a PDF child at the smaller of this and the fetch budget
+#: left (ADR-0153 decision 3).
+PDF_CHILD_WALL_SECONDS = 3.0
+#: The module the child runs, and the directory that holds ``product_app``:
+#: the child's working directory, so ``-m`` finds the package with no
+#: ``PYTHONPATH`` in its (empty) environment.
+_PDF_CHILD_MODULE = "product_app.pdf_text"
+_PDF_CHILD_CWD = str(Path(__file__).resolve().parents[1])
+#: At most one PDF child per app process (decision 3, failure mode 7): a PDF
+#: that finds this taken is ``unusable`` at once, never queued.
+_PDF_CHILD_SLOT = threading.Lock()
+
+
+def read_pdf_text(body: bytes, *, deadline_seconds: float) -> tuple[str, Outcome]:
+    """The text of the PDF ``body``, parsed in a sandboxed child process
+    (W54 step 3, ADR-0153), and the outcome: ``fetched`` with the text when
+    it holds at least ``MIN_USABLE_TEXT_CHARS`` characters once lone
+    surrogates are removed; ``timeout`` when no budget is left or the child
+    is killed by its time limits; otherwise ``unusable`` (no text, garbled,
+    password, parser failure, a reply over ``pdf_text.MAX_REPLY_BYTES``, a
+    child that could not start, or another PDF child already running).
+    Never raises.
+
+    The child is ``sys.executable -s -B -m product_app.pdf_text``, launched
+    with ``subprocess.Popen`` looked up at call time, no shell, ``env={}``,
+    the directory holding ``product_app`` as its working directory, and
+    ``start_new_session=True`` so it leads its own process group. The PDF
+    goes in on standard input and ``{"text": ...}`` comes back on standard
+    output, read here in bounded pieces (never past ``MAX_REPLY_BYTES`` + 1
+    bytes). The child sets its own limits (``pdf_text.set_limits``). The
+    whole group is killed with ``SIGKILL`` once the child has exited after
+    its reply (before the child is collected, on Linux; wherever
+    ``os.pidfd_open`` is missing or fails, macOS included, the child is
+    collected and the group is not killed: see :func:`_end_group`), at the
+    smaller of ``PDF_CHILD_WALL_SECONDS`` and
+    ``deadline_seconds``, or once the reply is over the ceiling, so a
+    grandchild holding the pipe cannot hold the call. The one-child slot is
+    freed on every path."""
+    wall = min(PDF_CHILD_WALL_SECONDS, deadline_seconds)
+    if wall <= 0:
+        return "", "timeout"
+    if not _PDF_CHILD_SLOT.acquire(blocking=False):
+        return "", "unusable"
+    try:
+        return _run_pdf_child(body, time.monotonic() + wall)
+    except (OSError, ValueError, MemoryError, subprocess.SubprocessError):
+        return "", "unusable"
+    finally:
+        _PDF_CHILD_SLOT.release()
+
+
+def _run_pdf_child(body: bytes, deadline: float) -> tuple[str, Outcome]:
+    try:
+        child = subprocess.Popen(
+            [sys.executable, "-s", "-B", "-m", _PDF_CHILD_MODULE],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            env={},
+            cwd=_PDF_CHILD_CWD,
+            close_fds=True,
+            start_new_session=True,
+        )
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return "", "unusable"
+    reaped = False
+    try:
+        failure, reply = _exchange(child, body, deadline)
+        if failure is None:
+            # The reply is complete; the child must still EXIT inside the
+            # deadline, or its exit status is unknown. It is left unreaped,
+            # so the group is killed while its zombie still holds the id.
+            exited = _wait_for_exit_unreaped(child.pid, deadline - time.monotonic())
+            if exited is False:
+                failure = "timeout"
+            elif exited is None:
+                # No way to wait without reaping on this platform: reap, and
+                # then do NOT kill the group, whose id may be reused.
+                try:
+                    child.wait(timeout=max(0.0, deadline - time.monotonic()))
+                    reaped = True
+                except subprocess.TimeoutExpired:
+                    failure = "timeout"
+    finally:
+        _end_group(child, kill_group=not reaped)
+    if failure is not None:
+        return "", failure
+    if child.returncode == -signal.SIGXCPU:
+        # The 2-second CPU limit: the child ran out of time, not of text.
+        return "", "timeout"
+    text = pdf_text.read_reply(reply) if child.returncode == 0 else ""
+    # The floor counts text as a web page's is counted: whitespace collapsed.
+    if len(" ".join(text.split())) < MIN_USABLE_TEXT_CHARS or pdf_text.is_garbled(text):
+        return "", "unusable"
+    return text, "fetched"
+
+
+#: Bytes written to or read from the child's pipes per call.
+_PIPE_CHUNK_BYTES = 65_536
+
+
+def _exchange(
+    child: subprocess.Popen[bytes], body: bytes, deadline: float
+) -> tuple[Outcome | None, bytes]:
+    """Feed ``body`` to the child and read its reply until it closes the pipe,
+    over one selector so neither side can deadlock the other. Returns
+    ``(None, reply)``, or ``("timeout", b"")`` at ``deadline``, or
+    ``("unusable", b"")`` once the reply passes ``MAX_REPLY_BYTES``. Each
+    read asks for no more than the bytes left to one past the ceiling."""
+    stdin, stdout = child.stdin, child.stdout
+    if stdin is None or stdout is None:  # never with PIPE; keeps "never raises" under -O
+        return "unusable", b""
+    view = memoryview(body)
+    sent = 0
+    chunks: list[bytes] = []
+    total = 0
+    ceiling = pdf_text.MAX_REPLY_BYTES
+    try:
+        with selectors.DefaultSelector() as selector:
+            if body:
+                os.set_blocking(stdin.fileno(), False)
+                selector.register(stdin, selectors.EVENT_WRITE)
+            else:
+                stdin.close()
+            selector.register(stdout, selectors.EVENT_READ)
+            while True:
+                left = deadline - time.monotonic()
+                if left <= 0:
+                    return "timeout", b""
+                for key, _ in selector.select(left):
+                    if key.fileobj is stdin:
+                        try:
+                            sent += os.write(stdin.fileno(), view[sent : sent + _PIPE_CHUNK_BYTES])
+                        except BrokenPipeError:
+                            # The child stopped reading; its reply decides.
+                            sent = len(body)
+                        if sent >= len(body):
+                            selector.unregister(stdin)
+                            with contextlib.suppress(OSError):
+                                stdin.close()
+                        continue
+                    chunk = os.read(stdout.fileno(), min(_PIPE_CHUNK_BYTES, ceiling + 1 - total))
+                    if not chunk:
+                        return None, b"".join(chunks)
+                    chunks.append(chunk)
+                    total += len(chunk)
+                    if total > ceiling:
+                        return "unusable", b""
+    finally:
+        for pipe in (stdin, stdout):
+            with contextlib.suppress(OSError):
+                pipe.close()
+
+
+#: How long the parent waits to collect a child after killing its group.
+_REAP_SECONDS = 0.5
+
+
+def _wait_for_exit_unreaped(pid: int, timeout: float) -> bool | None:
+    """Wait up to ``timeout`` seconds for process ``pid`` to exit WITHOUT
+    collecting it, so its zombie keeps holding the pid and the process-group
+    id. True once it has exited, False on timeout, None when this platform
+    offers no such wait or the wait itself fails: the caller then reaps
+    without a group kill.
+
+    Linux 5.3 and later only: ``os.pidfd_open``, readable once the process
+    has exited (an older kernel raises, and the fallback applies). Every
+    other platform, macOS included, returns None and uses the fallback:
+    only Linux runs in production and in CI, where this path is tested, so
+    no untested platform-specific wait is kept for macOS."""
+    timeout = max(0.0, timeout)
+    try:
+        if sys.platform == "linux":
+            handle = os.pidfd_open(pid)
+            try:
+                readable, _, _ = select.select([handle], [], [], timeout)
+                return bool(readable)
+            finally:
+                os.close(handle)
+    except (OSError, AttributeError):
+        return None
+    return None
+
+
+def _end_group(child: subprocess.Popen[bytes], *, kill_group: bool = True) -> None:
+    """Kill the child's whole process group with ``SIGKILL`` (a grandchild
+    may still hold a pipe or the CPU), then collect the child, waiting at
+    most ``_REAP_SECONDS``. Called on every path, and the kill always comes
+    BEFORE the child is collected, while the child (alive or a zombie) still
+    holds the group id, so the id cannot belong to another group. When the
+    call ended at the deadline or the ceiling, the child has not been
+    collected yet. When it exited on its own, :func:`_wait_for_exit_unreaped`
+    waited without collecting it. Only where no such wait exists (every
+    platform but Linux, macOS included; only Linux runs in production and
+    in CI) is the child collected first, and then ``kill_group`` is False
+    and no group kill is sent. Killing a zombie's group does not change its exit status
+    (0, or ``SIGXCPU``), which the collection then reads."""
+    if kill_group:
+        with contextlib.suppress(OSError):
+            os.killpg(child.pid, signal.SIGKILL)
+    with contextlib.suppress(OSError, subprocess.TimeoutExpired):
+        child.wait(timeout=_REAP_SECONDS)
+
+
 def _now_iso() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
@@ -510,6 +729,7 @@ def _fetch_one(
     raw: bool = False,
     robots_permit: Callable[[str, str], RobotsVerdict] | None = None,
     long_pages: bool = False,
+    max_pdf_bytes: int = pdf_text.MAX_PDF_BYTES,
 ) -> FetchedSource:
     """One bounded GET.
 
@@ -519,7 +739,13 @@ def _fetch_one(
     when given, is asked with the URL's ``scheme://host[:port]`` and the URL
     once the URL has passed the scheme and host checks, before anything is
     dialled. ``long_pages`` reads the page with :func:`reading_text` instead
-    of :func:`extract_text`; the usable-length floor is the same."""
+    of :func:`extract_text`; the usable-length floor is the same.
+
+    With ``long_pages`` (and not ``raw``) an ``application/pdf`` response is
+    read as a PDF (W54 step 3, ADR-0153): its byte cap is ``max_pdf_bytes``,
+    a body over that cap is ``too_large`` and never parsed (a cut PDF is
+    unreadable), and a whole body goes to :func:`read_pdf_text` with the
+    budget left."""
     started = clock()
     if _FORBIDDEN_IN_A_URL.search(url):
         return _row(url, "refused_scheme", started=started, clock=clock)
@@ -611,7 +837,8 @@ def _fetch_one(
                 )
             content_type, _, params = (response.getheader("Content-Type") or "").partition(";")
             content_type = content_type.strip().lower()
-            if content_type not in READABLE_CONTENT_TYPES:
+            is_pdf = content_type == PDF_CONTENT_TYPE and long_pages and not raw
+            if content_type not in READABLE_CONTENT_TYPES and not is_pdf:
                 return _row(
                     url,
                     "refused_content_type",
@@ -621,8 +848,9 @@ def _fetch_one(
                     server_date=server_date,
                     last_modified=last_modified,
                 )
+            cap = max_pdf_bytes if is_pdf else max_bytes
             declared = response.getheader("Content-Length")
-            if declared and declared.strip().isdigit() and int(declared) > max_bytes:
+            if declared and declared.strip().isdigit() and int(declared) > cap:
                 return _row(
                     url,
                     "too_large",
@@ -653,14 +881,14 @@ def _fetch_one(
                 # The bound is on the ARGUMENT: never more than one byte past
                 # the cap is requested, so an oversize body is detected, not
                 # buffered.
-                chunk = response.read1(min(READ_CHUNK_BYTES, max_bytes + 1 - total))
+                chunk = response.read1(min(READ_CHUNK_BYTES, cap + 1 - total))
                 if not chunk:
                     break
                 chunks.append(chunk)
                 total += len(chunk)
-                if total > max_bytes:
+                if total > cap:
                     truncated = True
-                    total = max_bytes
+                    total = cap
                     break
             if watchdog.fired:
                 return _row(
@@ -673,7 +901,21 @@ def _fetch_one(
                     server_date=server_date,
                     last_modified=last_modified,
                 )
-            body = b"".join(chunks)[:max_bytes]
+            if is_pdf and truncated:
+                # A PDF cut at the cap yields nothing readable (ADR-0153
+                # decision 2): it is never parsed.
+                return _row(
+                    url,
+                    "too_large",
+                    started=started,
+                    clock=clock,
+                    bytes_read=total,
+                    truncated=True,
+                    status=status,
+                    server_date=server_date,
+                    last_modified=last_modified,
+                )
+            body = b"".join(chunks)[:cap]
             encoding = (response.getheader("Content-Encoding") or "identity").strip().lower()
             if encoding not in ("", "identity"):
                 return _row(
@@ -682,6 +924,20 @@ def _fetch_one(
                     started=started,
                     clock=clock,
                     bytes_read=total,
+                    status=status,
+                    server_date=server_date,
+                    last_modified=last_modified,
+                )
+            if is_pdf:
+                connection.close()
+                text, outcome = read_pdf_text(body, deadline_seconds=deadline - clock())
+                return _row(
+                    url,
+                    outcome,
+                    started=started,
+                    clock=clock,
+                    bytes_read=total,
+                    text=text if outcome == "fetched" else "",
                     status=status,
                     server_date=server_date,
                     last_modified=last_modified,
@@ -943,6 +1199,7 @@ def fetch_cited_pages(
     clock: Callable[[], float] = time.monotonic,
     respect_robots: bool = False,
     long_pages: bool = False,
+    max_pdf_bytes: int = pdf_text.MAX_PDF_BYTES,
 ) -> tuple[FetchedSource, ...]:
     """Fetch ``urls`` in order, one row per distinct URL.
 
@@ -963,7 +1220,10 @@ def fetch_cited_pages(
     With ``long_pages`` (W54, ADR-0150) a page's text is
     :func:`reading_text`: a page longer than ``max_text_chars`` keeps its main
     area's blocks, up to ``READING_TEXT_MAX_CHARS``, for the caller to pick
-    passages from. Robots.txt is read the same way either way.
+    passages from. Robots.txt is read the same way either way. With
+    ``long_pages`` an ``application/pdf`` page is also read, as a PDF of at
+    most ``max_pdf_bytes`` (W54 step 3, ADR-0153); without it a PDF stays
+    ``refused_content_type``.
     """
     deadline = clock() + budget_seconds
     rows: list[FetchedSource] = []
@@ -1017,6 +1277,7 @@ def fetch_cited_pages(
                 clock=clock,
                 robots_permit=permit if respect_robots else None,
                 long_pages=long_pages,
+                max_pdf_bytes=max_pdf_bytes,
             )
         )
     return tuple(rows)

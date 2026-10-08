@@ -1,0 +1,87 @@
+"""Run ONE extraction in this process and print a JSON line.
+
+usage: extract_one.py <lib> <pdf_path> <max_pages> [<truncate_bytes>]
+Measures wall time, CPU time, peak RSS delta (getrusage, includes native allocs),
+tracemalloc peak (Python allocs only), characters extracted, and a text sample.
+"""
+import io
+import json
+import resource
+import sys
+import time
+import tracemalloc
+
+
+def rss_bytes():
+    # macOS: ru_maxrss in bytes; Linux: kilobytes
+    r = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    return r if sys.platform == "darwin" else r * 1024
+
+
+lib, path, max_pages = sys.argv[1], sys.argv[2], int(sys.argv[3])
+trunc = int(sys.argv[4]) if len(sys.argv) > 4 else 0
+data = open(path, "rb").read()
+if trunc:
+    data = data[:trunc]
+
+# import first so import cost is excluded from the peak delta
+if lib == "pypdf":
+    import pypdf
+elif lib in ("pdfminer",):
+    from pdfminer.high_level import extract_text
+elif lib == "pdfplumber":
+    import pdfplumber
+elif lib == "pymupdf":
+    import pymupdf
+elif lib == "pypdfium2":
+    import pypdfium2 as pdfium
+
+base_rss = rss_bytes()
+import os
+if not os.environ.get("NO_TM"): tracemalloc.start()
+t0, c0 = time.perf_counter(), time.process_time()
+err = None
+text = ""
+npages = None
+try:
+    if lib == "pypdf":
+        r = pypdf.PdfReader(io.BytesIO(data))
+        npages = len(r.pages)
+        parts = []
+        for i, p in enumerate(r.pages):
+            if i >= max_pages:
+                break
+            parts.append(p.extract_text() or "")
+        text = "\n".join(parts)
+    elif lib == "pdfminer":
+        text = extract_text(io.BytesIO(data), maxpages=max_pages)
+    elif lib == "pdfplumber":
+        with pdfplumber.open(io.BytesIO(data)) as pdf:
+            npages = len(pdf.pages)
+            text = "\n".join((pg.extract_text() or "") for pg in pdf.pages[:max_pages])
+    elif lib == "pymupdf":
+        doc = pymupdf.open(stream=data, filetype="pdf")
+        npages = doc.page_count
+        text = "\n".join(doc[i].get_text() for i in range(min(max_pages, npages)))
+    elif lib == "pypdfium2":
+        doc = pdfium.PdfDocument(data)
+        npages = len(doc)
+        parts = []
+        for i in range(min(max_pages, npages)):
+            tp = doc[i].get_textpage()
+            parts.append(tp.get_text_range())
+        text = "\n".join(parts)
+except BaseException as e:  # noqa: BLE001 - we want to record anything
+    err = f"{type(e).__name__}: {str(e)[:160]}"
+wall = time.perf_counter() - t0
+cpu = time.process_time() - c0
+_, tm_peak = tracemalloc.get_traced_memory()
+peak_rss = rss_bytes()
+print(json.dumps({
+    "lib": lib, "pdf": path.rsplit("/", 1)[-1], "trunc": trunc, "max_pages": max_pages,
+    "npages": npages, "wall_s": round(wall, 3), "cpu_s": round(cpu, 3),
+    "rss_delta_mb": round((peak_rss - base_rss) / 2**20, 1),
+    "tracemalloc_peak_mb": round(tm_peak / 2**20, 1),
+    "chars": len(text), "err": err,
+    "sample": text[:300].replace("\n", " | "),
+}, ensure_ascii=False))

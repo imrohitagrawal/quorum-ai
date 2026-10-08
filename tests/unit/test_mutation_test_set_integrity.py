@@ -156,6 +156,10 @@ DESELECTED_FROM_THE_MUTANT_RUN = (
     # `product_app`, so neither can kill a `src/` mutant.
     "tests/unit/test_docs_map_matches_tree.py",
     "tests/unit/test_measure_doc_reachability.py",
+    # W54 step 3. Parses the repository's `Dockerfile`, which is not copied
+    # into `./mutants/` (`also_copy` does not list it). It imports nothing
+    # from `product_app`, so it can kill no `src/` mutant.
+    "tests/unit/test_w54_dockerfile_compiles_bytecode.py",
 )
 
 MARKER = "repo_introspection"

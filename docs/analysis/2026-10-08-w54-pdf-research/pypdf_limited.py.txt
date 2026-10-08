@@ -1,0 +1,13 @@
+import io,sys,time,json,resource,pypdf
+from pypdf._configuration import Configuration
+cap=int(sys.argv[2])
+cfg=Configuration().with_overwrites(zlib_maximum_output_length=cap, maximum_declared_stream_length=cap,
+    array_based_stream_maximum_output_length=cap, lzw_maximum_output_length=cap, run_length_maximum_output_length=cap)
+import pypdf._configuration as C
+tok=C.CURRENT_CONFIGURATION.set(cfg)
+t0=time.process_time(); err=None; n=0
+try:
+    r=pypdf.PdfReader(sys.argv[1])
+    for p in r.pages[:10]: n+=len(p.extract_text() or "")
+except Exception as e: err=f"{type(e).__name__}: {str(e)[:80]}"
+print(json.dumps({"f":sys.argv[1].split('/')[-1],"cap":cap,"cpu":round(time.process_time()-t0,3),"maxrss_mb":resource.getrusage(resource.RUSAGE_SELF).ru_maxrss>>20,"chars":n,"err":err}))

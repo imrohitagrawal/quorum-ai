@@ -54,7 +54,7 @@ from urllib.parse import urlparse
 from markdown_it import MarkdownIt
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from product_app import source_fetcher
+from product_app import pdf_text, source_fetcher
 from product_app.config import settings
 from product_app.debate import AgreementSummary
 from product_app.providers import (
@@ -2083,7 +2083,8 @@ def judge_source_pages(initial_answers: list[InitialModelAnswer]) -> JudgeSource
       the content type was refused, the page was over the per-site limit.
       ADR-0152 decision 3 (CHG-032 (e)) overturned ADR-0148 call (iii), which
       sent "" for a fetch that failed for another reason;
-    * "" otherwise: no excerpt, a fetched page whose text cleans to nothing,
+    * "" otherwise: no excerpt, a fetched page or excerpt whose text cleans
+      to nothing once lone surrogates are removed (it is then not counted),
       or no slot left in the 8-item cap.
 
     THE CAP (ADR-0152 decision 5). Every page the fetcher ATTEMPTED (read,
@@ -2113,6 +2114,9 @@ def judge_source_pages(initial_answers: list[InitialModelAnswer]) -> JudgeSource
         budget_seconds=settings.quorum_source_fetch_budget_seconds,
         per_recv_seconds=settings.quorum_source_fetch_timeout_seconds,
         max_bytes=settings.quorum_source_fetch_max_bytes,
+        # W54 step 3 (ADR-0153 decision 2): the PDF cap is clamped HERE, where
+        # it is used, so an assigned setting cannot pass the literal.
+        max_pdf_bytes=min(settings.quorum_source_fetch_max_pdf_bytes, pdf_text.MAX_PDF_BYTES),
         max_pages=min(settings.quorum_source_fetch_max_pages, JUDGE_MAX_SOURCE_PAGES),
         max_text_chars=min(
             settings.quorum_source_fetch_max_text_chars, JUDGE_MAX_SOURCE_PAGE_CHARS
@@ -2144,8 +2148,12 @@ def judge_source_pages(initial_answers: list[InitialModelAnswer]) -> JudgeSource
             raw = pick_passages(row.text, answer_texts, limit=page_chars)
         else:
             raw = excerpts.get(address, "")
-        text = _clean_search_excerpt(raw)[:JUDGE_MAX_SOURCE_PAGE_CHARS]
-        if text:
+        # W54 step 3, review round 2: lone surrogates are removed BEFORE the
+        # item is counted, so an item made only of them (and spaces) counts
+        # in none of N, P or Q and cannot hide "(no page could be read)".
+        text = _clean_search_excerpt(pdf_text.strip_lone_surrogates(raw))
+        text = text[:JUDGE_MAX_SOURCE_PAGE_CHARS]
+        if text.strip():
             text_for[address] = text
             read += row.outcome == "fetched"
             preview += row.outcome == "refused_robots"
@@ -2228,8 +2236,11 @@ def build_judge_prompt(evidence: JudgeEvidence) -> tuple[str, str]:
 def _panel_judge_parts(evidence: JudgeEvidence, *, pages: bool) -> list[str]:
     """The panel judge's fenced body, as lines. ``pages`` (v2 only) adds the
     SOURCE_PAGES section after SOURCES: one ``PAGE [N]:`` entry per non-empty
-    ``source_pages`` item, N being its SOURCES line. Without it the lines are
-    exactly v1's, so v1's prompt does not move by a byte."""
+    ``source_pages`` item, N being its SOURCES line. Each item, a page's text
+    or a search preview, has its lone surrogates removed first (W54 step 3,
+    review round 1): a preview arrives as JSON, which can carry an escaped
+    one, so the prompt does not rely on the PDF path alone. Without ``pages``
+    the lines are exactly v1's, so v1's prompt does not move by a byte."""
     parts: list[str] = [JUDGE_EVIDENCE_START, f"QUESTION: {evidence.query_text}", ""]
     parts.append("SOURCES:")
     parts.extend(evidence.source_lines or ("(none)",))
@@ -2237,10 +2248,11 @@ def _panel_judge_parts(evidence: JudgeEvidence, *, pages: bool) -> list[str]:
     if pages:
         parts.append("SOURCE_PAGES:")
         entries = zip_longest(evidence.source_pages, evidence.source_page_same_as, fillvalue=0)
-        for number, (page, earlier) in enumerate(entries, start=1):
+        for number, (raw_page, earlier) in enumerate(entries, start=1):
+            page = pdf_text.strip_lone_surrogates(str(raw_page)) if raw_page else ""
             if page:
                 parts.append(f"PAGE [{number}]:")
-                parts.append(str(page))
+                parts.append(page)
             elif earlier:
                 parts.append(JUDGE_SAME_PAGE_LINE.format(line=number, earlier=earlier))
         parts.extend(() if any(evidence.source_pages) else ("(no page could be read)",))
