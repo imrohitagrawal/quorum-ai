@@ -516,7 +516,8 @@ def read_pdf_text(body: bytes, *, deadline_seconds: float) -> tuple[str, Outcome
     whole group is killed with ``SIGKILL`` once the child has exited after
     its reply (before the child is collected, on Linux; wherever
     ``os.pidfd_open`` is missing or fails, macOS included, the child is
-    collected and the group is not killed: see :func:`_end_group`), at the smaller of ``PDF_CHILD_WALL_SECONDS`` and
+    collected and the group is not killed: see :func:`_end_group`), at the
+    smaller of ``PDF_CHILD_WALL_SECONDS`` and
     ``deadline_seconds``, or once the reply is over the ceiling, so a
     grandchild holding the pipe cannot hold the call. The one-child slot is
     freed on every path."""
