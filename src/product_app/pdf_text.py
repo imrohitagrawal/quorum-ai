@@ -62,19 +62,22 @@ MAX_CHARS = 50_000
 CPU_SECONDS = 2
 ADDRESS_SPACE_BYTES = 256 * 2**20
 OOM_SCORE_ADJ = "1000"
-#: The child's CPU priority: the lowest, so a PDF never competes with requests.
+#: The child's CPU priority: the lowest. A PDF still uses the CPU, but it
+#: competes with the app's requests only at the lowest priority.
 NICENESS = 19
 #: The most bytes of reply the parent reads: 50,000 characters at most 12
 #: escaped bytes each is about 600 KB, so 1 MiB holds any real reply.
 MAX_REPLY_BYTES = 1_048_576
 #: Predefined CMaps pypdf does not map, and the codec that reads them. The
-#: research measured ``/90msp-RKSJ-H`` read exactly with cp932 (NOTES.md).
+#: research reported ``/90msp-RKSJ-H`` read exactly with cp932 (NOTES.md; its
+#: outputs were not kept); the tests show it on a PDF built for the purpose.
 EXTRA_CMAP_CODECS = {"/90msp-RKSJ-H": "cp932"}
 
 
-#: UTF-16 surrogates. In a Python string every one is LONE (Unicode category
-#: Cs): a valid pair decodes to one character above U+FFFF. A ToUnicode map
-#: can emit them, and an escaped one survives JSON.
+#: UTF-16 surrogates (Unicode category Cs). In the PARENT, after JSON decoding
+#: has joined every valid escaped pair into one character above U+FFFF, any
+#: U+D800-U+DFFF left is lone. A ToUnicode map can emit them, and an escaped
+#: lone one survives JSON.
 _LONE_SURROGATE = re.compile("[\ud800-\udfff]")
 
 

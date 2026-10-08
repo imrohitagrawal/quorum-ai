@@ -5,9 +5,14 @@ WORKDIR /app
 
 # Copy only the dependency manifest first to leverage layer caching.
 # This layer is invalidated only when pyproject.toml or uv.lock changes.
+# --compile-bytecode: the runtime stage sets PYTHONDONTWRITEBYTECODE=1, so the
+# .pyc files this stage writes are the only ones the image has. The PDF child
+# (ADR-0153) imports pypdf on every PDF inside a 2 s CPU limit; the W54 step 3
+# break-it session measured that import at 0.17-0.19 s of CPU without bytecode
+# and 0.04-0.05 s with it, on a Mac.
 COPY pyproject.toml uv.lock ./
 RUN uv venv /opt/venv \
-    && uv pip install --python /opt/venv/bin/python --no-cache .
+    && uv pip install --python /opt/venv/bin/python --no-cache --compile-bytecode .
 
 # Copy the application source
 COPY src ./src

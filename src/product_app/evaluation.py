@@ -2083,7 +2083,8 @@ def judge_source_pages(initial_answers: list[InitialModelAnswer]) -> JudgeSource
       the content type was refused, the page was over the per-site limit.
       ADR-0152 decision 3 (CHG-032 (e)) overturned ADR-0148 call (iii), which
       sent "" for a fetch that failed for another reason;
-    * "" otherwise: no excerpt, a fetched page whose text cleans to nothing,
+    * "" otherwise: no excerpt, a fetched page or excerpt whose text cleans
+      to nothing once lone surrogates are removed (it is then not counted),
       or no slot left in the 8-item cap.
 
     THE CAP (ADR-0152 decision 5). Every page the fetcher ATTEMPTED (read,
@@ -2147,8 +2148,12 @@ def judge_source_pages(initial_answers: list[InitialModelAnswer]) -> JudgeSource
             raw = pick_passages(row.text, answer_texts, limit=page_chars)
         else:
             raw = excerpts.get(address, "")
-        text = _clean_search_excerpt(raw)[:JUDGE_MAX_SOURCE_PAGE_CHARS]
-        if text:
+        # W54 step 3, review round 2: lone surrogates are removed BEFORE the
+        # item is counted, so an item made only of them (and spaces) counts
+        # in none of N, P or Q and cannot hide "(no page could be read)".
+        text = _clean_search_excerpt(pdf_text.strip_lone_surrogates(raw))
+        text = text[:JUDGE_MAX_SOURCE_PAGE_CHARS]
+        if text.strip():
             text_for[address] = text
             read += row.outcome == "fetched"
             preview += row.outcome == "refused_robots"
