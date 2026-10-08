@@ -490,6 +490,9 @@ class Launch:
     env: dict[str, str] | None
     kwargs: dict[str, Any]
     pid: int | None = None
+    #: The parent's end of the child's stdout pipe, so a test can tell the
+    #: reads of THIS pipe from every other ``os.read`` in the process.
+    stdout_fd: int | None = None
 
 
 @dataclass
@@ -549,6 +552,7 @@ class ChildLaunches:
                 super().__init__(args, *rest, **kwargs)
                 if ours:
                     record.pid = self.pid
+                    record.stdout_fd = self.stdout.fileno() if self.stdout else None
                     spy.launches.append(record)
                     spy.started.set()
 

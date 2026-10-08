@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import resource
 import sys
 from pathlib import Path
@@ -194,15 +195,31 @@ def test_read_reply_never_returns_more_than_fifty_thousand_characters() -> None:
 # ---------------------------------------------------------------------------
 
 
+def _record_setpriority(monkeypatch: pytest.MonkeyPatch) -> list[tuple[int, int, int]]:
+    """Replace ``os.setpriority`` with a recorder, so ``set_limits`` run in
+    THIS process cannot lower the test runner's own priority."""
+    calls: list[tuple[int, int, int]] = []
+    monkeypatch.setattr(
+        os, "setpriority", lambda which, who, value: calls.append((which, who, value))
+    )
+    return calls
+
+
 def test_set_limits_asks_for_the_adrs_four_limits(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """Decision 3, without changing this process's own limits:
     ``setrlimit`` is recorded, not applied. RED IF: the CPU limit is not 2 s
     soft, there are core files, the address space is not 268,435,456 bytes,
-    or ``oom_score_adj`` is not written as 1000."""
+    or ``oom_score_adj`` is not written as 1000, or the niceness is not
+    asked for exactly once as ``(PRIO_PROCESS, 0, 19)``. Guard: this pytest
+    process's own niceness is unchanged (rule 16a: a real ``setpriority``
+    here would lower the priority of every later test; it cannot be undone
+    without privileges)."""
+    before = os.getpriority(os.PRIO_PROCESS, 0)
     calls: list[tuple[int, tuple[int, int]]] = []
     monkeypatch.setattr(resource, "setrlimit", lambda which, limits: calls.append((which, limits)))
+    priorities = _record_setpriority(monkeypatch)
     adj = tmp_path / "oom_score_adj"
     pdf_text.set_limits(str(adj))
     assert calls == [
@@ -210,7 +227,9 @@ def test_set_limits_asks_for_the_adrs_four_limits(
         (resource.RLIMIT_CORE, (0, 0)),
         (resource.RLIMIT_AS, (268_435_456, 268_435_456)),
     ]
+    assert priorities == [(os.PRIO_PROCESS, 0, 19)]
     assert adj.read_text(encoding="ascii") == "1000"
+    assert os.getpriority(os.PRIO_PROCESS, 0) == before
 
 
 def test_set_limits_skips_what_the_platform_cannot_set(
@@ -218,7 +237,10 @@ def test_set_limits_skips_what_the_platform_cannot_set(
 ) -> None:
     """macOS refuses ``RLIMIT_AS`` and has no ``/proc``. RED IF: either
     failure raises (the child would then die before reading the PDF), or
-    the CPU limit is skipped along with them."""
+    the CPU limit is skipped along with them, or the niceness is skipped
+    (asked for other than once). Guard: this pytest process's niceness is
+    unchanged."""
+    before = os.getpriority(os.PRIO_PROCESS, 0)
     calls: list[int] = []
 
     def setrlimit(which: int, limits: tuple[int, int]) -> None:
@@ -227,8 +249,11 @@ def test_set_limits_skips_what_the_platform_cannot_set(
             raise ValueError("not allowed here")
 
     monkeypatch.setattr(resource, "setrlimit", setrlimit)
+    priorities = _record_setpriority(monkeypatch)
     pdf_text.set_limits(str(tmp_path / "missing" / "oom_score_adj"))
     assert calls == [resource.RLIMIT_CPU, resource.RLIMIT_CORE, resource.RLIMIT_AS]
+    assert priorities == [(os.PRIO_PROCESS, 0, 19)]
+    assert os.getpriority(os.PRIO_PROCESS, 0) == before
 
 
 def test_serve_writes_the_text_as_ascii_json() -> None:

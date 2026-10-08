@@ -228,6 +228,43 @@ def test_a4_a_flooding_child_is_read_only_up_to_the_ceiling_and_killed(
     assert (text, outcome) == ("", "unusable")
 
 
+def test_a4_each_read_of_the_reply_asks_only_for_the_bytes_left(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Rule 8b, on the ARGUMENT: every ``os.read`` of the child's stdout pipe
+    (that fd only) is recorded with the size it asked for and the size it
+    got, while a child floods 8 MiB. RED IF: any read asks for more than the
+    bytes left to 1,048,577 (one past the 1,048,576 ceiling), the parent
+    reads other than exactly 1,048,577 bytes, or the last read asks for
+    other than exactly the bytes left. A plain 65,536-byte read fails the
+    first: its 17th read asks for 65,536 with 1,048,576 already read.
+    The SUM of the sizes asked is not pinned: a read that returns short is
+    asked again, so the sum can pass 1,048,577 in a correct reader.
+    Partner: the pipe really was read (more than 16 reads), so the spy saw
+    the reader."""
+    progress = tmp_path / "written"
+    spy = pdfs.ChildLaunches(program=pdfs.flooder(8 * 2**20, str(progress))).install(monkeypatch)
+    reads: list[tuple[int, int, int]] = []  # (already read, asked, got)
+    real_read = os.read
+
+    def recording_read(fd: int, size: int) -> bytes:
+        data = real_read(fd, size)
+        if any(launch.stdout_fd == fd for launch in spy.launches):
+            already = sum(got for _, _, got in reads)
+            reads.append((already, size, len(data)))
+        return data
+
+    monkeypatch.setattr(os, "read", recording_read)
+    text, outcome = source_fetcher.read_pdf_text(pdfs.valid_pdf(), deadline_seconds=5.0)
+    assert (text, outcome) == ("", "unusable")
+    assert len(reads) > 16, len(reads)
+    over = [(already, asked) for already, asked, _ in reads if already + asked > 1_048_577]
+    assert over == [], over[:3]
+    assert sum(got for _, _, got in reads) == 1_048_577
+    last_already, last_asked, _ = reads[-1]
+    assert last_asked == 1_048_577 - last_already, reads[-1]
+
+
 def test_a4_a_reply_of_exactly_the_ceiling_is_parsed(monkeypatch: pytest.MonkeyPatch) -> None:
     """The boundary from below, a literal (rule 8b): a valid reply of exactly
     1,048,576 bytes is read. GREEN on 6c72f39 by design: the partner of the
