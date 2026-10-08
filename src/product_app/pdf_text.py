@@ -1,20 +1,27 @@
 """The text of one cited PDF, read in a sandboxed child process (W54 step 3, ADR-0153).
 
 HOW IT RUNS
-    ``source_fetcher.read_pdf_text`` starts ``sys.executable -m
-    product_app.pdf_text`` once per PDF, with an empty environment. This
+    ``source_fetcher.read_pdf_text`` starts ``sys.executable -s -B -m
+    product_app.pdf_text`` once per PDF (no user site-packages, no ``.pyc``
+    written), with ``env={}``, the directory holding ``product_app`` as its
+    working directory, and in a new session (so a new process group). This
     module's :func:`main` is that child: it sets its own operating-system
     limits FIRST (before it reads the PDF or imports the parser), reads the
     PDF's bytes from standard input, and writes one JSON object,
     ``{"text": "..."}``, to standard output. No parser ever runs in the app's
-    process; the app imports this module only for its constants.
+    process. The app imports this module for its constants and for
+    :func:`read_reply`, :func:`is_garbled` and :func:`strip_lone_surrogates`,
+    none of which parses a PDF.
 
 WHAT THE CHILD IS ALLOWED (ADR-0153 decision 3)
-    CPU time 2 s (``RLIMIT_CPU``; the kernel then sends ``SIGXCPU``), address
-    space 256 MiB (``RLIMIT_AS``; macOS cannot set it, so that failure is
-    ignored there), no core files, and on Linux ``oom_score_adj`` 1000 so the
-    kernel kills the child first under memory pressure. The parent kills it
-    at the smaller of 3 s and the fetch budget left.
+    CPU time 2 s soft, 3 s hard (``RLIMIT_CPU``; at the soft limit the
+    kernel sends ``SIGXCPU``), address space 256 MiB (``RLIMIT_AS``; macOS
+    cannot set it, so that failure is ignored there), no core files, the
+    lowest CPU priority (niceness 19), and on Linux ``oom_score_adj`` 1000 so
+    the kernel kills the child first under memory pressure. The parent reads
+    at most ``MAX_REPLY_BYTES`` + 1 bytes of its reply, and kills its whole
+    process group with ``SIGKILL`` at the smaller of 3 s and the fetch budget
+    left, or as soon as the reply passes ``MAX_REPLY_BYTES``.
 
 WHAT THE PARSER IS ALLOWED (decision 4)
     pypdf, with every stream's decompressed size capped at 2,000,000 bytes, a
@@ -26,8 +33,9 @@ WHAT THE PARSER IS ALLOWED (decision 4)
 
 A password or a parser exception of any kind comes back as "". Nothing here
 raises into the parent: the parent reads a JSON object, or nothing, through
-:func:`read_reply`, and itself decides whether the text is usable (at least
-200 characters, and not garbled by :func:`is_garbled`).
+:func:`read_reply` (which drops lone surrogates), and itself decides whether
+the text is usable (at least 200 characters, and not garbled by
+:func:`is_garbled`).
 """
 
 from __future__ import annotations
@@ -35,6 +43,8 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import os
+import re
 import resource
 import sys
 from typing import BinaryIO
@@ -52,9 +62,26 @@ MAX_CHARS = 50_000
 CPU_SECONDS = 2
 ADDRESS_SPACE_BYTES = 256 * 2**20
 OOM_SCORE_ADJ = "1000"
+#: The child's CPU priority: the lowest, so a PDF never competes with requests.
+NICENESS = 19
+#: The most bytes of reply the parent reads: 50,000 characters at most 12
+#: escaped bytes each is about 600 KB, so 1 MiB holds any real reply.
+MAX_REPLY_BYTES = 1_048_576
 #: Predefined CMaps pypdf does not map, and the codec that reads them. The
 #: research measured ``/90msp-RKSJ-H`` read exactly with cp932 (NOTES.md).
 EXTRA_CMAP_CODECS = {"/90msp-RKSJ-H": "cp932"}
+
+
+#: UTF-16 surrogates. In a Python string every one is LONE (Unicode category
+#: Cs): a valid pair decodes to one character above U+FFFF. A ToUnicode map
+#: can emit them, and an escaped one survives JSON.
+_LONE_SURROGATE = re.compile("[\ud800-\udfff]")
+
+
+def strip_lone_surrogates(text: str) -> str:
+    """``text`` without its lone surrogates, which are not characters and
+    must not reach the judge's prompt (W54 step 3, review round 1)."""
+    return _LONE_SURROGATE.sub("", text)
 
 
 def is_garbled(text: str) -> bool:
@@ -103,25 +130,31 @@ def extract_text(data: bytes) -> str:
 
 def read_reply(out: bytes) -> str:
     """The text in the child's reply, as the PARENT reads it: "" for anything
-    but a JSON object whose ``text`` is a string, and never more than
-    ``MAX_CHARS`` characters, whatever the child sent."""
+    but a JSON object whose ``text`` is a string, never more than
+    ``MAX_CHARS`` characters whatever the child sent, and with lone
+    surrogates removed (the floor and the garble guard then count what is
+    left)."""
     try:
         text = json.loads(out)["text"]
-    except (ValueError, TypeError, KeyError):
+    except (ValueError, TypeError, KeyError, RecursionError):
         return ""
-    return text[:MAX_CHARS] if isinstance(text, str) else ""
+    return strip_lone_surrogates(text[:MAX_CHARS]) if isinstance(text, str) else ""
 
 
 def set_limits(oom_score_adj_path: str = "/proc/self/oom_score_adj") -> None:
-    """The child's own limits, set before anything else it does. A limit the
-    platform cannot set (``RLIMIT_AS`` on macOS; ``oom_score_adj`` off Linux)
-    is skipped: the parent's wall-clock kill still bounds the child. The path
-    is a parameter so a test can run this without changing its own process's
-    standing with the kernel."""
+    """The child's own limits, set before anything else it does: CPU 2 s soft
+    and 3 s hard, no core files, address space 256 MiB, niceness 19 and
+    ``oom_score_adj`` 1000. A limit the platform cannot set (``RLIMIT_AS`` on
+    macOS; ``oom_score_adj`` off Linux) is skipped. Skipping it leaves TIME
+    bounded (the CPU limit and the parent's wall-clock kill) but not memory:
+    on macOS nothing bounds the child's memory. The path is a parameter so a
+    test can run this without changing its own process's standing with the
+    kernel."""
     resource.setrlimit(resource.RLIMIT_CPU, (CPU_SECONDS, CPU_SECONDS + 1))
     resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
     with contextlib.suppress(ValueError, OSError):
         resource.setrlimit(resource.RLIMIT_AS, (ADDRESS_SPACE_BYTES, ADDRESS_SPACE_BYTES))
+    os.setpriority(os.PRIO_PROCESS, 0, NICENESS)
     with (
         contextlib.suppress(OSError),
         open(oom_score_adj_path, "w", encoding="ascii") as handle,

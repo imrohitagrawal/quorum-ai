@@ -76,7 +76,9 @@ from __future__ import annotations
 import contextlib
 import http.client
 import ipaddress
+import os
 import re
+import selectors
 import signal
 import socket
 import ssl
@@ -496,64 +498,147 @@ _PDF_CHILD_SLOT = threading.Lock()
 def read_pdf_text(body: bytes, *, deadline_seconds: float) -> tuple[str, Outcome]:
     """The text of the PDF ``body``, parsed in a sandboxed child process
     (W54 step 3, ADR-0153), and the outcome: ``fetched`` with the text when
-    it holds at least ``MIN_USABLE_TEXT_CHARS`` characters; ``timeout`` when
-    no budget is left or the child is killed by its time limits; otherwise
-    ``unusable`` (no text, garbled, password, parser failure, a child that
-    could not start, or another PDF child already running). Never raises.
+    it holds at least ``MIN_USABLE_TEXT_CHARS`` characters once lone
+    surrogates are removed; ``timeout`` when no budget is left or the child
+    is killed by its time limits; otherwise ``unusable`` (no text, garbled,
+    password, parser failure, a reply over ``pdf_text.MAX_REPLY_BYTES``, a
+    child that could not start, or another PDF child already running).
+    Never raises.
 
-    The child is ``sys.executable -m product_app.pdf_text``, launched with
-    ``subprocess.Popen`` looked up at call time, no shell, an EMPTY
-    environment, the PDF on standard input and ``{"text": ...}`` back on
-    standard output (``pdf_text`` sets its limits). It is killed at the smaller
-    of ``PDF_CHILD_WALL_SECONDS`` and ``deadline_seconds``."""
+    The child is ``sys.executable -s -B -m product_app.pdf_text``, launched
+    with ``subprocess.Popen`` looked up at call time, no shell, ``env={}``,
+    the directory holding ``product_app`` as its working directory, and
+    ``start_new_session=True`` so it leads its own process group. The PDF
+    goes in on standard input and ``{"text": ...}`` comes back on standard
+    output, read here in bounded pieces (never past ``MAX_REPLY_BYTES`` + 1
+    bytes). The child sets its own limits (``pdf_text.set_limits``). The
+    whole group is killed with ``SIGKILL`` when the reply ends, at the
+    smaller of ``PDF_CHILD_WALL_SECONDS`` and ``deadline_seconds``, or once
+    the reply is over the ceiling, so a grandchild holding the pipe cannot
+    hold the call. The one-child slot is freed on every path."""
     wall = min(PDF_CHILD_WALL_SECONDS, deadline_seconds)
     if wall <= 0:
         return "", "timeout"
     if not _PDF_CHILD_SLOT.acquire(blocking=False):
         return "", "unusable"
     try:
-        return _run_pdf_child(body, wall)
+        return _run_pdf_child(body, time.monotonic() + wall)
+    except (OSError, ValueError, MemoryError, subprocess.SubprocessError):
+        return "", "unusable"
     finally:
         _PDF_CHILD_SLOT.release()
 
 
-def _run_pdf_child(body: bytes, wall: float) -> tuple[str, Outcome]:
+def _run_pdf_child(body: bytes, deadline: float) -> tuple[str, Outcome]:
     try:
         child = subprocess.Popen(
-            [sys.executable, "-s", "-m", _PDF_CHILD_MODULE],
+            [sys.executable, "-s", "-B", "-m", _PDF_CHILD_MODULE],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             env={},
             cwd=_PDF_CHILD_CWD,
             close_fds=True,
+            start_new_session=True,
         )
     except (OSError, ValueError, subprocess.SubprocessError):
         return "", "unusable"
     try:
-        out, _ = child.communicate(body, timeout=wall)
-    except subprocess.TimeoutExpired:
-        _reap(child)
-        return "", "timeout"
-    except (OSError, ValueError):
-        _reap(child)
-        return "", "unusable"
+        failure, reply = _exchange(child, body, deadline)
+        if failure is None:
+            # The reply is complete; the child must still EXIT inside the
+            # deadline, or its exit status is unknown.
+            try:
+                child.wait(timeout=max(0.0, deadline - time.monotonic()))
+            except subprocess.TimeoutExpired:
+                failure = "timeout"
+    finally:
+        _end_group(child)
+    if failure is not None:
+        return "", failure
     if child.returncode == -signal.SIGXCPU:
         # The 2-second CPU limit: the child ran out of time, not of text.
         return "", "timeout"
-    text = pdf_text.read_reply(out) if child.returncode == 0 else ""
+    text = pdf_text.read_reply(reply) if child.returncode == 0 else ""
     # The floor counts text as a web page's is counted: whitespace collapsed.
     if len(" ".join(text.split())) < MIN_USABLE_TEXT_CHARS or pdf_text.is_garbled(text):
         return "", "unusable"
     return text, "fetched"
 
 
-def _reap(child: subprocess.Popen[bytes]) -> None:
-    """Kill ``child`` and collect it, so no zombie outlives the call."""
+#: Bytes written to or read from the child's pipes per call.
+_PIPE_CHUNK_BYTES = 65_536
+
+
+def _exchange(
+    child: subprocess.Popen[bytes], body: bytes, deadline: float
+) -> tuple[Outcome | None, bytes]:
+    """Feed ``body`` to the child and read its reply until it closes the pipe,
+    over one selector so neither side can deadlock the other. Returns
+    ``(None, reply)``, or ``("timeout", b"")`` at ``deadline``, or
+    ``("unusable", b"")`` once the reply passes ``MAX_REPLY_BYTES``. Each
+    read asks for no more than the bytes left to one past the ceiling."""
+    stdin, stdout = child.stdin, child.stdout
+    if stdin is None or stdout is None:  # never with PIPE; keeps "never raises" under -O
+        return "unusable", b""
+    view = memoryview(body)
+    sent = 0
+    chunks: list[bytes] = []
+    total = 0
+    ceiling = pdf_text.MAX_REPLY_BYTES
+    try:
+        with selectors.DefaultSelector() as selector:
+            if body:
+                os.set_blocking(stdin.fileno(), False)
+                selector.register(stdin, selectors.EVENT_WRITE)
+            else:
+                stdin.close()
+            selector.register(stdout, selectors.EVENT_READ)
+            while True:
+                left = deadline - time.monotonic()
+                if left <= 0:
+                    return "timeout", b""
+                for key, _ in selector.select(left):
+                    if key.fileobj is stdin:
+                        try:
+                            sent += os.write(stdin.fileno(), view[sent : sent + _PIPE_CHUNK_BYTES])
+                        except BrokenPipeError:
+                            # The child stopped reading; its reply decides.
+                            sent = len(body)
+                        if sent >= len(body):
+                            selector.unregister(stdin)
+                            with contextlib.suppress(OSError):
+                                stdin.close()
+                        continue
+                    chunk = os.read(stdout.fileno(), min(_PIPE_CHUNK_BYTES, ceiling + 1 - total))
+                    if not chunk:
+                        return None, b"".join(chunks)
+                    chunks.append(chunk)
+                    total += len(chunk)
+                    if total > ceiling:
+                        return "unusable", b""
+    finally:
+        for pipe in (stdin, stdout):
+            with contextlib.suppress(OSError):
+                pipe.close()
+
+
+#: How long the parent waits to collect a child after killing its group.
+_REAP_SECONDS = 0.5
+
+
+def _end_group(child: subprocess.Popen[bytes]) -> None:
+    """Kill the child's whole process group with ``SIGKILL`` (a grandchild
+    may still hold a pipe or the CPU), then collect the child, waiting at
+    most ``_REAP_SECONDS``. Called on every path. When the child was killed
+    by the deadline or the ceiling it is not yet collected, so its group id
+    cannot have been reused. When it exited on its own it was collected
+    first; the group id then stays reserved while any process of the group
+    is alive, which is exactly when the kill is needed."""
     with contextlib.suppress(OSError):
-        child.kill()
-    with contextlib.suppress(OSError, ValueError):
-        child.communicate()
+        os.killpg(child.pid, signal.SIGKILL)
+    with contextlib.suppress(OSError, subprocess.TimeoutExpired):
+        child.wait(timeout=_REAP_SECONDS)
 
 
 def _now_iso() -> str:

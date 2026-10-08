@@ -2231,8 +2231,11 @@ def build_judge_prompt(evidence: JudgeEvidence) -> tuple[str, str]:
 def _panel_judge_parts(evidence: JudgeEvidence, *, pages: bool) -> list[str]:
     """The panel judge's fenced body, as lines. ``pages`` (v2 only) adds the
     SOURCE_PAGES section after SOURCES: one ``PAGE [N]:`` entry per non-empty
-    ``source_pages`` item, N being its SOURCES line. Without it the lines are
-    exactly v1's, so v1's prompt does not move by a byte."""
+    ``source_pages`` item, N being its SOURCES line. Each item, a page's text
+    or a search preview, has its lone surrogates removed first (W54 step 3,
+    review round 1): a preview arrives as JSON, which can carry an escaped
+    one, so the prompt does not rely on the PDF path alone. Without ``pages``
+    the lines are exactly v1's, so v1's prompt does not move by a byte."""
     parts: list[str] = [JUDGE_EVIDENCE_START, f"QUESTION: {evidence.query_text}", ""]
     parts.append("SOURCES:")
     parts.extend(evidence.source_lines or ("(none)",))
@@ -2240,10 +2243,11 @@ def _panel_judge_parts(evidence: JudgeEvidence, *, pages: bool) -> list[str]:
     if pages:
         parts.append("SOURCE_PAGES:")
         entries = zip_longest(evidence.source_pages, evidence.source_page_same_as, fillvalue=0)
-        for number, (page, earlier) in enumerate(entries, start=1):
+        for number, (raw_page, earlier) in enumerate(entries, start=1):
+            page = pdf_text.strip_lone_surrogates(str(raw_page)) if raw_page else ""
             if page:
                 parts.append(f"PAGE [{number}]:")
-                parts.append(str(page))
+                parts.append(page)
             elif earlier:
                 parts.append(JUDGE_SAME_PAGE_LINE.format(line=number, earlier=earlier))
         parts.extend(() if any(evidence.source_pages) else ("(no page could be read)",))
