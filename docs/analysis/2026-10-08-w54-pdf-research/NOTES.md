@@ -1,4 +1,9 @@
-# PDF extraction research — 2026-10-08 (scratch, not part of the repo)
+# PDF extraction research — 2026-10-08 (the research agent's notes, copied into the repo)
+
+> Read with `README.md`, which corrects these notes (round-1 review, 2026-10-08). Only the
+> `.py.txt` scripts and the three `.jsonl` files listed in this folder were copied; `pdfs/`,
+> `texts/`, `attacks/` and `full_10pages.jsonl` were not. `attacks.jsonl` is not a full 5 x 15
+> grid (`a7c` has 4 libraries; `a3c` has 6 rows). The 26.8 s figure used 4 MB stream limits.
 
 Machine: Apple Silicon Mac, 10 cores, load average 5-8 during runs (other sessions). Python 3.12.13.
 Versions: pypdf 6.19.0, pdfminer.six 20260107, pdfplumber 0.11.10, pymupdf 1.28.2, pypdfium2 5.14.0.
