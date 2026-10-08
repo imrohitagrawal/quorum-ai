@@ -170,6 +170,31 @@ def test_the_deadline_passed_in_caps_the_wall_time() -> None:
     assert 0.3 <= elapsed < 1.2, elapsed
 
 
+def test_a_child_that_sleeps_is_killed_at_three_seconds_and_reaped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ADR decision 3: the parent kills the child at the smaller of 3 s and
+    the budget left. The CPU-burning fixture cannot pin this, because the 2 s
+    CPU limit always ends it first; this child (``SLEEPER``) uses no CPU and
+    sleeps 10 s, so with 10 s of budget left ONLY the 3 s wall kill can end
+    it. RED IF: the wall kill is raised above about 4 s or removed (the call
+    then lasts 4 s or more), the call returns before about 3 s (a lower
+    kill), the result is not ``("", "timeout")``, or the child is left
+    behind unreaped (a zombie still answers ``os.kill(pid, 0)``). Partner:
+    exactly one child was started, and it was the swapped program."""
+    spy = pdfs.ChildLaunches(program=pdfs.SLEEPER).install(monkeypatch)
+    started = time.monotonic()
+    result = source_fetcher.read_pdf_text(pdfs.valid_pdf(), deadline_seconds=10.0)
+    elapsed = time.monotonic() - started
+    assert len(spy.launches) == 1, spy.launches
+    pid = spy.launches[0].pid
+    assert pid is not None and pid != os.getpid()
+    assert result == ("", "timeout")
+    assert 2.9 <= elapsed < 4.0, elapsed
+    with pytest.raises(ProcessLookupError):
+        os.kill(pid, 0)
+
+
 def test_no_budget_left_starts_no_child(monkeypatch: pytest.MonkeyPatch) -> None:
     """RED IF: a child is started when the fetch budget is already spent, or
     the result is not empty. Partner: the same spy counts one launch for a

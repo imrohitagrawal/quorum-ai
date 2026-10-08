@@ -1,8 +1,8 @@
 """PDF files for the W54 step 3 tests (ADR-0153), built from raw bytes.
 
 No PDF library is used to MAKE a fixture, so the tests do not depend on the
-parser they test (the approach of
-``docs/analysis/2026-10-08-w54-pdf-research/make_attacks.py.txt``). Each
+parser they test (the approach of the attack-file builder kept as a text file
+in ``docs/analysis/2026-10-08-w54-pdf-research/``). Each
 builder writes a correct cross-reference table unless breaking it is the
 point.
 
@@ -337,6 +337,12 @@ PROBE = (
     "sys.stdout.write(json.dumps({'text': text}))\n"
 )
 
+#: Replaces the child's program with one that reads its input, then sleeps
+#: 10 s using no CPU, so only the parent's WALL-CLOCK kill can end it early
+#: (the 2 s CPU limit never fires). 10 s, not longer, so a missing kill
+#: costs one failing test 10 s, not a hang.
+SLEEPER = "import sys, time\nsys.stdin.buffer.read()\ntime.sleep(10)\n"
+
 #: Interpreter flags that would stop an import hook from loading; stripped
 #: only when a hook is injected.
 _HOOK_BLOCKING_FLAGS = frozenset({"-I", "-E", "-S", "-s"})
@@ -356,12 +362,14 @@ class ChildLaunches:
     names ``product_app.pdf_text`` is recorded in ``launches``.
 
     ``probe=True`` swaps the program for :data:`PROBE` (same interpreter,
-    same keyword arguments). ``hook_dir`` prepends a directory holding a
+    same keyword arguments); ``program`` swaps it for any other ``-c``
+    source the same way (for example :data:`SLEEPER`). ``hook_dir`` prepends a directory holding a
     ``sitecustomize.py`` to the child's ``PYTHONPATH`` (and strips the flags
     that disable it), adding ``extra_env``; the code under test's own
     environment, limits and working directory are kept."""
 
     probe: bool = False
+    program: str | None = None
     hook_dir: str | None = None
     extra_env: dict[str, str] = field(default_factory=dict)
     launches: list[Launch] = field(default_factory=list)
@@ -377,8 +385,8 @@ class ChildLaunches:
                 ours = any(CHILD_MODULE in a for a in argv)
                 record = Launch(args=argv, env=kwargs.get("env"), kwargs=dict(kwargs))
                 if ours:
-                    if spy.probe:
-                        args = [argv[0], "-c", PROBE]
+                    if spy.probe or spy.program is not None:
+                        args = [argv[0], "-c", PROBE if spy.probe else spy.program]
                     if spy.hook_dir is not None:
                         args = [a for a in argv if a not in _HOOK_BLOCKING_FLAGS]
                         base = dict(kwargs.get("env") or os.environ)
