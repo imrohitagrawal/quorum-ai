@@ -514,10 +514,13 @@ def read_pdf_text(body: bytes, *, deadline_seconds: float) -> tuple[str, Outcome
     output, read here in bounded pieces (never past ``MAX_REPLY_BYTES`` + 1
     bytes). The child sets its own limits (``pdf_text.set_limits``). The
     whole group is killed with ``SIGKILL`` once the child has exited after
-    its reply (before the child is collected; see :func:`_end_group`), at
-    the smaller of ``PDF_CHILD_WALL_SECONDS`` and ``deadline_seconds``, or
-    once the reply is over the ceiling, so a grandchild holding the pipe
-    cannot hold the call. The one-child slot is freed on every path."""
+    its reply (before the child is collected, on Linux; on macOS, where no
+    unreaped wait is used because only Linux runs in production and in CI,
+    the child is collected and the group is not killed: see
+    :func:`_end_group`), at the smaller of ``PDF_CHILD_WALL_SECONDS`` and
+    ``deadline_seconds``, or once the reply is over the ceiling, so a
+    grandchild holding the pipe cannot hold the call. The one-child slot is
+    freed on every path."""
     wall = min(PDF_CHILD_WALL_SECONDS, deadline_seconds)
     if wall <= 0:
         return "", "timeout"
@@ -642,27 +645,16 @@ def _wait_for_exit_unreaped(pid: int, timeout: float) -> bool | None:
     """Wait up to ``timeout`` seconds for process ``pid`` to exit WITHOUT
     collecting it, so its zombie keeps holding the pid and the process-group
     id. True once it has exited, False on timeout, None when this platform
-    offers no such wait (no ``kqueue`` process filter, no ``pidfd_open``) or
-    the wait itself fails: the caller then reaps without a group kill.
+    offers no such wait or the wait itself fails: the caller then reaps
+    without a group kill.
 
-    macOS: ``kqueue`` with ``KQ_NOTE_EXIT`` (an event is returned at once for
-    a zombie: measured on macOS). Linux 5.3 and later: ``os.pidfd_open``,
-    readable once the process has exited (an older kernel raises, and the
-    fallback applies). Any other platform: None."""
+    Linux 5.3 and later only: ``os.pidfd_open``, readable once the process
+    has exited (an older kernel raises, and the fallback applies). Every
+    other platform, macOS included, returns None and uses the fallback:
+    only Linux runs in production and in CI, where this path is tested, so
+    no untested platform-specific wait is kept for macOS."""
     timeout = max(0.0, timeout)
     try:
-        if sys.platform == "darwin":
-            queue = select.kqueue()
-            try:
-                event = select.kevent(
-                    pid,
-                    filter=select.KQ_FILTER_PROC,
-                    flags=select.KQ_EV_ADD | select.KQ_EV_ONESHOT,
-                    fflags=select.KQ_NOTE_EXIT,
-                )
-                return bool(queue.control([event], 1, timeout))
-            finally:
-                queue.close()
         if sys.platform == "linux":
             handle = os.pidfd_open(pid)
             try:
@@ -683,9 +675,10 @@ def _end_group(child: subprocess.Popen[bytes], *, kill_group: bool = True) -> No
     holds the group id, so the id cannot belong to another group. When the
     call ended at the deadline or the ceiling, the child has not been
     collected yet. When it exited on its own, :func:`_wait_for_exit_unreaped`
-    waited without collecting it. Only where no such wait exists is the
-    child collected first, and then ``kill_group`` is False and no group
-    kill is sent. Killing a zombie's group does not change its exit status
+    waited without collecting it. Only where no such wait exists (every
+    platform but Linux, macOS included; only Linux runs in production and
+    in CI) is the child collected first, and then ``kill_group`` is False
+    and no group kill is sent. Killing a zombie's group does not change its exit status
     (0, or ``SIGXCPU``), which the collection then reads."""
     if kill_group:
         with contextlib.suppress(OSError):
