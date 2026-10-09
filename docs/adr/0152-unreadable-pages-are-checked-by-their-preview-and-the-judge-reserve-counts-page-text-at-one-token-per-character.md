@@ -7,7 +7,8 @@ the typical judge input, previews for unreadable pages and the recorded producti
 2026-10-07 (CHG-032 (d), (e), (f)). The sentence composition and the 1-token-per-character
 rate are the session's; the owner may overturn either. `quorum_source_fetch_enabled` stays
 False in code and `fly.toml`. Failure modes, written before the code:
-`docs/analysis/2026-10-08-w54-step2-previews-and-reserve-failure-modes.md`.
+`docs/analysis/2026-10-08-w54-step2-previews-and-reserve-failure-modes.md`. Decision 2's 8,400 is
+replaced by 15,000 in ADR-0155 (CHG-036 (b), 2026-10-09).
 
 ## Context
 
