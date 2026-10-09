@@ -8,8 +8,9 @@ Accepted — 2026-10-09, board row W54 (page reading still off). The product own
 
 ## Context
 
-ADR-0152 decision 2 set the typical judge input with page reading on to 8,400 tokens, the larger
-of two judge inputs measured on 2026-10-07 (7,304 and 8,416) before ADR-0152 added search
+ADR-0152 decision 2 set the typical judge input with page reading on to 8,400 tokens, a rounding
+of the larger of two judge inputs measured on 2026-10-07 (7,304 and 8,416, the figures CHG-032 (d)
+quoted; 7,304 was a judge-only call on run 1's evidence, whose own judge measured 7,303) before ADR-0152 added search
 previews for every unread page. On the merged step-3 code, two paid runs (CHG-035) measured:
 
 | Run | Judge input tokens |
@@ -41,6 +42,10 @@ pages; the query's tokens are still added; the result is still clamped to the re
   million), and so does the amount booked against the daily caps when a run starts (corrected
   to the measured actual afterwards) and the cost recorded for a run whose actual is not
   reported. With the default panel and the English question, three runs still fit in the $0.40
-  daily cap and a fourth does not, as before (arithmetic from the measured $0.1092 estimate).
+  daily cap and a fourth does not, as before (arithmetic from the measured $0.1092 estimate). For
+  longer questions the higher booking can cost the third run of the day: round-1 review measured,
+  at the catalog's fallback prices and the default panel, three runs fitting up to about 6,249
+  characters before and up to about 5,749 after, so questions of about 5,750–6,249 characters now
+  fit two. The band moves with live prices.
 - Two measurements are not a statistic; the figure should be revisited once production records
   judge inputs with pages.
