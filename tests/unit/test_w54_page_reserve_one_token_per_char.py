@@ -298,7 +298,7 @@ def test_the_pages_typical_still_follows_query_length(
 ) -> None:
     """ADR-0114's review finding carried to the new figure: the query is in
     the judge prompt verbatim, so the typical grows with it. RED IF: the
-    pages typical is a flat 15,000 (both cases then read $0.01575825), is
+    pages typical is a flat 15,000 (both cases then read $0.01575), is
     still ADR-0152's 8,400 (they read $0.01015 and $0.01415), or is 7,300
     (they read $0.00905 and $0.01305)."""
     assert _judge_term(monkeypatch, pages=True, typical=True, query="x" * chars) == expected
@@ -354,18 +354,23 @@ def test_the_shipped_default_plus_the_longest_query_stays_below_the_reserve(
     typical input is 15,000 + 5,000 = 20,000 tokens, priced as set
     ($0.02075: 0.020 input + 0.00075 output, not clamped), and the pages-on
     reserve for that query is 66,056 tokens plus the v2 prompt term
-    (measured 2026-10-09). RED IF: the default rises far enough
-    to be clamped (the typical then prices as the reserve, not $0.02075),
-    the reserve's figure changes from 66,056 + the prompt term, or the margin
-    between them vanishes."""
+    (measured 2026-10-09). The margin is asserted on figures the code
+    computes: the typical input actually priced (the typical cost less its
+    output, in tokens) is strictly below the reserve's input tokens. RED IF:
+    the typical input reaches the reserve (it is then clamped: equal, not
+    below), the default moves from 15,000 (the typical is then not
+    $0.02075), or the reserve's figure changes from 66,056 + the prompt
+    term."""
     query = "x" * 20_000
     typical = _judge_term(monkeypatch, pages=True, typical=True, query=query)
     bound = _judge_term(monkeypatch, pages=True, typical=False, query=query)
     out_usd = Decimal(1024) * _TEST_PRICE[1] / Decimal(1000)
     reserve_tokens = (bound - out_usd) * Decimal(1000) / _TEST_PRICE[0]
+    typical_out_usd = Decimal(settings.cost_judge_output_tokens) * _TEST_PRICE[1] / Decimal(1000)
+    typical_tokens = (typical - typical_out_usd) * Decimal(1000) / _TEST_PRICE[0]
+    assert typical_tokens < reserve_tokens, (typical_tokens, reserve_tokens)
     assert typical == Decimal("0.02075000"), typical
     assert reserve_tokens - _prompt_term_tokens() == Decimal(66_056), reserve_tokens
-    assert Decimal(20_000) < Decimal(66_056)
 
 
 def test_the_daily_cap_still_admits_three_default_panel_runs_and_not_a_fourth(
