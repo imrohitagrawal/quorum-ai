@@ -15,12 +15,13 @@ In the two paid runs on the merged step-3 code (CHG-035), no cited PDF was read:
 
 | PDF | Why it was not read | Checked by |
 |---|---|---|
-| Two Japanese government PDFs (`ppc.go.jp`, 302,238 and 183,197 bytes) | AES-256, empty user password; pypdf needs `cryptography` or `pycryptodome` for AES and raises `DependencyError` | pypdf on the downloaded files; production has neither package (checked on the machine) |
+| Two Japanese government PDFs (`ppc.go.jp`, 302,238 and 183,197 bytes) | AES-256, empty user password; pypdf needs `cryptography` or `pycryptodome` for AES and raises `DependencyError` | pypdf on the downloaded files; production lacks `cryptography` (checked on the machine, 2026-10-08), and `pycryptodome` is in neither `pyproject.toml` nor `uv.lock` |
 | An English guidelines PDF (544,991 bytes), not encrypted | served as `content-type: application/octet-stream`, refused as not a web page | `curl` of its headers |
 
-With `cryptography` 50.0.2 installed, the app's real child path read the two Japanese PDFs as
-4,115 and 860 characters of readable Japanese (0 characters in U+0080–U+00FF), within the 2 s
-CPU limit (0.077 s and 0.062 s of CPU, measured on a Mac with bytecode).
+With `cryptography` 50.0.2 installed, the app's real child path (`read_pdf_text`) read the two
+Japanese PDFs as 4,115 and 860 characters of readable Japanese (0 characters in U+0080–U+00FF).
+Extracting them in a fresh interpreter took 0.077 s and 0.062 s of CPU, against the 2 s limit
+(measured on a Mac with bytecode).
 
 ## Decision
 
@@ -31,8 +32,9 @@ for decryption, then `pycryptodome`, then a pure-Python provider that decrypts R
 imported only by pypdf, and pypdf only inside the sandboxed child (ADR-0153 decision 3); the app
 process imports neither.
 
-`pycryptodome` was measured to cost the same and has less native code, but `cryptography` is
-pypdf's first choice and its own error message names it.
+`pycryptodome` was measured at about the same CPU (0.081 s against 0.077 s), less memory (34 MiB
+against 39 MiB) and less native code, but `cryptography` is pypdf's first choice and its own error
+message names it.
 
 ### 2. Which encrypted PDFs are read
 
@@ -70,8 +72,8 @@ reads pypdf's chosen provider.
 - **Accept octet-stream by the address ending in `.pdf`.** An address is not the file; the first
   bytes are.
 - **Look for `%PDF-` in the first 1,024 bytes.** Wider than the standards, and only partly
-  useful: measured, with 100 or more junk bytes before the header an AES file read as 0
-  characters, though an RC4 file still read.
+  useful: measured, with 100 or more junk bytes before the header one of the two Japanese PDFs
+  read as 0 characters while the other still read in full (both are AES-256).
 
 ## Consequences
 

@@ -1,0 +1,3 @@
+# PDFs are binary: small ones can hold no NUL byte, and git would then diff them as text
+# (non-UTF-8 lines that broke test_cited_paths_resolve, W54 step 3b).
+*.pdf binary

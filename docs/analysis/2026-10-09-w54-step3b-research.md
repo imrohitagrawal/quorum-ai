@@ -10,7 +10,8 @@ CPython 3.12 from uv, throwaway venvs in this folder. Grades: MEASURED / SOURCED
 
 - Version 50.0.2 (uploaded 2026-09-30), licence `Apache-2.0 OR BSD-3-Clause`.
   Requires `cffi>=2.0.0` (non-PyPy); cffi pulls `pycparser`. MEASURED (PyPI JSON; `uv pip install`
-  printed cffi 2.1.1, cryptography 50.0.2, pycparser 3.1).
+  printed cffi 2.1.1, cryptography 50.0.2, pycparser 3.1; pycparser 3.11 was uploaded on 2026-10-09 and is
+  the version `uv.lock` records).
 - Linux x86_64 wheel for CPython 3.12 is abi3: `cryptography-50.0.2-cp311-abi3-manylinux_2_34_x86_64.whl`,
   4,752,576 bytes (also manylinux_2_28 4,753,050; manylinux2014 4,719,841). MEASURED (PyPI JSON).
 - The Linux wheel's `_rust.abi3.so` is 14,434,376 bytes, has OpenSSL 4.0.3 (29 Sep 2026) linked in
@@ -88,8 +89,10 @@ then matched `%PDF-` at offset 0:1024. NetApp StorageGRID KB: default S3 PUT Con
 scripts (forum sources only; frequency UNMEASURED).
 
 pypdf (MEASURED): non-strict mode only warns when byte 0 is not `%PDF-`. With junk prepended:
-3-4 bytes → both files read; 100 / 1,006 / 1,100 bytes → the AES PPC file gives 0 chars, the RC4 leaflet
-still gives 860.
+3-4 bytes → both files read; 100 / 1,006 / 1,100 bytes → the 230602 PPC file gives 0 chars, the leaflet
+(also AES-256, R5; see §3) still gives 860. Round-1 review: the leaflet re-encrypted as RC4-128 or AES-256
+also gives 860 at every size, and the repository's fixtures give 441 at 0-1,006 junk bytes, so the drop
+belongs to that one file, not to AES. (This line first said "the RC4 leaflet".)
 
 Robots path (MEASURED by reading source): `fetch_cited_pages.permit()` calls `_fetch_one(..., raw=True)`
 without `long_pages` (default False); `is_pdf = content_type == PDF_CONTENT_TYPE and long_pages and not raw`.
@@ -109,7 +112,7 @@ of the two judge inputs"); src/product_app/costs.py:2448-2455 (comment only, rea
 .env.example:367-371 (COST_JUDGE_INPUT_TOKENS_WITH_PAGES=8400).
 Tests: tests/unit/test_w54_page_reserve_one_token_per_char.py lines 12, 228, 236, 247-252, 258-259,
 285-288, 296, 304-305, 346-352, 365, 491.
-Docs: docs/adr/0152-...md:7, 58, 60-61, 153 (title "8,400", "$0.0004 more than 7,300");
+Docs: docs/adr/0152-unreadable-pages-are-checked-by-their-preview-and-the-judge-reserve-counts-page-text-at-one-token-per-character.md:7, 58, 60-61, 153 (title "8,400", "$0.0004 more than 7,300");
 docs/analysis/2026-10-08-w54-step2-previews-and-reserve-failure-modes.md:5-6, 27;
 docs/19-change-control-log.md:36 (CHG-032 (d) verbatim owner answer — history, do not edit; add CHG-036);
 docs/65-open-work.md:151 (W54 row "the typical judge input 8,400").
@@ -132,7 +135,9 @@ PPC files `unusable`; after `cryptography==50.0.2` 230602 `fetched` 4,115 chars 
 - Dockerfile installs with `uv pip install .` from pyproject ranges, ignoring uv.lock (pyproject comment
   says so; MEASURED by reading). cryptography is in neither pyproject nor uv.lock (grep count 0), and is
   not in the test venv either. Pin it exactly, like pypdf; cffi/pycparser then float.
-- Only pypdf's crypt providers import cryptography among the runtime packages (grep of site-packages).
-  MEASURED.
+- Among the runtime packages, pypdf's crypt providers import cryptography; so can urllib3's optional
+  `urllib3/contrib/pyopenssl.py` (round-1 review). The app never loads it: after a TestClient start and
+  /health /ready /status /ui /ui/ops /metrics /estimate, none of cryptography, pypdf, cffi or pycparser
+  is in `sys.modules` (round-1 review, MEASURED). (This line first said "Only pypdf's crypt providers".)
 - If cryptography's .so fails to map under RLIMIT_AS, Python raises ImportError and pypdf silently falls
   back (INFERRED from the try/except ImportError chain) — AES PDFs would be unusable again with no error.
