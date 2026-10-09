@@ -6,7 +6,8 @@ Accepted — 2026-10-08, board row W54, step 3 (page reading still off). The pro
 to read PDFs (CHG-033 (a)) and chose pypdf in a sandboxed process (CHG-034). The limits below
 are the session's, from the research in `docs/analysis/2026-10-08-w54-pdf-research/`; the owner
 may overturn any. `quorum_source_fetch_enabled` stays False in code and `fly.toml`. Failure modes,
-written before the code: `docs/analysis/2026-10-08-w54-step3-pdf-reading-failure-modes.md`.
+written before the code: `docs/analysis/2026-10-08-w54-step3-pdf-reading-failure-modes.md`. Decisions 1 and 4 are amended by ADR-0154
+(encrypted PDFs and PDFs served as binary downloads, 2026-10-09).
 
 ## Context
 

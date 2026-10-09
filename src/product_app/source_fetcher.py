@@ -38,7 +38,11 @@ THE EGRESS POLICY (docs/analysis/2026-09-24-447-source-fetch-failure-modes.md)
       read; only ``text/html`` and ``text/plain`` are read, and
       ``application/pdf`` on the long-pages path (W54 step 3, ADR-0153), under
       its own byte cap and parsed only in a sandboxed child process
-      (:func:`read_pdf_text`, ``pdf_text.py``).
+      (:func:`read_pdf_text`, ``pdf_text.py``). On the same path
+      ``application/octet-stream`` and ``binary/octet-stream`` are read as a
+      PDF only when the body starts with ``%PDF-`` at byte 0, checked on the
+      first bytes as they arrive: refused as soon as a byte received does not
+      match the start of ``%PDF-`` (W54 step 3b, ADR-0154).
     * Time is bounded by ONE total deadline shared by every page of one call,
       enforced two ways: the name lookup runs in a worker thread joined with
       the remaining time, and a watchdog timer armed before the request
@@ -121,8 +125,15 @@ USER_AGENT = "quorum-ai-source-check/0.1 (+https://quorum.stackclimb.com)"
 #: The only content types whose body is read at all, apart from PDFs.
 READABLE_CONTENT_TYPES = frozenset({"text/html", "text/plain"})
 #: Read as a PDF, in a sandboxed child, on the long-pages path only (W54 step
-#: 3, ADR-0153 decision 1). Nothing is sniffed: another type stays refused.
+#: 3, ADR-0153 decision 1). Its body is not sniffed.
 PDF_CONTENT_TYPE = "application/pdf"
+#: Binary-download types read as a PDF on the same path, but ONLY when the
+#: body's first bytes are ``PDF_MAGIC`` (W54 step 3b, ADR-0154 decision 3): a
+#: cited PDF was served as ``application/octet-stream``. Every other type,
+#: other download types included, stays refused.
+PDF_DOWNLOAD_CONTENT_TYPES = frozenset({"application/octet-stream", "binary/octet-stream"})
+#: Byte 0 of every PDF (RFC 8118; the WHATWG MIME Sniffing standard).
+PDF_MAGIC = b"%PDF-"
 #: A page whose extracted text is shorter than this is a login shell, a
 #: consent wall or a bot challenge far more often than evidence, so it is
 #: reported as ``unusable`` and the reader treats it as not fetched.
@@ -745,7 +756,14 @@ def _fetch_one(
     read as a PDF (W54 step 3, ADR-0153): its byte cap is ``max_pdf_bytes``,
     a body over that cap is ``too_large`` and never parsed (a cut PDF is
     unreadable), and a whole body goes to :func:`read_pdf_text` with the
-    budget left."""
+    budget left. On the same path a ``PDF_DOWNLOAD_CONTENT_TYPES`` response
+    takes the same cap and is read the same way, but its first bytes are
+    checked as they arrive: it is ``refused_content_type``, with no further
+    read, as soon as a byte received differs from the same place in
+    ``PDF_MAGIC``, or when the body ends before 5 bytes; it is accepted once
+    its first 5 bytes are ``PDF_MAGIC``. A server that sends the headers and
+    then nothing still holds the fetch until its read timeout (W54 step 3b,
+    ADR-0154)."""
     started = clock()
     if _FORBIDDEN_IN_A_URL.search(url):
         return _row(url, "refused_scheme", started=started, clock=clock)
@@ -837,7 +855,11 @@ def _fetch_one(
                 )
             content_type, _, params = (response.getheader("Content-Type") or "").partition(";")
             content_type = content_type.strip().lower()
-            is_pdf = content_type == PDF_CONTENT_TYPE and long_pages and not raw
+            reading_pages = long_pages and not raw
+            # A download type is a PDF only if its body starts with %PDF-,
+            # checked below as the first bytes arrive (ADR-0154 decision 3).
+            start_unchecked = reading_pages and content_type in PDF_DOWNLOAD_CONTENT_TYPES
+            is_pdf = start_unchecked or (reading_pages and content_type == PDF_CONTENT_TYPE)
             if content_type not in READABLE_CONTENT_TYPES and not is_pdf:
                 return _row(
                     url,
@@ -886,6 +908,22 @@ def _fetch_one(
                     break
                 chunks.append(chunk)
                 total += len(chunk)
+                if start_unchecked:
+                    # Refused as soon as a byte received differs from the
+                    # same place in %PDF-; accepted once all 5 have arrived.
+                    head = b"".join(chunks)[: len(PDF_MAGIC)]
+                    if head != PDF_MAGIC[: len(head)]:
+                        return _row(
+                            url,
+                            "refused_content_type",
+                            started=started,
+                            clock=clock,
+                            bytes_read=total,
+                            status=status,
+                            server_date=server_date,
+                            last_modified=last_modified,
+                        )
+                    start_unchecked = len(head) < len(PDF_MAGIC)
                 if total > cap:
                     truncated = True
                     total = cap
@@ -894,6 +932,18 @@ def _fetch_one(
                 return _row(
                     url,
                     "timeout",
+                    started=started,
+                    clock=clock,
+                    bytes_read=total,
+                    status=status,
+                    server_date=server_date,
+                    last_modified=last_modified,
+                )
+            if start_unchecked:
+                # The body ended before 5 bytes: it cannot start with %PDF-.
+                return _row(
+                    url,
+                    "refused_content_type",
                     started=started,
                     clock=clock,
                     bytes_read=total,
@@ -1222,8 +1272,10 @@ def fetch_cited_pages(
     area's blocks, up to ``READING_TEXT_MAX_CHARS``, for the caller to pick
     passages from. Robots.txt is read the same way either way. With
     ``long_pages`` an ``application/pdf`` page is also read, as a PDF of at
-    most ``max_pdf_bytes`` (W54 step 3, ADR-0153); without it a PDF stays
-    ``refused_content_type``.
+    most ``max_pdf_bytes`` (W54 step 3, ADR-0153), and so is an
+    ``application/octet-stream`` or ``binary/octet-stream`` page whose body
+    starts with ``%PDF-`` (W54 step 3b, ADR-0154); without it neither is
+    read, and both stay ``refused_content_type``.
     """
     deadline = clock() + budget_seconds
     rows: list[FetchedSource] = []
