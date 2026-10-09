@@ -2445,9 +2445,10 @@ class CostEstimationService:
                 # too. Without it the displayed judge line did not move with
                 # query length at all, and under-showed a maximum-length query
                 # by about $0.002 (found in review).
-                # W54 step 2 (ADR-0152 decision 2, CHG-032 (d)): when this
-                # run's judge reads pages the typical input is
-                # ``cost_judge_input_tokens_with_pages``; otherwise (pages off,
+                # W54 step 2 (ADR-0152 decision 2): when this run's judge reads
+                # pages the typical input is
+                # ``cost_judge_input_tokens_with_pages`` (15,000 since ADR-0155,
+                # CHG-036 (b); 8,400 under CHG-032 (d)); otherwise (pages off,
                 # no judge, a quick run) it stays ``cost_judge_input_tokens``.
                 # The same clamp applies to both.
                 typical_input = (
