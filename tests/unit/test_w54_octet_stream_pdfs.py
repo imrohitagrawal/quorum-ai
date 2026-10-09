@@ -24,6 +24,7 @@ turns it red.
 from __future__ import annotations
 
 import contextlib
+import select
 import socket
 import time
 from collections.abc import Callable, Iterator
@@ -40,6 +41,7 @@ from tests.unit.test_w54_pdf_fetch_and_judge import (  # noqa: F401 - _hermetic 
 )
 
 from product_app import source_fetcher
+from product_app.config import settings
 
 pytestmark = pytest.mark.env_oracle
 
@@ -376,8 +378,9 @@ def test_a_raw_fetch_never_takes_the_pdf_path_even_with_long_pages(
     ``Content-Length`` (over the 262,144-byte text cap, under the 4 MiB PDF
     cap), is ``refused_content_type`` with 0 bytes read and no child. RED
     IF: ``raw`` is dropped from the condition (the PDF is then read under
-    the PDF cap by a child) or the PDF cap is applied to a raw fetch (it is
-    then ``too_large``)."""
+    the PDF cap by a child), or a raw fetch's PDF type passes the type check
+    while the 262,144-byte text cap still applies (it is then
+    ``too_large``)."""
     spy = pdfs.ChildLaunches().install(monkeypatch)
     body = pdfs.text_pdf([pdfs.EVIDENCE * 3], pad_to=300_000)
     with _routes({("raw.example", "/file"): _typed(content_type, body)}) as sites:
@@ -445,3 +448,93 @@ def test_an_octet_stream_body_starting_pdf_without_the_dash_is_refused(
     assert reading.rows[nodash].outcome == "refused_content_type", reading.rows[nodash].outcome
     assert reading.rows[dash].outcome == "fetched", reading.rows[dash].outcome
     assert len(reading.launches) == 1
+
+
+# ---------------------------------------------------------------------------
+# Round 1: refuse as soon as the first bytes stop matching %PDF-
+# ---------------------------------------------------------------------------
+
+
+def _first_then_stall(
+    first: bytes, *, stall: float, rest: bytes = b"", declared: int = PDF_CAP
+) -> Responder:
+    """Headers declaring ``declared`` bytes, then ``first``, then silence for
+    up to ``stall`` seconds, then ``rest``. The silence ends early once the
+    client has closed the connection, so a fetcher that refuses at once
+    never waits for the server here."""
+
+    def send(conn: socket.socket, _request: dict[str, str]) -> None:
+        head = (
+            f"HTTP/1.1 200 OK\r\nContent-Type: {OCTET}\r\n"
+            f"Content-Length: {declared}\r\nConnection: close\r\n\r\n"
+        )
+        try:
+            conn.sendall(head.encode() + first)
+            give_up = time.monotonic() + stall
+            while time.monotonic() < give_up:
+                readable, _, _ = select.select([conn], [], [], 0.05)
+                if readable and not conn.recv(1, socket.MSG_PEEK):
+                    return  # the client closed the connection
+            conn.sendall(rest)
+        except OSError:
+            return
+
+    return send
+
+
+@pytest.mark.parametrize(
+    "first", [b"X", b"PK\x03\x04", b"%PDX"], ids=["X", "zip-signature", "%PDX"]
+)
+def test_a_start_that_cannot_be_pdf_is_refused_before_the_rest_arrives(
+    monkeypatch: pytest.MonkeyPatch, first: bytes
+) -> None:
+    """Decision 3: an octet-stream body is refused as soon as the bytes
+    received stop matching the start of ``%PDF-``, not after 5 bytes. The
+    server sends ``first`` and then stalls for 4 s (longer than the 3 s read
+    timeout). RED IF: the call takes 1.0 s or more (on 6b4808d it waits for
+    5 bytes and ends as ``timeout`` at the 3 s read timeout), the outcome is
+    not ``refused_content_type``, or a child starts."""
+    with _routes({("dl.example", "/file"): _first_then_stall(first, stall=4.0)}) as sites:
+        url = sites.url("dl.example", "/file")
+        started = time.monotonic()
+        reading = _judge(monkeypatch, [url])
+        elapsed = time.monotonic() - started
+    row = reading.rows[url]
+    assert row.outcome == "refused_content_type", (row.outcome, round(elapsed, 2))
+    assert elapsed < 1.0, (row.outcome, elapsed)
+    assert reading.launches == []
+
+
+def test_a_matching_prefix_keeps_waiting_for_the_rest(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The partner: ``%PD`` (still a prefix of ``%PDF-``), a 0.5 s stall, then
+    the rest of a valid PDF is ``fetched``. RED IF: the check refuses a
+    prefix that could still match, or decides before 5 bytes in a way that
+    loses the PDF."""
+    body = pdfs.valid_pdf()
+    responder = _first_then_stall(body[:3], stall=0.5, rest=body[3:], declared=len(body))
+    with _routes({("dl.example", "/file"): responder}) as sites:
+        url = sites.url("dl.example", "/file")
+        reading = _judge(monkeypatch, [url])
+    row = reading.rows[url]
+    assert row.outcome == "fetched", row.outcome
+    assert "PDFSENTINEL" in row.text
+    assert len(reading.launches) == 1
+
+
+def test_headers_then_no_body_bytes_stays_a_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pinned so a change is visible, not because it is ideal: a server that
+    sends octet-stream headers and then NO body byte cannot be judged by its
+    start, so the fetch waits for the read timeout (failure mode 6 records
+    this accepted exposure). With a 1.0 s read timeout the outcome is
+    ``timeout`` after about that long. RED IF: it is anything but
+    ``timeout``, it returns before 0.9 s (a guess made without any byte), or
+    it takes 2.5 s or more, or a child starts."""
+    monkeypatch.setattr(settings, "quorum_source_fetch_timeout_seconds", 1.0)
+    with _routes({("dl.example", "/file"): _first_then_stall(b"", stall=4.0)}) as sites:
+        url = sites.url("dl.example", "/file")
+        started = time.monotonic()
+        reading = _judge(monkeypatch, [url])
+        elapsed = time.monotonic() - started
+    assert reading.rows[url].outcome == "timeout", reading.rows[url].outcome
+    assert 0.9 <= elapsed < 2.5, elapsed
+    assert reading.launches == []

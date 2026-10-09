@@ -1,10 +1,13 @@
 """Build the encrypted PDF fixtures in this directory (W54 step 3b, ADR-0154).
 
-The tests do NOT run this: AES encryption needs ``cryptography``, which the
-test venv may not have, so the built files are committed and each one's
-SHA-256 is pinned in ``tests/unit/test_w54_encrypted_pdfs.py``. Encryption
-uses a random IV (and, for AES-256, a random file key), so a rebuild gives
-different bytes: after rebuilding, update the pinned digests.
+The tests do NOT run this: the built files are committed and each one's
+SHA-256 is pinned in ``tests/unit/test_w54_encrypted_pdfs.py``, so a test
+never depends on how a rebuild comes out. AES encryption needs
+``cryptography`` (a runtime dependency since ADR-0154). The 7 AES files use
+a random IV (and, for AES-256, a random file key), so a rebuild gives them
+different bytes: update their pinned digests after rebuilding. The 4 RC4
+files rebuild byte-identical (measured 2026-10-09 by rebuilding all 11 and
+comparing the digests).
 
 How they were built (2026-10-09), from the repository root:
 
