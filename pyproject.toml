@@ -38,6 +38,8 @@ dependencies = [
   # must be a reviewed decision, not a side effect of a rebuild.
   "markdown-it-py==4.2.0",
   "pypdf==6.19.0",
+  # pypdf needs it to open AES-encrypted PDFs; pinned exactly like pypdf (ADR-0154).
+  "cryptography==50.0.2",
 ]
 
 [project.optional-dependencies]
