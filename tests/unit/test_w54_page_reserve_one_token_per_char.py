@@ -9,8 +9,10 @@ Failure modes 1, 2, 3 and 11 of
   character instead of ``CHARS_PER_TOKEN`` (4). The v2 system prompt is still
   priced at 4 characters per token: decision 1 names the page block only.
 * 2 -- with page reading in effect the displayed typical judge input is
-  ``cost_judge_input_tokens_with_pages`` (8,400) plus the query, else
-  ``cost_judge_input_tokens`` (7,300) plus the query.
+  ``cost_judge_input_tokens_with_pages`` plus the query, else
+  ``cost_judge_input_tokens`` (7,300) plus the query. The pages figure was
+  8,400 under ADR-0152 (CHG-032 (d)); it is 15,000 since ADR-0155
+  (CHG-036 (b)), after paid runs measured judge inputs of 10,575 and 14,983.
 * 3 -- the typical figure never exceeds the reserve (the clamp holds for the
   new setting too).
 * 11 -- with page reading off, every estimate and bound is byte-identical to
@@ -225,15 +227,16 @@ def test_raising_the_fetch_settings_still_does_not_raise_the_reserve(
 
 
 def test_the_new_setting_exists_with_the_owners_figure() -> None:
-    """CHG-032 (d): ``cost_judge_input_tokens_with_pages`` defaults to 8,400;
-    ``cost_judge_input_tokens`` stays 7,300. RED IF: the setting is missing,
-    its default is not 8,400, or the old figure moved. Like its sibling it
+    """CHG-036 (b), ADR-0155: ``cost_judge_input_tokens_with_pages`` defaults
+    to 15,000 (it was 8,400 under CHG-032 (d)); ``cost_judge_input_tokens``
+    stays 7,300. RED IF: the setting is missing, its default is not 15,000,
+    or the pages-off figure moved. Like its sibling it
     refuses zero (a $0 judge row beside a firing judge, ADR-0114's review
     finding); partner: 1 is accepted."""
     from pydantic import ValidationError
 
     fresh = Settings()
-    assert fresh.cost_judge_input_tokens_with_pages == 8400
+    assert fresh.cost_judge_input_tokens_with_pages == 15000
     assert fresh.cost_judge_input_tokens == 7300
     for bad in (0, -1):
         with pytest.raises(ValidationError):
@@ -244,19 +247,21 @@ def test_the_new_setting_exists_with_the_owners_figure() -> None:
 @pytest.mark.parametrize(
     ("pages", "expected"),
     [
-        # 8,400 + 8.25 tokens at $0.001/1k + 150 output tokens at $0.005/1k.
-        (True, Decimal("0.00915825")),
+        # 15,000 + 8.25 tokens at $0.001/1k + 150 output tokens at $0.005/1k:
+        # 0.01500825 + 0.00075. (0.00915825 at ADR-0152's 8,400.)
+        (True, Decimal("0.01575825")),
         # 7,300 + 8.25 tokens + the same output: today's figure, unchanged.
         (False, Decimal("0.00805825")),
     ],
-    ids=["pages-in-effect-8400", "pages-off-7300"],
+    ids=["pages-in-effect-15000", "pages-off-7300"],
 )
 def test_the_typical_judge_input_follows_page_reading(
     monkeypatch: pytest.MonkeyPatch, pages: bool, expected: Decimal
 ) -> None:
-    """Decision 2, failure mode 2. RED IF: with pages in effect the typical
-    input is still 7,300 (0.00805825), or with pages off it is 8,400
-    (0.00915825), or the query is no longer added."""
+    """Decision 2, failure mode 2 (ADR-0155: 15,000). RED IF: with pages in
+    effect the typical input is 7,300 (0.00805825) or ADR-0152's 8,400
+    (0.00915825), or with pages off it is 15,000 (0.01575825), or the query
+    is no longer added."""
     assert _judge_term(monkeypatch, pages=pages, typical=True) == expected
 
 
@@ -275,17 +280,17 @@ def test_each_typical_setting_is_read_only_on_its_own_path(
         assert _judge_term(mp, pages=True, typical=True) == Decimal("0.00085825")
     with monkeypatch.context() as mp:
         mp.setattr(settings, "cost_judge_input_tokens", 100)
-        assert _judge_term(mp, pages=True, typical=True) == Decimal("0.00915825")
+        assert _judge_term(mp, pages=True, typical=True) == Decimal("0.01575825")
         assert _judge_term(mp, pages=False, typical=True) == Decimal("0.00085825")
 
 
 @pytest.mark.parametrize(
     ("chars", "expected"),
     [
-        # (8,400 + 1,000) input tokens at $0.001/1k + 150 output at $0.005/1k.
-        (4_000, Decimal("0.01015000")),
-        # (8,400 + 5,000) input tokens + the same output.
-        (20_000, Decimal("0.01415000")),
+        # (15,000 + 1,000) input tokens at $0.001/1k + 150 output at $0.005/1k.
+        (4_000, Decimal("0.01675000")),
+        # (15,000 + 5,000) input tokens + the same output.
+        (20_000, Decimal("0.02075000")),
     ],
 )
 def test_the_pages_typical_still_follows_query_length(
@@ -293,16 +298,18 @@ def test_the_pages_typical_still_follows_query_length(
 ) -> None:
     """ADR-0114's review finding carried to the new figure: the query is in
     the judge prompt verbatim, so the typical grows with it. RED IF: the
-    pages typical is a flat 8,400 (both cases then read $0.00915825), or
-    is 7,300 (they read $0.00905 and $0.01305)."""
+    pages typical is a flat 15,000 (both cases then read $0.01575), is
+    still ADR-0152's 8,400 (they read $0.01015 and $0.01415), or is 7,300
+    (they read $0.00905 and $0.01305)."""
     assert _judge_term(monkeypatch, pages=True, typical=True, query="x" * chars) == expected
 
 
 def test_the_typical_with_pages_is_clamped_to_the_pages_reserve(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Failure mode 3. With the shipped constants 8,400 + the longest query
-    (5,000 tokens) can never reach the pages-on reserve (over 61,000 tokens),
+    """Failure mode 3 (ADR-0155 failure mode 2). With the shipped constants
+    15,000 + the longest query (5,000 tokens) can never reach the pages-on
+    reserve (over 61,000 tokens; pinned with literals in the next test),
     so the clamp is pinned by moving the SETTING to the reserve's boundary.
     The reserve in tokens is 28,232.25 (today's pages-off reserve for this
     query, pinned in ``test_estimate_prices_the_judge.py``) + 32,832 (the page
@@ -339,17 +346,114 @@ def test_the_typical_with_pages_is_clamped_to_the_pages_reserve(
         assert got <= bound_term
 
 
+def test_the_shipped_default_plus_the_longest_query_stays_below_the_reserve(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ADR-0155 failure mode 2, pinned with literals on both sides (rule 8b):
+    for the longest query (20,000 characters, 5,000 tokens) the shipped
+    typical input is 15,000 + 5,000 = 20,000 tokens, priced as set
+    ($0.02075: 0.020 input + 0.00075 output, not clamped), and the pages-on
+    reserve for that query is 66,056 tokens plus the v2 prompt term
+    (measured 2026-10-09). The margin is asserted on figures the code
+    computes: the typical input actually priced (the typical cost less its
+    output, in tokens) is strictly below the reserve's input tokens. RED IF:
+    the typical input reaches the reserve (it is then clamped: equal, not
+    below), the default moves from 15,000 (the typical is then not
+    $0.02075), or the reserve's figure changes from 66,056 + the prompt
+    term."""
+    query = "x" * 20_000
+    typical = _judge_term(monkeypatch, pages=True, typical=True, query=query)
+    bound = _judge_term(monkeypatch, pages=True, typical=False, query=query)
+    out_usd = Decimal(1024) * _TEST_PRICE[1] / Decimal(1000)
+    reserve_tokens = (bound - out_usd) * Decimal(1000) / _TEST_PRICE[0]
+    typical_out_usd = Decimal(settings.cost_judge_output_tokens) * _TEST_PRICE[1] / Decimal(1000)
+    typical_tokens = (typical - typical_out_usd) * Decimal(1000) / _TEST_PRICE[0]
+    assert typical_tokens < reserve_tokens, (typical_tokens, reserve_tokens)
+    assert typical == Decimal("0.02075000"), typical
+    assert reserve_tokens - _prompt_term_tokens() == Decimal(66_056), reserve_tokens
+
+
+def test_the_daily_cap_still_admits_three_default_panel_runs_and_not_a_fourth(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ADR-0155 failure mode 1, through the real booking path: the default
+    panel, an English question, page reading in effect, production's judge
+    (``gpt-4.1-mini`` at $0.40/$1.60 per million) and the prices the
+    catalog's static fallback entries carry (NOT the live catalog, so the
+    figure is near, not equal to, the measured $0.1092). Each estimate is
+    booked with ``try_record_run_charge`` against an in-memory ledger for
+    one account. At 15,000 the estimate is $0.1116 (it is $0.1090 at
+    8,400; measured 2026-10-09); at either figure three runs are booked
+    and the fourth is refused by the $0.40 daily cap. RED IF: the estimate
+    at the shipped default is not $0.1116 (on 291a8e9, whose default is
+    still 8,400, it is $0.1090), or the admission changes at either figure
+    (a fourth booked, or a third refused)."""
+    from uuid import uuid4
+
+    from product_app.costs import CostEstimationService, CostThresholdAction, cost_event_recorder
+    from product_app.feedback_store import ChargeOutcome, configure_for_tests
+    from product_app.model_slots import DEFAULT_MODEL_IDS, validate_model_slots_with_search
+
+    query = "What does the EU AI Act require of providers of general-purpose AI models?"
+    slots = validate_model_slots_with_search(list(DEFAULT_MODEL_IDS), mode="panel")
+    # The catalog's static fallback entries, read from the module constant
+    # (not from the catalog service, whose cache other tests may have filled).
+    from product_app.catalog_fetcher import _FALLBACK_CATALOG
+
+    index = {e.model_id: (e.input_price_per_1k, e.output_price_per_1k) for e in _FALLBACK_CATALOG}
+    index[PROD_JUDGE_MODEL] = _PROD_PRICE
+
+    def book_four(estimate: Decimal) -> list[ChargeOutcome]:
+        service = CostEstimationService(binding_secret="x" * 32)
+        account = uuid4()
+        cost_event_recorder.clear()
+        try:
+            with configure_for_tests():
+                return [
+                    service.try_record_run_charge(
+                        account_id=account,
+                        query_run_id=uuid4(),
+                        estimated_cost_usd=estimate,
+                        threshold_action=CostThresholdAction.ALLOW,
+                        confirmed=False,
+                        global_ceiling_reached=False,
+                    )
+                    for _ in range(4)
+                ]
+        finally:
+            cost_event_recorder.clear()
+
+    estimates: dict[int | None, Decimal] = {}
+    for setting in (None, 8_400):
+        with monkeypatch.context() as mp:
+            mp.setattr(openrouter_model_catalog_service, "price_index", lambda: dict(index))
+            mp.setattr(settings, "quorum_eval_judge_api_key", "sk-not-a-real-key")
+            mp.setattr(settings, "quorum_eval_judge_model_id", PROD_JUDGE_MODEL)
+            mp.setattr(settings, "quorum_source_fetch_enabled", True)
+            if setting is not None:
+                mp.setattr(settings, "cost_judge_input_tokens_with_pages", setting)
+            estimates[setting] = cost_estimation_service.estimate(
+                query_text=query, model_slots=slots, mode="panel"
+            ).estimated_cost_usd
+    assert estimates[None] == Decimal("0.1116"), estimates
+    assert estimates[8_400] == Decimal("0.1090"), estimates
+    expected = [ChargeOutcome.RECORDED] * 3 + [ChargeOutcome.OVER_DAILY_CAP]
+    for estimate in estimates.values():
+        assert book_four(estimate) == expected, estimate
+
+
 def test_the_estimates_judge_row_shows_the_pages_typical(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The wire: the displayed estimate, not only ``_cost_components``. With
-    pages in effect the headline is $0.2019 (raw $0.19273875 + $0.00915825),
-    with them off $0.2008 (today's pin). RED IF: ``estimate()`` still shows
-    7,300 with pages in effect, or shows 8,400 with them off. Partner: the
+    pages in effect the headline is $0.2085 (raw $0.19273875 + $0.01575825 =
+    $0.20849700, shown to 4 places; it was $0.2019 at ADR-0152's 8,400),
+    with them off $0.2008 (today's pin). RED IF: ``estimate()`` shows 7,300
+    or 8,400 with pages in effect, or 15,000 with them off. Partner: the
     judge row is present on both."""
     on = _estimate(monkeypatch, judge=True, pages=True)
     off = _estimate(monkeypatch, judge=True, pages=False)
-    assert on.estimated_cost_usd == Decimal("0.2019"), on.estimated_cost_usd
+    assert on.estimated_cost_usd == Decimal("0.2085"), on.estimated_cost_usd
     assert off.estimated_cost_usd == Decimal("0.2008"), off.estimated_cost_usd
     for est in (on, off):
         assert est.breakdown is not None
@@ -362,7 +466,7 @@ def test_a_quick_runs_typical_does_not_move_with_the_setting(
 ) -> None:
     """Quick runs never read pages (ADR-0148 decision 1), so page reading is
     not in effect for them and their typical stays 7,300, as their reserve
-    already does. RED IF: the 8,400 figure is keyed on the setting alone
+    already does. RED IF: the pages figure (15,000) is keyed on the setting alone
     rather than on pages being read for this run. Partner: the quick estimate
     does price a judge."""
     quick_on = _estimate(monkeypatch, judge=True, pages=True, mode="quick")
@@ -488,7 +592,7 @@ def test_with_page_reading_not_in_effect_every_figure_is_todays(
     monkeypatch: pytest.MonkeyPatch, case: tuple[bool, bool, str, int]
 ) -> None:
     """Failure mode 11. RED IF: any figure moves when pages are not read --
-    for example 8,400 used with the setting off, or the one-token-per-
+    for example the pages figure (15,000) used with the setting off, or the one-token-per-
     character block added without a judge or on a quick run. Partner: the
     judge cases really price a judge (their stages carry a judge row) and
     the no-judge cases do not."""
