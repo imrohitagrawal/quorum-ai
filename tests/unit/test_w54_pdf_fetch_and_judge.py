@@ -397,10 +397,14 @@ def test_the_html_cap_is_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_pdf_bytes_under_another_content_type_are_refused_unparsed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Decision 1: only ``application/pdf`` takes the PDF path; nothing is
-    sniffed. RED IF: a valid PDF served as ``application/octet-stream`` is
-    parsed or is anything but ``refused_content_type``."""
-    routes = {"bin.example": _close_delimited(pdfs.valid_pdf(), "application/octet-stream")}
+    """Decision 1, as amended by ADR-0154 decision 3: only ``application/pdf``
+    and the two octet-stream types (tested in ``test_w54_octet_stream_pdfs``)
+    take the PDF path; the body of any other type is never sniffed. RED IF:
+    a valid PDF served as ``image/png`` is parsed or is anything but
+    ``refused_content_type``. (Until ADR-0154 this test used
+    ``application/octet-stream``, which is now read when the body starts
+    with ``%PDF-``.)"""
+    routes = {"bin.example": _close_delimited(pdfs.valid_pdf(), "image/png")}
     with _sites(routes) as sites:
         url = sites.url("bin.example")
         reading = _judge(monkeypatch, [url])
