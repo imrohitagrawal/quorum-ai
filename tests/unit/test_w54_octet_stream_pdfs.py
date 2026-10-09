@@ -343,3 +343,105 @@ def test_other_download_types_stay_refused(
         reading = _judge(monkeypatch, [url])
     assert reading.rows[url].outcome == "refused_content_type"
     assert reading.launches == []
+
+
+# ---------------------------------------------------------------------------
+# Review round: three survivors of the builder's mutation proofs
+# ---------------------------------------------------------------------------
+
+
+def _fetch_one_raw_with_long_pages(url: str) -> source_fetcher.FetchedSource:
+    """``_fetch_one`` as the robots fetch calls it (``raw=True``), but ALSO
+    with ``long_pages=True``: no caller passes both today, so only a direct
+    call can show that ``raw`` alone keeps a body off the PDF path."""
+    return source_fetcher._fetch_one(
+        url,
+        deadline=time.monotonic() + 5.0,
+        per_recv_seconds=2.0,
+        max_bytes=262_144,
+        max_text_chars=4_000,
+        clock=time.monotonic,
+        raw=True,
+        long_pages=True,
+    )
+
+
+@pytest.mark.parametrize("content_type", ["application/pdf", OCTET, "binary/octet-stream"])
+def test_a_raw_fetch_never_takes_the_pdf_path_even_with_long_pages(
+    monkeypatch: pytest.MonkeyPatch, content_type: str
+) -> None:
+    """ADR-0153 decision 1 and ADR-0154 decision 3: a body is a PDF only on
+    the page-reading path, ``long_pages and not raw``. A raw fetch with
+    ``long_pages`` also set, of a valid 300,000-byte PDF declared by
+    ``Content-Length`` (over the 262,144-byte text cap, under the 4 MiB PDF
+    cap), is ``refused_content_type`` with 0 bytes read and no child. RED
+    IF: ``raw`` is dropped from the condition (the PDF is then read under
+    the PDF cap by a child) or the PDF cap is applied to a raw fetch (it is
+    then ``too_large``)."""
+    spy = pdfs.ChildLaunches().install(monkeypatch)
+    body = pdfs.text_pdf([pdfs.EVIDENCE * 3], pad_to=300_000)
+    with _routes({("raw.example", "/file"): _typed(content_type, body)}) as sites:
+        row = _fetch_one_raw_with_long_pages(sites.url("raw.example", "/file"))
+    assert row.outcome == "refused_content_type", row.outcome
+    assert row.bytes_read == 0
+    assert spy.launches == []
+
+
+def test_the_same_pdf_off_the_raw_path_is_read(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The partner: the same 300,000-byte octet-stream PDF, fetched with
+    ``long_pages`` and WITHOUT ``raw``, is read by one child, so the refusal
+    above is ``raw``'s doing. RED IF: it is not ``fetched``."""
+    spy = pdfs.ChildLaunches().install(monkeypatch)
+    body = pdfs.text_pdf([pdfs.EVIDENCE * 3], pad_to=300_000)
+    with _routes({("raw.example", "/file"): _typed(OCTET, body)}) as sites:
+        row = source_fetcher._fetch_one(
+            sites.url("raw.example", "/file"),
+            deadline=time.monotonic() + 5.0,
+            per_recv_seconds=2.0,
+            max_bytes=262_144,
+            max_text_chars=4_000,
+            clock=time.monotonic,
+            long_pages=True,
+        )
+    assert row.outcome == "fetched", row.outcome
+    assert len(spy.launches) == 1
+
+
+@pytest.mark.parametrize("body", [b"%", b"%P", b"%PDF"], ids=["1-byte", "2-bytes", "4-bytes"])
+@pytest.mark.parametrize("framing", ["content-length", "close"])
+def test_an_octet_stream_body_shorter_than_five_bytes_is_refused(
+    monkeypatch: pytest.MonkeyPatch, body: bytes, framing: str
+) -> None:
+    """Decision 3: a body that ends before 5 bytes cannot start with
+    ``%PDF-``. RED IF: a 1-, 2- or 4-byte octet-stream body (each a prefix
+    of ``%PDF-``) is anything but ``refused_content_type``, or a child is
+    started for it."""
+    responder = (
+        _typed(OCTET, body) if framing == "content-length" else _typed_close_delimited(OCTET, body)
+    )
+    with _routes({("dl.example", "/file"): responder}) as sites:
+        url = sites.url("dl.example", "/file")
+        reading = _judge(monkeypatch, [url])
+    assert reading.rows[url].outcome == "refused_content_type", reading.rows[url].outcome
+    assert reading.launches == []
+
+
+def test_an_octet_stream_body_starting_pdf_without_the_dash_is_refused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Decision 3: the magic is the five bytes ``%PDF-``. A valid PDF whose
+    byte 4 is ``X`` instead of ``-`` (pypdf, not strict, may still read it)
+    is ``refused_content_type`` with no child. RED IF: the check is
+    shortened to ``%PDF``. Partner: the same file with its ``-`` is read."""
+    valid = pdfs.valid_pdf()
+    assert valid.startswith(b"%PDF-")
+    routes = {
+        ("nodash.example", "/file"): _typed(OCTET, b"%PDFX" + valid[5:]),
+        ("dash.example", "/file"): _typed(OCTET, valid),
+    }
+    with _routes(routes) as sites:
+        nodash, dash = sites.url("nodash.example", "/file"), sites.url("dash.example", "/file")
+        reading = _judge(monkeypatch, [nodash, dash])
+    assert reading.rows[nodash].outcome == "refused_content_type", reading.rows[nodash].outcome
+    assert reading.rows[dash].outcome == "fetched", reading.rows[dash].outcome
+    assert len(reading.launches) == 1
