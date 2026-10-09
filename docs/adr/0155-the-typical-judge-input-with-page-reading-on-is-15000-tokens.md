@@ -43,9 +43,9 @@ pages; the query's tokens are still added; the result is still clamped to the re
   to the measured actual afterwards) and the cost recorded for a run whose actual is not
   reported. With the default panel and the English question, three runs still fit in the $0.40
   daily cap and a fourth does not, as before (arithmetic from the measured $0.1092 estimate). For
-  longer questions the higher booking can cost the third run of the day: round-1 review measured,
-  at the catalog's fallback prices and the default panel, three runs fitting up to about 6,249
-  characters before and up to about 5,749 after, so questions of about 5,750–6,249 characters now
-  fit two. The band moves with live prices.
+  longer questions the higher booking can cost the third run of the day: two round-2 reviewers measured,
+  at the catalog's fallback prices and the default panel, three runs fitting up to 6,247
+  characters before and up to 5,579 after, so questions of 5,580–6,247 characters now fit two.
+  The band moves with live prices.
 - Two measurements are not a statistic; the figure should be revisited once production records
   judge inputs with pages.
