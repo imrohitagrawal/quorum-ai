@@ -41,7 +41,8 @@ THE EGRESS POLICY (docs/analysis/2026-09-24-447-source-fetch-failure-modes.md)
       (:func:`read_pdf_text`, ``pdf_text.py``). On the same path
       ``application/octet-stream`` and ``binary/octet-stream`` are read as a
       PDF only when the body starts with ``%PDF-`` at byte 0, checked on the
-      first bytes as they arrive (W54 step 3b, ADR-0154).
+      first bytes as they arrive: refused as soon as a byte received does not
+      match the start of ``%PDF-`` (W54 step 3b, ADR-0154).
     * Time is bounded by ONE total deadline shared by every page of one call,
       enforced two ways: the name lookup runs in a worker thread joined with
       the remaining time, and a watchdog timer armed before the request
@@ -757,8 +758,11 @@ def _fetch_one(
     unreadable), and a whole body goes to :func:`read_pdf_text` with the
     budget left. On the same path a ``PDF_DOWNLOAD_CONTENT_TYPES`` response
     takes the same cap and is read the same way, but its first bytes are
-    checked as they arrive: unless the first 5 are ``PDF_MAGIC``, it is
-    ``refused_content_type`` at once, with no further read (W54 step 3b,
+    checked as they arrive: it is ``refused_content_type``, with no further
+    read, as soon as a byte received differs from the same place in
+    ``PDF_MAGIC``, or when the body ends before 5 bytes; it is accepted once
+    its first 5 bytes are ``PDF_MAGIC``. A server that sends the headers and
+    then nothing still holds the fetch until its read timeout (W54 step 3b,
     ADR-0154)."""
     started = clock()
     if _FORBIDDEN_IN_A_URL.search(url):
@@ -904,8 +908,11 @@ def _fetch_one(
                     break
                 chunks.append(chunk)
                 total += len(chunk)
-                if start_unchecked and total >= len(PDF_MAGIC):
-                    if not b"".join(chunks).startswith(PDF_MAGIC):
+                if start_unchecked:
+                    # Refused as soon as a byte received differs from the
+                    # same place in %PDF-; accepted once all 5 have arrived.
+                    head = b"".join(chunks)[: len(PDF_MAGIC)]
+                    if head != PDF_MAGIC[: len(head)]:
                         return _row(
                             url,
                             "refused_content_type",
@@ -916,7 +923,7 @@ def _fetch_one(
                             server_date=server_date,
                             last_modified=last_modified,
                         )
-                    start_unchecked = False
+                    start_unchecked = len(head) < len(PDF_MAGIC)
                 if total > cap:
                     truncated = True
                     total = cap
