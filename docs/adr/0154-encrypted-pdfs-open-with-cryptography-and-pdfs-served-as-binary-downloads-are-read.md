@@ -65,8 +65,8 @@ reads pypdf's chosen provider.
 
 ## Rejected alternatives
 
-- **`pycryptodome` instead.** Same measured cost and smaller native code, but not pypdf's first
-  choice; either would be one more native package in the child.
+- **`pycryptodome` instead.** About the same CPU, less memory and smaller native code, but not
+  pypdf's first choice; either would be one more native package in the child.
 - **Respect "no copy or extract" permissions.** The session recommended it, to match the
   robots.txt stance; the owner decided to read such PDFs (CHG-037).
 - **Accept octet-stream by the address ending in `.pdf`.** An address is not the file; the first

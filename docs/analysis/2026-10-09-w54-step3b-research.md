@@ -91,8 +91,12 @@ scripts (forum sources only; frequency UNMEASURED).
 pypdf (MEASURED): non-strict mode only warns when byte 0 is not `%PDF-`. With junk prepended:
 3-4 bytes → both files read; 100 / 1,006 / 1,100 bytes → the 230602 PPC file gives 0 chars, the leaflet
 (also AES-256, R5; see §3) still gives 860. Round-1 review: the leaflet re-encrypted as RC4-128 or AES-256
-also gives 860 at every size, and the repository's fixtures give 441 at 0-1,006 junk bytes, so the drop
-belongs to that one file, not to AES. (This line first said "the RC4 leaflet".)
+also gives 860 at every size. The repository's six empty-password fixtures read in full (441 characters)
+at 0, 4, 100, 1,006 and 1,100 junk bytes of `J`, space, NUL or newline; with 1,006 or more `x` bytes,
+AES-128, RC4-40 and RC4-128 read 0 while the three AES-256 fixtures still read (measured by the session,
+2026-10-09, with `pdf_text.extract_text`). So the drop depends on the file and the junk bytes, not on
+AES. (This line first said "the RC4 leaflet", and then wrongly "the fixtures give 441 at 0-1,006 junk
+bytes".)
 
 Robots path (MEASURED by reading source): `fetch_cited_pages.permit()` calls `_fetch_one(..., raw=True)`
 without `long_pages` (default False); `is_pdf = content_type == PDF_CONTENT_TYPE and long_pages and not raw`.
@@ -137,7 +141,7 @@ PPC files `unusable`; after `cryptography==50.0.2` 230602 `fetched` 4,115 chars 
   not in the test venv either. Pin it exactly, like pypdf; cffi/pycparser then float.
 - Among the runtime packages, pypdf's crypt providers import cryptography; so can urllib3's optional
   `urllib3/contrib/pyopenssl.py` (round-1 review). The app never loads it: after a TestClient start and
-  /health /ready /status /ui /ui/ops /metrics /estimate, none of cryptography, pypdf, cffi or pycparser
+  /health /ready /status /ui /ui/ops /metrics and a POST to /v1/query-runs/estimate, none of cryptography, pypdf, cffi or pycparser
   is in `sys.modules` (round-1 review, MEASURED). (This line first said "Only pypdf's crypt providers".)
 - If cryptography's .so fails to map under RLIMIT_AS, Python raises ImportError and pypdf silently falls
   back (INFERRED from the try/except ImportError chain) — AES PDFs would be unusable again with no error.
