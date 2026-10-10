@@ -67,9 +67,11 @@ jobs:
     name: e2e axe + parity (chromium)
     runs-on: ubuntu-latest
     # 25, not 20 (ADR-0151): on main this job took 18.4 to 19.5 min on its last
-    # five runs, and up to 19.85 min on pull requests. The deploy gate's wait
-    # (1800s) covers 25.
-    timeout-minutes: 25
+    # five runs, and up to 19.85 min on pull requests. 35, not 25 (ADR-0157),
+    # moved with the full-suite jobs: validate-and-test was cancelled at 25 min
+    # twice on the push of dbf314e and took 23.9 min on 8d9a60b. The deploy
+    # gate's wait (2400s) covers 35.
+    timeout-minutes: 35
     env:
       # The app boots without a live OpenRouter key: every query falls back to
       # local_simulation, which is exactly what the mocked suites expect. No
