@@ -49,7 +49,7 @@ Quorum AI is an AI-assisted decision-support product. It compares four model out
 - The system must not follow instructions from retrieved pages that ask it to ignore policy, reveal secrets, fabricate citations, change model configuration, or call tools.
 - Provider keys, internal system prompts, secret-store references, and hidden configuration must not be included in model-visible context.
 - Prompt-injection regression tests are required before implementation completion.
-- Cited page text is untrusted judge input (W29, ADR-0148). When `QUORUM_SOURCE_FETCH_ENABLED` is switched on (it is off in code and in `fly.toml`), a panel run's judge reads up to 8 cited pages, or the search excerpt where robots.txt disallows the page, under its own prompt `PR-EVAL-JUDGE-v2`. Each item is cleaned and cut to 4,000 characters and sits inside the judge's fenced evidence block; the prompt tells the judge the text is untrusted data and never instructions. Page text is never served, logged or stored. Quick answers never read pages.
+- Cited page text is untrusted judge input (W29, ADR-0148). When `QUORUM_SOURCE_FETCH_ENABLED` is switched on (off in code; set in `fly.toml` since ADR-0156, 2026-10-10; with live execution off no run reaches the judge), a panel run's judge reads up to 8 cited pages, or the search excerpt where robots.txt disallows the page, under its own prompt `PR-EVAL-JUDGE-v2`. Each item is cleaned and cut to 4,000 characters and sits inside the judge's fenced evidence block; the prompt tells the judge the text is untrusted data and never instructions. Page text is never served, logged or stored. Quick answers never read pages.
 
 ## High-Stakes Handling
 

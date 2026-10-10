@@ -29,6 +29,7 @@ SUITES: tuple[tuple[str, str], ...] = (
     ("accuracy pilot harness", "tests/evals/test_accuracy_pilot.py"),
     ("refusal/fabrication residual", "tests/evals/test_refusal_fabrication_residual.py"),
     ("measured judge behaviour", "tests/evals/test_measured_judge_behaviour.py"),
+    ("measured judge with pages", "tests/evals/test_measured_judge_with_pages.py"),
 )
 
 #: One-off operator-labelled measurements, cited — never restated as new.

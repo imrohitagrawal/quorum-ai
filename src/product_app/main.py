@@ -1644,7 +1644,8 @@ def status_snapshot() -> dict[str, object]:
         "peer_critique_enabled": settings.peer_critique_enabled,
         # #447 / ADR-0124: the source fetcher is an egress-capable subsystem
         # (it reads arbitrary cited hosts), so its flag is reported like the
-        # others (ADR-0013). State only. Shipped off.
+        # others (ADR-0013). State only. False in code; production sets it in
+        # fly.toml since ADR-0156.
         "source_fetch_enabled": settings.quorum_source_fetch_enabled,
         # W29 (ADR-0148 decision 9): whether the judge actually reads the
         # cited pages -- the setting AND a configured judge. Reported beside

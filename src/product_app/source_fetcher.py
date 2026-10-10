@@ -4,8 +4,9 @@ WHAT THIS IS FOR
     The judge is asked whether an answer asserts only what its evidence
     supports, and until now it saw titles and URLs only. This module fetches
     the pages a run cited, as plain text with per-page provenance, under a
-    closed egress policy. It is SHIPPED OFF (``quorum_source_fetch_enabled``
-    defaults to ``False``). Its one caller is ``evaluation.judge_source_pages``
+    closed egress policy. ``quorum_source_fetch_enabled`` defaults to
+    ``False`` in code; production sets it in ``fly.toml`` since ADR-0156. Its
+    one caller is ``evaluation.judge_source_pages``
     (W29, ADR-0148), reached only when that setting is on and a judge is
     configured, for a panel run's verdict.
 
