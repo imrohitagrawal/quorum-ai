@@ -6,6 +6,9 @@ Accepted — 2026-10-07. A technical decision by the session; it blocked W54's p
 (#546), and would block later pull requests that add tests. Supersedes the 1800 s
 grace value in ADR-0026 (its reasoning stands; the value moves with the gate).
 
+Its values are changed by ADR-0157 (2026-10-10: 35 minutes, 2400 s, 2700 s); its ordering
+stands.
+
 ## Context
 
 Three CI jobs run the whole Python suite, each with `timeout-minutes: 20`:

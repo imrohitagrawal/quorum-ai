@@ -158,6 +158,7 @@ ways, so the record shows what was believed on a date and what replaced it.
 | [ADR-0153](adr/0153-the-judge-reads-cited-pdfs-with-pypdf-in-a-sandboxed-child-process.md) | The judge reads cited PDFs, with pypdf in a sandboxed child process | Architecture | Accepted — 2026-10-08, board row W54, step 3 (page reading still off) |
 | [ADR-0154](adr/0154-encrypted-pdfs-open-with-cryptography-and-pdfs-served-as-binary-downloads-are-read.md) | Encrypted PDFs open with `cryptography`, and PDFs served as binary downloads are read | Architecture | Accepted — 2026-10-09, board row W54, step 3b (page reading still off) |
 | [ADR-0155](adr/0155-the-typical-judge-input-with-page-reading-on-is-15000-tokens.md) | The typical judge input with page reading on is 15,000 tokens | Architecture | Accepted — 2026-10-09, board row W54 (page reading still off) |
+| [ADR-0157](adr/0157-the-full-suite-jobs-get-35-minutes-and-the-gate-and-drift-grace-move-with-them.md) | The full-suite jobs get 35 minutes, and the gate and drift grace move with them | Architecture | Accepted — 2026-10-10 |
 
 **This index was itself stale** until 2026-07-30: ADR-0002 had existed since
 2026-07-19 and was never listed here. A hand-maintained index is a derived fact

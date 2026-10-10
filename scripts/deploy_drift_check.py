@@ -55,18 +55,21 @@ from enum import Enum
 #:
 #:     795s 758s 734s 753s 792s 803s 734s 737s 744s   -> max 803s, median 753s
 #:
-#: A legitimate deploy is bounded by the slowest required push job (25 min since
-#: ADR-0151), then the gate and deploy jobs (about 1 min). The grace is also kept
-#: above the gate's whole wait (`GATE_TIMEOUT_SECONDS = 1800` in deploy.yml) plus
-#: a deploy, ~1860s, so a gate still waiting is never reported as drift.
-#: 2100s clears both. (Was 1800s against a 1500s gate; both moved on 2026-10-07
-#: when the full-suite jobs outgrew 20 minutes, ADR-0151.)
+#: A legitimate deploy is bounded by the slowest required push job (35 min since
+#: ADR-0157), then the gate and deploy jobs (about 1 min). The grace is also kept
+#: above the gate's whole wait (`GATE_TIMEOUT_SECONDS = 2400` in deploy.yml) plus
+#: a deploy, ~2460s, so a gate still waiting is never reported as drift.
+#: 2700s clears both. (Was 2100s against an 1800s gate under ADR-0151, and 1800s
+#: against a 1500s gate before that; ADR-0157 moved all three after
+#: validate-and-test was cancelled at 25 min twice on the push of dbf314e and
+#: took 23.9 min on 8d9a60b.)
 #:
 #: An earlier draft used 2700s, sized against the 2071s of the 2026-08-07
 #: INCIDENT. That was the wrong calibration: sizing the grace to tolerate the
 #: failure means a repeat reads DEPLOY_IN_FLIGHT for its whole duration. Size it
-#: against the legitimate path instead.
-DEFAULT_GRACE_SECONDS = 2100.0
+#: against the legitimate path instead. (The value is 2700s again today, but
+#: sized from the legitimate path above, not from that incident.)
+DEFAULT_GRACE_SECONDS = 2700.0
 
 DEFAULT_STATUS_URL = "https://quorum-ai.fly.dev/status"
 
