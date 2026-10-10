@@ -4,8 +4,8 @@
 
 Accepted — 2026-10-10, board row W54 (before page reading is switched on, W54 step 4). Amends
 ADR-0099 decision 2, which made the old sentence a fixed current limit. The product owner chose
-the wording (CHG-039 (b)); when the line changes is the session's call, following ADR-0099's
-#458 precedent. The owner may change either.
+the wording (CHG-039 (b)); when the line changes is the session's call, following ADR-0116's
+rule (the other half of #458). The owner may change either.
 
 ## Context
 
@@ -24,7 +24,7 @@ judge and nothing is read. Production's live execution is off today (`/status`,
 
 The landing subhead already follows what a run would do, not a bare flag: peer-critique copy
 shows only while peer critique is in effect (the flag AND live execution AND a key;
-`main._landing_subhead`, ADR-0099's #458 update).
+`main._landing_subhead`, ADR-0116, which amended ADR-0099's #458 update).
 
 ## Decision
 

@@ -391,7 +391,7 @@ def _landing_sources_line(active_settings: Settings) -> str:
     configured AND page reading on) AND live execution on with a key, the
     same two live terms as :func:`_peer_critique_in_effect`. With live
     execution off no run reaches the judge, so nothing is read: the same
-    reasoning the subhead follows for peer critique (ADR-0099, #458). It is
+    reasoning the subhead follows for peer critique (ADR-0116, the other half of #458). It is
     prospective: it says what a run would do, not what one did. Returned as
     HTML, like :func:`_landing_subhead`; both sentences are fixed text.
     """
