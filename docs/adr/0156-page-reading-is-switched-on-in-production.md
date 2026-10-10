@@ -26,7 +26,14 @@ CHG-038):
 
 The page-reading prompt (`PR-EVAL-JUDGE-v2`) is captured in
 `tests/evals/golden/measured/judge_with_pages_2026-10-10.json`: scores, token counts, page
-outcomes and SHA-256 fingerprints of both prompts, without page text or judge rationales.
+outcomes and SHA-256 fingerprints of both prompts, without page text or judge rationales. The
+figures above come from the session's run records (the app's telemetry and run results), kept
+on the session's machine only because they hold the cited sites' page text; the repository keeps
+the capture, not the records, so they cannot be re-derived from the tree.
+
+The judge reads pages only on a panel run where at least one answer came from a real model
+(`query_run_orchestration._request_path_judge`). Production's live execution is off
+(`/status` `live_execution: false`, 2026-10-10), so no production run reaches the judge today.
 
 ## Decision
 
@@ -35,17 +42,21 @@ local run, a test and any deployment without that line keep page reading off.
 
 ## Rejected alternatives
 
-- **Switch on before PDFs could be read.** In the runs of 2026-10-07 and 2026-10-08, 7 of 9 and
-  then all 6 of the cited PDFs went unread; the owner chose to make them readable first
+- **Switch on before PDFs could be read.** In the runs of 2026-10-07 and 2026-10-08, all 7 and
+  then all 6 of the cited PDFs went unread (on 2026-10-07 they were 7 of the 9 unread pages); the owner chose to make them readable first
   (CHG-033 (a), CHG-036 (a)).
 - **A paid production run to verify the switch-on.** The owner's approvals were for runs on the
   session's machine, never by switching production on; `/status` shows the switch for free.
 
 ## Consequences
 
-- Every panel run with a configured judge fetches the cited pages, within 8 attempts and 8
-  seconds, and the judge checks the answer against them; the trust note says which pages were
-  read and which were checked by preview only.
+- While live execution is off, no run reaches the judge, so nothing is fetched. What changes at
+  once: `/status` reports `source_pages_in_effect: true`, and the estimate prices pages (the
+  judge line from 15,000 typical input tokens, ADR-0155, and the maximum from the page reserve).
+- In a live window, every live panel run with a configured judge fetches the cited pages, within
+  8 attempts and 8 seconds, and the judge checks the answer against them; the trust note says
+  which pages were read and which were checked by preview only. Quick answers never read pages.
+  The landing line follows the same condition (ADR-0158).
 - The judge line costs about $0.001 to $0.004 more a run (arithmetic: the measured 10,801 and
   16,374 input tokens against the 7,300-token typical call without pages, at `gpt-4.1-mini`'s
   prices), and a run holds its slot up to 8 s longer.
@@ -53,4 +64,6 @@ local run, a test and any deployment without that line keep page reading off.
   once production records judge inputs with pages.
 - Unmeasured in a real run: a PDF served as `application/octet-stream` (the English run's was not
   reached before the budget ran out). Tests cover it, and it fails closed.
-- Rollback: remove the `fly.toml` line and redeploy.
+- Rollback: remove the `fly.toml` line and redeploy, then confirm `/status`
+  `source_pages_in_effect: false`. No Fly secret of that name exists to override it (`fly secrets
+  list -a quorum-ai`, 2026-10-10); if one is ever set, it must be removed too.
