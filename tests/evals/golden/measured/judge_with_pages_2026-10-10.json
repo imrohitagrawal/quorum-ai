@@ -1,0 +1,196 @@
+{
+  "schema": "measured-judge-with-pages-v1",
+  "captured_utc": "2026-10-10",
+  "code_commit": "dbf314e2e5aba4b7583f6fae5c4d4ddc4d3d9135",
+  "why_this_exists": "The first measured outputs of the page-reading judge prompt (PR-EVAL-JUDGE-v2) on the final step-4 code: two paid runs approved by the owner (CHG-038), made on the session's machine with page reading on for that process only; production was not touched.",
+  "how_to_reproduce": "Start the app at code_commit with QUORUM_SOURCE_FETCH_ENABLED=true and live execution on, run each question with the panel shown, and read the judge call's telemetry. Costs real money (about /bin/zsh.19 for both). Never run in CI.",
+  "d5_note": "Judge rationales and page text are not kept: rationales are free text about provider prose, and page text belongs to the cited sites. The user prompt is recorded only as a SHA-256 and a length.",
+  "total_cost_usd": "0.1889",
+  "runs": [
+    {
+      "label": "en",
+      "query_run_id": "a9ae16af-dbe2-4683-a971-027dbc74b6d7",
+      "question": "What obligations does the EU AI Act place on providers of general-purpose AI models, and from what date do they apply?",
+      "result_generated_at_utc": "2026-10-10T17:29:21.915336Z",
+      "panel": [
+        "openai/gpt-4o-mini",
+        "anthropic/claude-haiku-4.5",
+        "google/gemini-2.5-flash",
+        "nvidia/nemotron-3-nano-30b-a3b"
+      ],
+      "models_answered": 4,
+      "estimate_usd": "0.1118",
+      "max_usd": "0.1857",
+      "actual_cost_usd": "0.0914",
+      "cost_source": "measured",
+      "run_slot_seconds": 73.373,
+      "fetch_seconds": 8.013,
+      "pages": {
+        "cited": 8,
+        "read": 3,
+        "preview_refused": 1,
+        "preview_other": 4
+      },
+      "page_outcomes": [
+        {
+          "url": "https://ai-act-service-desk.ec.europa.eu/en/ai-act/article-53",
+          "outcome": "fetched",
+          "http_status": 200,
+          "bytes": 89585,
+          "text_chars": 14094
+        },
+        {
+          "url": "https://digital-strategy.ec.europa.eu/en/node/13148/printable/pdf",
+          "outcome": "refused_robots",
+          "http_status": null,
+          "bytes": 0,
+          "text_chars": 0
+        },
+        {
+          "url": "https://ai-act-service-desk.ec.europa.eu/sites/default/files/2025-07/guidelines_on_the_scope_of_the_obligations_for_generalpurpose_ai_models_established_by_regulation_1cx2atxgq79us4n3x8jfgyy1qlm_118340-3.pdf",
+          "outcome": "fetched",
+          "http_status": 200,
+          "bytes": 570508,
+          "text_chars": 50000
+        },
+        {
+          "url": "https://ai-act-service-desk.ec.europa.eu/en/ai-act/annex-11",
+          "outcome": "fetched",
+          "http_status": 200,
+          "bytes": 82918,
+          "text_chars": 12175
+        },
+        {
+          "url": "https://pollicinoaidvisory.eu/wp-content/uploads/2025/07/POLICY-BRIEF_GPAI_Rev.pdf",
+          "outcome": "robots_unchecked",
+          "http_status": null,
+          "bytes": 0,
+          "text_chars": 0
+        },
+        {
+          "url": "https://digital-strategy.ec.europa.eu/en/policies/guidelines-gpai-providers",
+          "outcome": "skipped_cap",
+          "http_status": null,
+          "bytes": 0,
+          "text_chars": 0
+        },
+        {
+          "url": "https://www.biodiritto.org/ocmultibinary/download/5091/59080/2/581ad8765c33dada735446909b287afa/file/Guidelines_on_the_scope_of_the_obligations_for_generalpurpose_AI_models_established_by_AI_Act_English_1GXcpQ7pr2sKT4kQl25UpMkOw4A_118340.PDF",
+          "outcome": "skipped_cap",
+          "http_status": null,
+          "bytes": 0,
+          "text_chars": 0
+        },
+        {
+          "url": "https://www.rivista.ai/wp-content/uploads/2025/07/1752837372957.pdf",
+          "outcome": "skipped_cap",
+          "http_status": null,
+          "bytes": 0,
+          "text_chars": 0
+        }
+      ],
+      "judge": {
+        "prompt_id": "PR-EVAL-JUDGE-v2",
+        "model": "openai/gpt-4.1-mini",
+        "system_prompt_sha256": "339226ede3e75ebcd1e65edb53b1539c76fd7943db93941caae25898d52be784",
+        "user_prompt_sha256": "b2249c0d975883bfbe2088b526557e00fa430bd5d4e42676681cd0de003fd574",
+        "user_prompt_chars": 45654,
+        "prompt_tokens": 10801,
+        "completion_tokens": 131,
+        "scores": {
+          "faithfulness": 5,
+          "grounding": 5,
+          "disagreement_preserved": true,
+          "hallucination_risk": "low"
+        },
+        "labels": {
+          "faithfulness_label": "faithful",
+          "hallucination_risk": "low",
+          "judge_status": "verdict"
+        }
+      }
+    },
+    {
+      "label": "ja",
+      "query_run_id": "b5f3675f-e722-43d4-a7ff-f5f5e24ac3a4",
+      "question": "日本の個人情報保護委員会は、2023年に生成AIサービスの利用についてどのような注意喚起を行いましたか？",
+      "result_generated_at_utc": "2026-10-10T17:31:20.472528Z",
+      "panel": [
+        "openai/gpt-4o-mini",
+        "anthropic/claude-haiku-4.5",
+        "google/gemini-2.5-flash",
+        "nvidia/nemotron-3-nano-30b-a3b"
+      ],
+      "models_answered": 4,
+      "estimate_usd": "0.1116",
+      "max_usd": "0.1856",
+      "actual_cost_usd": "0.0975",
+      "cost_source": "measured",
+      "run_slot_seconds": 54.803,
+      "fetch_seconds": 4.672,
+      "pages": {
+        "cited": 5,
+        "read": 4,
+        "preview_refused": 0,
+        "preview_other": 1
+      },
+      "page_outcomes": [
+        {
+          "url": "https://www.ppc.go.jp/news/press/2023/230602kouhou/",
+          "outcome": "fetched",
+          "http_status": 200,
+          "bytes": 40636,
+          "text_chars": 2285
+        },
+        {
+          "url": "https://www.ppc.go.jp/files/pdf/230602_kouhou_houdou.pdf",
+          "outcome": "fetched",
+          "http_status": 200,
+          "bytes": 302238,
+          "text_chars": 4115
+        },
+        {
+          "url": "https://www.ppc.go.jp/files/pdf/generativeAI_notice_leaflet2023.pdf",
+          "outcome": "fetched",
+          "http_status": 200,
+          "bytes": 183197,
+          "text_chars": 860
+        },
+        {
+          "url": "https://www.ppc.go.jp/files/pdf/230601_gijiroku.pdf",
+          "outcome": "fetched",
+          "http_status": 200,
+          "bytes": 176985,
+          "text_chars": 4728
+        },
+        {
+          "url": "https://www.ppc.go.jp/files/pdf/230601_shiryou-1.pdf",
+          "outcome": "skipped_cap",
+          "http_status": null,
+          "bytes": 0,
+          "text_chars": 0
+        }
+      ],
+      "judge": {
+        "prompt_id": "PR-EVAL-JUDGE-v2",
+        "model": "openai/gpt-4.1-mini",
+        "system_prompt_sha256": "339226ede3e75ebcd1e65edb53b1539c76fd7943db93941caae25898d52be784",
+        "user_prompt_sha256": "7d9de357d07d06254d385b86a743fb2d4c0dbd43862cfbbfa90bd4c8abe4e745",
+        "user_prompt_chars": 26762,
+        "prompt_tokens": 16374,
+        "completion_tokens": 160,
+        "scores": {
+          "faithfulness": 5,
+          "grounding": 5,
+          "disagreement_preserved": true,
+          "hallucination_risk": "low"
+        },
+        "labels": {
+          "faithfulness_label": "faithful",
+          "hallucination_risk": "low",
+          "judge_status": "verdict"
+        }
+      }
+    }
+  ]
+}
