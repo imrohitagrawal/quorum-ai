@@ -159,10 +159,11 @@ jobs:
           # The gate WAITS (bounded) for pending required workflows rather than
           # skipping. It must exceed the LONGEST a required push job may legitimately
           # run — its declared `timeout-minutes` ceiling — or the gate fail-safes and
-          # strands the deploy before a slow-but-valid job finishes. The blocking
-          # push jobs in the required workflows cap at `timeout-minutes: 35`
-          # (validate-and-test, pytest, e2e; 2100s) or 20 (api-contract), so 2400s
-          # clears the longest ceiling with headroom (ADR-0157: validate-and-test
+          # strands the deploy before a slow-but-valid job finishes. The push
+          # jobs in the required workflows cap at `timeout-minutes: 35`
+          # (validate-and-test, pytest, e2e; 2100s), 20 (api-contract, perf-gate)
+          # or 10 (fr-completeness), so 2400s clears the longest ceiling with
+          # headroom (ADR-0157: validate-and-test
           # was cancelled at 25 min twice on the push of dbf314e and took 23.9 min
           # on 8d9a60b; was 1800s against 25 minutes under ADR-0151, and 1500s
           # against 20 before that). (The 30-min mutation job is

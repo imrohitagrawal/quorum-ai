@@ -119,6 +119,8 @@ jobs:
   fr-completeness:
     name: FR traceability completeness (blocking)
     runs-on: ubuntu-latest
+    # ADR-0157: it had no limit, so GitHub's 360-min default applied, unseen by the gate check; it takes about 7 s.
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
