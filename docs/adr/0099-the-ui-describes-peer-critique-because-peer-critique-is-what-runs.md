@@ -108,7 +108,8 @@ the landing spec picks the one to expect from `/status`.
 ### 2. The stale roadmap chip becomes a real current limit
 
 "Peer critique ... planned, not yet built" -> "Sources are cited, but aren't
-checked against their pages". ADR-0096 decision 1 buys L1 only and says in those
+checked against their pages". (Amended by ADR-0158, 2026-10-10: when the judge reads the cited
+pages, the line becomes "Answers are checked against the pages and PDFs they cite".) ADR-0096 decision 1 buys L1 only and says in those
 words that no UI copy may imply otherwise; the chip slot is where that belongs.
 
 ### 3. Copy that counts must read the count

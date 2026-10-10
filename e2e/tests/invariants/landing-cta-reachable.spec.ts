@@ -394,11 +394,27 @@ test.describe("landing copy describes the real pipeline (ADR-0032)", () => {
     expect(text).not.toContain("not yet built");
 
     // POSITIVE PARTNER for the two negatives above: the slot still carries a
-    // truthful current limit rather than being quietly emptied. ADR-0096
-    // decision 1 buys L1 only — a source is CITED; that it resolves (L2) or
-    // supports the claim (L3) is not attempted — and says in those words that
-    // no UI copy may imply otherwise.
-    expect(text).toContain("cited");
-    expect(text).toContain("aren't checked against their pages");
+    // truthful current limit rather than being quietly emptied. ADR-0158
+    // (CHG-039): the last chip follows whether a run would check its answers
+    // against the cited pages -- page reading in effect AND live execution
+    // on, as the server reports them on /status. ``page.request`` is not
+    // routed by ``stubReadinessLive`` (which answers /ready only), so this is
+    // the server's own state; CI serves both off and must still see the old
+    // line. (The server picks the line from the live flag and a key, the
+    // terms the subhead uses; /status's ``live_execution`` also needs the
+    // cached key-auth verdict, so the two could differ only after a key was
+    // refused -- never with live execution off, CI's state.)
+    const status = await (await page.request.get("/status")).json();
+    expect(typeof status.source_pages_in_effect).toBe("boolean");
+    expect(typeof status.live_execution).toBe("boolean");
+    const pagesChecked = status.source_pages_in_effect === true && status.live_execution === true;
+    const OLD_LINE = "Sources are cited, but aren't checked against their pages";
+    const NEW_LINE = "Answers are checked against the pages and PDFs they cite";
+    const chips = (
+      await page.locator(".landing-disclaimers .landing-disclaimer").allTextContents()
+    ).map((chip) => chip.replace(/\s+/g, " ").trim());
+    expect(chips).toHaveLength(4);
+    expect(chips[3]).toBe(pagesChecked ? NEW_LINE : OLD_LINE);
+    expect(chips).not.toContain(pagesChecked ? OLD_LINE : NEW_LINE);
   });
 });
