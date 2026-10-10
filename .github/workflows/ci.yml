@@ -29,8 +29,10 @@ jobs:
     # defaults to 360 min and would be invisible to the ceiling math.
     # 25, not 20 (ADR-0151): the last 11 green runs before 2026-10-07 took 15.7 to
     # 19.5 min, and PR #546 was cancelled at the 20-min limit twice (20.2 and 20.3 min).
-    # The deploy gate's wait (1800s) and the drift grace (2100s) cover 25.
-    timeout-minutes: 25
+    # 35, not 25 (ADR-0157): this job was cancelled at 25 min twice on the push of
+    # dbf314e and took 23.9 min on 8d9a60b. The deploy gate's wait (2400s) and the
+    # drift grace (2700s) cover 35.
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
         with:
@@ -212,8 +214,11 @@ jobs:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     # 25, not 20 (ADR-0151): it runs the full suite with coverage and took 18.1
-    # min on PR #546. Pull-request only, so the deploy gate never waits on it.
-    timeout-minutes: 25
+    # min on PR #546. 35, not 25 (ADR-0157): validate-and-test, the same suite
+    # with coverage, was cancelled at 25 min twice on the push of dbf314e and
+    # took 23.9 min on 8d9a60b. Pull-request only, so the deploy gate never
+    # waits on it.
+    timeout-minutes: 35
     env:
       OPENROUTER_LIVE_EXECUTION_ENABLED: "false"
       QUORUM_RUNTIME_ENVIRONMENT: "ci"

@@ -37,9 +37,11 @@ jobs:
     # 20:04:33, which left merged code undeployed (the deploy gate needs this
     # job). 25, not 20 (ADR-0151, 2026-10-07): it took 15.2 min on 7e6c94c and
     # the suite keeps growing; validate-and-test, which runs the same suite with
-    # coverage, was cancelled at 20. The deploy gate's wait (GATE_TIMEOUT_SECONDS,
-    # 1800s, deploy.yml) and the drift alarm's grace (2100s) moved with it.
-    timeout-minutes: 25
+    # coverage, was cancelled at 20. 35, not 25 (ADR-0157): validate-and-test was
+    # cancelled at 25 min twice on the push of dbf314e and took 23.9 min on
+    # 8d9a60b. The deploy gate's wait (GATE_TIMEOUT_SECONDS, 2400s, deploy.yml)
+    # and the drift alarm's grace (2700s) moved with it.
+    timeout-minutes: 35
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
