@@ -28,8 +28,8 @@ job start and end times):
 #551, within a minute of its limit.
 
 The durations come from `gh run view <run id> --json jobs` (each job's `startedAt` and
-`completedAt`), for runs 37774320417, 37814080389, 37967644862, 37964635590, 37977379231 and
-37964635693, and `gh api repos/:owner/:repo/actions/runs/37980293673/attempts/<1|2>/jobs` for
+`completedAt`), for runs 37774320417, 37814080389, 37967644862, 37964635590, 37977379231, 37964635693 and
+37980293856 (pytest on `dbf314e`), and `gh api repos/:owner/:repo/actions/runs/37980293673/attempts/<1|2>/jobs` for
 the two attempts of `dbf314e`; the 97% line is in that attempt's job log.
 The suite grows with every work package (the W54 steps added many tests, some of which start
 real child processes).
@@ -70,7 +70,8 @@ declares no limit.
 - A merge whose push jobs run 25–35 minutes now deploys instead of stranding.
 - A truly hung job is cancelled ten minutes later than before. The drift watchdog reports a
   stranded merge no sooner than 45 minutes after it (35 before); in practice later, because it
-  runs on a schedule whose measured median gap is about 93 minutes
-  (`.github/workflows/deploy-drift-watchdog.yml`).
+  runs on a schedule whose median gap was 297.8 minutes over its last 100 scheduled runs
+  (2026-09-20 to 2026-10-10, `gh run list --workflow deploy-drift-watchdog.yml --event schedule
+  --limit 100`).
 - If the suite keeps growing, these values will be reached again; parallel test runs are the
   follow-up.
