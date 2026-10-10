@@ -3,7 +3,7 @@
   "captured_utc": "2026-10-10",
   "code_commit": "dbf314e2e5aba4b7583f6fae5c4d4ddc4d3d9135",
   "why_this_exists": "The first measured outputs of the page-reading judge prompt (PR-EVAL-JUDGE-v2) on the final step-4 code: two paid runs approved by the owner (CHG-038), made on the session's machine with page reading on for that process only; production was not touched.",
-  "how_to_reproduce": "Start the app at code_commit with QUORUM_SOURCE_FETCH_ENABLED=true and live execution on, run each question with the panel shown, and read the judge call's telemetry. Costs real money (about /bin/zsh.19 for both). Never run in CI.",
+  "how_to_reproduce": "Start the app at code_commit with QUORUM_SOURCE_FETCH_ENABLED=true and live execution on, run each question with the panel shown, and read the judge call's telemetry. Costs real money (about $0.19 for both). Never run in CI.",
   "d5_note": "Judge rationales and page text are not kept: rationales are free text about provider prose, and page text belongs to the cited sites. The user prompt is recorded only as a SHA-256 and a length.",
   "total_cost_usd": "0.1889",
   "runs": [
