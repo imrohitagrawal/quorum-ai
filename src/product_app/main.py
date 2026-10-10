@@ -381,6 +381,28 @@ def _landing_subhead(active_settings: Settings) -> str:
     )
 
 
+def _landing_sources_line(active_settings: Settings) -> str:
+    """The landing's last disclaimer chip, following whether pages are read.
+
+    ADR-0158 (CHG-039). The chip said "Sources are cited, but aren't checked
+    against their pages", which stops being true once page reading is on.
+    It says "Answers are checked against the pages and PDFs they cite" only
+    when a run WOULD read them: :func:`source_pages_in_effect` (the judge
+    configured AND page reading on) AND live execution on with a key, the
+    same two live terms as :func:`_peer_critique_in_effect`. With live
+    execution off no run reaches the judge, so nothing is read: the same
+    reasoning the subhead follows for peer critique (ADR-0099, #458). It is
+    prospective: it says what a run would do, not what one did. Returned as
+    HTML, like :func:`_landing_subhead`; both sentences are fixed text.
+    """
+    live = active_settings.openrouter_live_execution_enabled and bool(
+        active_settings.openrouter_api_key
+    )
+    if source_pages_in_effect() and live:
+        return "Answers are checked against the pages and PDFs they cite"
+    return "Sources are cited, but aren't checked against their pages"
+
+
 def _openapi_url(active_settings: Settings) -> str | None:
     """Return the raw schema route (``/openapi.json``), gated by the docs flag.
 
@@ -1164,6 +1186,7 @@ def _render_workspace_html(account_controls: str = "", *, signed_in: bool = Fals
         .replace("{{ live_readiness_json }}", live_readiness_json)
         .replace("{{ cost_model_json }}", cost_model_json)
         .replace("{{ landing_subhead }}", _landing_subhead(settings))
+        .replace("{{ landing_sources_line }}", _landing_sources_line(settings))
     )
     for slot_index in range(len(default_ids)):
         default_id = escape(default_ids[slot_index])
