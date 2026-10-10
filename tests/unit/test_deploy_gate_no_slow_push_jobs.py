@@ -132,11 +132,21 @@ def test_deploy_gate_waits_at_least_as_long_as_any_required_push_job_may_run() -
     blocking job (or a pathological advisory one) leaves its workflow ``in_progress``
     past the gate window, the fail-safe fires, and the merge is stranded undeployed.
     The fix is EITHER lengthen the gate wait OR gate the offending job off push
-    (see the mutation-job test below); both keep this invariant true."""
+    (see the mutation-job test below); both keep this invariant true.
+
+    A push job with NO ``timeout-minutes`` runs up to GitHub's default of 360
+    minutes, far past any gate wait. It used to be skipped here unseen
+    (``fr-completeness`` declared none until ADR-0157). RED IF: any job that
+    runs on push in a required workflow (pull-request-only jobs excepted)
+    declares no ``timeout-minutes``, or any declared ceiling exceeds the gate's
+    wait. Partner: the check sees the declared ceilings of the other jobs
+    (``CI``'s ``validate-and-test`` at 35 minutes among them), so it is not
+    passing over an empty list."""
     required, gate_timeout = _deploy_gate()
     by_name = _workflow_files_by_name()
 
     ceilings: list[tuple[str, int]] = []
+    unbounded: list[str] = []
     for name in required:
         wf = _load(by_name[name])
         if not _triggers_on_push_to_main(wf):
@@ -145,9 +155,16 @@ def test_deploy_gate_waits_at_least_as_long_as_any_required_push_job_may_run() -
             if not isinstance(job, dict) or _is_pull_request_only(job):
                 continue
             tmo = job.get("timeout-minutes")
-            if tmo is not None:
+            if tmo is None:
+                unbounded.append(f"{name}:{job_id}")
+            else:
                 ceilings.append((f"{name}:{job_id}", int(tmo) * 60))
 
+    assert unbounded == [], (
+        f"push jobs with no timeout-minutes (GitHub's default is 360 minutes): {unbounded}"
+    )
+    assert dict(ceilings).get("CI:validate-and-test") == 35 * 60, ceilings
+    assert len(ceilings) >= 5, ceilings
     worst = max(ceilings, key=lambda kv: kv[1], default=("<none>", 0))
     assert gate_timeout >= worst[1], (
         f"deploy-gate timeout {gate_timeout}s < {worst[0]} declared ceiling "
@@ -237,6 +254,16 @@ def test_the_gate_waits_2400_seconds_in_deploy_yml_and_in_the_script() -> None:
     ADR-0157)."""
     assert _deploy_gate()[1] == 2400
     assert _load_script("deploy_gate").DEFAULT_TIMEOUT_SECONDS == 2400.0
+
+
+def test_fr_completeness_has_10_minutes() -> None:
+    """ADR-0157 (round 1): the blocking ``fr-completeness`` job runs on push
+    and declared no limit, so it could run GitHub's default 360 minutes. RED
+    IF: it declares other than 10 minutes, or none. Partner: the job exists
+    in ``ci.yml``."""
+    jobs = _load(_WORKFLOWS / "ci.yml")["jobs"]
+    assert "fr-completeness" in jobs
+    assert jobs["fr-completeness"].get("timeout-minutes") == 10
 
 
 def test_the_drift_grace_is_2700_seconds() -> None:
