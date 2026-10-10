@@ -2474,7 +2474,7 @@ def judge_reads_pages() -> bool:
     """Whether a panel run's judge reads the cited pages (W29, ADR-0148).
 
     The judge must be configured AND ``quorum_source_fetch_enabled`` on (False
-    in code and unset in ``fly.toml``). The ONE predicate: the request-path
+    in code; production sets it in ``fly.toml`` since ADR-0156). The ONE predicate: the request-path
     judge gates the fetch on it, ``costs.py`` prices the page reserve and the
     ``source_fetch`` row on it, and ``main.source_pages_in_effect`` serves it
     to ``/status`` and the page (ADR-0116). Quick runs never read pages; that

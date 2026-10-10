@@ -742,9 +742,10 @@ class Settings(BaseSettings):
     peer_critique_enabled: bool = False
 
     # --- Source fetch (#447, ADR-0124) ------------------------------------
-    #: The judge reads the cited pages, not only their titles. SHIPPED OFF:
-    #: nothing in the run path calls the fetcher until the wiring pull
-    #: request, and even then only when the judge is configured. Egress to
+    #: The judge reads the cited pages, not only their titles. False in code;
+    #: production sets it in ``fly.toml`` since ADR-0156. The run path calls
+    #: the fetcher only when this is on AND the judge is configured
+    #: (``evaluation.judge_reads_pages``), for a panel run's verdict. Egress to
     #: arbitrary cited hosts is a new surface (T-014), so it is reported on
     #: /status like the other subsystems (ADR-0013) and never enabled
     #: invisibly. ``source_fetcher.py`` holds the egress policy.
