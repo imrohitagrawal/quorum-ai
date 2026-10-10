@@ -27,9 +27,9 @@ CHG-038):
 The page-reading prompt (`PR-EVAL-JUDGE-v2`) is captured in
 `tests/evals/golden/measured/judge_with_pages_2026-10-10.json`: scores, token counts, page
 outcomes and SHA-256 fingerprints of both prompts, without page text or judge rationales. The
-figures above come from the session's run records (the app's telemetry and run results), kept
-on the session's machine only because they hold the cited sites' page text; the repository keeps
-the capture, not the records, so they cannot be re-derived from the tree.
+capture holds every figure in the table above; the raw run records they come from (the app's
+telemetry and run results) stay on the session's machine, because they hold the cited sites'
+page text.
 
 The judge reads pages only on a panel run where at least one answer came from a real model
 (`query_run_orchestration._request_path_judge`). Production's live execution is off
@@ -53,6 +53,12 @@ local run, a test and any deployment without that line keep page reading off.
 - While live execution is off, no run reaches the judge, so nothing is fetched. What changes at
   once: `/status` reports `source_pages_in_effect: true`, and the estimate prices pages (the
   judge line from 15,000 typical input tokens, ADR-0155, and the maximum from the page reserve).
+- Simulated runs book their estimate against the per-visitor $0.40 daily cap as live runs do
+  (`feedback_store.try_record_cost_charge`), so each simulated panel run now books about
+  $0.003 more (the judge line) and shows a maximum about $0.013 higher (the page reserve); a
+  panel whose maximum was within that of the $0.30 confirmation threshold now asks for
+  confirmation. With the default panel, three runs a day fit either way (round-2 review,
+  measured with the catalog's fallback prices).
 - In a live window, every live panel run with a configured judge fetches the cited pages, within
   8 attempts and 8 seconds, and the judge checks the answer against them; the trust note says
   which pages were read and which were checked by preview only. Quick answers never read pages.

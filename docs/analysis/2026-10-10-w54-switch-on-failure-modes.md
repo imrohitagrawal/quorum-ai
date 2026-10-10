@@ -21,7 +21,7 @@ code's default stays False. Design: ADR-0156. Measured: CHG-038's two paid runs 
 | # | Failure | Harm | Answer |
 |---|---|---|---|
 | 1 | Each run costs more: page text in the judge's input. | Money. | Measured: $0.0914 and $0.0975 for the two runs (CHG-038), against estimates of $0.1118 and $0.1116. The estimate prices a 15,000-token typical judge input (ADR-0155); the Japanese run's 16,374 tokens was above it, so that estimate was about $0.0006 low on the judge line (arithmetic). The maximum shown prices the full page reserve. |
-| 2 | Each run holds its slot longer while pages are fetched. | Fewer runs at once. | The fetch budget is 8 s per run (unchanged). Measured slot times 73.4 s and 54.8 s, below every earlier measured slot time (79.6 s, 82.7 s, 67.5 s). |
+| 2 | Each run holds its slot longer while pages are fetched. | Fewer runs at once. | The fetch budget is 8 s per run (unchanged). Measured slot times 73.4 s and 54.8 s; earlier runs measured 67.5 s to 82.7 s. Two runs with different questions cannot show what fetching adds, so the effect on capacity is unmeasured. |
 | 3 | The app now fetches addresses an AI model cited. | SSRF, abuse of third-party sites. | Existing guards (ADR-0124): public addresses only, robots.txt honoured, 8 attempts and 4 pages per site per run. Unchanged here. |
 | 4 | A hostile PDF exhausts memory or CPU on the 512 MB machine. | Runs in flight lost. | The sandboxed child with its Linux limits (ADR-0153), proven on CI; one PDF child at a time. Unchanged here. |
 | 5 | Page previews and text go to the judge provider. | Privacy. | Approved in `docs/48` (CHG-033 (b)): the search preview and page text are sent to the same judge provider for the run only, never stored. |
