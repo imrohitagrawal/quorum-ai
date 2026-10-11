@@ -361,31 +361,154 @@ Each was filed as a separate fact, not as one class of problem.
   or a session started clean of this project's memory.
 - **Evidence from another project is a lead, not proof.** Check its maturity and branch first.
 
-## Order, and where to do it
+## The plan
 
-Nothing waits on `stackclimb-skills`. Each step is one concern, so each is one pull request,
-reviewed twice and pushed once.
+Nothing here waits on `stackclimb-skills`. Each package is one concern and one pull request,
+reviewed twice and pushed once, then merged and checked in production.
 
-1. **"How we work"** (on the branch that holds this document):
-   - the process skill `.agents/skills/work-item-delivery/`, with both testers;
-   - the item-based route in the skill router, with its tests;
-   - the `AGENTS.md` lines;
-   - `make handoff` checking that a prompt names the skill.
-2. **"One status":**
-   - the three kinds of status, each named in `docs/README.md`;
-   - the completion-word check;
-   - the `PRESENT`-needle fix;
-   - the board-to-GitHub job;
-   - fixes for the 8 disagreements, with the owner deciding which issues to close.
-3. **W55 and W56,** built with the new skill. This is the first real use of it.
-4. **Later, each its own item:**
-   - one test-suite run per change in CI;
-   - the signed-in journey test lane against the real app;
-   - pull-request template fields;
-   - the constant-sweep script;
-   - the status hook.
-5. **`stackclimb-skills`, any time:** settle the pl5 work, then take in the generic parts of
-   steps 1 and 2.
+### Package A: "How we work" (pull request 1)
 
-Steps 1 and 2 are built in a fresh session, because this session's context has been summarised
-once. This session's research is all in this document.
+**Goal:** every session follows one process without anyone retyping it.
+
+**What gets built:**
+
+1. **The process skill:** `.agents/skills/work-item-delivery/SKILL.md`.
+   - **Roles:**
+     - main orchestrator, the only one who merges;
+     - test designer;
+     - user-journey tester;
+     - builder, who may not edit the tests;
+     - break-it reviewer;
+     - prose auditor working against the transcript;
+     - Codex, run against the pull request's worktree;
+     - a falsification lens;
+     - a completeness critic;
+     - one fixer at a time.
+   - **The rules it states:**
+     - two review rounds plus a narrow re-check of each fix;
+     - at most 8 agents in a workflow;
+     - failure modes first for money, sign-in and safety;
+     - check `docs/19` before asking the owner anything, and batch the questions;
+     - record decisions as CHG rows, and never record an approval that was not given;
+     - production checks: the Deploy job, `build_sha`, and something visible;
+     - cleanup with `df -h .` before and after;
+     - status reported before the owner has to ask;
+     - a time limit on every wait;
+     - the check for other live sessions;
+     - a handoff when context runs low.
+   - **The four contradictions it settles:** who merges, how many reviewers, how many rounds, and
+     how big a workflow may be.
+2. **The skill router routes by the item or the diff:**
+   - `make skill-route ITEM=W55` or `DIFF=origin/main`;
+   - classes are money, sign-in and session, interface, AI output and judge, CI, privacy and
+     retention, and docs only. Each class adds its roles, checks and owner decisions;
+   - the 3 routed names that are not skills are removed.
+3. **`AGENTS.md`:** a few lines saying every item is built by the skill, plus the rules it lacks:
+   - `docs/19` for decisions;
+   - `docs/65` needles;
+   - the live-session check;
+   - cleanup.
+4. **`make handoff`:**
+   - fails when a root prompt file does not name the skill;
+   - lists leftover worktrees, branches and scratch files.
+5. **Older files:** `AUTONOMOUS-WORK-LOOP-ULTRACODE-PROMPT.md` and the template either point at the
+   skill or move to the archive. `R2-S2-S4-ULTRACODE-PROMPT.md` stays, marked as an example,
+   because a test pins it.
+6. **This review document** goes in the same pull request.
+
+**How we know it works** (each check is a test that must first be shown failing):
+
+- a root prompt file without the skill line makes `make handoff` fail;
+- a diff touching money that is routed without the failure-mode role turns a test red, and a
+  docs-only diff gets no money roles;
+- every routed skill name exists, and every `src/` module falls in a class.
+
+**Owner decisions:** confirm the four settled points (main orchestrator merges; 3 lenses plus Codex;
+exactly 2 rounds; at most 8 agents).
+
+### Package B: "One status" (pull request 2)
+
+**Goal:** a fresh reader reaches one status, and a false "done" fails a check.
+
+**What gets built:**
+
+1. **Three kinds of status, each with one home, named in `docs/README.md`:**
+   - **delivery:** the board plus GitHub;
+   - **product readiness:** a section generated from `/status` and `/ready`, saying what is
+     built and what is in effect in production;
+   - **decisions:** `docs/19` and the ADRs.
+2. **Stale readiness documents:** `docs/95`, `docs/factory-status.md`, `docs/74` and `docs/116` go
+   to the archive or get a banner. The status columns in `docs/17` and `docs/18` either become
+   true or are marked historical.
+3. **A completion-word check.** "merged", "in production", "COMPLETED", "Verified", "Approved" or
+   "Accepted" in a handoff, root prompt, `docs/17`, `docs/18`, an ADR or a readiness document must
+   cite a PR or commit on `main`, or a CHG row.
+4. **A `PRESENT` needle must have been true at a named commit.** This closes the made-up-needle
+   hole.
+5. **Board and GitHub agree:** a check in `make handoff` (it needs `gh`) that fails on a DONE row
+   with an open issue, or an open issue with no row.
+6. **The disagreements still open:**
+   - give #458 and #459 board rows;
+   - correct the peer-critique prose;
+   - correct the requirement statuses;
+   - add `docs/74` and `docs/116` to the router's placeholder list;
+   - put the advisory leftovers from the 2026-10-11 handoff on the board.
+
+   Issues #447, #464, #465 and #469 were checked and closed on 2026-10-11.
+
+**How we know it works:**
+
+- the 14 false claims from the colleague's test are committed as a test, and every one is
+  rejected. Today 9 of 14 pass;
+- one agent started without this project's memory answers "what is live, what is open, is it
+  ready?" from the repository, and gets one consistent answer.
+
+**Owner decisions:**
+
+- which of `docs/17`, `docs/18` and `docs/95` are archived and which are kept current;
+- the wording of the readiness statement.
+
+### Package C: W55 and W56 (pull requests 3 and 4)
+
+Built under the skill from package A: the first real use of it. The scope is as in
+`CONTINUE-W55-W56-PROMPT.md`, rewritten as a short prompt that names the skill.
+
+### Package D: later, each its own pull request, in this order
+
+1. **One test-suite run per change in CI.** The suite runs up to four times per change today, and
+   this is the largest time saving. Measure first how `diff-cover` runs the suite.
+2. **Signed-in browser tests of the owner's journeys against the real app,** written from journey
+   statements the owner approves. This was proposed by the 2026-09-29 engineering review.
+3. **Large web pages, found 2026-10-11.** A page over 256 KiB whose server states its size is
+   refused and never read. For example, Wikipedia's Photosynthesis article (970,143 bytes) stated
+   its size on 6 of 6 requests. Decide whether to read the first 256 KiB or keep refusing.
+4. **Pull-request template fields with a CI check:**
+   - the premise;
+   - review rounds;
+   - the source of every number;
+   - the CHG row;
+   - for a bug fix, who found it.
+5. **A search script before changing a constant.**
+6. **A status line or stop hook listing background jobs.** This changes the owner's settings, so
+   the owner decides.
+7. **The advisory leftovers in the 2026-10-11 handoff:**
+   - the 1,024-open-files limit in the PDF reader's exit wait;
+   - `cffi` and `pycparser` unpinned in the image;
+   - the flaky signed-in browser tests;
+   - the mutation job's time budget.
+
+### Package E: `stackclimb-skills`, any time, separately
+
+Settle the 8 unfinished pl5 worktrees. Then take the generic parts of packages A and B into
+`work-package-protocol` and `multi-work-package-orchestration`, and install the latest version.
+
+### Sessions
+
+| Session | Repository | Work | Starts when |
+|---|---|---|---|
+| 1 | quorum-ai | Packages A then B (two pull requests). If context runs low after A, hand off and start a session for B | now |
+| 2 | quorum-ai | Package C | A merged |
+| 3 | stackclimb-skills | Package E | any time |
+
+Each session gets a prompt file the owner starts with one line. The prompt states the approvals:
+push, merge and deploy for the named pull requests only.
