@@ -136,36 +136,55 @@ approximate.
 
 ## What to do: one home, loaded every time, with checks
 
-**Layer 1: skills** (reusable across all repos, in `stackclimb-skills`):
+**Layer 1: one process skill, inside this repo first.**
 
-- `work-package-protocol` covers one item; `multi-work-package-orchestration` covers several.
-- Fold in what was learned since August, as generic rules:
-  - a test designer separate from the builder;
-  - one lens that runs commands;
-  - a browser run of the real user journeys;
-  - limits on workflow size;
-  - disk cleanup;
-  - batching questions to the owner;
-  - every wait has a time limit;
-  - status shown before the owner has to ask.
-- Settle the four contradictions:
-  - **merges:** the main orchestrator only, under the approval given in the prompt;
+- **The skill:** `.agents/skills/work-item-delivery/`. It holds the full process:
+  - the roles, including the two testers;
+  - review rounds and workflow limits;
+  - who merges;
+  - production checks, cleanup, and how to ask the owner.
+- **Why here first:** `AGENTS.md` already says a procedure moves to `.agents/skills/` "once
+  generalised", so this needs no new mechanism. quorum-ai never waits on `stackclimb-skills`.
+- **Contradictions it settles:**
+  - **merges:** only the main orchestrator, under the approval given in the prompt;
   - **reviewers:** 3 lenses plus Codex;
   - **rounds:** exactly 2, plus one narrow re-check of each fix;
   - **workflows:** at most 8 agents.
-- Install the latest version, including the multi-item skill.
+- **Later, as a separate task:** `stackclimb-skills` takes the generic parts into
+  `work-package-protocol` and `multi-work-package-orchestration`, and installs the latest version.
+  That repo has 8 worktrees of unfinished "pl5" work to settle first.
 
-**Layer 2: the repo profile** (`AGENTS.md`, quorum-ai only). Add one short section,
-"How every item is built", that:
+**A dedicated user-journey tester (owner's direction, 2026-10-11).** This role is separate from the
+test designer, who writes failing acceptance tests against the code. The user-journey tester works
+from the owner's expectations, never from the pull request's own description:
 
-- names the two skills and says they apply to every item;
-- holds the quorum-specific parts:
-  - commands, gates and e2e flags;
-  - Codex with `--cwd`, the close-guard and the deploy checks;
+- **Before the build:**
+  - writes what the owner expects to see and do, step by step;
+  - works from `docs/113-user-journeys.md` and the owner-approved journey statements;
+  - covers both signed-in and anonymous use.
+- **After the build:**
+  - drives the real running app the way the owner uses it, signed in and anonymous, at desktop and
+    phone widths;
+  - reports each expectation as met or not, with a screenshot.
+
+This is part (1) and (3) of the fix the 2026-09-29 engineering review proposed
+(`docs/analysis/2026-09-29/ENGINEERING-REVIEW-2026-09-29.md`). That review found that agents which
+actually drove a browser found 16 defects, while the gates found none of the 39 user-journey defects.
+
+**Layer 2: make the existing mechanisms load it.**
+
+- **`configs/skill-router.json`** (`make skill-route`) picks one skill per product phase, from idea to
+  publishing. It came with the template and has been unchanged since 2026-06-20. Its result is the
+  same for every item: in the current phase it names one driver skill and 39 reviewer skills.
+  It never mentions the delivery process (0 hits for `work-package-protocol` or `journey`). Add a
+  route, "deliver one work item", whose driver is the new skill.
+- **`AGENTS.md`** loads into every session and every agent. Add a few lines: "every item is
+  built by `.agents/skills/work-item-delivery`". They also cover what `AGENTS.md` lacks today:
   - `docs/19` for decisions;
   - `docs/65` needles;
-  - the live-session check.
-- Archive LOOP and the template, or change them to point at the skills. Keep R2 where it is,
+  - the check for other live sessions;
+  - disk cleanup.
+- Archive LOOP and the template, or change them to point at the skill. Keep R2 where it is,
   because a test pins it, and mark it as an example.
 
 **Layer 3: the handoff prompt** (short, per session): which items, in what order, the decisions to
@@ -200,14 +219,15 @@ read, what is approved, and one line naming the skills. No process text.
 
 ## Order, and where to do it
 
-- **This session:** the research and this document only. Its context has been summarised once, and
-  every change below is its own pull request with its own review.
-- **Next session 1 (in `stackclimb-skills`):**
-  - decide what happens to the unfinished pl5 work;
-  - fold Layer 1 into the two skills;
-  - install the latest version.
-- **Next session 2 (quorum-ai):**
-  - the `AGENTS.md` section and check 1;
-  - the first real use of the updated skills, so it doubles as a trial.
-- **Next session 3:** W55 and W56, with a short prompt that names the skills.
-- **Later, each its own item:** checks 2–6.
+1. **One "how we work" pull request in quorum-ai,** on the branch that holds this document:
+   - the skill;
+   - the router route;
+   - the `AGENTS.md` lines;
+   - check 1, then two review rounds and one push.
+
+   Built in a fresh session, because this one's context has been summarised once and the pull
+   request includes code and tests.
+2. **W55 and W56,** with a short prompt that names the skill. This is the first real use of the skill.
+3. **`stackclimb-skills`, any time, independently:** settle the pl5 work, then take in the generic
+   parts.
+4. **Later, each its own item:** checks 2–6.
