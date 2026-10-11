@@ -456,8 +456,8 @@ is the rule only.
     is not.
 18a. **Close out in this order, every time — do not skip or reorder:**
     (1) local gates green (rule 14) and every review finding resolved;
-    (2) merge (rule 17c); (3) verify the deploy per rule 18, on the newest
-    run for the merge SHA if a concurrency-cancelled run appears first;
+    (2) merge (rule 17c); (3) verify the deploy per rule 18, on the run for
+    the merge SHA whose Deploy job concluded `success` (see the trap below);
     (4) `git branch -f main origin/main` (rule 17e), delete the merged
     branch (local + remote), remove the dedicated worktree. Merging without
     step 3 and leaving a stale branch/worktree without step 4 are both
@@ -473,9 +473,10 @@ is the rule only.
       was written as a timeless absolute, so nobody re-checked it for a week.
     - **A merge produces several Deploy runs** — 3 to 8 on the five merges
       before 2026-10-11 (`gh run list --commit <sha> --workflow 'Deploy to
-      Fly.io'`). The extras are `cancelled` by concurrency dedupe or, later,
-      `skipped`; on four of the five exactly one succeeded, and on `dbf314e`
-      none did. A wait-loop keyed on "any completed run for this SHA" fires on
+      Fly.io'`). The extras are `cancelled` by concurrency dedupe, `skipped`
+      later, or `failure` when the deploy gate refuses; on four of the five
+      exactly one succeeded, and on `dbf314e` none did (four failed at the
+      gate). A wait-loop keyed on "any completed run for this SHA" fires on
       a cancelled one and reports done while production is still on the old
       build. Read the Deploy **job** of every run for the merge SHA, and look
       for the one that concluded `success` — not merely the newest run.

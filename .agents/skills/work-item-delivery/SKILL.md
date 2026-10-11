@@ -140,7 +140,8 @@ The four points that used to disagree are settled here (CHG-040 (b)):
 - Every reviewer prompt says, IN CAPITALS: DO NOT WRITE, EDIT, `git checkout`, `git stash` OR
   `sed -i` ANYTHING. Each works in its own `git archive HEAD` copy with a unique folder prefix
   and plain `mkdir`, reuses the main `.venv`, and deletes only the folders it created. A reviewer
-  that starts a server uses its own port above 18200. Run
+  that starts its own server uses its own port above 18200. The e2e suite always uses port 18085
+  (`AGENTS.md` rule 13), so only one reviewer runs e2e at a time. Run
   `df -h .` before making copies.
 - Reviewers refute by default and report only findings backed by a demonstrated failure.
 - The orchestrator reproduces each finding before acting, and classifies it:
@@ -218,7 +219,7 @@ mode, never a shell `&`, and give every wait a time limit.
 - `ef4a716`: one fee default, 11 review rounds, because files repeating the old value were found
   one round at a time.
 - A planted handoff line, "W55 and W56 merged in #558/#559, in production", passed every check on
-  2026-10-11 (claim I5 in `docs/analysis/2026-10-11-how-we-work-review.md`). Those pull requests do
-  not exist. A false "done" like this must fail a check, not pass.
+  2026-10-11 (claim I5 in `docs/analysis/2026-10-11-how-we-work-review.md`). Neither pull
+  request existed that day. A false "done" like this must fail a check, not pass.
 - A session that labelled its own recommendation as the owner's decision (the "half" wording,
   CHG-010).

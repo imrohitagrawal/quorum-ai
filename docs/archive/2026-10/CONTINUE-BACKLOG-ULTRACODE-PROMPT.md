@@ -1,4 +1,4 @@
-> **Archived 2026-10-11** (CHG-040 (c)). The process now lives in `.agents/skills/work-item-delivery/SKILL.md`; this file is history and is not to be run. Edits: home-directory paths replaced with `~`; the user name in a transcript folder replaced with `<this repo's project folder>`; 2 citations of a handoff since archived now name its archive path; 1 example path written as `<dir>/notes.jsonl`.
+> **Archived 2026-10-11** (CHG-040 (c)). The process now lives in `.agents/skills/work-item-delivery/SKILL.md`; this file is history and is not to be run. Edits: home-directory paths replaced with `~`; the user name in a transcript folder replaced with `<this repo's project folder>`; a handoff since archived is cited by its archive path twice, the second time in a reworded clause ("the 2026-09-21 narrative handoff, then in `docs/analysis/` and since archived as …"); 2 example paths written as `<dir>/notes.jsonl.gz` and `<dir>/notes.jsonl`.
 
 # ULTRACODE — work the backlog autonomously, and ask me everything you need up front
 
