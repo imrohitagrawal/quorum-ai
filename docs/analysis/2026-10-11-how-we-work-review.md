@@ -217,17 +217,129 @@ read, what is approved, and one line naming the skills. No process text.
    targets mistake theme 2. It changes the owner's Claude Code settings, so it needs the owner's
    approval.
 
+## The skill router (`configs/skill-router.json`)
+
+Measured by a read-only researcher; the run of `python3 scripts/skill_router.py` was repeated by a
+second researcher.
+
+- **It never looks at the work item.**
+  - It walks the product phases and stops at the first document that is missing or still a
+    template. Every document is now filled, so it always lands on "Operate, learn, and improve"
+    (`scripts/skill_router.py:166-191`).
+  - It decides risk by searching 12 product documents for keywords. Bare words like "ai" and "ui"
+    match almost any text, so 7 of 9 risk triggers always fire.
+  - The answer is therefore the same for every item: one driver skill and 38 to 39 reviewer
+    skills.
+- **It has never changed what a session did.**
+  - It ran 11 times in 1,339 transcript files, almost always as part of `make handoff`.
+  - It routes 85 of the 113 repo skills, and 3 of the names it routes are not skills at all.
+  - It leaves out the skills sessions actually read: `e2e-testing-patterns`, `webapp-testing`,
+    `systematic-debugging`, `deploy-checklist`, `subagent-driven-development`.
+  - None of the lessons in this document appears in it. For example, it has 0 hits for "money",
+    "journey", "deploy" and "cleanup".
+- **Proposed redesign:**
+  - Route on what the change touches: `make skill-route ITEM=W55` reads the board row, and
+    `make skill-route DIFF=origin/main` reads the changed paths.
+  - Classes by path and identifier: money, sign-in and session, interface copy and layout, AI
+    output and judge, CI, privacy and retention, docs only.
+  - Each class adds required roles, reviewers, checks and owner decisions. For example, money adds
+    failure modes first, the test designer, the break-it reviewer and a `docs/19` CHG row; the
+    interface adds the user-journey tester. The output is a checklist, not 39 names.
+  - Tests:
+    - a money-path diff must route those roles, and a docs-only diff must not;
+    - every `src/` module falls in a class;
+    - every routed skill exists.
+  - Size: about 150 lines of JSON, 120 of Python and 4 tests.
+- **From the owner's other projects:**
+  - `citevyn` sizes review by blast radius, T0 to T3 (`citevyn/AGENTS.md:93-107`);
+  - `aushraya-ai` gives each skill route a verification column and keeps an append-only log of
+    skills actually used (`docs/skill-plan.md`, `docs/skill-execution.md`);
+  - `agent-program-supervisor` bounds correction waves and names a stop state
+    (`ARCHITECTURE_REDESIGN_REQUIRED`).
+
+## One consistent status (a colleague's feedback, tested)
+
+The feedback: *keep status in its authoritative sources; separate delivery status, product readiness
+and historical decisions; check whether the validators still accept unsupported completion claims;
+proof of improvement is that a fresh reader reaches one status and a deliberately unsupported claim
+fails a check.*
+
+**It applies here, and both halves are true today.** A researcher measured this on a copy of
+`origin/main` at `c894f78`.
+
+- **A fresh reader does not reach one status.** There are 8 disagreements. These were re-checked by
+  the session:
+  - W25, W26, W27 and W29 read DONE on the board while issues #464, #469, #465 and #447 are open;
+  - #458 and #459 are open with no board row;
+  - board prose says peer critique was switched on in production, while `fly.toml:120` and
+    `/status` say it is off;
+  - `docs/95` says "Decision: **Go**";
+  - all 31 rows in `docs/17` read "Draft".
+
+  Not re-checked: `docs/factory-status.md` says "no-go" and "70 tests", and the router reports "no
+  placeholders" while `docs/74` and `docs/116` are still templates.
+- **Unsupported completion claims mostly pass.** Of 14 deliberately false claims:
+  - 3 were rejected by a real support check. The board refused two hand-typed DONEs, and the
+    findings ledger refused a DONE with no proof.
+  - 2 were rejected only by chance, through a snapshot or a freshness check.
+  - **9 were accepted.** These included:
+    - "W55 and W56 merged and in production" in a handoff;
+    - an ADR marked "Accepted, owner approved" with no CHG row;
+    - FR-001 marked "Verified, passed in production";
+    - "STATUS: COMPLETED" in root prompts;
+    - the console set to "Released, GA, production-ready";
+    - readiness documents set to "Approved, GA";
+    - a board row pinned to a made-up `PRESENT` needle.
+- **The smallest change that makes both goals true:**
+  1. **Separate the three kinds of status.**
+     - Delivery: the board plus GitHub.
+     - Product readiness: one generated section from `/status` and `/ready`, saying what is built
+       versus what is in effect in production.
+     - Decisions: `docs/19` and the ADRs.
+
+     Name each in `docs/README.md`. Archive or banner `docs/95`, `docs/factory-status.md`,
+     `docs/74` and `docs/116`.
+  2. **Completion words need a cited proof.** A test that rejects "merged", "in production",
+     "COMPLETED", "Verified", "Approved" or "Accepted" in a handoff, root prompt, `docs/17`,
+     `docs/18`, an ADR or a readiness document, unless it cites a PR or commit on `main`, or a CHG
+     row for a decision. It follows the findings-ledger rule that already works, and it would have
+     rejected 7 of the 9.
+  3. **A `PRESENT` needle must have been true at a named commit,** which closes the made-up-needle
+     hole.
+  4. **Board and GitHub agree:** an advisory job that fails on a DONE row with an open issue, or an
+     open issue with no row.
+  5. **Fix the 8 disagreements found.** Closing #447, #464, #465 and #469 is the owner's decision.
+     #464 and #465 say "left open for the owner to close".
+- `agent-program-supervisor` already does this. It has one state machine for delivery, labels for
+  how proven each control is (DESIGNED / ENFORCED / MEASURED), and a `NOT_VERIFIED` result that
+  cannot support "COMPLETED". `narratwin-ai` rejects "production-ready" claims in pull-request
+  bodies.
+
 ## Order, and where to do it
 
-1. **One "how we work" pull request in quorum-ai,** on the branch that holds this document:
-   - the skill;
-   - the router route;
-   - the `AGENTS.md` lines;
-   - check 1, then two review rounds and one push.
+Nothing waits on `stackclimb-skills`. Each step is one concern, so each is one pull request,
+reviewed twice and pushed once.
 
-   Built in a fresh session, because this one's context has been summarised once and the pull
-   request includes code and tests.
-2. **W55 and W56,** with a short prompt that names the skill. This is the first real use of the skill.
-3. **`stackclimb-skills`, any time, independently:** settle the pl5 work, then take in the generic
-   parts.
-4. **Later, each its own item:** checks 2–6.
+1. **"How we work"** (on the branch that holds this document):
+   - the process skill `.agents/skills/work-item-delivery/`, with both testers;
+   - the item-based route in the skill router, with its tests;
+   - the `AGENTS.md` lines;
+   - `make handoff` checking that a prompt names the skill.
+2. **"One status":**
+   - the three kinds of status, each named in `docs/README.md`;
+   - the completion-word check;
+   - the `PRESENT`-needle fix;
+   - the board-to-GitHub job;
+   - fixes for the 8 disagreements, with the owner deciding which issues to close.
+3. **W55 and W56,** built with the new skill. This is the first real use of it.
+4. **Later, each its own item:**
+   - one test-suite run per change in CI;
+   - the signed-in journey test lane against the real app;
+   - pull-request template fields;
+   - the constant-sweep script;
+   - the status hook.
+5. **`stackclimb-skills`, any time:** settle the pl5 work, then take in the generic parts of
+   steps 1 and 2.
+
+Steps 1 and 2 are built in a fresh session, because this session's context has been summarised
+once. This session's research is all in this document.
