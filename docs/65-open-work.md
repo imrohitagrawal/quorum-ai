@@ -6,7 +6,7 @@ original, because a gate and an offline agent can read it and cannot read `gh`.
 
 Verified at: `4ba35cec0ce40f9dd48b9c1bf0b9aefeb862a28c`
 
-The board holds **65** rows, **25** of them unpinned.
+The board holds **66** rows, **26** of them unpinned.
 
 `scripts/check_open_work.py --check` reads every row's evidence off disk and
 refuses if a claim is false. It runs inside `make validate`, and
@@ -161,6 +161,7 @@ caught by any automated check and 10 of 16 by adversarial review
 | W64 | With the 15,000-token judge input, questions of 5,580 to 6,247 characters fit two runs a day, not three (advisory from the 2026-10-11 handoff) | UNPINNED | `—` | — | — |
 | W65 | With the model catalog unreachable, every page load fetched it again (763 fetches in about 6 minutes in a browser review), so a failed fetch appears not to be cached (advisory from the 2026-10-11 handoff) | UNPINNED | `—` | — | — |
 | W66 | A cited page over 256 KiB whose server states its size is refused and never read (Wikipedia's Photosynthesis article, 970,143 bytes, stated its size on 6 of 6 requests); decide whether to read the first 256 KiB (plan package D3) | UNPINNED | `—` | — | — |
+| W67 | The completion-word check (ADR-0162) lets a "no" answer with no colon cancel the claim that opens the next line: "Rollback needed? no" followed by "In production: yes" passes uncited (found by the narrow re-check of package B, 2026-10-11) | UNPINNED | `—` | — | — |
 
 **STOP** marks a row that cannot be finished without a human decision — a money,
 cost or safety guardrail value that only real measurement could justify. Do not
