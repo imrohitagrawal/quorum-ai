@@ -31,9 +31,12 @@ If the check ran inside `make validate`, an untracked prompt in the main checkou
 1. **`make prompt-check`** (`scripts/check_root_prompts.py`) reads the root directory itself, so it
    sees tracked and untracked files. It checks every root `.md` whose name contains `PROMPT`, in any
    case. Each must carry a paragraph that opens with **Process:** in bold and whose visible text
-   names `.agents/skills/work-item-delivery/SKILL.md`. The file is parsed with the CommonMark parser
-   the project already pins (`markdown-it-py`, as ADR-0029 chose for the same reason), so a code
-   block, an HTML comment, a heading or a comment-hidden path never counts. The paragraph may sit
+   names `.agents/skills/work-item-delivery/SKILL.md`. The file is rendered with the CommonMark
+   parser the project already pins (`markdown-it-py`, as ADR-0029 chose for the same reason), and
+   the check walks the rendered HTML with the standard library's `html.parser`, so a code block, an
+   HTML comment (also one that raw HTML leaves open), a heading, a comment-hidden path, or a
+   paragraph that raw HTML wraps or marks (`<div hidden>`, `<p hidden>`) never counts: only what
+   Markdown itself makes does. The paragraph may sit
    in a list item or a block quote. `make prompt-check` runs it with `uv run`, because the system
    Python lacks the parser. It exits 1 on any failure. It
    reports how many files it checked and how many were exempt, and it exits 1 when it finds no
@@ -54,6 +57,10 @@ split. It is the session's choice (CHG-040 (c)); the owner may reverse it.
 
 - **Line-by-line rules for code blocks and comments.** The first two versions did this, and each
   review round found a code example or a comment they let through, or a valid prompt they refused.
+- **Reading the parser's tokens instead of the rendered HTML.** Raw HTML passes through the tokens
+  unread, so `<!-- a --> <!--` at the start of a line, or `<div><!--`, left a comment open over the
+  Process paragraph: a reader saw nothing, and the token check accepted it. It also accepted a
+  paragraph inside `<div hidden>`.
 
 - **Inside `make validate`.** This hits the rule 13a trap described above.
 - **`make handoff` exits 1.** This contradicts ADR-0045, and an offline handoff would stop

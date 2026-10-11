@@ -9,6 +9,9 @@ A root prompt is any ``.md`` file at the repository root whose name contains
 Visibility is decided by a CommonMark parser (markdown-it-py, which ADR-0029
 chose after hand-rolled block rules failed), not by line rules: two rounds of
 hand-written rules each let a code example or a comment through. The check
+walks the RENDERED HTML, not the parser's tokens, because raw HTML passes
+through the tokens unread: a comment it left open hid a paragraph from a
+reader while a token-based check still accepted it. The check
 reads the directory itself, so it sees untracked files too. It exits 1 on any
 problem, and also when it finds no prompt file at all.
 """
@@ -16,6 +19,7 @@ problem, and also when it finds no prompt file at all.
 from __future__ import annotations
 
 import argparse
+from html.parser import HTMLParser
 from pathlib import Path
 
 from markdown_it import MarkdownIt
@@ -43,27 +47,113 @@ def find_prompt_files(root: Path) -> list[Path]:
     )
 
 
-def has_process_line(text: str) -> bool:
-    """True when a paragraph (at any depth: list item, block quote) opens with
-    bold ``Process:`` and its visible text names the skill. Fences, indented
-    code blocks and HTML blocks are never paragraphs; inline HTML such as a
-    ``<!-- -->`` comment is not visible text."""
-    tokens = MarkdownIt("commonmark").parse(text)
-    for before, token in zip(tokens, tokens[1:], strict=False):
-        if token.type != "inline" or before.type != "paragraph_open":
-            continue
-        parts = [c for c in token.children or [] if not (c.type == "text" and not c.content)]
-        opens = [(c.type, c.content) for c in parts[:3]]
-        if opens != [("strong_open", ""), ("text", "Process:"), ("strong_close", "")]:
-            continue
-        visible = "".join(
-            " " if c.type in ("softbreak", "hardbreak") else c.content
-            for c in parts
-            if c.type in ("text", "code_inline", "softbreak", "hardbreak")
+#: Block elements a Markdown paragraph may sit inside (block quote, list).
+_CONTAINERS = frozenset({"blockquote", "ul", "ol", "li"})
+#: Inline elements Markdown makes inside a paragraph; text in them is visible.
+_INLINE = frozenset({"strong", "em", "code", "a"})
+
+
+def _plain(tag: str, attrs: list[tuple[str, str | None]]) -> bool:
+    """True when the element carries only attributes Markdown itself writes:
+    none, ``start`` on a numbered list, ``href``/``title`` on a link."""
+    allowed = {"ol": {"start"}, "a": {"href", "title"}}.get(tag, set())
+    return all(name in allowed for name, _ in attrs)
+
+
+class _Paragraph:
+    def __init__(self) -> None:
+        self.opening = "await-strong"  # then "in-strong", then "opened" or "no"
+        self.label = ""
+        self.text = ""
+
+
+class _ProcessParagraphs(HTMLParser):
+    """Walks rendered HTML and sets ``found`` when a paragraph that Markdown
+    made opens with ``<strong>Process:</strong>`` and its text names the skill.
+
+    Raw HTML passes through to the page, so only what Markdown makes counts. A
+    paragraph is a ``<p>``, or an ``<li>`` (a tight list item has no ``<p>``),
+    with no attribute, whose every enclosing element is a plain block quote or
+    list. Its text is the data directly in it or in plain ``strong``, ``em``,
+    ``code`` or ``a``; a nested list item's text is its own. Comments are
+    never data. Markdown writes ``<br />``, ``<hr />`` and ``<img ... />``,
+    which the parser opens and closes at once; a raw ``<br>`` without the
+    slash stays open and refuses what follows it, the strict side."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.found = False
+        # Each open element: (tag, plain, the paragraph it starts or None).
+        self._open: list[tuple[str, bool, _Paragraph | None]] = []
+
+    def _innermost(self) -> tuple[int, _Paragraph | None]:
+        """The innermost open paragraph and its index in ``_open``."""
+        for i in range(len(self._open) - 1, -1, -1):
+            if self._open[i][2] is not None:
+                return i, self._open[i][2]
+        return -1, None
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        _, para = self._innermost()
+        if para and para.opening == "await-strong":
+            para.opening = "in-strong" if tag == "strong" else "no"
+        elif para and para.opening == "in-strong":
+            para.opening = "no"
+        starts = (
+            tag in ("p", "li")
+            and not attrs
+            and all(t in _CONTAINERS and plain for t, plain, _ in self._open)
         )
-        if _SKILL_PATH in visible:
-            return True
-    return False
+        self._open.append((tag, _plain(tag, attrs), _Paragraph() if starts else None))
+
+    def handle_endtag(self, tag: str) -> None:
+        _, para = self._innermost()
+        if para and para.opening == "in-strong":
+            ends = tag == "strong" and para.label == "Process:"
+            para.opening = "opened" if ends else "no"
+        self._close_to(tag)
+
+    def handle_data(self, data: str) -> None:
+        i, para = self._innermost()
+        if para is None:
+            return
+        if not all(t in _INLINE and plain for t, plain, _ in self._open[i + 1 :]):
+            return  # inside an element Markdown does not make in a paragraph
+        if para.opening == "await-strong" and data.strip():
+            para.opening = "no"
+        elif para.opening == "in-strong":
+            para.label += data
+        para.text += data
+
+    def _close_to(self, tag: str) -> None:
+        """Close ``tag`` and every element opened inside it; an end tag with
+        no open element is ignored, as in a browser."""
+        if all(t != tag for t, _, _ in self._open):
+            return
+        while self._open:
+            closed, _, para = self._open.pop()
+            if para and para.opening == "opened" and _SKILL_PATH in para.text:
+                self.found = True
+            if closed == tag:
+                return
+
+
+def has_process_line(text: str) -> bool:
+    """True when the RENDERED page shows a paragraph (at any depth: list item,
+    block quote) that opens with bold ``Process:`` and whose visible text names
+    the skill. The Markdown is rendered by a CommonMark parser and the HTML is
+    walked, so code blocks, headings, HTML comments (also one an HTML block or
+    inline HTML leaves open) and paragraphs that raw HTML wraps or marks never
+    count; a path in backticks or in link text does."""
+    walker = _ProcessParagraphs()
+    # An unclosed "<!--" hides everything after it in a browser. Python's
+    # HTMLParser ends one at close() as a comment on 3.12.13 but as text on
+    # 3.9.6 (both measured), so close it explicitly: after an open comment,
+    # "-->" ends it; with none open, it is three characters of text at the
+    # end, which cannot name the skill.
+    walker.feed(MarkdownIt("commonmark").render(text) + "-->")
+    walker.close()
+    return walker.found
 
 
 def problems(root: Path, exempt: dict[str, str]) -> list[str]:
