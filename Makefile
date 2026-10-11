@@ -59,7 +59,7 @@ DIFF_BASE ?= origin/main
 # disagrees with the real pathspec is a lie waiting to be believed; the banner
 # now states the pathspec the code actually uses.
 
-.PHONY: docs-map-check check-python publishing-check skill-onboarding-check skill-discover handoff check-breaking apply-orbi-profile skill-route start next capture-idea validate validate-strict fr-completeness openapi-export openapi-check adr-index-check open-work-check open-work-write quality format format-check lint type-check test evals test-report gate-min-collected gate-min-executed perf-gate api-contract mutation-baseline diff-cover security-scan close-guard ci-evidence run docker-build feedback-audit session-clean close-window
+.PHONY: docs-map-check check-python publishing-check skill-onboarding-check skill-discover handoff check-breaking apply-orbi-profile skill-route prompt-check start next capture-idea validate validate-strict fr-completeness openapi-export openapi-check adr-index-check open-work-check open-work-write quality format format-check lint type-check test evals test-report gate-min-collected gate-min-executed perf-gate api-contract mutation-baseline diff-cover security-scan close-guard ci-evidence run docker-build feedback-audit session-clean close-window
 
 check-python:
 	@if [ -z "$(PYTHON)" ]; then 		echo "ERROR: Python 3 is required. Install python3, or set PYTHON=/path/to/python3."; 		exit 127; 	fi
@@ -1134,8 +1134,24 @@ feedback-audit:
 session-clean: check-python
 	$(PYTHON) scripts/session_hygiene.py
 
+# `make skill-route` prints the product-phase route, as it always has.
+# `make skill-route ITEM=W55` routes one docs/65-open-work.md row, and
+# `make skill-route DIFF=origin/main` routes the change since that base
+# (ADR-0159): the roles, checks, reviewer skills and owner decisions it needs.
 skill-route: check-python
+ifneq ($(strip $(ITEM)),)
+	$(PYTHON) scripts/skill_router.py --item "$(ITEM)"
+else ifneq ($(strip $(DIFF)),)
+	$(PYTHON) scripts/skill_router.py --diff "$(DIFF)"
+else
 	$(PYTHON) scripts/skill_router.py
+endif
+
+# Every root *PROMPT*.md (any case, tracked or not) must name the process
+# skill on a **Process:** line (ADR-0160). Deliberately NOT inside `validate`:
+# an untracked prompt would turn the suite red on one machine and green in CI.
+prompt-check: check-python
+	$(PYTHON) scripts/check_root_prompts.py
 
 apply-orbi-profile: check-python
 	$(PYTHON) scripts/apply_profile.py orbi

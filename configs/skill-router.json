@@ -35,9 +35,7 @@
         "next-action-coach",
         "fanatic-critic"
       ],
-      "blocking_gates": [
-        "no-placeholder-gate"
-      ],
+      "blocking_gates": [],
       "triggers": [
         "raw idea exists",
         "user provides idea in prompt",
@@ -63,7 +61,7 @@
         "skill-contract-auditor"
       ],
       "blocking_gates": [
-        "skill-onboarding-check",
+        "make skill-onboarding-check",
         "external-skill-security-auditor"
       ],
       "triggers": [
@@ -341,7 +339,6 @@
       ],
       "blocking_gates": [
         "production-readiness-review",
-        "release-evidence-gate",
         "traceability-graph-gate"
       ],
       "triggers": [
@@ -458,6 +455,247 @@
     "session_or_parallel_work": [
       "session-continuity-manager",
       "skill-conflict-moderator"
+    ]
+  },
+  "work_item_routing": {
+    "purpose": "make skill-route ITEM=<id> or DIFF=<base> (ADR-0159). Each class whose paths, file-name words or changed-line identifiers match adds its roles, checks, reviewer skills and owner decisions. There is no catch-all class: a path no class names is printed as unclassified.",
+    "driver": "work-item-delivery",
+    "base_roles": [
+      "main-orchestrator",
+      "builder",
+      "prose-auditor",
+      "falsification-lens",
+      "codex-review",
+      "completeness-critic",
+      "fixer"
+    ],
+    "code_roles": [
+      "test-designer",
+      "break-it-reviewer"
+    ],
+    "classes": [
+      {
+        "id": "money",
+        "label": "Money: cost, spend, fees, quotas",
+        "paths": [
+          "src/product_app/costs.py",
+          "src/product_app/session_exemptions.py",
+          "src/product_app/invite_links.py"
+        ],
+        "name_words": [
+          "cost",
+          "spend",
+          "fee",
+          "price",
+          "pricing",
+          "quota",
+          "billing",
+          "budget",
+          "allowance"
+        ],
+        "identifiers": "(?i)(?<![a-z0-9])(?:usd|cost|fee|spend|price|pricing|budget|charge|ceiling|allowance|quota)(?:s|es|d|ed|ing)?(?![a-z0-9])|(?-i:(?<=[a-z0-9])(?:Usd|USD|Cost|Fee|Spend|Price|Pricing|Budget|Charge|Ceiling|Allowance|Quota)s?(?![a-z0-9]))|(?-i:(?<![A-Za-z0-9])(?:usd|cost|fee|spend|price|pricing|budget|charge|ceiling|allowance|quota)s?(?=[A-Z]))",
+        "roles": [
+          "failure-modes-first"
+        ],
+        "checks": [
+          "sweep-old-value",
+          "cardinality-assertions",
+          "diff-cover"
+        ],
+        "reviewer_skills": [
+          "cost-finops",
+          "idempotency-concurrency"
+        ],
+        "owner_decisions": [
+          "A CHG row in docs/19 for any money value or policy."
+        ]
+      },
+      {
+        "id": "sign-in-session",
+        "label": "Sign-in and session",
+        "paths": [
+          "src/product_app/auth.py",
+          "src/product_app/google_signin.py",
+          "src/product_app/session_store.py",
+          "src/product_app/session_exemptions.py",
+          "src/product_app/invite_links.py",
+          "src/product_app/account_deletion.py",
+          "src/product_app/account_history.py",
+          "src/product_app/credentialed_url.py",
+          "src/product_app/provider_keys.py",
+          "src/product_app/main.py",
+          "src/product_app/templates/*sign-in*.html",
+          "src/product_app/templates/*capped*.html",
+          "src/product_app/templates/invite*.html",
+          "src/product_app/static/invite.js"
+        ],
+        "identifiers": "(?i)(?<![a-z0-9])(?:csrf|oauth|google_sub)",
+        "roles": [
+          "failure-modes-first",
+          "user-journey-tester"
+        ],
+        "checks": [
+          "signed-in-e2e-lane"
+        ],
+        "reviewer_skills": [
+          "security-threat-modeling",
+          "owasp-control-mapper"
+        ],
+        "owner_decisions": [
+          "A CHG row for any sign-in or session policy."
+        ]
+      },
+      {
+        "id": "interface",
+        "label": "Interface: pages, scripts, styles, API shape",
+        "paths": [
+          "src/product_app/static/**",
+          "src/product_app/templates/**",
+          "src/product_app/main.py",
+          "openapi.yaml"
+        ],
+        "roles": [
+          "user-journey-tester"
+        ],
+        "checks": [
+          "e2e-invariants-lane",
+          "browser-desktop-and-phone",
+          "golden-messy-fixture"
+        ],
+        "reviewer_skills": [
+          "e2e-testing-patterns",
+          "webapp-testing",
+          "accessibility-testing",
+          "content-design"
+        ],
+        "owner_decisions": [
+          "The owner's approval of user-facing wording, as a CHG row."
+        ]
+      },
+      {
+        "id": "ai-output-judge",
+        "label": "AI output and judge",
+        "paths": [
+          "src/product_app/providers.py",
+          "src/product_app/evaluation.py",
+          "src/product_app/debate.py",
+          "src/product_app/synthesis*.py",
+          "src/product_app/quick_verdict.py",
+          "src/product_app/query_runs.py",
+          "src/product_app/query_run_orchestration.py",
+          "src/product_app/model_slots.py",
+          "src/product_app/source_fetcher.py",
+          "src/product_app/pdf_text.py",
+          "src/product_app/untrusted_text.py",
+          "src/product_app/visible_text.py",
+          "src/product_app/safety.py",
+          "src/product_app/catalog_fetcher.py",
+          "src/product_app/readiness.py",
+          "src/httpx2/**"
+        ],
+        "roles": [
+          "failure-modes-first"
+        ],
+        "checks": [
+          "no-paid-run-without-approval",
+          "golden-capture"
+        ],
+        "reviewer_skills": [
+          "llm-evaluation",
+          "prompt-injection-defense",
+          "grounding-contract-builder"
+        ],
+        "owner_decisions": [
+          "Owner approval before any paid run."
+        ]
+      },
+      {
+        "id": "privacy-retention",
+        "label": "Privacy and retention",
+        "paths": [
+          "src/product_app/feedback_store.py",
+          "src/product_app/feedback_audit.py",
+          "src/product_app/run_history_store.py",
+          "src/product_app/telemetry_sink.py",
+          "src/product_app/logging_config.py",
+          "src/product_app/account_deletion.py",
+          "src/product_app/account_history.py",
+          "src/product_app/store_reconnect.py",
+          "src/product_app/request_id.py"
+        ],
+        "identifiers": "(?i)(?<![a-z0-9])(?:sentry|retention|purge|client_ip|personal_data)",
+        "roles": [
+          "failure-modes-first"
+        ],
+        "checks": [
+          "retention-row-in-docs-48"
+        ],
+        "reviewer_skills": [
+          "privacy-compliance",
+          "data-governance"
+        ],
+        "owner_decisions": [
+          "A CHG row, and the owner approval docs/48 names for each kept datum."
+        ]
+      },
+      {
+        "id": "settings",
+        "label": "Settings and defaults",
+        "paths": [
+          "src/product_app/config.py",
+          "src/product_app/__init__.py",
+          ".env.example",
+          "fly.toml",
+          "configs/**"
+        ],
+        "roles": [],
+        "checks": [
+          "sweep-old-value",
+          "adr-for-default"
+        ],
+        "reviewer_skills": [
+          "change-control"
+        ],
+        "owner_decisions": [
+          "A CHG row for any default value."
+        ]
+      },
+      {
+        "id": "ci",
+        "label": "CI, build and scripts",
+        "paths": [
+          ".github/**",
+          "Makefile",
+          "scripts/**",
+          "pyproject.toml",
+          "uv.lock",
+          "Dockerfile",
+          "e2e/playwright.config.ts"
+        ],
+        "roles": [],
+        "checks": [
+          "job-limit-gate-wait-drift-grace-together",
+          "read-the-job-log"
+        ],
+        "reviewer_skills": [
+          "ci-cd-engineering",
+          "deploy-checklist"
+        ],
+        "owner_decisions": []
+      },
+      {
+        "id": "docs-only",
+        "label": "Docs only (every path under docs/ or a root-level .md)",
+        "paths": [],
+        "roles": [],
+        "checks": [
+          "docs-map-and-cited-paths"
+        ],
+        "reviewer_skills": [
+          "doc-critic"
+        ],
+        "owner_decisions": []
+      }
     ]
   }
 }
