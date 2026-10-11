@@ -10,9 +10,10 @@ product owner approved (CHG-040 (b)). The scope and the cut-off are the session'
 On 2026-10-11, 14 false completion claims were planted, one at a time, in a copy of `main` (the
 appendix of the review document). Three were rejected by a real support check: the board refused
 two hand-typed DONEs, and the findings ledger refused a DONE with no proof. Two were rejected only
-by chance, by a snapshot or a freshness check. Nine were accepted, including "W55 and W56 merged
-… in production" in a handoff, an ADR marked "Accepted, owner approved" with no CHG row, and a
-board row pinned to a made-up `PRESENT` needle.
+by chance, by a snapshot or a freshness check. Nine got through, including these three:
+- in a handoff, "W55 and W56 merged … in production";
+- an ADR marked "Accepted, owner approved" with no CHG row;
+- a board row pinned to a made-up `PRESENT` needle.
 
 The findings ledger already shows what works: a DONE must cite its proof, and a test checks it.
 
@@ -62,8 +63,8 @@ The findings ledger already shows what works: a DONE must cite its proof, and a 
 - **Make the board-versus-GitHub check part of `make validate`.** It needs the network; `make
   validate` must run offline.
 - **Close claim I3 (a row's polarity flipped).** The board already documents it as its known limit,
-  and closing it needs the same commit proof for ABSENT rows. The test asserts I3 is still
-  accepted.
+  and closing it needs the same commit proof for ABSENT rows. The test asserts that I3 still
+  gets through.
 
 ## Consequences
 

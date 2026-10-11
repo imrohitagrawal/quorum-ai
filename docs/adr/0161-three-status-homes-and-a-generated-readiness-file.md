@@ -31,7 +31,7 @@ sources disagreed with each other:
      production's `/status` and `/ready`. `make handoff` regenerates it;
    - **decisions:** `docs/19-change-control-log.md` and `docs/adr/`.
 2. **The readiness file states facts plus a verdict.** It gives the time and build it was
-   generated from; what is in effect in production; what is built but switched off; and the
+   generated from; what production has in effect; what is built but switched off; and the
    verdict. The verdict is "Ready" only when live execution is on and `/ready` reports `ready`
    with no reasons. Otherwise it is "Not ready", with the reasons. It says how to get the current
    value, because production moves after every merge. A release decision is a CHG row, not this
@@ -42,8 +42,11 @@ sources disagreed with each other:
      2026-06 draft status, and its four false "Not started" cells in `docs/18` are corrected;
    - `docs/95`, `docs/74` and `docs/73` get a banner: they are named by configuration, and
      archiving them breaks `make validate`;
-   - `docs/factory-status.md` and `docs/116-signoff-record.md` move to `docs/archive/2026-10/`:
-     nothing reads them. The skills and links that named them now point at the three homes.
+   - `docs/factory-status.md` gets a "not maintained, do not update" banner. No script reads it,
+     but 20 skill checklists tell a session to update it; archiving it would send them to a
+     missing file, and a session could recreate it;
+   - `docs/116-signoff-record.md` moves to `docs/archive/2026-10/`. Nothing reads it, and the two
+     skill files and three documents that name it now point at `docs/19-change-control-log.md`.
 
 ## Rejected alternatives
 
