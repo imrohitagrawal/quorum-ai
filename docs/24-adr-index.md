@@ -161,6 +161,8 @@ ways, so the record shows what was believed on a date and what replaced it.
 | [ADR-0156](adr/0156-page-reading-is-switched-on-in-production.md) | Page reading is switched on in production | Architecture | Accepted — 2026-10-10, board row W54, step 4 |
 | [ADR-0157](adr/0157-the-full-suite-jobs-get-35-minutes-and-the-gate-and-drift-grace-move-with-them.md) | The full-suite jobs get 35 minutes, and the gate and drift grace move with them | Architecture | Accepted — 2026-10-10 |
 | [ADR-0158](adr/0158-the-landing-line-about-sources-follows-whether-pages-are-read.md) | The landing line about sources follows whether pages are read | Architecture | Accepted — 2026-10-10, board row W54 (before page reading is switched on, W54 step 4) |
+| [ADR-0159](adr/0159-one-process-skill-loads-in-every-session-and-the-router-reads-the-change.md) | One process skill loads in every session, and the router reads the change | Architecture | Accepted — 2026-10-11, package A of `docs/analysis/2026-10-11-how-we-work-review.md` |
+| [ADR-0160](adr/0160-the-root-prompt-check-fails-on-its-own-and-the-handoff-only-shows-it.md) | The root prompt check fails on its own, and the handoff only shows it | Architecture | Accepted — 2026-10-11, package A of `docs/analysis/2026-10-11-how-we-work-review.md` |
 
 **This index was itself stale** until 2026-07-30: ADR-0002 had existed since
 2026-07-19 and was never listed here. A hand-maintained index is a derived fact

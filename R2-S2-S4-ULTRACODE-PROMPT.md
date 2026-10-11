@@ -1,5 +1,9 @@
 # Ultracode Prompt — Quorum-AI Release 2 (Trust & Evaluation): continue S2 → S3 → S4
 
+> **Example only — do not run.** It is kept because a test pins its shape. Its process is out of
+> date (3 review rounds, judge off); the process now lives in
+> `.agents/skills/work-item-delivery/SKILL.md`.
+
 > **STATUS: COMPLETED (2026-07-21/22).** S2 (`src/product_app/evaluation.py`,
 > commit `a1cf546`), S3 (trust-score UI, commit `fe254b4`), and S4 (golden-set
 > harness, commit `6a412f8`) all shipped. **This file is kept as the reference

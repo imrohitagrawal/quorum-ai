@@ -1,3 +1,5 @@
+> **Archived 2026-10-11** (CHG-040 (c)). The process now lives in `.agents/skills/work-item-delivery/SKILL.md`; this file is history and is not to be run. Otherwise unchanged.
+
 # Autonomous work loop — analyse, prioritise, execute, merge, repeat
 
 A self-driving loop for clearing a backlog. Written 2026-08-25, encoding what

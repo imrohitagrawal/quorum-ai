@@ -9,6 +9,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -325,6 +326,59 @@ generation time, per #134.
 """
 
 
+def _load_script(name: str) -> object:
+    """Load a sibling script by file path. Registered in ``sys.modules`` before
+    it runs, because a dataclass looks its own module up there (#467)."""
+    spec = importlib.util.spec_from_file_location(name, ROOT / "scripts" / f"{name}.py")
+    assert spec and spec.loader
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[name] = mod
+    try:
+        spec.loader.exec_module(mod)
+    except BaseException:
+        del sys.modules[name]
+        raise
+    return mod
+
+
+def _prompt_check_section(root: Path) -> str:
+    """The root prompt check (ADR-0160) as one value. Never raises (ADR-0045):
+    `make prompt-check` is the gate; this only shows its result."""
+    try:
+        check = _load_script("check_root_prompts")
+        found = check.problems(root, check.EXEMPT)  # type: ignore[attr-defined]
+        counted = check.counts(root, check.EXEMPT)  # type: ignore[attr-defined]
+    except Exception as exc:  # noqa: BLE001 — ADR-0045: degrade, never abort
+        return f"## Root prompt check\nunavailable: {exc!r}\n"
+    if not found:
+        return f"## Root prompt check\nPASSED ({counted}; `make prompt-check`)\n"
+    lines = "".join(f"- {m}\n" for m in found)
+    return f"## Root prompt check\nFAILED ({counted}) -- run `make prompt-check`\n{lines}"
+
+
+def _collect_leftovers() -> list[tuple[Any, list[Any]]] | None:
+    """What `scripts/session_hygiene.py` finds, or None if it cannot run."""
+    try:
+        return _load_script("session_hygiene").collect()  # type: ignore[attr-defined,no-any-return]
+    except Exception as exc:  # noqa: BLE001 — ADR-0045: degrade, never abort
+        print(f"session_handoff: could not collect leftovers: {exc!r}", file=sys.stderr)
+        return None
+
+
+def _leftovers_section(found: list[tuple[Any, list[Any]]] | None) -> str:
+    """Each finding's label and reason under its category's title (`make session-clean`)."""
+    head = "## Leftovers\nFrom `make session-clean`, which reports and never deletes.\n"
+    if found is None:
+        return f"{head}unavailable: session_hygiene could not run (cause on stderr)\n"
+    body = ""
+    for category, findings in found:
+        if findings:
+            body += f"\n**{category.title}**\n" + "".join(
+                f"- `{f.label}` — {f.why}\n" for f in findings
+            )
+    return head + (body or "None found\n")
+
+
 def main() -> int:
     r = load_route()
     branch = run(["git", "branch", "--show-current"])
@@ -334,6 +388,8 @@ def main() -> int:
     latest_narrative = _latest_narrative_handoff(ROOT / "docs" / "analysis")
     narrative_pointer = _narrative_pointer_line(latest_narrative)
     live_state = _live_state_section(_gather_live_state())
+    prompt_check = _prompt_check_section(ROOT)
+    leftovers = _leftovers_section(_collect_leftovers())
     text = f"""# Session Handoff
 
 ## Date/time
@@ -357,6 +413,8 @@ what's next, the traps) lives in the dated doc it points to, not here.
 {branch or "not a git branch / unavailable"}
 
 {live_state}
+{prompt_check}
+{leftovers}
 ## Current phase
 {r.get("label")}
 
