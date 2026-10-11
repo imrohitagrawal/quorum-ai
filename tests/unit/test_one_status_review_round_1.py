@@ -349,14 +349,15 @@ def _live_and_ready() -> tuple[dict[str, Any], dict[str, Any]]:
 
 def test_the_spending_ceiling_reached_is_not_ready() -> None:
     # Red when: /ready at the global spending ceiling (Codex's input: live on, "ready", no
-    # reasons, global_spend_ceiling_reached true) gives the verdict "Ready".
+    # reasons, global_spend_ceiling_reached true) gives the verdict "Ready", or a reason other
+    # than "the ceiling is reached" (a "field missing" reason is not the cause here).
     status, ready = _live_and_ready()
     said, _reasons = _readiness().verdict(status, ready)
     assert said == "Ready", "the partner: the same input below the ceiling is Ready"
     ready["live_readiness"]["global_spend_ceiling_reached"] = True
     said, reasons = _readiness().verdict(status, ready)
     assert said == "Not ready", reasons
-    assert any("ceiling" in reason.lower() for reason in reasons), reasons
+    assert len(reasons) == 1 and "ceiling is reached" in reasons[0], reasons
 
 
 @pytest.mark.parametrize(

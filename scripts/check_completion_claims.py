@@ -2,30 +2,46 @@
 """A completion word in a status document must cite its proof (ADR-0162).
 
 A status document here may say "merged", "in production", "approved" and the
-other words in :data:`WORDS` only when the same paragraph, or the same table
-row, cites one of:
+other words in :data:`WORDS` only when the same UNIT cites one of:
 
-* a pull request ``#N`` whose squash commit, with ``(#N)`` in its subject, is on
-  ``main``;
+* a pull request ``#N`` whose squash commit ends its subject with ``(#N)`` on
+  ``main`` (an issue number in a commit scope, ``feat(#105): ...``, is not one);
 * a commit (7 to 40 hex characters) that is an ancestor of ``main``;
 * a ``CHG-NNN`` that is a row of ``docs/19-change-control-log.md``.
 
-A word right after a negation ("not merged", "never merged") is not a claim, and
-neither is a word inside backticks or double quotes, which mentions the word
-rather than claims it. A quoted or backticked span may run across a line break
-inside one paragraph. A fenced code block (a line opening with three backticks
-or tildes, to the line that closes it) is quoted output in the same way: the
-mechanical handoff prints ``git status`` and the leftover report there.
+UNITS ARE WHAT THE READER SEES. The file is parsed with the CommonMark parser
+the project already pins (``markdown-it-py``, ADR-0029; the table rule is
+switched on). A unit is one block: a paragraph, one list item's own paragraph,
+one heading, or one table row (with or without leading pipes). A citation
+supports only the claims in its own unit, so a bullet cannot lend the next
+bullet its citation.
 
-THE CUT-OFF. Only lines written after :data:`CUTOFF` (the merge of package A,
-#558) are checked: ``git blame`` names the commit that last wrote each line, and
-an uncommitted line always counts. A scoped file that no commit after the
-cut-off touched, and that has no uncommitted change, is exempt without a blame.
-The files touched after the cut-off come from ONE ``git log --name-only`` plus
-``git status --porcelain``, so only those files are blamed.
+THE CLAIM TEXT is the unit's visible text, its line breaks read as spaces, so a
+claim wrapped across two lines ("in" / "production") is still one phrase. Inline
+code, fenced and indented code blocks, raw HTML (a comment included) and anything
+inside double quotes are mentions, not claims. A line opening with inline code
+(three backticks, a word, three backticks) is a paragraph, not a fence.
+
+A word is not a claim when a negation sits just before it, in the same clause
+("not merged", "has not been merged"): the look-back crosses only spaces, so
+"no. In production" and "No, merged" are claims. The status-field form
+"<word>: no" or "<word>: not yet" ("Merged: no.") is a negation too. A heading
+that is exactly a closing-status label (Done, Verified myself, Cleanup, Pending,
+Next action) is a label, not a claim.
+
+THE CUT-OFF. A claim is checked when the source line holding its first character
+was written after :data:`CUTOFF` (the merge of package A, #558): ``git blame``
+names the commit that last wrote each line, and an uncommitted line always
+counts. A scoped file that no commit after the cut-off touched, and that has no
+uncommitted change, is exempt without a blame. The files touched after the
+cut-off come from ONE ``git log --name-only`` plus ``git status --porcelain``,
+so only those files are blamed.
 
 The main ref is ``refs/remotes/origin/main`` when it exists, else
-``refs/heads/main``: on a pull-request checkout there is no local ``main``.
+``refs/heads/main``: on a pull-request checkout there is no local ``main``. When
+an unsupported claim's unit cites a commit that is not on that ref, the message
+says so and suggests ``git fetch``: production deploys a merge before a local
+clone has fetched it.
 
 GATE CHARTER
 ------------
@@ -34,10 +50,12 @@ time in a copy of ``main``; 9 were accepted by every check, including a handoff
 saying two items were merged and in production when neither was.
 
 WHAT IT CANNOT SEE: words outside the list ("done", "shipped", "live"); a false
-claim in a paragraph that also holds a true citation, since a citation anywhere
-in the paragraph supports every word in it; lines written before the cut-off;
-untracked files; a claim typed inside backticks, double quotes or a fenced code
-block; and whether the cited pull request did what the sentence says.
+claim in a unit that also holds a true citation, since a citation anywhere in
+the unit supports every word in it; lines written before the cut-off (but an
+old line moved without a change is re-dated by blame to the move, and so is
+checked); untracked files; a claim typed inside backticks, double quotes, raw
+HTML (an HTML comment) or a code block, or in an image's alt text; and whether
+the cited pull request did what the sentence says.
 
 FALSE-POSITIVE COST: a new line that uses a listed word in its plain sense ("the
 request is accepted") fails until it is quoted, reworded or cited.
@@ -45,7 +63,8 @@ request is accepted") fails until it is quoted, reworded or cited.
 WHEN TO REMOVE: when status claims are generated from git and GitHub instead of
 written by hand.
 
-Stdlib and git only: it runs inside ``make validate``, offline.
+Git and ``markdown-it-py``: it runs inside ``make validate``, offline, under
+``uv run``, because the system Python lacks the parser.
 """
 
 from __future__ import annotations
@@ -54,7 +73,11 @@ import argparse
 import re
 import subprocess
 from collections.abc import Iterable
+from dataclasses import dataclass, field
 from pathlib import Path
+
+from markdown_it import MarkdownIt
+from markdown_it.token import Token
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -87,14 +110,16 @@ _EDGE_AFTER = r"(?![\w-])"
 def _pattern(word: str) -> re.Pattern[str]:
     if word == "GA":
         return re.compile(_EDGE_BEFORE + "GA" + _EDGE_AFTER)
-    body = r"[ \t]+".join(re.escape(part) for part in word.split(" "))
+    body = r"\s+".join(re.escape(part) for part in word.split(" "))
     return re.compile(_EDGE_BEFORE + body + _EDGE_AFTER, re.IGNORECASE)
 
 
 _PATTERNS = tuple((word, _pattern(word)) for word in WORDS)
 
-#: A negation just before the word. ``yet``, ``been`` and the like may sit
-#: between them: "not yet merged", "has not been merged".
+#: A negation just before the word, in the same clause: only spaces may sit
+#: between them, and ``yet``, ``been`` and the like may too ("not yet merged",
+#: "has not been merged"). Any punctuation stops the look-back, so
+#: "no. In production" and "Blocked? No, merged." are claims.
 _NEGATIONS = frozenset(
     {
         "not",
@@ -118,13 +143,18 @@ _NEGATIONS = frozenset(
     }
 )
 _FILLERS = frozenset({"yet", "been", "be", "being", "fully", "ever", "also", "still", "all"})
-_WORD_BEFORE = re.compile(r"([\w'’-]+)\W*$")
+_WORD_BEFORE = re.compile(r"([\w'’-]+)\s*$")
+#: The status-field form right after the word: "Merged: no", "In production: not yet".
+_FIELD_NO = re.compile(r"\s*:\s*(?:no|not\s+yet)(?![\w-])", re.IGNORECASE)
+#: A heading that is exactly one of these (any case) is a closing-status label.
+_LABELS = frozenset({"done", "verified myself", "cleanup", "pending", "next action"})
 
 _PR = re.compile(r"(?<![\w&/])#(\d+)\b")
 _SHA = re.compile(r"(?<![\w-])([0-9a-f]{7,40})(?![\w-])")
 _CHG = re.compile(r"\bCHG-(\d+)\b")
 _CHG_ROW = re.compile(r"^\| *CHG-(\d+) *\|", re.MULTILINE)
-_SQUASH = re.compile(r"\(#(\d+)\)")
+#: A squash merge ENDS its subject with ``(#N)``; ``feat(#105): ...`` is a scope.
+_SQUASH = re.compile(r"\(#(\d+)\)\s*$", re.MULTILINE)
 
 _UNCOMMITTED = "0" * 40
 CHANGE_LOG = "docs/19-change-control-log.md"
@@ -211,35 +241,121 @@ def _blame(root: Path, path: str, after: set[str]) -> list[int] | None:
 
 
 # ---------------------------------------------------------------------------
-# Reading the text.
+# Reading the text: CommonMark units.
 # ---------------------------------------------------------------------------
 
-
-def _blank(text: str, start: int, end: int) -> str:
-    """``text`` with ``[start, end)`` replaced by spaces, line breaks kept."""
-    span = "".join("\n" if ch == "\n" else " " for ch in text[start:end])
-    return text[:start] + span + text[end:]
-
-
-_BACKTICKS = re.compile(r"(`+)(?:(?!\1).|\n)+?\1", re.DOTALL)
+_MARKDOWN = MarkdownIt("commonmark").enable("table")
 _QUOTES = re.compile(r"\"[^\"]*\"|“[^”]*”")
 
 
-def mask_mentions(paragraph: str) -> str:
-    """``paragraph`` with every backticked or double-quoted span blanked.
+@dataclass
+class Unit:
+    """One block the reader sees: a paragraph, a heading or a table row.
 
-    Backticks first, so a quote inside code is not read as a quote. A span may
-    cross a line break: the paragraph is masked as one piece of text.
+    ``first`` and ``last`` are its 0-based source lines (``last`` exclusive).
+    ``text`` is its visible text, mentions blanked, and ``lines[i]`` is the
+    0-based source line of ``text[i]``.
     """
-    for match in list(_BACKTICKS.finditer(paragraph)):
-        paragraph = _blank(paragraph, match.start(), match.end())
-    for match in list(_QUOTES.finditer(paragraph)):
-        paragraph = _blank(paragraph, match.start(), match.end())
-    return paragraph
+
+    first: int
+    last: int
+    heading: bool = False
+    text: str = ""
+    lines: list[int] = field(default_factory=list)
+
+    def add(self, piece: str, line: int) -> None:
+        self.text += piece
+        self.lines.extend([line] * len(piece))
+
+
+def _after_code_span(content: str, cursor: int, markup: str) -> int:
+    """The position just after the code span that ``markup`` opens at or after ``cursor``.
+
+    A backslash-escaped backtick does not open one. If the span cannot be found,
+    ``cursor`` is returned unchanged: only the line count of a span that crosses a
+    line break depends on this.
+    """
+    run = len(markup)
+    opener = re.compile(rf"(?<![`\\])`{{{run}}}(?!`)")
+    closer = re.compile(rf"(?<!`)`{{{run}}}(?!`)")
+    found = opener.search(content, cursor)
+    if not found:
+        return cursor
+    closing = closer.search(content, found.end())
+    return closing.end() if closing else cursor
+
+
+def _read_inline(inline: Token, unit: Unit) -> None:
+    """Append ``inline``'s visible text to ``unit``, each character with its line.
+
+    ``inline.content`` is the block's source with its line breaks, so the line of
+    a character is the block's first line plus the breaks before it. Text tokens
+    hold no line break; soft and hard breaks, code spans and raw HTML can.
+    """
+    content = inline.content
+    base = inline.map[0] if inline.map else unit.first
+    cursor = 0
+
+    def line_now() -> int:
+        return base + content.count("\n", 0, cursor)
+
+    for child in inline.children or []:
+        if child.type == "text":
+            unit.add(child.content, line_now())
+        elif child.type in ("softbreak", "hardbreak"):
+            line = line_now()
+            found = content.find("\n", cursor)
+            if found >= 0:
+                cursor = found + 1
+            unit.add(" ", line)
+        elif child.type == "code_inline":
+            line = line_now()
+            cursor = _after_code_span(content, cursor, child.markup)
+            unit.add(" ", line)
+        elif child.type == "html_inline":
+            line = line_now()
+            found = content.find(child.content, cursor)
+            if found >= 0:
+                cursor = found + len(child.content)
+            unit.add(" ", line)
+
+
+def units(text: str) -> list[Unit]:
+    """Every paragraph, heading and table row of ``text``, in source order."""
+    found: list[Unit] = []
+    row: Unit | None = None
+    heading = False
+    for token in _MARKDOWN.parse(text):
+        if token.type == "tr_open" and token.map:
+            row = Unit(token.map[0], token.map[1])
+        elif token.type == "tr_close" and row is not None:
+            found.append(row)
+            row = None
+        elif token.type == "heading_open":
+            heading = True
+        elif token.type == "heading_close":
+            heading = False
+        elif token.type == "inline" and token.map:
+            if row is not None:
+                if row.text:
+                    row.add(" | ", row.first)
+                _read_inline(token, row)
+                continue
+            unit = Unit(token.map[0], token.map[1], heading=heading)
+            _read_inline(token, unit)
+            found.append(unit)
+    for unit in found:
+        unit.text = _blank_quotes(unit.text)
+    return found
+
+
+def _blank_quotes(text: str) -> str:
+    """``text`` with every double-quoted span replaced by spaces of the same length."""
+    return _QUOTES.sub(lambda m: " " * len(m.group(0)), text)
 
 
 def _negated(before: str) -> bool:
-    """Whether the text just before a word ends in a negation."""
+    """Whether the text just before a word ends in a negation, in the same clause."""
     words: list[str] = []
     rest = before
     for _ in range(3):
@@ -256,48 +372,19 @@ def _negated(before: str) -> bool:
     return False
 
 
-def claims_in(line: str) -> list[str]:
-    """The completion words claimed in one (already masked) line, in order."""
+def claims_in(unit: Unit) -> list[tuple[int, str]]:
+    """The completion words claimed in ``unit``: (index into its text, word), in order."""
+    if unit.heading and " ".join(unit.text.split()).lower() in _LABELS:
+        return []
     found: list[tuple[int, str]] = []
     for word, pattern in _PATTERNS:
-        for match in pattern.finditer(line):
-            if not _negated(line[: match.start()]):
-                found.append((match.start(), word))
-    return [word for _start, word in sorted(found)]
-
-
-def _units(lines: list[str]) -> list[tuple[int, int]]:
-    """For each line (0-based), the [start, end) of its paragraph or table row."""
-    spans: list[tuple[int, int]] = [(i, i + 1) for i in range(len(lines))]
-    i = 0
-    while i < len(lines):
-        if not lines[i].strip():
-            i += 1
-            continue
-        start = i
-        while i < len(lines) and lines[i].strip():
-            i += 1
-        for j in range(start, i):
-            if not lines[j].lstrip().startswith("|"):
-                spans[j] = (start, i)
-    return spans
-
-
-def _fenced(lines: list[str]) -> set[int]:
-    """0-based indexes of the lines inside a fenced code block, its fences included."""
-    inside: set[int] = set()
-    fence: str | None = None
-    for i, line in enumerate(lines):
-        opener = re.match(r" {0,3}(`{3,}|~{3,})", line)
-        if fence is None:
-            if opener:
-                fence = opener.group(1)
-                inside.add(i)
-            continue
-        inside.add(i)
-        if opener and opener.group(1)[0] == fence[0] and len(opener.group(1)) >= len(fence):
-            fence = None
-    return inside
+        for match in pattern.finditer(unit.text):
+            if _negated(unit.text[: match.start()]):
+                continue
+            if _FIELD_NO.match(unit.text, match.end()):
+                continue
+            found.append((match.start(), word))
+    return sorted(found)
 
 
 class Citations:
@@ -330,33 +417,43 @@ class Citations:
             return True
         return any(self._on_main(sha) for sha in _SHA.findall(text))
 
+    def fetch_hint(self, text: str) -> str:
+        """Advice when ``text`` cites a commit that is not on the local main ref, else ""."""
+        missing = [sha for sha in dict.fromkeys(_SHA.findall(text)) if not self._on_main(sha)]
+        if not missing:
+            return ""
+        where = self.ref or "main (no main ref here)"
+        return (
+            f" ({', '.join(missing)} is not on the local {where}: if it was merged since "
+            "this clone last fetched, run `git fetch` and check again)"
+        )
+
 
 def problems_in_text(
     path: str, text: str, numbers: Iterable[int], citations: Citations
 ) -> tuple[list[str], int]:
-    """Problems for the given 1-based lines of ``text``, and how many claims they hold."""
-    lines = text.splitlines()
-    spans = _units(lines)
-    fenced = _fenced(lines)
-    masked_units: dict[tuple[int, int], list[str]] = {}
+    """Problems for the claims starting on the given 1-based lines, and how many there are."""
+    wanted = set(numbers)
+    source = text.replace("\r\n", "\n").split("\n")
     problems: list[str] = []
     claims = 0
-    for number in sorted(set(numbers)):
-        index = number - 1
-        if not 0 <= index < len(lines) or index in fenced:
+    for unit in units(text):
+        here = [
+            (unit.lines[start] + 1, word)
+            for start, word in claims_in(unit)
+            if unit.lines[start] + 1 in wanted
+        ]
+        if not here:
             continue
-        span = spans[index]
-        if span not in masked_units:
-            masked_units[span] = mask_mentions("\n".join(lines[span[0] : span[1]])).split("\n")
-        words = claims_in(masked_units[span][index - span[0]])
-        if not words:
+        claims += len(here)
+        cited = "\n".join(source[unit.first : unit.last])
+        if citations.supports(cited):
             continue
-        claims += len(words)
-        if citations.supports("\n".join(lines[span[0] : span[1]])):
-            continue
+        hint = citations.fetch_hint(cited)
         problems.extend(
-            f"{path}:{number}: '{word}' cites no merged pull request, commit on main, or CHG row"
-            for word in words
+            f"{path}:{line}: '{word}' cites no merged pull request, commit on main, or CHG row"
+            + hint
+            for line, word in here
         )
     return problems, claims
 
@@ -420,9 +517,10 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  FAIL {problem}")
     if problems:
         print(
-            "A completion word needs a cited proof in the same paragraph or table row: "
-            "a pull request squash-merged on main (#N), a commit on main, or a CHG row "
-            "(ADR-0162). Quote the word if it is a mention, not a claim."
+            "A completion word needs a cited proof in the same unit (a paragraph, a list "
+            "item, a heading or a table row): a pull request squash-merged on main (#N), "
+            "a commit on main, or a CHG row (ADR-0162). Quote the word if it is a mention, "
+            "not a claim."
         )
     return 1 if problems or counts["files_scoped"] == 0 else 0
 

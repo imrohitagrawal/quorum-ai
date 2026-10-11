@@ -52,14 +52,43 @@ def _short(sha: str | None, n: int = 7) -> str:
     return (sha or "")[:n]
 
 
-def _build_sha_drift_line(*, last_src_commit: str | None, prod_build_sha: str | None) -> str:
+def _is_ancestor(older: str, newer: str, root: Path = ROOT) -> bool:
+    """Whether commit ``older`` is in ``newer``'s history (``git merge-base --is-ancestor``).
+
+    False when git cannot say: a commit this clone has not fetched, or no git.
+    """
+    try:
+        done = subprocess.run(
+            ["git", "merge-base", "--is-ancestor", older, newer],
+            cwd=root,
+            capture_output=True,
+            check=False,
+        )
+    except OSError:
+        return False
+    return done.returncode == 0
+
+
+def _build_sha_drift_line(
+    *,
+    last_src_commit: str | None,
+    prod_build_sha: str | None,
+    main_tip: str | None = None,
+    src_commit_in_build: bool = False,
+) -> str:
     """Compare production's `/status.build_sha` to the last commit touching `src/`.
 
     This is the relationship AGENTS.md rule 18 asks a human to check by hand
     (`build_sha` == the merged SHA) -- a "relationship" fact in #134's own
     taxonomy, which survives merges instead of going stale like a quoted SHA
-    would. Pure comparison: the two values are fetched by the caller so this
+    would. Pure comparison: the values are fetched by the caller so this
     stays a same-process, mockable unit.
+
+    Every merge deploys, a docs-only one too (AGENTS.md rule 18a), so production
+    usually runs a commit NEWER than the last `src/` commit. That is in sync when
+    the build is `origin/main`'s tip (``main_tip``), or when the build contains
+    the last `src/` commit (``src_commit_in_build``, from :func:`_is_ancestor`).
+    Only otherwise is it the warning.
     """
     if not last_src_commit and not prod_build_sha:
         return "unavailable: could not read either the last src/ commit or production's build_sha"
@@ -75,6 +104,16 @@ def _build_sha_drift_line(*, last_src_commit: str | None, prod_build_sha: str | 
         )
     if last_src_commit.strip().lower() == prod_build_sha.strip().lower():
         return f"production build_sha {_short(prod_build_sha)} is in sync with last src/ commit"
+    if main_tip and main_tip.strip().lower() == prod_build_sha.strip().lower():
+        return (
+            f"production build_sha {_short(prod_build_sha)} is in sync: it is `origin/main`'s "
+            f"tip, which holds the last src/ commit {_short(last_src_commit)}"
+        )
+    if src_commit_in_build:
+        return (
+            f"production build_sha {_short(prod_build_sha)} is in sync: it holds the last "
+            f"src/ commit {_short(last_src_commit)}"
+        )
     return (
         f"production build_sha {_short(prod_build_sha)} does NOT match "
         f"last src/ commit {_short(last_src_commit)} -- a deploy may be in flight or overdue"
@@ -277,15 +316,21 @@ def _gather_live_state() -> dict:
         ["gh", "issue", "list", "--state", "open", "--json", "number", "--jq", "length"]
     )
     unmerged_raw = run(["git", "branch", "-r", "--no-merged", "refs/remotes/origin/main"])
+    src_known = (
+        last_src_commit if last_src_commit and "unavailable" not in last_src_commit else None
+    )
+    tip_known = main_tip if main_tip and "unavailable" not in main_tip else None
     return {
         "main_tip": main_tip,
         "last_src_commit": last_src_commit,
         "prod_build_sha": prod_build_sha,
         "build_sha_drift_line": _build_sha_drift_line(
-            last_src_commit=last_src_commit
-            if last_src_commit and "unavailable" not in last_src_commit
-            else None,
+            last_src_commit=src_known,
             prod_build_sha=prod_build_sha,
+            main_tip=tip_known,
+            src_commit_in_build=bool(
+                src_known and prod_build_sha and _is_ancestor(src_known, prod_build_sha)
+            ),
         ),
         "pytest_count": _parse_pytest_collected_count(pytest_raw),
         "e2e_lane_counts": _e2e_lane_counts(ROOT / "e2e" / "tests"),

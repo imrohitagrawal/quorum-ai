@@ -65,3 +65,17 @@ sources disagreed with each other:
 - A fresh reader still cannot see production without the network. The file is the best a
   repository can hold.
 - `docs/analysis/2026-10-11-one-status-failure-modes.md` lists what this can get wrong.
+
+## Amendment after review round 1 (2026-10-12)
+
+Four gaps a review found, each pinned by `tests/unit/test_one_status_review_round_1.py`:
+- The verdict also needs `/ready`'s `live_readiness` to say the global spending ceiling is not
+  reached, and to carry its `reasons` list and its ceiling field. When the ceiling is reached, new
+  runs are answered by the local simulation, so the verdict is "Not ready". A `/ready` without
+  those fields is "Not ready" too, with a reason naming the missing field.
+- Only the default production URL is called production. A file made with `--base-url` names that
+  server by its URL, and its verdict line says it is not production.
+- With live execution off, the judge, page fetching and page reading are listed under "Built and
+  switched on, but idle while live execution is off", not as in effect: no run reaches them.
+- The file embeds the two responses it was made from, in a fenced JSON block. A test re-renders
+  the file from that block and needs an exact match, so a verdict typed by hand fails.

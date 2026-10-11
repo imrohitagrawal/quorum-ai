@@ -2,11 +2,19 @@
 """Write ``docs/product-readiness.md`` from production's ``/status`` and ``/ready`` (ADR-0161).
 
 The file states facts plus a verdict: when it was generated and from which
-build; what production has in effect; what is built but switched off; and the
-verdict. The verdict is "Ready" only when live execution is on and ``/ready``
-reports ``ready`` with no reasons. Anything else is "Not ready", with the
-reasons. When either endpoint cannot be read, the file says "unavailable" and
-the verdict is "unknown". A release decision is a CHG row, not this file.
+build; what production has in effect; what is switched on but idle because live
+execution is off; what is built but switched off; and the verdict. The verdict
+is "Ready" only when live execution is on, ``/ready`` reports ``ready``, and its
+``live_readiness`` lists no reasons and says the global spending ceiling is not
+reached. Anything else is "Not ready", with the reasons, and so is a ``/ready``
+without those ``live_readiness`` fields. When either endpoint cannot be read,
+the file says "unavailable" and the verdict is "unknown". A release decision is
+a CHG row, not this file.
+
+THE FILE CARRIES ITS OWN INPUT. The two responses are embedded at its end, in a
+fenced JSON block, with the time and the URL they came from. The file must equal
+:func:`render` over that block (``tests/unit/test_one_status_review_round_1.py``),
+so a verdict typed by hand fails a test.
 
 ``make readiness`` runs this, and so does ``make handoff``. Each endpoint gets
 ONE attempt with a short timeout, and a failure never fails the caller
@@ -14,9 +22,11 @@ ONE attempt with a short timeout, and a failure never fails the caller
 endpoints are free to call (AGENTS.md rule 18).
 
 The file is in the completion check's scope (ADR-0162), so every "in
-production" it writes sits in a paragraph that cites the build commit.
+production" it writes sits in a unit that cites the build commit.
 
 ``--out PATH`` writes somewhere else; ``--base-url URL`` reads another server.
+Only :data:`DEFAULT_BASE_URL` is called production: another server is named by
+its URL, and its verdict says it is not production.
 """
 
 from __future__ import annotations
@@ -53,10 +63,16 @@ _SWITCH_NAMES = {
 }
 
 
-def _switches(status: dict[str, Any]) -> tuple[list[str], list[str]]:
-    """Every boolean in ``/status`` (one level of nesting), as (on, off) lines."""
-    on: list[str] = []
-    off: list[str] = []
+#: Switches that act only inside a live run: the judge judges real answers, and
+#: pages are fetched and read for it. With live execution off no run reaches
+#: them, so they are listed as idle, not as in effect (review round 1 of package B).
+_NEEDS_LIVE = ("judge_enabled", "source_fetch_enabled", "source_pages_in_effect")
+IDLE_HEADING = "Built and switched on, but idle while live execution is off: no run reaches them"
+
+
+def _switches(status: dict[str, Any]) -> list[tuple[str, bool, str]]:
+    """Every boolean in ``/status`` (one level of nesting): (key, value, its line)."""
+    found: list[tuple[str, bool, str]] = []
     for key, value in status.items():
         pairs = (
             [(f"{key}.{inner}", item) for inner, item in value.items()]
@@ -64,11 +80,9 @@ def _switches(status: dict[str, Any]) -> tuple[list[str], list[str]]:
             else [(key, value)]
         )
         for name, item in pairs:
-            if not isinstance(item, bool):
-                continue
-            line = f"- {_SWITCH_NAMES.get(name, name)} (`{name}`)"
-            (on if item else off).append(line)
-    return on, off
+            if isinstance(item, bool):
+                found.append((name, item, f"- {_SWITCH_NAMES.get(name, name)} (`{name}`)"))
+    return found
 
 
 def _facts(status: dict[str, Any]) -> list[str]:
@@ -83,6 +97,38 @@ def _facts(status: dict[str, Any]) -> list[str]:
     return lines
 
 
+def _live_readiness_reasons(ready: dict[str, Any]) -> list[str]:
+    """What ``/ready``'s ``live_readiness`` says against live runs, or that it is missing."""
+    live = ready.get("live_readiness")
+    if not isinstance(live, dict):
+        return [
+            "`/ready` has no `live_readiness` object, so whether a live run can happen is "
+            "not known."
+        ]
+    reasons: list[str] = []
+    listed = live.get("reasons")
+    if isinstance(listed, list):
+        reasons.extend(str(reason) for reason in listed)
+    else:
+        reasons.append(
+            "`/ready` has no `live_readiness.reasons` list, so what stands against a live "
+            "run is not known."
+        )
+    ceiling = live.get("global_spend_ceiling_reached")
+    if ceiling is True:
+        reasons.append(
+            "The global daily spending ceiling is reached "
+            "(`live_readiness.global_spend_ceiling_reached` is true in `/ready`): new runs "
+            "are answered by the local simulation, not by real models, while it stays so."
+        )
+    elif ceiling is not False:
+        reasons.append(
+            "`/ready` has no true-or-false `live_readiness.global_spend_ceiling_reached`, so "
+            "whether spending is at the ceiling is not known."
+        )
+    return reasons
+
+
 def verdict(status: dict[str, Any] | None, ready: dict[str, Any] | None) -> tuple[str, list[str]]:
     """("Ready" | "Not ready" | "unknown", the reasons)."""
     if status is None or ready is None:
@@ -95,25 +141,67 @@ def verdict(status: dict[str, Any] | None, ready: dict[str, Any] | None) -> tupl
         )
     if ready.get("status") != "ready":
         reasons.append(f"`/ready` reports `{ready.get('status')}`, not `ready`.")
-    live = ready.get("live_readiness")
-    listed = live.get("reasons") if isinstance(live, dict) else None
-    reasons.extend(str(reason) for reason in listed or [])
+    reasons.extend(_live_readiness_reasons(ready))
     return ("Ready" if not reasons else "Not ready"), reasons
 
 
-def render(status: dict[str, Any] | None, ready: dict[str, Any] | None, generated_at: str) -> str:
-    """The text of the readiness file."""
+def _embedded(
+    status: dict[str, Any] | None,
+    ready: dict[str, Any] | None,
+    generated_at: str,
+    base: str,
+) -> list[str]:
+    """The fenced block holding what this file was rendered from.
+
+    Keys keep the order the server sent them in (no ``sort_keys``): the lists
+    above follow that order, and ``json.loads`` keeps it, so re-rendering the
+    block gives the same file.
+    """
+    data = {"base_url": base, "generated_at": generated_at, "status": status, "ready": ready}
+    return [
+        "## The responses this file was generated from",
+        "",
+        "`render()` in `scripts/product_readiness.py`, run over this block, must give this"
+        " file exactly; a test checks it. Do not edit the file by hand: run"
+        " `make readiness`.",
+        "",
+        "```json",
+        json.dumps(data, indent=2),
+        "```",
+        "",
+    ]
+
+
+def render(
+    status: dict[str, Any] | None,
+    ready: dict[str, Any] | None,
+    generated_at: str,
+    base_url: str = DEFAULT_BASE_URL,
+) -> str:
+    """The text of the readiness file, for the responses read from ``base_url``."""
+    base = base_url.rstrip("/")
+    production = base == DEFAULT_BASE_URL
     build = str(status.get("build_sha") or "unknown") if status is not None else None
     short = build[:7] if build else None
     said, reasons = verdict(status, ready)
+    if production:
+        source = (
+            f"Generated by `make readiness` at {generated_at}, from production's `GET /status`"
+            f" and `GET /ready` ({base}). It is true when generated and ages after:"
+            " production moves after every merge. For the current value, run `make readiness`"
+            f" again, or `GET /status` on {base}."
+        )
+    else:
+        source = (
+            f"Generated by `scripts/product_readiness.py` at {generated_at}, from `GET /status`"
+            f" and `GET /ready` on {base}. That server is not production ({DEFAULT_BASE_URL}),"
+            " so nothing here describes production."
+        )
     out = [
         "# Product readiness",
         "",
-        f"Generated by `make readiness` at {generated_at}, from production's `GET /status`"
-        f" and `GET /ready` ({DEFAULT_BASE_URL}). It is true when generated and ages after:"
-        " production moves after every merge. For the current value, run `make readiness`"
-        f" again, or `GET /status` on {DEFAULT_BASE_URL}. A release decision is a CHG row in"
-        " `docs/19-change-control-log.md`, not this file (ADR-0161).",
+        source + " A release decision is a CHG row in `docs/19-change-control-log.md`, not"
+        " this file (ADR-0161).",
         "",
         "## Verdict",
         "",
@@ -125,13 +213,19 @@ def render(status: dict[str, Any] | None, ready: dict[str, Any] | None, generate
             if value is None
         ]
         out += [
-            "Verdict: unknown",
+            "Verdict: unknown" + ("" if production else f" for {base}, which is not production"),
             "",
             f"{' and '.join(missing)} unavailable when this was generated, so the verdict"
             " cannot be known. Run `make readiness` again with the network.",
         ]
-    else:
+    elif production:
         out.append(f"Verdict: {said} (production build {short}, generated {generated_at})")
+        out += [f"- {reason}" for reason in reasons]
+    else:
+        out.append(
+            f"Verdict: {said} for {base}, which is not production"
+            f" (build {short}, generated {generated_at})"
+        )
         out += [f"- {reason}" for reason in reasons]
     out += [""]
 
@@ -143,16 +237,29 @@ def render(status: dict[str, Any] | None, ready: dict[str, Any] | None, generate
             " switched off is known.",
             "",
         ]
-        return "\n".join(out)
+        return "\n".join(out + _embedded(status, ready, generated_at, base))
 
-    on, off = _switches(status)
+    live_off = status.get("live_execution") is not True
+    switches = _switches(status)
+    idle = [line for name, on, line in switches if on and live_off and name in _NEEDS_LIVE]
+    on = [
+        line for name, value, line in switches if value and not (live_off and name in _NEEDS_LIVE)
+    ]
+    off = [line for _name, value, line in switches if not value]
+    runs = "Production runs" if production else f"The server at {base} runs"
     out += [
-        f"## In effect in production at build {short}",
+        f"## In effect in production at build {short}"
+        if production
+        else f"## In effect at {base} (not production), build {short}",
         "",
-        f"Production runs build `{build}`"
+        f"{runs} build `{build}`"
         f" (version `{status.get('version')}`, environment `{status.get('environment')}`).",
         *(on or ["- None"]),
         "",
+    ]
+    if idle:
+        out += [f"## {IDLE_HEADING}", "", *idle, ""]
+    out += [
         "## Built but switched off",
         "",
         *(off or ["- None"]),
@@ -164,7 +271,7 @@ def render(status: dict[str, Any] | None, ready: dict[str, Any] | None, generate
     ]
     if ready is None:
         out += ["`GET /ready` was unavailable when this was generated.", ""]
-    return "\n".join(out)
+    return "\n".join(out + _embedded(status, ready, generated_at, base))
 
 
 def _tls_context() -> ssl.SSLContext:
@@ -220,7 +327,7 @@ def write(out: Path = DEFAULT_OUT, base_url: str = DEFAULT_BASE_URL) -> tuple[st
     base = base_url.rstrip("/")
     status, status_error = fetch(f"{base}/status")
     ready, ready_error = fetch(f"{base}/ready")
-    text = render(status, ready, now_utc())
+    text = render(status, ready, now_utc(), base_url=base)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(text, encoding="utf-8")
     failures = [

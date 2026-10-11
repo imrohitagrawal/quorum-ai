@@ -643,10 +643,34 @@ def check_anchor_is_on_main(board: Board, root: Path) -> tuple[list[str], str]:
 
 
 #: The rows that used a plain ``PRESENT`` needle on 2026-10-11. ADR-0162 lets
-#: them keep it by name; every other ``PRESENT`` row must name a commit.
+#: them keep it; every other ``PRESENT`` row must name a commit.
 GRANDFATHERED_PRESENT = frozenset(
     {"W3", "W10", "W15", "W16", "W17", "W18", "W22", "W28", "W37", "W47"}
 )
+#: The commit whose board fixes WHICH needle each grandfathered row keeps: the
+#: cut-off of ADR-0162 (the merge of #558). A grandfathered row keeps its path and
+#: needle as they were there, not just its id, or W28's needle could be swapped
+#: for a made-up one and typed DONE (review round 1 of package B).
+GRANDFATHER_COMMIT = "b66b107f3f36eeaeb943ce93776b4fd4ef72095a"
+
+
+def grandfathered_needles(root: Path) -> dict[str, tuple[str, str]] | None:
+    """Each grandfathered row's (path, needle) on the board at :data:`GRANDFATHER_COMMIT`.
+
+    None when that commit's board cannot be read (a repository without that
+    commit, such as a shallow clone or a test's own small repository): then the
+    rows are grandfathered by id only, as before. CI checks out the full history
+    (``fetch-depth: 0``), where the needles are pinned.
+    """
+    shown = _git(root, "show", f"{GRANDFATHER_COMMIT}:docs/65-open-work.md")
+    if shown.returncode != 0:
+        return None
+    kept: dict[str, tuple[str, str]] = {}
+    for row in parse_board(shown.stdout).rows:
+        match = _EVIDENCE.match(row.evidence) if row.pinned else None
+        if match and match.group(1) == "PRESENT" and row.row_id in GRANDFATHERED_PRESENT:
+            kept[row.row_id] = (match.group(2), match.group(3))
+    return kept
 
 
 def _text_at_commit(root: Path, sha: str, rel_path: str) -> str | None:
@@ -674,7 +698,8 @@ def check_present_commits(board: Board, root: Path) -> tuple[list[str], int]:
     for free. ``PRESENT@<sha> <path> :: <needle>`` closes that: the commit must
     be an ancestor of a ``main`` this checkout can see, and the needle must be
     in the file AT that commit. A plain ``PRESENT`` is allowed only for the
-    rows in :data:`GRANDFATHERED_PRESENT`.
+    rows in :data:`GRANDFATHERED_PRESENT`, and only with the path and needle
+    each had at :data:`GRANDFATHER_COMMIT` (:func:`grandfathered_needles`).
 
     It needs git, so :func:`check_all` runs it only on a git working tree.
     Returns the failures and how many ``PRESENT@`` needles were read at their
@@ -683,6 +708,8 @@ def check_present_commits(board: Board, root: Path) -> tuple[list[str], int]:
     failures: list[str] = []
     checked = 0
     refs: list[str] | None = None
+    kept: dict[str, tuple[str, str]] | None = None
+    kept_read = False
     for row in board.rows:
         match = _EVIDENCE.match(row.evidence) if row.pinned else None
         if not match or not match.group(1).startswith("PRESENT"):
@@ -695,6 +722,19 @@ def check_present_commits(board: Board, root: Path) -> tuple[list[str], int]:
                     f"the file: write `PRESENT@<sha> {rel_path} :: <needle>` with a commit "
                     "on main (ADR-0162). Without one, a needle that was never in the "
                     "file reads absent and derives DONE."
+                )
+                continue
+            if not kept_read:
+                kept, kept_read = grandfathered_needles(root), True
+            if kept is not None and kept.get(row.row_id) != (rel_path, needle):
+                was = kept.get(row.row_id)
+                failures.append(
+                    f"{row.row_id}: a plain PRESENT needle is grandfathered only as it was at "
+                    f"{GRANDFATHER_COMMIT[:7]}"
+                    + (f" (`PRESENT {was[0]} :: {was[1]}`)" if was else " (it had none)")
+                    + f". A changed path or needle must name a commit: write "
+                    f"`PRESENT@<sha> {rel_path} :: <needle>` with a commit on main where "
+                    "the needle is in the file (ADR-0162)."
                 )
             continue
         sha = polarity.split("@", 1)[1]

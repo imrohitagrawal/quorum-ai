@@ -105,12 +105,14 @@ open-work-write:
 
 # A completion word ("merged", "in production", "approved", ...) in a status
 # document must cite a pull request squash-merged on main, a commit on main, or
-# a CHG row, in the same paragraph or table row (ADR-0162). Only lines written
-# after the cut-off commit are checked, so old true records are not. Offline
-# (git only), so it is inside `validate`. Bite-proofs:
-# tests/unit/test_completion_claims.py, tests/test_planted_false_claims.py.
+# a CHG row, in the same unit: a paragraph, list item, heading or table row
+# (ADR-0162). Only lines written after the cut-off commit are checked, so old
+# true records are not. Offline, so it is inside `validate`. `uv run` because it
+# reads Markdown with the pinned CommonMark parser (markdown-it-py), which the
+# system Python lacks. Bite-proofs: tests/unit/test_completion_claims.py,
+# tests/test_planted_false_claims.py, tests/unit/test_one_status_review_round_1.py.
 completion-check: check-python
-	$(PYTHON) scripts/check_completion_claims.py
+	UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python scripts/check_completion_claims.py
 
 # DONE board rows whose issue is still open, and open issues no row cites
 # (ADR-0162). Needs `gh` and the network, so it is NOT inside `validate`;

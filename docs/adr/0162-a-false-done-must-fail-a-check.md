@@ -80,3 +80,26 @@ The findings ledger already shows what works: a DONE must cite its proof, and a 
   that a proof exists, not that it is the right proof; the reviewers still read it.
 - Text inside a fenced code block is quoted output, not a claim. `make handoff` prints generated
   lists in fences, so this is needed; a claim typed inside a fence passes.
+
+## Amendment after review round 1 (2026-10-12)
+
+The review planted claims that the first build let through. Each is now pinned by
+`tests/unit/test_one_status_review_round_1.py`:
+- **A unit is a CommonMark block.** "The same paragraph or table row" was read as a run of
+  non-blank lines, so one bullet's citation supported the next bullet, and a heading or a table
+  without leading pipes shared one unit with its neighbours. The check now parses the file with
+  the pinned CommonMark parser (ADR-0029) and reads each paragraph, list item, heading and table
+  row as its own unit. It runs under `uv run` for that parser.
+- **The claim text is the visible text**, line breaks read as spaces, so a phrase wrapped across
+  two lines is seen. Inline code, code blocks and raw HTML are mentions, like quoted text.
+- **A negation counts only in the same clause.** The look-back crosses spaces only, so a "no" that
+  ends one sentence does not cancel a word in the next. The status-field form "Merged: no" is a
+  negation, and a heading that is exactly a closing-status label ("Verified myself") is a label.
+- **A pull request counts only as a squash suffix:** `(#N)` at the end of a subject on `main`. A
+  commit scope such as `feat(#105):` names an issue.
+- **A grandfathered PRESENT row keeps its needle, not just its id.** The path and needle are
+  read from the board at `b66b107`; a row whose path or needle differs must name a commit with
+  `PRESENT@<sha>`. In a repository without that commit, the rows are kept by id, as before.
+- A claim is checked when the line holding its first character was written after the cut-off. An
+  old line moved without a change is re-dated by blame and so is checked. That limit is kept:
+  quote, cite or reword the moved line.
