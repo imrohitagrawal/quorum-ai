@@ -254,8 +254,9 @@ second researcher.
   - `citevyn` sizes review by blast radius, T0 to T3 (`citevyn/AGENTS.md:93-107`);
   - `aushraya-ai` gives each skill route a verification column and keeps an append-only log of
     skills actually used (`docs/skill-plan.md`, `docs/skill-execution.md`);
-  - `agent-program-supervisor` bounds correction waves and names a stop state
-    (`ARCHITECTURE_REDESIGN_REQUIRED`).
+  - `agent-program-supervisor` (work in progress; read from a stale local branch) designs bounded
+    correction waves with a named stop state (`ARCHITECTURE_REDESIGN_REQUIRED`). That is an idea to
+    test, not a proven practice.
 
 ## One consistent status (a colleague's feedback, tested)
 
@@ -310,10 +311,55 @@ fails a check.*
      open issue with no row.
   5. **Fix the 8 disagreements found.** Closing #447, #464, #465 and #469 is the owner's decision.
      #464 and #465 say "left open for the owner to close".
-- `agent-program-supervisor` already does this. It has one state machine for delivery, labels for
-  how proven each control is (DESIGNED / ENFORCED / MEASURED), and a `NOT_VERIFIED` result that
-  cannot support "COMPLETED". `narratwin-ai` rejects "production-ready" claims in pull-request
-  bodies.
+- **Ideas only, not proven practice:**
+  - **`agent-program-supervisor`** designs the same split: a delivery state machine, labels for how
+    proven each control is, and a `NOT_VERIFIED` result that cannot support "COMPLETED".
+    - It is work in progress, and its own traceability table marks 7 controls as `DESIGNED`, meaning
+      the runtime is not implemented.
+    - The researcher also read a local branch (`governance-warning-strict-contracts`, last commit
+      2026-08-20), while GitHub `main` is at "M1 V10" (2026-10-11).
+    - Its audit of quorum-ai is that project's claim. Here it agrees with our own measurements, but
+      that does not make it evidence.
+  - **`narratwin-ai`** rejects "production-ready" claims in pull-request bodies. The line numbers
+    came from a researcher's sub-agent and were not re-checked.
+
+  Build and test our own versions; do not copy either project's design as if it were proven.
+
+## Why this session missed the status problem the colleague found
+
+The colleague's point (status that disagrees with itself, and checks that accept false "done"
+claims) was not in this document until they raised it. Evidence for it was already in hand:
+
+- the four board rows marked DONE with open issues;
+- the "STATUS: COMPLETED" line in `R2-S2-S4`;
+- the 12 handoffs that called production "unreachable".
+
+Each was filed as a separate fact, not as one class of problem.
+
+**Why:**
+
+1. **The research asked only the questions the session was given:** practices, repeated work,
+   slowness and owner corrections. Nobody asked "are the things we report true, and would a false
+   one be caught?"
+2. **Every lens read and measured. None experimented.** The colleague's test is a falsification:
+   plant a false claim and see whether a check rejects it. It took one researcher about 20 minutes
+   to show that 9 of 14 false claims pass.
+3. **The session audits other things more readily than its own output.** Handoffs, board rows and
+   status reports are what sessions write, so their accuracy was the least examined.
+4. **No completeness critic ran.** No final pass asked "which question, and which kind of evidence,
+   is missing?"
+
+**How to avoid it** (goes into the process skill):
+
+- **Every research or review fan-out includes:**
+  - a falsification lens that plants one false claim, or deletes one guard, and checks whether
+    anything goes red;
+  - a completeness critic that lists the questions and kinds of evidence not used.
+- **When one instance of a problem is found, ask where else the same class occurs before filing
+  the instance.**
+- **Get outside eyes on any analysis meant to change how we work:** a reviewer outside the session,
+  or a session started clean of this project's memory.
+- **Evidence from another project is a lead, not proof.** Check its maturity and branch first.
 
 ## Order, and where to do it
 
