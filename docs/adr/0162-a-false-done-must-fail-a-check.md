@@ -70,8 +70,10 @@ The findings ledger already shows what works: a DONE must cite its proof, and a 
 
 ## Consequences
 
-- Of the 14 planted claims, the in-scope ones are now rejected by a support check, and a test
-  plants each of them in a temporary copy.
+- Of the 14 planted claims, the in-scope ones, as planted by the test, are rejected by a support
+  check, and a test plants each of them in a temporary copy. A claim written next to an unrelated
+  real citation in the same block still passes (I7a typed into ADR-0121's status paragraph, which
+  cites CHG-011, is one): the check proves a proof exists, not that it is the right one.
 - A session writing "merged" must cite the pull request. That is the habit this repository already
   asks for in prose.
 - Words outside the list ("done", "shipped", "live") still pass. The list can grow when a planted
@@ -92,9 +94,9 @@ The review planted claims that the first build let through. Each is now pinned b
   row as its own unit. It runs under `uv run` for that parser.
 - **The claim text is the visible text**, line breaks read as spaces, so a phrase wrapped across
   two lines is seen. Inline code, code blocks and raw HTML are mentions, like quoted text.
-- **A negation counts only in the same clause.** The look-back crosses spaces only, so a "no" that
+- **A negation counts only in the same clause.** The look-back crosses spaces and a few filler words ("not yet", "has not been"), never punctuation, so a "no" that
   ends one sentence does not cancel a word in the next. The status-field form "Merged: no" is a
-  negation, and a heading that is exactly a closing-status label ("Verified myself") is a label.
+  negation only when "no" or "not yet" is the whole value (amended after review round 2), and a heading that is exactly a closing-status label ("Verified myself") is a label.
 - **A pull request counts only as a squash suffix:** `(#N)` at the end of a subject on `main`. A
   commit scope such as `feat(#105):` names an issue.
 - **A grandfathered PRESENT row keeps its needle, not just its id.** The path and needle are

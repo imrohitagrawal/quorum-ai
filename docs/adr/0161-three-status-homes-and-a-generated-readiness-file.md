@@ -32,8 +32,8 @@ sources disagreed with each other:
    - **decisions:** `docs/19-change-control-log.md` and `docs/adr/`.
 2. **The readiness file states facts plus a verdict.** It gives the time and build it was
    generated from; what production has in effect; what is built but switched off; and the
-   verdict. The verdict is "Ready" only when live execution is on and `/ready` reports `ready`
-   with no reasons. Otherwise it is "Not ready", with the reasons. It says how to get the current
+   verdict. The verdict is "Ready" only when live execution is on, `/ready` reports `ready` with
+   no reasons, and the global spend ceiling is not reached (amended after review round 1). Otherwise it is "Not ready", with the reasons. It says how to get the current
    value, because production moves after every merge. A release decision is a CHG row, not this
    file.
 3. **The old status documents,** decided by the session under the owner's delegation:
@@ -44,9 +44,10 @@ sources disagreed with each other:
    - `docs/95`, `docs/74` and `docs/73` get a banner: they are named by configuration, and
      archiving them breaks `make validate`;
    - `docs/factory-status.md` gets a "not maintained, do not update" banner. No script reads it,
-     but 21 skill files name it (`git grep -l factory-status .agents/skills`), 18 of them
+     but 21 skill files named it at the cut-off (`git grep -l factory-status b66b107 -- .agents/skills`), 18 of them
      checklists; archiving it would send them to a missing file, and a session could recreate it.
-     The three skill files that listed it as an output now say not to update it;
+     Of the three skill files that listed it as an output, two now say not to update it, and the
+     third (`session-continuity-manager`) now writes its notes to the narrative handoff;
    - `116-signoff-record.md` moves to `docs/archive/2026-10/116-signoff-record.md`. Nothing reads it. Two skill
      files and four documents named it: `docs/91` and the design handoff now point at
      `docs/19-change-control-log.md`, and the others drop the line.
@@ -78,4 +79,6 @@ Four gaps a review found, each pinned by `tests/unit/test_one_status_review_roun
 - With live execution off, the judge, page fetching and page reading are listed under "Built and
   switched on, but idle while live execution is off", not as in effect: no run reaches them.
 - The file embeds the two responses it was made from, in a fenced JSON block. A test re-renders
-  the file from that block and needs an exact match, so a verdict typed by hand fails.
+  the file from that block and needs an exact match, so a verdict typed by hand, without changing
+  the embedded responses, fails. A forgery that edits both the responses and the verdict passes:
+  the block proves the text matches its input, not that the input came from production.
