@@ -35,8 +35,10 @@ If the check ran inside `make validate`, an untracked prompt in the main checkou
    parser the project already pins (`markdown-it-py`, as ADR-0029 chose for the same reason), and
    the check walks the rendered HTML with the standard library's `html.parser`, so a code block, an
    HTML comment (also one that raw HTML leaves open), a heading, a comment-hidden path, or a
-   paragraph that raw HTML wraps or marks (`<div hidden>`, `<p hidden>`) never counts: only what
-   Markdown itself makes does. The paragraph may sit
+   paragraph wrapped in a raw HTML element or given attributes (`<div hidden>`, `<p hidden>`) never
+   counts. Raw HTML that looks exactly like Markdown's own output (a bare `<p>` or `<strong>`) cannot
+   be told apart, and counts; it is visible, so nothing hidden is accepted. A file that begins with a
+   byte-order mark directly before the Process paragraph is refused (advisory). The paragraph may sit
    in a list item or a block quote. `make prompt-check` runs it with `uv run`, because the system
    Python lacks the parser. It exits 1 on any failure. It
    reports how many files it checked and how many were exempt, and it exits 1 when it finds no
