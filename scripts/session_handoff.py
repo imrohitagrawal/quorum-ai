@@ -75,6 +75,7 @@ def _build_sha_drift_line(
     prod_build_sha: str | None,
     main_tip: str | None = None,
     src_commit_in_build: bool = False,
+    build_on_main: bool = True,
 ) -> str:
     """Compare production's `/status.build_sha` to the last commit touching `src/`.
 
@@ -87,7 +88,9 @@ def _build_sha_drift_line(
     Every merge deploys, a docs-only one too (AGENTS.md rule 18a), so production
     usually runs a commit NEWER than the last `src/` commit. That is in sync when
     the build is `origin/main`'s tip (``main_tip``), or when the build contains
-    the last `src/` commit (``src_commit_in_build``, from :func:`_is_ancestor`).
+    the last `src/` commit (``src_commit_in_build``, from :func:`_is_ancestor`)
+    AND is itself on main (``build_on_main``): a hotfix deployed from a branch
+    holds the last `src/` commit but is not what main says production runs.
     Only otherwise is it the warning.
     """
     if not last_src_commit and not prod_build_sha:
@@ -108,6 +111,13 @@ def _build_sha_drift_line(
         return (
             f"production build_sha {_short(prod_build_sha)} is in sync: it is `origin/main`'s "
             f"tip, which holds the last src/ commit {_short(last_src_commit)}"
+        )
+    if src_commit_in_build and not build_on_main:
+        return (
+            f"production build_sha {_short(prod_build_sha)} is not on main"
+            + (f" (`origin/main` is {_short(main_tip)})" if main_tip else "")
+            + f": it holds the last src/ commit {_short(last_src_commit)}, but main does"
+            " not hold it -- a deploy from a branch?"
         )
     if src_commit_in_build:
         return (
@@ -330,6 +340,9 @@ def _gather_live_state() -> dict:
             main_tip=tip_known,
             src_commit_in_build=bool(
                 src_known and prod_build_sha and _is_ancestor(src_known, prod_build_sha)
+            ),
+            build_on_main=bool(
+                tip_known and prod_build_sha and _is_ancestor(prod_build_sha, tip_known)
             ),
         ),
         "pytest_count": _parse_pytest_collected_count(pytest_raw),

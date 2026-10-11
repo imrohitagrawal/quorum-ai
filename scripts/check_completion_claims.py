@@ -23,9 +23,13 @@ inside double quotes are mentions, not claims. A line opening with inline code
 (three backticks, a word, three backticks) is a paragraph, not a fence.
 
 A word is not a claim when a negation sits just before it, in the same clause
-("not merged", "has not been merged"): the look-back crosses only spaces, so
-"no. In production" and "No, merged" are claims. The status-field form
-"<word>: no" or "<word>: not yet" ("Merged: no.") is a negation too. A heading
+("not merged", "has not been merged"): the look-back crosses spaces and a few
+filler words (:data:`_FILLERS`: "yet", "been" and the like), never punctuation,
+so "no. In production" and "No, merged" are claims. The status-field form
+"<word>: no" or "<word>: not yet" ("Merged: no.") is a negation too, but only
+when "no" or "not yet" is the whole field value: "Merged: no doubt." is a claim.
+A line break hidden inside an image or an inline link's destination and title
+still moves the claims after it to their own source line. A heading
 that is exactly a closing-status label (Done, Verified myself, Cleanup, Pending,
 Next action) is a label, not a claim.
 
@@ -72,11 +76,14 @@ from __future__ import annotations
 import argparse
 import re
 import subprocess
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from markdown_it import MarkdownIt
+from markdown_it.rules_inline import image as _image_rule
+from markdown_it.rules_inline import link as _link_rule
+from markdown_it.rules_inline.state_inline import StateInline
 from markdown_it.token import Token
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -145,7 +152,10 @@ _NEGATIONS = frozenset(
 _FILLERS = frozenset({"yet", "been", "be", "being", "fully", "ever", "also", "still", "all"})
 _WORD_BEFORE = re.compile(r"([\w'’-]+)\s*$")
 #: The status-field form right after the word: "Merged: no", "In production: not yet".
-_FIELD_NO = re.compile(r"\s*:\s*(?:no|not\s+yet)(?![\w-])", re.IGNORECASE)
+#: Only as the WHOLE field value: after "no" or "not yet" may come closing
+#: punctuation, then the end of the unit or a field separator (``.``, ``;``,
+#: ``,``, ``|``). "Merged: no doubt." is a claim (review round 2 of package B).
+_FIELD_NO = re.compile(r"\s*:\s*(?:no|not\s+yet)[\s)\]!?]*(?:[.;,|]|$)", re.IGNORECASE)
 #: A heading that is exactly one of these (any case) is a closing-status label.
 _LABELS = frozenset({"done", "verified myself", "cleanup", "pending", "next action"})
 
@@ -245,6 +255,36 @@ def _blame(root: Path, path: str, after: set[str]) -> list[int] | None:
 # ---------------------------------------------------------------------------
 
 _MARKDOWN = MarkdownIt("commonmark").enable("table")
+_SOURCE_END = "completion_check_source_end"
+
+
+_InlineRule = Callable[[StateInline, bool], bool]
+
+
+def _recording_end(rule: _InlineRule) -> _InlineRule:
+    """``rule`` (``link`` or ``image``), noting where its source ends on the token it opens.
+
+    An image's alt text and an inline link's destination and title can hold a
+    line break that no child token shows. Recording the end lets
+    :func:`_read_inline` move its line counter past them. A reference link ends
+    at its own closing bracket: its title lives in the definition.
+    """
+
+    def wrapped(state: StateInline, silent: bool) -> bool:
+        count = len(state.tokens)
+        ok = rule(state, silent)
+        if ok and not silent:
+            for token in state.tokens[count:]:
+                if token.type in ("link_open", "image"):
+                    token.meta[_SOURCE_END] = state.pos
+                    break
+        return ok
+
+    return wrapped
+
+
+_MARKDOWN.inline.ruler.at("link", _recording_end(_link_rule))
+_MARKDOWN.inline.ruler.at("image", _recording_end(_image_rule))
 _QUOTES = re.compile(r"\"[^\"]*\"|“[^”]*”")
 
 
@@ -290,17 +330,26 @@ def _read_inline(inline: Token, unit: Unit) -> None:
 
     ``inline.content`` is the block's source with its line breaks, so the line of
     a character is the block's first line plus the breaks before it. Text tokens
-    hold no line break; soft and hard breaks, code spans and raw HTML can.
+    hold no line break; soft and hard breaks, code spans and raw HTML can, and so
+    can an image or an inline link's destination and title, which are skipped to
+    the source end :func:`_recording_end` noted.
     """
     content = inline.content
     base = inline.map[0] if inline.map else unit.first
     cursor = 0
+    link_ends: list[int] = []
 
     def line_now() -> int:
         return base + content.count("\n", 0, cursor)
 
     for child in inline.children or []:
-        if child.type == "text":
+        if child.type == "link_open":
+            link_ends.append(child.meta.get(_SOURCE_END, cursor))
+        elif child.type == "link_close" and link_ends:
+            cursor = max(cursor, link_ends.pop())
+        elif child.type == "image":
+            cursor = max(cursor, child.meta.get(_SOURCE_END, cursor))
+        elif child.type == "text":
             unit.add(child.content, line_now())
         elif child.type in ("softbreak", "hardbreak"):
             line = line_now()

@@ -14,7 +14,7 @@ a CHG row, not this file.
 THE FILE CARRIES ITS OWN INPUT. The two responses are embedded at its end, in a
 fenced JSON block, with the time and the URL they came from. The file must equal
 :func:`render` over that block (``tests/unit/test_one_status_review_round_1.py``),
-so a verdict typed by hand fails a test.
+so a verdict typed by hand without changing the embedded responses fails a test.
 
 ``make readiness`` runs this, and so does ``make handoff``. Each endpoint gets
 ONE attempt with a short timeout, and a failure never fails the caller
@@ -22,7 +22,10 @@ ONE attempt with a short timeout, and a failure never fails the caller
 endpoints are free to call (AGENTS.md rule 18).
 
 The file is in the completion check's scope (ADR-0162), so every "in
-production" it writes sits in a unit that cites the build commit.
+production" it writes sits in a unit that cites the build commit. When
+production reports no build (``build_sha`` missing, empty or "unknown", as it
+is when ``BUILD_SHA`` is unset), there is no commit to cite, so the file names
+that gap instead of saying "in production".
 
 ``--out PATH`` writes somewhere else; ``--base-url URL`` reads another server.
 Only :data:`DEFAULT_BASE_URL` is called production: another server is named by
@@ -54,9 +57,9 @@ _SWITCH_NAMES = {
     "live_execution": "Live execution (paid model calls)",
     "judge_enabled": "The judge",
     "peer_critique_enabled": "Peer critique (setting)",
-    "peer_critique_in_effect": "Peer critique (in effect)",
+    "peer_critique_in_effect": "Peer critique, as applied to runs",
     "source_fetch_enabled": "Source page fetching (setting)",
-    "source_pages_in_effect": "Source pages read (in effect)",
+    "source_pages_in_effect": "Source pages read by the judge",
     "sign_in_enabled": "Sign-in",
     "invite_links.enabled": "Invite links",
     "model_catalog_loaded": "Model catalog loaded",
@@ -183,6 +186,8 @@ def render(
     production = base == DEFAULT_BASE_URL
     build = str(status.get("build_sha") or "unknown") if status is not None else None
     short = build[:7] if build else None
+    # Production says "unknown" when BUILD_SHA is unset: there is no commit to cite.
+    build_known = build not in (None, "unknown")
     said, reasons = verdict(status, ready)
     if production:
         source = (
@@ -247,16 +252,24 @@ def render(
     ]
     off = [line for _name, value, line in switches if not value]
     runs = "Production runs" if production else f"The server at {base} runs"
-    out += [
-        f"## In effect in production at build {short}"
-        if production
-        else f"## In effect at {base} (not production), build {short}",
-        "",
-        f"{runs} build `{build}`"
-        f" (version `{status.get('version')}`, environment `{status.get('environment')}`).",
-        *(on or ["- None"]),
-        "",
-    ]
+    versions = f"version `{status.get('version')}`, environment `{status.get('environment')}`"
+    if production and not build_known:
+        out += [
+            "## In effect, at a build production did not report",
+            "",
+            "The production build is not known: production did not report its build"
+            f" (`build_sha` is `{build}` in `/status`), so no commit can be named for"
+            f" these values ({versions}).",
+        ]
+    else:
+        out += [
+            f"## In effect in production at build {short}"
+            if production
+            else f"## In effect at {base} (not production), build {short}",
+            "",
+            f"{runs} build `{build}` ({versions}).",
+        ]
+    out += [*(on or ["- None"]), ""]
     if idle:
         out += [f"## {IDLE_HEADING}", "", *idle, ""]
     out += [
