@@ -25,13 +25,28 @@ inside double quotes are mentions, not claims. A line opening with inline code
 A word is not a claim when a negation sits just before it, in the same clause
 ("not merged", "has not been merged"): the look-back crosses spaces and a few
 filler words (:data:`_FILLERS`: "yet", "been" and the like), never punctuation,
-so "no. In production" and "No, merged" are claims. The status-field form
-"<word>: no" or "<word>: not yet" ("Merged: no.") is a negation too, but only
-when "no" or "not yet" is the whole field value: "Merged: no doubt." is a claim.
+so "no. In production" and "No, merged" are claims.
+
+THE STATUS FIELD is read on the SOURCE LINE that holds the end of the word, not
+on the joined text, because a status block is often written one field per line
+("Pushed: yes" / "Merged: no" / "In production: no"). The word (after any other
+words: "W55 merged: no") is a negated field when ":" follows it and the field
+value, which runs to the end of that source line or to the next ".", ";" or
+"|", is exactly "no" or "not yet", optionally followed by closing punctuation,
+emphasis markers (``**``, ``_``) and one parenthesized remark: "Merged: no.",
+"Merged: **no**", "Merged: no (blocked on CI)". "Merged: no doubt." and
+"Merged: no -- see below" are claims. A value wrapped onto the next source line
+is read per line, so "Merged: no" with "conflicts with main." on the next line
+is a negation. The line is read as the reader sees it: markup gone, mentions
+blanked. A field value negates nothing on the next line: the look-back does not
+cross a line break that follows a line ending in ": no" or ": not yet", so
+"Merged: no" with "In production: yes" on the next line claims "in production".
+A plain wrapped negation ("has not" / "been merged") still crosses it.
+
 A line break hidden inside an image or an inline link's destination and title
-still moves the claims after it to their own source line. A heading
-that is exactly a closing-status label (Done, Verified myself, Cleanup, Pending,
-Next action) is a label, not a claim.
+still moves the claims after it to their own source line. A heading that is
+exactly a closing-status label (Done, Verified myself, Cleanup, Pending, Next
+action) is a label, not a claim.
 
 THE CUT-OFF. A claim is checked when the source line holding its first character
 was written after :data:`CUTOFF` (the merge of package A, #558): ``git blame``
@@ -152,10 +167,23 @@ _NEGATIONS = frozenset(
 _FILLERS = frozenset({"yet", "been", "be", "being", "fully", "ever", "also", "still", "all"})
 _WORD_BEFORE = re.compile(r"([\w'’-]+)\s*$")
 #: The status-field form right after the word: "Merged: no", "In production: not yet".
-#: Only as the WHOLE field value: after "no" or "not yet" may come closing
-#: punctuation, then the end of the unit or a field separator (``.``, ``;``,
-#: ``,``, ``|``). "Merged: no doubt." is a claim (review round 2 of package B).
-_FIELD_NO = re.compile(r"\s*:\s*(?:no|not\s+yet)[\s)\]!?]*(?:[.;,|]|$)", re.IGNORECASE)
+#: Matched with ``fullmatch`` against the rest of the word's OWN SOURCE LINE (see
+#: :func:`_rest_of_line`), never the unit's joined text: a status block written
+#: one field per line must not read the next line's field as part of this value.
+#: The value runs to the end of that line or to the next ``.``, ``;`` or ``|``,
+#: and must be exactly "no" or "not yet", with optional emphasis markers, closing
+#: punctuation and one parenthesized remark. "Merged: no doubt." and
+#: "Merged: no -- see below" are claims.
+_FIELD_NO = re.compile(
+    r"\s*:\s*[*_]*(?:no|not\s+yet)[*_]*[!?,)\]]*(?:\s*\([^()]*\))?[*_!?,]*\s*(?:[.;|].*)?",
+    re.IGNORECASE | re.DOTALL,
+)
+#: A source line that ENDS in a status-field value "no" or "not yet" ("Merged: no").
+#: That value negates nothing on the next line: the look-back of :func:`_negated`
+#: does not cross such a line break, so "Merged: no" / "In production: yes" is a
+#: claim of "in production". A plain wrapped negation ("has not" / "been merged")
+#: still crosses it.
+_FIELD_VALUE_ENDS_LINE = re.compile(r":\s*[*_]*(?:no|not\s+yet)[*_]*\s*$", re.IGNORECASE)
 #: A heading that is exactly one of these (any case) is a closing-status label.
 _LABELS = frozenset({"done", "verified myself", "cleanup", "pending", "next action"})
 
@@ -421,6 +449,34 @@ def _negated(before: str) -> bool:
     return False
 
 
+def _rest_of_line(unit: Unit, end: int) -> int:
+    """The index in ``unit.text`` where the source line of ``unit.text[end - 1]`` stops.
+
+    A soft or hard break is read as a space that belongs to the line it ends, so
+    the slice ``unit.text[end:stop]`` is the rest of that source line as the
+    reader sees it: markup gone, mentions blanked, nothing from the next line.
+    """
+    line = unit.lines[end - 1]
+    stop = end
+    while stop < len(unit.text) and unit.lines[stop] == line:
+        stop += 1
+    return stop
+
+
+def _look_back_from(unit: Unit, start: int) -> int:
+    """Where the negation look-back for a word at ``start`` may begin.
+
+    The start of the word's source line when the line before it ends in a status
+    field value ("Merged: no"), else the start of the unit.
+    """
+    line_start = start
+    while line_start > 0 and unit.lines[line_start - 1] == unit.lines[start]:
+        line_start -= 1
+    if line_start > 0 and _FIELD_VALUE_ENDS_LINE.search(unit.text, 0, line_start):
+        return line_start
+    return 0
+
+
 def claims_in(unit: Unit) -> list[tuple[int, str]]:
     """The completion words claimed in ``unit``: (index into its text, word), in order."""
     if unit.heading and " ".join(unit.text.split()).lower() in _LABELS:
@@ -428,9 +484,9 @@ def claims_in(unit: Unit) -> list[tuple[int, str]]:
     found: list[tuple[int, str]] = []
     for word, pattern in _PATTERNS:
         for match in pattern.finditer(unit.text):
-            if _negated(unit.text[: match.start()]):
+            if _negated(unit.text[_look_back_from(unit, match.start()) : match.start()]):
                 continue
-            if _FIELD_NO.match(unit.text, match.end()):
+            if _FIELD_NO.fullmatch(unit.text, match.end(), _rest_of_line(unit, match.end())):
                 continue
             found.append((match.start(), word))
     return sorted(found)

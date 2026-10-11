@@ -95,8 +95,19 @@ The review planted claims that the first build let through. Each is now pinned b
 - **The claim text is the visible text**, line breaks read as spaces, so a phrase wrapped across
   two lines is seen. Inline code, code blocks and raw HTML are mentions, like quoted text.
 - **A negation counts only in the same clause.** The look-back crosses spaces and a few filler words ("not yet", "has not been"), never punctuation, so a "no" that
-  ends one sentence does not cancel a word in the next. The status-field form "Merged: no" is a
-  negation only when "no" or "not yet" is the whole value (amended after review round 2), and a heading that is exactly a closing-status label ("Verified myself") is a label.
+  ends one sentence does not cancel a word in the next. A heading that is exactly a
+  closing-status label ("Verified myself") is a label.
+- **A status field is read on its own source line** (amended after review round 2, and again
+  after the re-check of 8c7838d, because a status block is often written one field per line and
+  the joined text read "Merged: no" / "In production: no" as "Merged: no In production: no").
+  "Merged: no" is a negation when the field value, which runs to the end of the word's source
+  line or to the next ".", ";" or "|", is exactly "no" or "not yet", with optional closing
+  punctuation, emphasis markers and one parenthesized remark ("Merged: no (blocked on CI)").
+  "Merged: no doubt." and "Merged: no -- see below" are claims. A value wrapped onto the next
+  source line is read per line, so "Merged: no" followed by a line "conflicts with main." is a
+  negation. A field value negates nothing on the next line: "Merged: no" followed by
+  "In production: yes" claims "in production". A plain wrapped negation ("has not" / "been
+  merged") still negates.
 - **A pull request counts only as a squash suffix:** `(#N)` at the end of a subject on `main`. A
   commit scope such as `feat(#105):` names an issue.
 - **A grandfathered PRESENT row keeps its needle, not just its id.** The path and needle are
