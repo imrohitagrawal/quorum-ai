@@ -2,8 +2,9 @@
 
 ## Status
 
-Accepted — 2026-10-11, package B of `docs/analysis/2026-10-11-how-we-work-review.md`, which the
-product owner approved (CHG-040 (b)). The scope and the cut-off are the session's design.
+Accepted — 2026-10-11, under the plan the product owner approved (CHG-040 (b)).
+This is package B of `docs/analysis/2026-10-11-how-we-work-review.md`. The scope and the cut-off
+are the session's design.
 
 ## Context
 
@@ -35,8 +36,9 @@ The findings ledger already shows what works: a DONE must cite its proof, and a 
    generated readiness file).
 2. **Only lines written after the cut-off commit `b66b107`** (the merge of package A, #558) are
    checked: `git blame` says which commit last wrote each line, and an uncommitted line always
-   counts. Files last changed before the cut-off are skipped without a blame. At the cut-off, 155
-   of 157 ADRs say "Accepted" and all 24 narrative handoffs say "merged" or "in production", so
+   counts. Files last changed before the cut-off are skipped without a blame. At the cut-off, 154
+   of 157 ADRs are marked "Accepted" in their Status section, and 23 of 24 narrative handoffs use
+   "merged" or "in production", so
    checking old lines would fail hundreds of true records. Checking whole files would do the same
    to any old file a later change touches, such as a banner added to `docs/18`. The test reports
    how many scoped files and lines it checked and how many the cut-off exempts. Because blame
@@ -74,3 +76,7 @@ The findings ledger already shows what works: a DONE must cite its proof, and a 
   asks for in prose.
 - Words outside the list ("done", "shipped", "live") still pass. The list can grow when a planted
   claim shows the need.
+- A citation supports every claim in its block, even a citation of unrelated work. The check proves
+  that a proof exists, not that it is the right proof; the reviewers still read it.
+- Text inside a fenced code block is quoted output, not a claim. `make handoff` prints generated
+  lists in fences, so this is needed; a claim typed inside a fence passes.

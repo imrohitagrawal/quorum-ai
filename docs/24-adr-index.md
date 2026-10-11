@@ -164,7 +164,7 @@ ways, so the record shows what was believed on a date and what replaced it.
 | [ADR-0159](adr/0159-one-process-skill-loads-in-every-session-and-the-router-reads-the-change.md) | One process skill loads in every session, and the router reads the change | Architecture | Accepted — 2026-10-11, package A of `docs/analysis/2026-10-11-how-we-work-review.md` |
 | [ADR-0160](adr/0160-the-root-prompt-check-fails-on-its-own-and-the-handoff-only-shows-it.md) | The root prompt check fails on its own, and the handoff only shows it | Architecture | Accepted — 2026-10-11, package A of `docs/analysis/2026-10-11-how-we-work-review.md` |
 | [ADR-0161](adr/0161-three-status-homes-and-a-generated-readiness-file.md) | Three status homes, and a readiness file generated from production | Architecture | Accepted — 2026-10-11, package B of `docs/analysis/2026-10-11-how-we-work-review.md` |
-| [ADR-0162](adr/0162-a-false-done-must-fail-a-check.md) | A false "done" must fail a check | Architecture | Accepted — 2026-10-11, package B of `docs/analysis/2026-10-11-how-we-work-review.md`, which the |
+| [ADR-0162](adr/0162-a-false-done-must-fail-a-check.md) | A false "done" must fail a check | Architecture | Accepted — 2026-10-11, under the plan the product owner approved (CHG-040 (b)) |
 
 **This index was itself stale** until 2026-07-30: ADR-0002 had existed since
 2026-07-19 and was never listed here. A hand-maintained index is a derived fact

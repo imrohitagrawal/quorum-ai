@@ -15,11 +15,11 @@ description: Enforce enterprise quality gates, placeholder rules, evidence requi
 ## Inputs
 - `configs/factory-gates.json`
 - `configs/enterprise-quality-rules.json`
-- `docs/factory-status.md`
 
 ## Owned outputs
-- `docs/factory-status.md`
-- `docs/95-production-readiness-review.md`
+- Findings recorded in the three status homes named in `docs/README.md`. Do not update
+  `docs/factory-status.md` or `docs/95-production-readiness-review.md`: both are records, not
+  maintained (ADR-0161).
 
 ## Allowed tools
 - Read and update repository artifacts owned by this skill.

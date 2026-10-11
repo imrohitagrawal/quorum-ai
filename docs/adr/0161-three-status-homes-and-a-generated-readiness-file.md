@@ -39,14 +39,17 @@ sources disagreed with each other:
 3. **The old status documents,** decided by the session under the owner's delegation:
    - `docs/17` and `docs/18` stay, because the blocking requirements gate reads them. Each gets a
      banner pointing at the three homes. The `docs/17` Status column is relabelled as the
-     2026-06 draft status, and its four false "Not started" cells in `docs/18` are corrected;
+     draft status each row was given when it was added, and its four false "Not started" cells in
+     `docs/18` are corrected;
    - `docs/95`, `docs/74` and `docs/73` get a banner: they are named by configuration, and
      archiving them breaks `make validate`;
    - `docs/factory-status.md` gets a "not maintained, do not update" banner. No script reads it,
-     but 20 skill checklists tell a session to update it; archiving it would send them to a
-     missing file, and a session could recreate it;
-   - `116-signoff-record.md` moves to `docs/archive/2026-10/116-signoff-record.md`. Nothing reads it, and the two
-     skill files and three documents that name it now point at `docs/19-change-control-log.md`.
+     but 21 skill files name it (`git grep -l factory-status .agents/skills`), 18 of them
+     checklists; archiving it would send them to a missing file, and a session could recreate it.
+     The three skill files that listed it as an output now say not to update it;
+   - `116-signoff-record.md` moves to `docs/archive/2026-10/116-signoff-record.md`. Nothing reads it. Two skill
+     files and four documents named it: `docs/91` and the design handoff now point at
+     `docs/19-change-control-log.md`, and the others drop the line.
 
 ## Rejected alternatives
 

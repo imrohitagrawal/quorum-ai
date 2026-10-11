@@ -1,8 +1,8 @@
 # Requirement Registry
 
-> **Not a current status.** The Status column is the 2026-06 draft status, and it is not maintained. Current status has three homes, named in `docs/README.md`: delivery is the board (`docs/65-open-work.md`) with GitHub; product readiness is `docs/product-readiness.md`, generated from production; decisions are `docs/19-change-control-log.md` and `docs/adr/`.
+> **Not a current status.** The Status column holds the draft status each row was given when it was added, from June 2026 on, and it is not maintained. Current status has three homes, named in `docs/README.md`: delivery is the board (`docs/65-open-work.md`) with GitHub; product readiness is `docs/product-readiness.md`, generated from production; decisions are `docs/19-change-control-log.md` and `docs/adr/`.
 
-| Req ID | Type | Title | Source | Owner | Priority | Acceptance Criteria | Tests | Jira | Confluence | Status (2026-06 draft, not maintained) |
+| Req ID | Type | Title | Source | Owner | Priority | Acceptance Criteria | Tests | Jira | Confluence | Status (draft, not maintained) |
 |---|---|---|---|---|---|---|---|---|---|---|
 | FR-001 | Functional | Account-gated query execution | `docs/01-product-brief.md`; `docs/115-release-scope.md` | Product owner | Must | AC-001, AC-002 | TEST-FR-001 | Not created | Not published | Draft |
 | FR-002 | Functional | Single active query per account | `docs/01-product-brief.md`; `docs/115-release-scope.md` | Product owner | Must | AC-003, AC-004 | TEST-FR-002 | Not created | Not published | Draft |
@@ -39,5 +39,5 @@
 ## Registry Notes
 
 - Jira and Confluence entries remain explicit non-claims until artifacts are created through approved tools with human confirmation.
-- The Status column was set to Draft in June 2026, before the architecture, threat model and implementation existed. It has not been maintained since. Delivery status is the board (`docs/65-open-work.md`).
+- Each row's Status was set to Draft when the row was added (June to September 2026), and it has not been maintained. Delivery status is the board (`docs/65-open-work.md`).
 - QA test charter draft `JIRA-DRAFT-TASK-002` covers FR-001 through FR-013, NFR-001 through NFR-010, and AC-001 through AC-036 for independent software testing team handoff. Full draft payload is in `docs/118-qa-test-charter-jira.md`; external Jira creation is not claimed until approved tool execution succeeds.

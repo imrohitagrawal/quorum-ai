@@ -24,7 +24,7 @@ description: Maintain cross-session context using handoff notes, worktrees, rout
 ## Owned outputs
 - `docs/session-handoff.md`
 - `docs/00-factory-console.md`
-- branch/worktree notes in `docs/factory-status.md`
+- branch and worktree notes in the narrative handoff (`docs/analysis/<date>-session-handoff.md`)
 
 ## Allowed tools
 - Read repository files relevant to the skill decision.
