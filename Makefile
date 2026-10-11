@@ -1153,7 +1153,7 @@ endif
 # skill on a **Process:** line (ADR-0160). Deliberately NOT inside `validate`:
 # an untracked prompt would turn the suite red on one machine and green in CI.
 prompt-check: check-python
-	$(PYTHON) scripts/check_root_prompts.py
+	UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python scripts/check_root_prompts.py
 
 apply-orbi-profile: check-python
 	$(PYTHON) scripts/apply_profile.py orbi

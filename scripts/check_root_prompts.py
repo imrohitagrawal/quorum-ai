@@ -2,20 +2,23 @@
 """Check that every root prompt file names the process skill (ADR-0160).
 
 A root prompt is any ``.md`` file at the repository root whose name contains
-"prompt", in any case. Each one must carry, outside a fenced code block, a line
-of this form:
+"prompt", in any case. Each one must carry a visible paragraph of this form:
 
     **Process:** ... .agents/skills/work-item-delivery/SKILL.md ...
 
-The check reads the directory itself, so it sees untracked files too. It exits
-1 on any problem, and also when it finds no prompt file at all. Stdlib only.
+Visibility is decided by a CommonMark parser (markdown-it-py, which ADR-0029
+chose after hand-rolled block rules failed), not by line rules: two rounds of
+hand-written rules each let a code example or a comment through. The check
+reads the directory itself, so it sees untracked files too. It exits 1 on any problem, and also when it
+finds no prompt file at all.
 """
 
 from __future__ import annotations
 
 import argparse
-import re
 from pathlib import Path
+
+from markdown_it import MarkdownIt
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -28,9 +31,7 @@ EXEMPT: dict[str, str] = {
     ),
 }
 
-# At most 3 leading spaces: 4 spaces or a tab start an indented code block.
-_PROCESS_LINE = re.compile(r"^ {0,3}\*\*Process:\*\*.*\.agents/skills/work-item-delivery/SKILL\.md")
-_FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
+_SKILL_PATH = ".agents/skills/work-item-delivery/SKILL.md"
 
 
 def find_prompt_files(root: Path) -> list[Path]:
@@ -43,29 +44,25 @@ def find_prompt_files(root: Path) -> list[Path]:
 
 
 def has_process_line(text: str) -> bool:
-    """True when a ``**Process:**`` line naming the skill sits outside every
-    fence, every indented code block and every ``<!-- -->`` comment. A fence
-    closes only on a line of fence characters (as long as the opener's, or
-    longer) and whitespace."""
-    fence = ""
-    in_comment = False
-    for line in text.splitlines():
-        if in_comment:
-            in_comment = "-->" not in line
+    """True when a paragraph (at any depth: list item, block quote) opens with
+    bold ``Process:`` and its visible text names the skill. Fences, indented
+    code blocks and HTML blocks are never paragraphs; inline HTML such as a
+    ``<!-- -->`` comment is not visible text."""
+    tokens = MarkdownIt("commonmark").parse(text)
+    for before, token in zip(tokens, tokens[1:], strict=False):
+        if token.type != "inline" or before.type != "paragraph_open":
             continue
-        match = _FENCE.match(line)
-        if match:
-            marker, rest = match.groups()
-            if not fence:
-                fence = marker
-            elif marker[0] == fence[0] and len(marker) >= len(fence) and not rest.strip():
-                fence = ""
+        parts = [c for c in token.children or [] if not (c.type == "text" and not c.content)]
+        opens = [(c.type, c.content) for c in parts[:3]]
+        if opens != [("strong_open", ""), ("text", "Process:"), ("strong_close", "")]:
             continue
-        if fence:
-            continue
-        if _PROCESS_LINE.match(line):
+        visible = "".join(
+            " " if c.type in ("softbreak", "hardbreak") else c.content
+            for c in parts
+            if c.type in ("text", "code_inline", "softbreak", "hardbreak")
+        )
+        if _SKILL_PATH in visible:
             return True
-        in_comment = "<!--" in line and "-->" not in line.split("<!--", 1)[1]
     return False
 
 

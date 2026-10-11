@@ -282,13 +282,15 @@ def _name_has_word(path: str, words: list[str]) -> bool:
     return any(part in (word, word + "s") for part in parts for word in words)
 
 
-def route_work(paths: list[str], diff_text: str = "") -> dict[str, Any]:
-    """Classify one work item by its paths and changed lines."""
+def route_work(paths: list[str], diff_text: str = "", *, docs_only: bool = True) -> dict[str, Any]:
+    """Classify one work item by its paths and changed lines. ``docs_only``
+    allows the docs-only shortcut when every path is a doc; item mode turns it
+    off, because a board row's docs path is a citation, not the change."""
     cfg = load_router()["work_item_routing"]
     classes = cfg["classes"]
     matched: list[dict[str, Any]] = []
     unclassified: list[str] = []
-    if paths and all(_is_docs(p) for p in paths):
+    if docs_only and paths and all(_is_docs(p) for p in paths):
         matched = [c for c in classes if c["id"] == "docs-only"]
     else:
         changed = "\n".join(_changed_lines(diff_text))
@@ -354,7 +356,12 @@ def paths_for_item(item_id: str, board_text: str | None = None) -> tuple[list[st
 
 def _git(repo: Path, *args: str) -> str:
     return subprocess.run(
-        ["git", *args], cwd=repo, capture_output=True, text=True, check=True
+        ["git", *args],
+        cwd=repo,
+        capture_output=True,
+        check=True,
+        encoding="utf-8",
+        errors="replace",
     ).stdout
 
 
@@ -423,7 +430,7 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         # The row's prose is read as added lines, so "spend key" routes money.
         rows_as_added = "".join(f"+{x}\n" for x in row.splitlines())
-        result = route_work(paths, rows_as_added)
+        result = route_work(paths, rows_as_added, docs_only=False)
         if not result["classes"]:
             print(
                 f"NOT ROUTED: neither the paths nor the words of row {args.item} match any "

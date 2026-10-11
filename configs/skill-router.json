@@ -493,7 +493,7 @@
           "budget",
           "allowance"
         ],
-        "identifiers": "(?i)(?<![a-z0-9])(?:fees?|bill(?:s|ed|ing)?|(?:usd|cost|spend|price|pricing|budget|charge|allowance|quota)(?:s|es|d|ed|ing)?)(?![a-z0-9])|(?-i:(?<=[a-z0-9])(?:Usd|USD|Cost|Fee|Spend|Price|Pricing|Budget|Charge|Allowance|Quota|Bill|Billed|Billing)s?(?![a-z0-9]))|(?-i:(?<![A-Za-z0-9])(?:usd|cost|fee|spend|price|pricing|budget|charge|allowance|quota|bill|billed|billing)s?(?=[A-Z]))",
+        "identifiers": "(?i)(?<![a-z0-9])(?:fees?|bill(?:s|ed|ing)?|global_ceilings?|daily_caps?|(?:usd|cost|spend|price|pricing|budget|charge|allowance|quota)(?:s|es|d|ed|ing)?)(?![a-z0-9])|(?-i:(?<=[a-z0-9])(?:Usd|USD|Cost|Fee|Spend|Price|Pricing|Budget|Charge|Allowance|Quota|Bill|Billed|Billing)s?(?![a-z0-9]))|(?-i:(?<![A-Za-z0-9])(?:usd|cost|fee|spend|price|pricing|budget|charge|allowance|quota|bill|billed|billing)s?(?=[A-Z]))|(?-i:GlobalCeiling)",
         "roles": [
           "failure-modes-first"
         ],
@@ -593,6 +593,7 @@
           "src/product_app/readiness.py",
           "src/httpx2/**"
         ],
+        "identifiers": "(?i)(?<![a-z0-9])(?:judge[sd]?|judging|source_fetch(?:er|es|ed|ing)?|source_pages?|peer_critiques?|live_execution|openrouter|tavily|prompt_ids?)(?![a-z0-9])",
         "roles": [
           "failure-modes-first"
         ],
