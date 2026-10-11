@@ -351,12 +351,12 @@ def _prompt_check_section(root: Path) -> str:
     except Exception as exc:  # noqa: BLE001 — ADR-0045: degrade, never abort
         return f"## Root prompt check\nunavailable: {exc!r}\n"
     if not found:
-        # The result word is backticked: it is the gate's output quoted, and this
-        # file is in the completion check's scope (ADR-0162), where a bare
-        # "passed" must cite a commit.
+        # "PASSED" is backticked: it is the gate's output quoted, and this file is
+        # in the completion check's scope (ADR-0162), where a bare "passed" must
+        # cite a commit. "FAILED" is not a completion word and stays bare.
         return f"## Root prompt check\n`PASSED` ({counted}; `make prompt-check`)\n"
     lines = "".join(f"- {m}\n" for m in found)
-    return f"## Root prompt check\n`FAILED` ({counted}) -- run `make prompt-check`\n{lines}"
+    return f"## Root prompt check\nFAILED ({counted}) -- run `make prompt-check`\n{lines}"
 
 
 def _readiness_section() -> str:
@@ -415,10 +415,14 @@ def _leftovers_section(found: list[tuple[Any, list[Any]]] | None) -> str:
     body = ""
     for category, findings in found:
         if findings:
-            body += f"\n**{category.title}**\n" + "".join(
+            body += f"\n{category.title}:\n" + "".join(
                 f"- `{f.label}` — {f.why}\n" for f in findings
             )
-    return head + (body or "None found\n")
+    # A fenced block: this is the tool's report quoted, and its titles and
+    # reasons say "merged" ("Merged branches and worktrees", "once its branch is
+    # merged"). This file is in the completion check's scope (ADR-0162), which
+    # reads a fenced block as quoted output, not as a claim.
+    return head + (f"```text{body}```\n" if body else "None found\n")
 
 
 def main() -> int:

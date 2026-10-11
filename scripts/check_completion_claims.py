@@ -13,7 +13,9 @@ row, cites one of:
 A word right after a negation ("not merged", "never merged") is not a claim, and
 neither is a word inside backticks or double quotes, which mentions the word
 rather than claims it. A quoted or backticked span may run across a line break
-inside one paragraph.
+inside one paragraph. A fenced code block (a line opening with three backticks
+or tildes, to the line that closes it) is quoted output in the same way: the
+mechanical handoff prints ``git status`` and the leftover report there.
 
 THE CUT-OFF. Only lines written after :data:`CUTOFF` (the merge of package A,
 #558) are checked: ``git blame`` names the commit that last wrote each line, and
@@ -34,7 +36,8 @@ saying two items were merged and in production when neither was.
 WHAT IT CANNOT SEE: words outside the list ("done", "shipped", "live"); a false
 claim in a paragraph that also holds a true citation, since a citation anywhere
 in the paragraph supports every word in it; lines written before the cut-off;
-untracked files; and whether the cited pull request did what the sentence says.
+untracked files; a claim typed inside backticks, double quotes or a fenced code
+block; and whether the cited pull request did what the sentence says.
 
 FALSE-POSITIVE COST: a new line that uses a listed word in its plain sense ("the
 request is accepted") fails until it is quoted, reworded or cited.
@@ -280,6 +283,23 @@ def _units(lines: list[str]) -> list[tuple[int, int]]:
     return spans
 
 
+def _fenced(lines: list[str]) -> set[int]:
+    """0-based indexes of the lines inside a fenced code block, its fences included."""
+    inside: set[int] = set()
+    fence: str | None = None
+    for i, line in enumerate(lines):
+        opener = re.match(r" {0,3}(`{3,}|~{3,})", line)
+        if fence is None:
+            if opener:
+                fence = opener.group(1)
+                inside.add(i)
+            continue
+        inside.add(i)
+        if opener and opener.group(1)[0] == fence[0] and len(opener.group(1)) >= len(fence):
+            fence = None
+    return inside
+
+
 class Citations:
     """What a citation may point at, read from git once and cached."""
 
@@ -317,12 +337,13 @@ def problems_in_text(
     """Problems for the given 1-based lines of ``text``, and how many claims they hold."""
     lines = text.splitlines()
     spans = _units(lines)
+    fenced = _fenced(lines)
     masked_units: dict[tuple[int, int], list[str]] = {}
     problems: list[str] = []
     claims = 0
     for number in sorted(set(numbers)):
         index = number - 1
-        if not 0 <= index < len(lines):
+        if not 0 <= index < len(lines) or index in fenced:
             continue
         span = spans[index]
         if span not in masked_units:
