@@ -59,7 +59,7 @@ DIFF_BASE ?= origin/main
 # disagrees with the real pathspec is a lie waiting to be believed; the banner
 # now states the pathspec the code actually uses.
 
-.PHONY: docs-map-check check-python publishing-check skill-onboarding-check skill-discover handoff check-breaking apply-orbi-profile skill-route prompt-check start next capture-idea validate validate-strict fr-completeness openapi-export openapi-check adr-index-check open-work-check open-work-write quality format format-check lint type-check test evals test-report gate-min-collected gate-min-executed perf-gate api-contract mutation-baseline diff-cover security-scan close-guard ci-evidence run docker-build feedback-audit session-clean close-window
+.PHONY: docs-map-check check-python publishing-check skill-onboarding-check skill-discover handoff check-breaking apply-orbi-profile skill-route prompt-check start next capture-idea validate validate-strict fr-completeness openapi-export openapi-check adr-index-check open-work-check open-work-write completion-check board-github-check readiness quality format format-check lint type-check test evals test-report gate-min-collected gate-min-executed perf-gate api-contract mutation-baseline diff-cover security-scan close-guard ci-evidence run docker-build feedback-audit session-clean close-window
 
 check-python:
 	@if [ -z "$(PYTHON)" ]; then 		echo "ERROR: Python 3 is required. Install python3, or set PYTHON=/path/to/python3."; 		exit 127; 	fi
@@ -73,7 +73,7 @@ next: check-python
 capture-idea: check-python
 	@if [ -n "$(IDEA)" ]; then 		$(PYTHON) scripts/capture_idea.py "$(IDEA)"; 	else 		$(PYTHON) scripts/capture_idea.py; 	fi
 
-validate: check-python fr-completeness adr-index-check open-work-check docs-map-check
+validate: check-python fr-completeness adr-index-check open-work-check docs-map-check completion-check
 	$(PYTHON) scripts/validate_all.py
 
 # The docs map (`docs/README.md`) says where each kind of information lives.
@@ -102,6 +102,29 @@ open-work-check:
 # finished with no source change at all. See ADR-0079.
 open-work-write:
 	$(PYTHON) scripts/check_open_work.py
+
+# A completion word ("merged", "in production", "approved", ...) in a status
+# document must cite a pull request squash-merged on main, a commit on main, or
+# a CHG row, in the same paragraph or table row (ADR-0162). Only lines written
+# after the cut-off commit are checked, so old true records are not. Offline
+# (git only), so it is inside `validate`. Bite-proofs:
+# tests/unit/test_completion_claims.py, tests/test_planted_false_claims.py.
+completion-check: check-python
+	$(PYTHON) scripts/check_completion_claims.py
+
+# DONE board rows whose issue is still open, and open issues no row cites
+# (ADR-0162). Needs `gh` and the network, so it is NOT inside `validate`;
+# without them it prints "unavailable" and exits 0 (ADR-0045). Exits 1 on a
+# mismatch. Bite-proofs: tests/unit/test_board_github.py.
+board-github-check: check-python
+	$(PYTHON) scripts/check_board_github.py
+
+# Regenerate docs/product-readiness.md from production's free `/status` and
+# `/ready` (ADR-0161). Never fails: offline, the file says "unavailable".
+# `uv run` because a python.org build on macOS has no certificate store, and
+# the project environment carries `certifi`. `make handoff` runs it too.
+readiness: check-python
+	UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python scripts/product_readiness.py
 
 # #407: the obvious revert (flag off, window untouched) is refused by
 # test_the_shipped_declaration_file_declares_no_window_right_now, because a

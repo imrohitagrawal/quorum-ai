@@ -197,6 +197,7 @@ being true, fix the row in the same pull request that made it false.
 | `day-one-quality-standard.md` | Day-One Quality Standard — SUPERSEDED |
 | `factory-status.md` | Factory Status |
 | `feedback-audit-design.md` | Feedback Audit — Design & Prompt Specification |
+| `product-readiness.md` | Product readiness |
 | `project-profile.md` | Project profile — quorum-ai |
 | `readme-verification-appendix.md` | README verification appendix |
 | `session-handoff.md` | Session Handoff |

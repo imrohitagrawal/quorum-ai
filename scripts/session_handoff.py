@@ -351,9 +351,51 @@ def _prompt_check_section(root: Path) -> str:
     except Exception as exc:  # noqa: BLE001 — ADR-0045: degrade, never abort
         return f"## Root prompt check\nunavailable: {exc!r}\n"
     if not found:
-        return f"## Root prompt check\nPASSED ({counted}; `make prompt-check`)\n"
+        # The result word is backticked: it is the gate's output quoted, and this
+        # file is in the completion check's scope (ADR-0162), where a bare
+        # "passed" must cite a commit.
+        return f"## Root prompt check\n`PASSED` ({counted}; `make prompt-check`)\n"
     lines = "".join(f"- {m}\n" for m in found)
-    return f"## Root prompt check\nFAILED ({counted}) -- run `make prompt-check`\n{lines}"
+    return f"## Root prompt check\n`FAILED` ({counted}) -- run `make prompt-check`\n{lines}"
+
+
+def _readiness_section() -> str:
+    """Regenerate `docs/product-readiness.md` (ADR-0161) and say what it found.
+
+    Through `run()`, as a child process, so it degrades like every other value
+    here (ADR-0045): `scripts/product_readiness.py` never fails its caller, and
+    offline it still writes the file, saying "unavailable".
+    """
+    out = run(
+        [
+            sys.executable,
+            str(ROOT / "scripts" / "product_readiness.py"),
+            "--out",
+            str(ROOT / "docs" / "product-readiness.md"),
+        ]
+    )
+    return (
+        "## Product readiness\n"
+        "`docs/product-readiness.md`, regenerated from production's `/status` and `/ready` "
+        "by this run (`make readiness`):\n"
+        f"{out or 'unavailable: product_readiness printed nothing'}\n"
+    )
+
+
+def _board_github_section() -> str:
+    """Whether the board and GitHub agree (ADR-0162), from `check_board_github`.
+
+    `--no-fail` makes a mismatch exit 0, so `run()` returns the report rather
+    than labelling it unavailable. Without `gh` or the network, it says
+    "unavailable" (ADR-0045).
+    """
+    out = run([sys.executable, str(ROOT / "scripts" / "check_board_github.py"), "--no-fail"])
+    return (
+        "## Board and GitHub\n"
+        "From `make board-github-check`: DONE rows whose issue is still open, and open "
+        "issues no row cites.\n"
+        f"{out or 'unavailable: check_board_github printed nothing'}\n"
+    )
 
 
 def _collect_leftovers() -> list[tuple[Any, list[Any]]] | None:
@@ -388,6 +430,8 @@ def main() -> int:
     latest_narrative = _latest_narrative_handoff(ROOT / "docs" / "analysis")
     narrative_pointer = _narrative_pointer_line(latest_narrative)
     live_state = _live_state_section(_gather_live_state())
+    readiness = _readiness_section()
+    board_github = _board_github_section()
     prompt_check = _prompt_check_section(ROOT)
     leftovers = _leftovers_section(_collect_leftovers())
     text = f"""# Session Handoff
@@ -413,6 +457,8 @@ what's next, the traps) lives in the dated doc it points to, not here.
 {branch or "not a git branch / unavailable"}
 
 {live_state}
+{readiness}
+{board_github}
 {prompt_check}
 {leftovers}
 ## Current phase
