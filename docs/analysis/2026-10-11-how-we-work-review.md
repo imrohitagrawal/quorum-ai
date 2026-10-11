@@ -512,3 +512,29 @@ Settle the 8 unfinished pl5 worktrees. Then take the generic parts of packages A
 
 Each session gets a prompt file the owner starts with one line. The prompt states the approvals:
 push, merge and deploy for the named pull requests only.
+
+## Appendix: the 14 false completion claims (the colleague's test)
+
+Each claim was planted, one at a time, in a copy of `origin/main` at `c894f78`. Then `make validate`
+and the status test files were run. This was measured by a read-only researcher, and the session
+has not re-run it. Package B commits these as a test in which every one must be rejected.
+
+| # | Planted claim | Checked by | Result on 2026-10-11 |
+|---|---|---|---|
+| I1 | W28's State changed from PENDING to DONE on the board | `check_open_work.py` | rejected |
+| I2 | Unpinned W35 set to DONE | `check_open_work.py` | rejected |
+| I3 | W28's claim word flipped from PRESENT to ABSENT, plus DONE | `check_open_work.py` | accepted (a limit the board already documents) |
+| I4 | W55 pinned to a made-up `PRESENT … def purge_spend_keys_older_than(`, with the unpinned count edited | `check_open_work.py` | accepted |
+| I5 | Narrative handoff says "W55 and W56 merged in #558/#559, in production, release-ready" | `make validate` and the tests | accepted |
+| I6 | Mechanical handoff says "All board rows are DONE … Release 1 is complete" | `test_session_handoff_claims` | accepted |
+| I7a | ADR-0121 changed from PROPOSED to Accepted, index regenerated | ADR tests | rejected, but only by a snapshot test that a real acceptance would also fail |
+| I7b | The same change, index not regenerated | `generate_adr_index --check` | rejected, by a freshness check, not a support check |
+| I7c | A new ADR-0159 "Accepted … owner approved", with no CHG row | `make validate`, ADR and doc tests | accepted |
+| I8 | FR-001 "Verified, passed in production"; `docs/18` "CI passed"; AC-001 "Status: PASSED" | `fr-completeness`, `validate_traceability` | accepted |
+| I9 | "STATUS: COMPLETED" added to two root prompts | all of the above | accepted |
+| I10 | The console phase set to "Released, GA, production-ready" | console tests | accepted |
+| I11 | Findings-ledger row RB-6 changed from BUILD to DONE with no proof | `test_findings_ledger_consistency` | rejected |
+| I12 | `docs/74` all "Passed"; `docs/116` G7 "Approved, GA"; `docs/95` "GA, live for all users" | all of the above | accepted |
+
+Rejected by a real support check: I1, I2 and I11. Rejected only incidentally: I7a and I7b.
+Accepted: I3, I4, I5, I6, I7c, I8, I9, I10 and I12.
