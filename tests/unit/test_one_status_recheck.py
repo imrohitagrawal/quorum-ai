@@ -99,13 +99,16 @@ def test_a_status_field_whose_value_on_its_source_line_is_no_is_not_a_claim(text
         ("W55 and W56 merged: no conflicts.", [(1, "merged")]),
         ("Release 1 is complete: no open blockers.", [(1, "complete")]),
         ("Merged: no -- see below", [(1, "merged")]),
+        # A comma is not a field separator: the value runs on to the next ".", ";" or "|".
+        ("In production: no, apart from the hotfix build.", [(1, "in production")]),
     ],
 )
 def test_a_status_field_whose_value_only_starts_with_no_is_a_claim(
     text: str, expected: list[tuple[int, str]]
 ) -> None:
     # Red when: "<word>: no" cancels the word although more of the field value follows "no"
-    # on the same source line ("no doubt", "no issues detected", "no -- see below").
+    # on the same source line ("no doubt", "no issues detected", "no -- see below"), or when
+    # a comma ends the field value ("no, apart from the hotfix build").
     assert _reported(text) == (expected, len(expected))
 
 
@@ -114,3 +117,26 @@ def test_a_status_block_one_field_per_line_still_reports_a_yes_field() -> None:
     # on line 3 is no longer a claim. Partner of the accepted block above.
     text = "Pushed: yes\nMerged: no\nIn production: yes"
     assert _reported(text) == ([(3, "in production")], 1)
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("Merged: no\nIn production: yes", [(2, "in production")]),
+        ("Merged: not yet\nIn production: yes", [(2, "in production")]),
+        ("Merged: **no**\nIn production: yes", [(2, "in production")]),
+    ],
+)
+def test_a_field_value_no_does_not_negate_the_next_lines_word(
+    text: str, expected: list[tuple[int, str]]
+) -> None:
+    # Red when: the negation look-back crosses the line break after a status field, so the
+    # field value "no" or "not yet" on one line cancels the claim word that opens the next.
+    assert _reported(text) == (expected, len(expected))
+
+
+@pytest.mark.parametrize("text", ["W55 has not\nbeen merged.", "W55 is not\nin production."])
+def test_a_plain_negation_wrapped_onto_the_next_line_still_negates(text: str) -> None:
+    # Red when: the look-back stops at every line break, so a sentence wrapped between its
+    # negation and its word becomes a claim. Partner of the test above.
+    assert _reported(text) == ([], 0)
