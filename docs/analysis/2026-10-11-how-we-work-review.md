@@ -409,10 +409,12 @@ reviewed twice and pushed once, then merged and checked in production.
    - the live-session check;
    - cleanup.
 4. **`make handoff`:**
-   - fails when a root prompt file does not name the skill;
+   - fails when a root prompt file does not name the skill (as built: `make prompt-check` fails,
+     and `make handoff` shows its result, because ADR-0045 forbids a failing handoff; ADR-0160);
    - lists leftover worktrees, branches and scratch files.
 5. **Older files:** `AUTONOMOUS-WORK-LOOP-ULTRACODE-PROMPT.md` and the template either point at the
-   skill or move to the archive. `R2-S2-S4-ULTRACODE-PROMPT.md` stays, marked as an example,
+   skill or move to the archive (as built: the prompt is archived; the template stays portable, and
+   `templates/README.md` points quorum-ai's own work at the skill). `R2-S2-S4-ULTRACODE-PROMPT.md` stays, marked as an example,
    because a test pins it.
 6. **This review document** goes in the same pull request.
 

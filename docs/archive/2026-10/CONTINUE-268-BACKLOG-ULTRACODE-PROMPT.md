@@ -1,4 +1,4 @@
-> **Archived 2026-10-11** (CHG-040 (c)). The process now lives in `.agents/skills/work-item-delivery/SKILL.md`; this file is history and is not to be run. Home-directory paths were replaced with `~`, and citations of files that moved or never existed were rewritten so they resolve.
+> **Archived 2026-10-11** (CHG-040 (c)). The process now lives in `.agents/skills/work-item-delivery/SKILL.md`; this file is history and is not to be run. Edits: 1 citation of a handoff since archived now names its archive path.
 
 # ULTRACODE — continue the backlog from the 2026-09-19 handoff
 

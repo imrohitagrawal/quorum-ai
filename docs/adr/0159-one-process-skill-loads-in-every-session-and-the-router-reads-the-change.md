@@ -44,10 +44,12 @@ two gates that exist nowhere in the repository: `no-placeholder-gate` and `relea
    its roles, checks, reviewer skills and owner decisions. The classes are money, sign-in and
    session, interface, AI output and judge, CI, privacy and retention, settings, and docs only.
    A class matches by path, or by an identifier in the changed lines. The output is a checklist.
-4. **The old route is not touched.** `route()` keeps its output, because `scripts/factory_next.py`
-   writes `docs/00-factory-console.md` from it and `scripts/session_handoff.py` prints it. The new
+4. **The old route's code is not touched.** `scripts/factory_next.py` writes
+   `docs/00-factory-console.md` from `route()`, and `scripts/session_handoff.py` prints it. The new
    behaviour is a new function. The two dead gate names are removed, and `skill-onboarding-check`
-   is written as the `make` target it is.
+   is written as the `make` target it is. That changes the "Blocking gates" line of three phases
+   (idea intake, external-skill governance, build-release-operate). The route printed today, for
+   the phase every session lands on, is byte-for-byte unchanged.
 
 **Why a "settings" class.** The plan listed seven classes. `src/product_app/config.py` holds money,
 sign-in and judge settings together, so its path cannot say which class a change belongs to.
@@ -59,8 +61,8 @@ value before changing it. The identifiers in the changed lines add the money cla
 
 - **More rules in `AGENTS.md`.** It is already long, and earlier rules are followed better than later
   ones (its own preamble). The process would be an eleventh place.
-- **Wait for `stackclimb-skills`.** Its installed copy is 143 commits behind, and it has 8 unfinished
-  worktrees. The generic parts move there later, as a separate task.
+- **Wait for `stackclimb-skills`.** Its installed copy was 143 commits behind its GitHub `main`
+  (measured by the review). The generic parts move there later, as a separate task.
 - **A new phase in `configs/skill-router.json`.** A phase is chosen only when its documents are
   missing. A phase with no documents is never chosen.
 - **Rewrite `route()`.** That changes `docs/00` and the mechanical handoff for no gain.

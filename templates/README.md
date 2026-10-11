@@ -19,6 +19,10 @@ executable. Files here are the opposite on both counts: plain reference
 documents, not runnable skill bundles — nothing in `templates/` is loaded,
 executed, or synced by any script in this repo. Copy what you need by hand.
 
+In quorum-ai itself, every work item is delivered by
+`.agents/skills/work-item-delivery/SKILL.md` (ADR-0159). The template below is for other
+projects, and its numbers (review rounds, reviewers) are placeholders, not this repo's rules.
+
 ## What's here
 
 - `feature-slice-ultracode-prompt-template.md` — the methodology (evidence-first

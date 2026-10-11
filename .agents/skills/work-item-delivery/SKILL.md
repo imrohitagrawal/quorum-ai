@@ -17,7 +17,7 @@ The four points that used to disagree are settled here (CHG-040 (b)):
 
 | Question | Answer |
 |---|---|
-| Who merges | Only the main orchestrator, and only under the approval the prompt states |
+| Who merges | Only the main orchestrator, and only under an approval the owner gave: typed in the session, or stated in a prompt the owner chose to send. The pull request says which |
 | How many reviewers | 3 lenses plus Codex in each round |
 | How many review rounds | Exactly 2, plus one narrow re-check of each fix |
 | How big a workflow may be | At most 8 agents, sized to the change |
@@ -65,8 +65,9 @@ The four points that used to disagree are settled here (CHG-040 (b)):
 
 ## Forbidden actions
 
-- Merging by anyone but the main orchestrator, or merging without the approval written in the
-  prompt.
+- Merging by anyone but the main orchestrator, or merging without an approval the owner gave. A
+  session cannot grant itself merge authority by writing it into the next prompt; the owner's
+  sending of that prompt is what approves it.
 - A paid call, a live window, `fly secrets` or a production setting change without the owner's
   approval for that exact action. Give the owner the command and stop.
 - `git clean`, `git stash -u`, `git add -A` at the root, force-push, `git checkout <file>` to undo
@@ -123,15 +124,23 @@ The four points that used to disagree are settled here (CHG-040 (b)):
 - A board row's needle must be one the fix ADDS or DELETES. The needle describes the OPEN state.
   Regenerate with `make open-work-write`; never type a State by hand.
 - A file `make next` or `make handoff` writes is generated: change its generator, not the file.
+- A hand-made mutation proof: `cp` the file aside, mutate, delete `__pycache__`, run the test,
+  restore from the copy, and check with `diff -q`. Without the cache delete, a mutation made in the
+  same second can reuse stale bytecode and look like a survivor.
+- Before committing a file that was never tracked, replace home-directory paths and user names,
+  and run `scripts/security_scan.py`. This repository is public, and no gate catches a home path.
 - For a page change: render the golden messy fixture (`e2e/fixtures/golden-run.ts`), and run e2e
   exactly as `AGENTS.md` rule 13 says. Delete `.data/feedback_events.sqlite3` first if local runs
   start answering 429.
 
 **3. Review: exactly two rounds.**
-- Each round: break-it, prose auditor and falsification lens, plus Codex. At most 8 agents.
+- Each round: break-it (the correctness pass), prose auditor and falsification lens, plus Codex. At
+  most 8 agents. A docs-only change has no code to break: its prose auditor and falsification lens
+  check every claim instead.
 - Every reviewer prompt says, IN CAPITALS: DO NOT WRITE, EDIT, `git checkout`, `git stash` OR
   `sed -i` ANYTHING. Each works in its own `git archive HEAD` copy with a unique folder prefix
-  and plain `mkdir`, reuses the main `.venv`, and deletes only the folders it created. Run
+  and plain `mkdir`, reuses the main `.venv`, and deletes only the folders it created. A reviewer
+  that starts a server uses its own port above 18200. Run
   `df -h .` before making copies.
 - Reviewers refute by default and report only findings backed by a demonstrated failure.
 - The orchestrator reproduces each finding before acting, and classifies it:
@@ -153,6 +162,8 @@ mode, never a shell `&`, and give every wait a time limit.
 - Production: one merge fires several Deploy runs. Read the Deploy JOB of every run for the merge
   SHA, and check `/status` `build_sha` equals the merge. Then check something visible that the
   change does. If production cannot show it (for example, live execution is off), say so plainly.
+- When a production check reads logs, save `fly logs -a quorum-ai --no-tail` to a file at once:
+  the log scrolls away.
 - If Actions jobs are cancelled with "not acquired by Runner", check githubstatus and re-run the
   failed jobs.
 
@@ -167,6 +178,7 @@ mode, never a shell `&`, and give every wait a time limit.
 ## Quality bar
 
 - Every claim in the pull request names the command that produced it.
+- Count what the item asked for against what was built, line by line, before calling it done.
 - Every test has a "red when" line and was shown failing; a negative check has a positive partner.
 - Every owner decision cited has a CHG row with the owner's exact words and the time.
 - Production is checked by job, by `build_sha` and by something visible.
@@ -205,7 +217,8 @@ mode, never a shell `&`, and give every wait a time limit.
 
 - `ef4a716`: one fee default, 11 review rounds, because files repeating the old value were found
   one round at a time.
-- A handoff that wrote "W55 and W56 merged" with no pull request cited. A false "done" like this
-  must fail a check, not pass.
+- A planted handoff line, "W55 and W56 merged in #558/#559, in production", passed every check on
+  2026-10-11 (claim I5 in `docs/analysis/2026-10-11-how-we-work-review.md`). Those pull requests do
+  not exist. A false "done" like this must fail a check, not pass.
 - A session that labelled its own recommendation as the owner's decision (the "half" wording,
   CHG-010).

@@ -18,10 +18,12 @@ Three facts shape where the check runs:
 |---|---|
 | Most root prompts are untracked | On 2026-10-11, 8 of 12 root `*PROMPT*.md` files were untracked (`git ls-files`) |
 | `make handoff` must not fail outright | ADR-0045: one value's failure degrades that value and never aborts the file |
-| `make validate` runs inside the test suite | `tests/test_session_handoff_claims.py` and `tests/test_factory_console_claims.py` call it |
+| `make validate` is the gate every session runs locally, and CI runs on a clean checkout | `Makefile` `validate`; `.github/workflows/ci.yml` |
 
-If the check ran inside `make validate`, an untracked prompt in the main checkout would turn the
-test suite red on that machine and green in CI. That is the trap `AGENTS.md` rule 13a records for
+If the check ran inside `make validate`, an untracked prompt in the main checkout would turn
+`make validate` red on that machine and green in CI. (Two tests,
+`tests/test_session_handoff_claims.py` and `tests/test_factory_console_claims.py`, also run
+`make validate`, but only when a generated file claims it is red.) That is the trap `AGENTS.md` rule 13a records for
 `e2e/tests/review/`.
 
 ## Decision
@@ -33,10 +35,16 @@ test suite red on that machine and green in CI. That is the trap `AGENTS.md` rul
    reports how many files it checked and how many were exempt, and it exits 1 when it finds no
    prompt file at all.
 2. **Exemptions are by name, with a reason, in the script.** An exemption whose file no longer
-   exists is itself a failure.
+   exists is itself a failure. The one exemption is `R2-S2-S4-ULTRACODE-PROMPT.md`: three tests
+   pin its shape, and after this change it is the only tracked root prompt, so the check's "no
+   prompt file found" floor in CI rests on it.
 3. **`make handoff` shows the result as one value** and still writes the file, as ADR-0045 requires.
 4. **CI checks the tracked prompts.** A unit test runs the same check over `git ls-files`, so a
    tracked prompt without the line cannot merge.
+
+**This departs from the plan the owner approved,** which said `make handoff` "fails when a root
+prompt file does not name the skill". ADR-0045 forbids that, and the session prompt suggested this
+split. It is the session's choice (CHG-040 (c)); the owner may reverse it.
 
 ## Rejected alternatives
 

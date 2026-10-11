@@ -471,12 +471,14 @@ is the rule only.
       across four `main` SHAs). The workaround is still safe but no longer
       required. Recorded with its date and tool version because the original
       was written as a timeless absolute, so nobody re-checked it for a week.
-    - **A merge produces several runs; all but one are `cancelled` by
-      concurrency dedupe** (three for `c894f78` on 2026-10-11: two cancelled,
-      one success). A
-      wait-loop keyed on "any completed run for this SHA" fires on the cancelled
-      one and reports done while production is still on the old build. Resolve
-      the **newest run by `createdAt`**, then read its Deploy **job**.
+    - **A merge produces several Deploy runs** — 3 to 8 on the five merges
+      before 2026-10-11 (`gh run list --commit <sha> --workflow 'Deploy to
+      Fly.io'`). The extras are `cancelled` by concurrency dedupe or, later,
+      `skipped`; on four of the five exactly one succeeded, and on `dbf314e`
+      none did. A wait-loop keyed on "any completed run for this SHA" fires on
+      a cancelled one and reports done while production is still on the old
+      build. Read the Deploy **job** of every run for the merge SHA, and look
+      for the one that concluded `success` — not merely the newest run.
 19. **Close more than you open.** If an item is bigger than it looked, say so and
     stop — do not file and continue.
 20. **A pull request opens with one line saying why this item outranks the top of

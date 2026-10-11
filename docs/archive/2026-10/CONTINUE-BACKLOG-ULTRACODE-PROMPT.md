@@ -1,4 +1,4 @@
-> **Archived 2026-10-11** (CHG-040 (c)). The process now lives in `.agents/skills/work-item-delivery/SKILL.md`; this file is history and is not to be run. Home-directory paths were replaced with `~`, and citations of files that moved or never existed were rewritten so they resolve.
+> **Archived 2026-10-11** (CHG-040 (c)). The process now lives in `.agents/skills/work-item-delivery/SKILL.md`; this file is history and is not to be run. Edits: home-directory paths replaced with `~`; the user name in a transcript folder replaced with `<this repo's project folder>`; 2 citations of a handoff since archived now name its archive path; 1 example path written as `<dir>/notes.jsonl`.
 
 # ULTRACODE — work the backlog autonomously, and ask me everything you need up front
 
@@ -34,7 +34,7 @@ git status --porcelain     # expect only CONTINUE-*.md prompts (untracked)
 git worktree list          # expect only quorum-ai (main)
 git log --oneline -1       # expect 097a223 or later
 curl -s https://quorum.stackclimb.com/status | jq '{build_sha,live_execution,peer_critique_enabled,peer_critique_in_effect}'
-ls -lt ~/.claude/projects/-~-Projects-quorum-ai/*.jsonl | head -3
+ls -lt ~/.claude/projects/<this repo's project folder>/*.jsonl | head -3
 ```
 
 `live_execution` must be **false**. The last command is the concurrent-session
@@ -473,7 +473,7 @@ Before the session ends:
 1. Write the narrative handoff at
    `docs/analysis/<today>-session-handoff.md`. **If a file for today already
    exists, write `-2.md` or update it in place — never overwrite it.**
-   (`docs/archive/2026-09/2026-09-21-session-handoff.md` exists; archive it only once
+   (the 2026-09-21 narrative handoff, then in `docs/analysis/` and since archived as `docs/archive/2026-09/2026-09-21-session-handoff.md`, exists; archive it only once
    yours is written.)
 2. `make next`, `make skill-route`, `make handoff`.
 3. List, explicitly: every item merged and verified in production; every item

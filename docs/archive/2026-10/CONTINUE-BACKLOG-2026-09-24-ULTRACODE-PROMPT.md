@@ -1,4 +1,4 @@
-> **Archived 2026-10-11** (CHG-040 (c)). The process now lives in `.agents/skills/work-item-delivery/SKILL.md`; this file is history and is not to be run. Home-directory paths were replaced with `~`.
+> **Archived 2026-10-11** (CHG-040 (c)). The process now lives in `.agents/skills/work-item-delivery/SKILL.md`; this file is history and is not to be run. Edits: home-directory paths replaced with `~`, and the user name in a transcript folder replaced with `<this repo's project folder>`.
 
 # ULTRACODE — the 2026-09-24 backlog: eight packages in a fixed order
 
@@ -33,7 +33,7 @@ git status --porcelain     # expect only CONTINUE-*.md prompts (untracked)
 git worktree list          # expect quorum-ai (main) + quorum-ai-wt-268 (parked)
 git log --oneline -1       # expect 42cd965 or later
 curl -s https://quorum.stackclimb.com/status | jq '{build_sha,live_execution,peer_critique_enabled,peer_critique_in_effect}'
-ls -lt ~/.claude/projects/-~-Projects-quorum-ai/*.jsonl | head -3
+ls -lt ~/.claude/projects/<this repo's project folder>/*.jsonl | head -3
 ```
 
 `live_execution` must be false. A transcript written in the last few minutes
