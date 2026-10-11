@@ -45,7 +45,7 @@ sources disagreed with each other:
    - `docs/factory-status.md` gets a "not maintained, do not update" banner. No script reads it,
      but 20 skill checklists tell a session to update it; archiving it would send them to a
      missing file, and a session could recreate it;
-   - `docs/116-signoff-record.md` moves to `docs/archive/2026-10/`. Nothing reads it, and the two
+   - `116-signoff-record.md` moves to `docs/archive/2026-10/116-signoff-record.md`. Nothing reads it, and the two
      skill files and three documents that name it now point at `docs/19-change-control-log.md`.
 
 ## Rejected alternatives
