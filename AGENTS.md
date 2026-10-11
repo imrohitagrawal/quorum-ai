@@ -14,6 +14,23 @@ rises, and earlier instructions are measurably better followed than later ones
 each one lives in `docs/evidence/` and `docs/103-incident-learnings.md`; this list
 is the rule only.
 
+**Process**
+- **Before any work item, read `.agents/skills/work-item-delivery/SKILL.md`.**
+  It is the one home of how an item is delivered: the roles, the two review
+  rounds, who merges, the production checks and cleanup (ADR-0159). A handoff
+  prompt names only the items, the decisions to read and the approvals, plus a
+  `**Process:**` line naming that file; `make prompt-check` refuses a root
+  prompt without it (ADR-0160).
+- **Decisions:** read `docs/19-change-control-log.md` before asking the owner
+  anything, and record each owner decision there as a CHG row in the owner's
+  exact words.
+- **Board state comes from needles.** A row's state in `docs/65-open-work.md` is
+  derived from its evidence needle by `scripts/check_open_work.py`; regenerate
+  it, never type it.
+- **Before choosing work, check for other live sessions** (transcript
+  last-write times, `ps`, `git worktree list`), and **show `df -h .` before and
+  after cleanup.**
+
 **Truth**
 1. **Verify by executing, never by reading.** State the command and what it
    printed, or say UNVERIFIED out loud. **This includes claims about WHERE
@@ -454,7 +471,9 @@ is the rule only.
       across four `main` SHAs). The workaround is still safe but no longer
       required. Recorded with its date and tool version because the original
       was written as a timeless absolute, so nobody re-checked it for a week.
-    - **A merge produces two runs; one is `cancelled` by concurrency dedupe.** A
+    - **A merge produces several runs; all but one are `cancelled` by
+      concurrency dedupe** (three for `c894f78` on 2026-10-11: two cancelled,
+      one success). A
       wait-loop keyed on "any completed run for this SHA" fires on the cancelled
       one and reports done while production is still on the old build. Resolve
       the **newest run by `createdAt`**, then read its Deploy **job**.
@@ -686,6 +705,10 @@ make skill-route
 make next
 ```
 
+For one work item, route by what it changes instead:
+`make skill-route ITEM=<board row id>` or `make skill-route DIFF=origin/main`
+(ADR-0159). The output is a checklist of roles, checks and owner decisions.
+
 Use the recommended driver skill as the single writer for the next missing artifact. Use reviewer skills only to critique and request changes. If skills conflict, apply this precedence: safety/security/privacy/compliance, explicit user approval within policy, approved Jira/Confluence source of truth, local factory policies, ADRs, driver skill output, reviewer findings, external skill suggestions.
 
 ORBI-specific rules are not global defaults. Activate them only through `make apply-orbi-profile` or explicit user instruction, then read `AGENTS.ORBI.md`.
@@ -741,12 +764,12 @@ to different places:
 | Kind | Example | Home |
 |---|---|---|
 | Session **output** — a record of what happened | `HANDOFF-*`, `*-RESULT.md`, dated triage/analysis docs | `docs/archive/` (or `docs/analysis/` if it stays actively referenced) |
-| Executable **procedure** — text a future session runs | `*-ULTRACODE-PROMPT.md` | root, or `.agents/skills/` once generalised |
+| Executable **procedure** — text a future session runs | a root `*PROMPT*.md` with a `**Process:**` line; the process itself is `.agents/skills/work-item-delivery/SKILL.md` | root until its session has run, then `docs/archive/<month>/` |
 
 **The rule is "session output never accumulates at root," not "session
 artifacts never at root."** The blunt version would forbid
-`REPO-HOUSEKEEPING-ULTRACODE-PROMPT.md` itself — an executable procedure
-correctly kept at root — and a rule that forbids the thing you're holding
+the next session's prompt itself — an executable procedure correctly kept
+at root until it has run — and a rule that forbids the thing you're holding
 gets ignored rather than followed. If you're not sure which kind a file
 is, ask: would a future session **run** this, or does it only **read**
 this to see what a past session did? Running → procedure → root/skills.
