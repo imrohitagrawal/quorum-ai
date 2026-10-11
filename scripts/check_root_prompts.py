@@ -9,8 +9,8 @@ A root prompt is any ``.md`` file at the repository root whose name contains
 Visibility is decided by a CommonMark parser (markdown-it-py, which ADR-0029
 chose after hand-rolled block rules failed), not by line rules: two rounds of
 hand-written rules each let a code example or a comment through. The check
-reads the directory itself, so it sees untracked files too. It exits 1 on any problem, and also when it
-finds no prompt file at all.
+reads the directory itself, so it sees untracked files too. It exits 1 on any
+problem, and also when it finds no prompt file at all.
 """
 
 from __future__ import annotations
