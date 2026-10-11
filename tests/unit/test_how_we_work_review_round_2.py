@@ -74,6 +74,7 @@ _LINE = "**Process:** every item is built by `.agents/skills/work-item-delivery/
         f"# P\n\nIntro paragraph.\n\n    {_LINE}\n",
         f"# P\n\nIntro paragraph.\n\n\t{_LINE}\n",
         f"# P\n\n<!--\n{_LINE}\n-->\n",
+        f"# P\n\n## {_LINE}\n",
     ],
     ids=[
         "list-item-fence",
@@ -83,12 +84,14 @@ _LINE = "**Process:** every item is built by `.agents/skills/work-item-delivery/
         "indented-4",
         "indented-tab",
         "html-block-comment",
+        "heading-not-a-paragraph",
     ],
 )
 def test_the_process_line_in_code_or_a_comment_is_refused(text: str) -> None:
     # Red when: has_process_line() counts a line inside a fence (also a fence opened in a
     # list item, or one a shorter fence line does not close), an indented code block, an HTML
-    # block, or reads the skill path from an inline <!-- --> comment as visible text.
+    # block, reads the skill path from an inline <!-- --> comment as visible text, or counts
+    # an inline token that is not a paragraph's (the heading case: drop the paragraph_open test).
     assert _check().has_process_line(text) is False, text
 
 
@@ -377,7 +380,9 @@ def _untracked_route(tmp_path: Path, name: str, data: bytes) -> list[str]:
 
 
 def test_an_untracked_markdown_file_is_not_read_for_money(tmp_path: Path) -> None:
-    # Red when: _as_added() reads an untracked .md file's lines, so prose about fees routes money.
+    # Red when: an untracked .md file's lines reach the identifier match, which takes BOTH
+    # _as_added()'s ".md" skip and _changed_lines()'s Markdown skip being removed (either one
+    # alone still holds; measured by mutation).
     assert "money" not in _untracked_route(tmp_path / "md", "notes.md", b"fee = 1\n")
     # Positive partner: the same words in a small text file ARE read.
     assert "money" in _untracked_route(tmp_path / "txt", "notes.txt", b"fee = 1\n")
