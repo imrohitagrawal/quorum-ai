@@ -159,7 +159,7 @@ Session (`GET /v1/session`, CSRF token) · active run (`GET /v1/query-runs/activ
 Keep the repo's implemented scaffolding: skip link → `#main-content`, focusable main, `fieldset`/`legend` for model slots, polite live regions for run state/results/notices. All status colors pass AA on their papers (green on cream 5.7:1; white on green 6.5:1). Never color-alone: every state pairs color + label/icon. Warnings adjacent to the actions they gate. **The trust/evaluation surface (05b) is `role="group"`, never a `meter`/`progressbar`/`slider` role, and never carries `aria-valuenow`** (AC-044) — it communicates state through the disclosure and state-line text, not an ARIA value widget.
 
 ## Copy
-All warning/notice copy in the mocks follows `docs/33-content-design.md` (COPY-001…006) — treat that file as the copy source of truth. Product name: **Quorum** (no "-AI" suffix; `quorum-ai` for domains/repos). Tagline: "Four AI models, one sourced answer." Record in `docs/116-signoff-record.md`; `docs/91-product-naming.md` still holds placeholder names.
+All warning/notice copy in the mocks follows `docs/33-content-design.md` (COPY-001…006) — treat that file as the copy source of truth. Product name: **Quorum** (no "-AI" suffix; `quorum-ai` for domains/repos). Tagline: "Four AI models, one sourced answer." Record in `docs/19-change-control-log.md`; `docs/91-product-naming.md` still holds placeholder names.
 
 ## Assets
 No image assets. Logo is typographic: green rounded square + serif "Q" (Newsreader 700) + wordmark. Fonts: Newsreader, Geist, Geist Mono (Google Fonts).

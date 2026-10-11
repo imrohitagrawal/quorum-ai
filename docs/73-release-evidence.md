@@ -1,5 +1,7 @@
 # Release Evidence
 
+> **Not a current status.** This file records release evidence as written in June and July 2026, and it is not maintained. Current status has three homes, named in `docs/README.md`: delivery is the board (`docs/65-open-work.md`) with GitHub; product readiness is `docs/product-readiness.md`, generated from production; decisions are `docs/19-change-control-log.md` and `docs/adr/`.
+
 ## Release Readiness Status
 
 Decision: No-go for production release.

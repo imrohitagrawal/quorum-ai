@@ -220,6 +220,7 @@ mode, never a shell `&`, and give every wait a time limit.
   one round at a time.
 - A planted handoff line, "W55 and W56 merged in #558/#559, in production", passed every check on
   2026-10-11 (claim I5 in `docs/analysis/2026-10-11-how-we-work-review.md`). Neither pull
-  request existed that day. A false "done" like this must fail a check, not pass.
+  request had been opened when the claim was planted (#558 was opened later that day, for other
+  work). A false "done" like this must fail a check, not pass.
 - A session that labelled its own recommendation as the owner's decision (the "half" wording,
   CHG-010).
