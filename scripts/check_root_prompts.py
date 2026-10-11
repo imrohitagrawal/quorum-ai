@@ -28,8 +28,9 @@ EXEMPT: dict[str, str] = {
     ),
 }
 
-_PROCESS_LINE = re.compile(r"^\s*\*\*Process:\*\*.*\.agents/skills/work-item-delivery/SKILL\.md")
-_FENCE = re.compile(r"^\s{0,3}(`{3,}|~{3,})")
+# At most 3 leading spaces: 4 spaces or a tab start an indented code block.
+_PROCESS_LINE = re.compile(r"^ {0,3}\*\*Process:\*\*.*\.agents/skills/work-item-delivery/SKILL\.md")
+_FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
 
 
 def find_prompt_files(root: Path) -> list[Path]:
@@ -42,19 +43,29 @@ def find_prompt_files(root: Path) -> list[Path]:
 
 
 def has_process_line(text: str) -> bool:
-    """True when a ``**Process:**`` line naming the skill sits outside every fence."""
+    """True when a ``**Process:**`` line naming the skill sits outside every
+    fence, every indented code block and every ``<!-- -->`` comment. A fence
+    closes only on a line of fence characters (as long as the opener's, or
+    longer) and whitespace."""
     fence = ""
+    in_comment = False
     for line in text.splitlines():
+        if in_comment:
+            in_comment = "-->" not in line
+            continue
         match = _FENCE.match(line)
         if match:
-            marker = match.group(1)
+            marker, rest = match.groups()
             if not fence:
                 fence = marker
-            elif marker[0] == fence[0] and len(marker) >= len(fence):
+            elif marker[0] == fence[0] and len(marker) >= len(fence) and not rest.strip():
                 fence = ""
             continue
-        if not fence and _PROCESS_LINE.match(line):
+        if fence:
+            continue
+        if _PROCESS_LINE.match(line):
             return True
+        in_comment = "<!--" in line and "-->" not in line.split("<!--", 1)[1]
     return False
 
 
@@ -80,14 +91,19 @@ def problems(root: Path, exempt: dict[str, str]) -> list[str]:
     return found
 
 
+def counts(root: Path, exempt: dict[str, str]) -> str:
+    """The "checked N, exempt M" line: prompt files read, and prompt files skipped."""
+    files = find_prompt_files(root) if root.is_dir() else []
+    skipped = sum(1 for p in files if p.name in exempt)
+    return f"checked {len(files) - skipped}, exempt {skipped}"
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--root", type=Path, default=ROOT, help="directory to check")
     root = parser.parse_args(argv).root
     found = problems(root, EXEMPT)
-    files = find_prompt_files(root) if root.is_dir() else []
-    exempt = sum(1 for p in files if p.name in EXEMPT)
-    print(f"Root prompt check: checked {len(files) - exempt}, exempt {exempt}")
+    print(f"Root prompt check: {counts(root, EXEMPT)}")
     for message in found:
         print(f"  - {message}")
     print("FAILED" if found else "PASSED")

@@ -493,7 +493,7 @@
           "budget",
           "allowance"
         ],
-        "identifiers": "(?i)(?<![a-z0-9])(?:usd|cost|fee|spend|price|pricing|budget|charge|ceiling|allowance|quota)(?:s|es|d|ed|ing)?(?![a-z0-9])|(?-i:(?<=[a-z0-9])(?:Usd|USD|Cost|Fee|Spend|Price|Pricing|Budget|Charge|Ceiling|Allowance|Quota)s?(?![a-z0-9]))|(?-i:(?<![A-Za-z0-9])(?:usd|cost|fee|spend|price|pricing|budget|charge|ceiling|allowance|quota)s?(?=[A-Z]))",
+        "identifiers": "(?i)(?<![a-z0-9])(?:fees?|bill(?:s|ed|ing)?|(?:usd|cost|spend|price|pricing|budget|charge|allowance|quota)(?:s|es|d|ed|ing)?)(?![a-z0-9])|(?-i:(?<=[a-z0-9])(?:Usd|USD|Cost|Fee|Spend|Price|Pricing|Budget|Charge|Allowance|Quota|Bill|Billed|Billing)s?(?![a-z0-9]))|(?-i:(?<![A-Za-z0-9])(?:usd|cost|fee|spend|price|pricing|budget|charge|allowance|quota|bill|billed|billing)s?(?=[A-Z]))",
         "roles": [
           "failure-modes-first"
         ],
@@ -529,7 +529,7 @@
           "src/product_app/templates/invite*.html",
           "src/product_app/static/invite.js"
         ],
-        "identifiers": "(?i)(?<![a-z0-9])(?:csrf|oauth|google_sub)",
+        "identifiers": "(?i)(?<![a-z0-9])(?:csrf|oauth|google_sub|(?:google|sign(?:s|ed)?[_ -]?(?:in|out)|session|cookie|invite|account)(?:s|d)?(?![a-z0-9]))",
         "roles": [
           "failure-modes-first",
           "user-journey-tester"
@@ -623,7 +623,7 @@
           "src/product_app/store_reconnect.py",
           "src/product_app/request_id.py"
         ],
-        "identifiers": "(?i)(?<![a-z0-9])(?:sentry|retention|purge|client_ip|personal_data)",
+        "identifiers": "(?i)(?<![a-z0-9])(?:sentry|retention|purge|client_ip|ip_address|personal|history|histories|keep[_ -]days|days[_ -]kept|delet(?:e|ing|ion))",
         "roles": [
           "failure-modes-first"
         ],

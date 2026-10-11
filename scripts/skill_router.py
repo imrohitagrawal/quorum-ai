@@ -366,7 +366,24 @@ def paths_for_diff(base: str, repo: Path | None = None) -> tuple[list[str], str]
     changed = _git(repo, "diff", "--name-only", "--no-renames", "-z", merge_base).split("\0")
     untracked = _git(repo, "ls-files", "--others", "--exclude-standard", "-z").split("\0")
     paths = _unique([p for p in changed + untracked if p])
-    return paths, _git(repo, "diff", "--no-renames", merge_base)
+    added = "".join(_as_added(repo, p) for p in untracked if p)
+    return paths, _git(repo, "diff", "--no-renames", merge_base) + added
+
+
+def _as_added(repo: Path, rel: str) -> str:
+    """An untracked file as a diff that adds every line, so its content is read
+    like a tracked change. A Markdown, binary or over-256-KiB file gives ""."""
+    path = repo / rel
+    if rel.lower().endswith(".md") or not path.is_file() or path.stat().st_size > 256 * 1024:
+        return ""
+    try:
+        text = path.read_bytes().decode("utf-8")
+    except UnicodeDecodeError:
+        return ""
+    if "\0" in text:
+        return ""
+    body = "".join(f"+{line}\n" for line in text.splitlines())
+    return f"diff --git a/{rel} b/{rel}\n--- /dev/null\n+++ b/{rel}\n@@ -0,0 +1 @@\n{body}"
 
 
 def format_work_route(source: str, paths: list[str], r: dict[str, Any]) -> str:
@@ -394,16 +411,29 @@ def main(argv: list[str] | None = None) -> int:
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--item", help="route the docs/65-open-work.md row with this id")
     group.add_argument("--diff", metavar="BASE", help="route the change since BASE")
+    # Tests only: read this file instead of docs/65-open-work.md.
+    parser.add_argument("--board", type=Path, help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     if args.item:
+        board = args.board.read_text(encoding="utf-8") if args.board else None
         try:
-            paths, row = paths_for_item(args.item)
+            paths, row = paths_for_item(args.item, board_text=board)
         except LookupError as exc:
             print(f"skill_router: {exc}. Check the id.", file=sys.stderr)
             return 1
         # The row's prose is read as added lines, so "spend key" routes money.
         rows_as_added = "".join(f"+{x}\n" for x in row.splitlines())
-        print(format_work_route(f"Item: {args.item}", paths, route_work(paths, rows_as_added)))
+        result = route_work(paths, rows_as_added)
+        if not result["classes"]:
+            print(
+                f"NOT ROUTED: neither the paths nor the words of row {args.item} match any "
+                f"class (paths: {', '.join(paths) or 'none'}). Route the change with "
+                "`make skill-route DIFF=origin/main` once it exists, or add a backticked "
+                f"path to the row in {BOARD}.",
+                file=sys.stderr,
+            )
+            return 1
+        print(format_work_route(f"Item: {args.item}", paths, result))
         return 0
     if args.diff:
         try:

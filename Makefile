@@ -1139,7 +1139,9 @@ session-clean: check-python
 # `make skill-route DIFF=origin/main` routes the change since that base
 # (ADR-0159): the roles, checks, reviewer skills and owner decisions it needs.
 skill-route: check-python
-ifneq ($(strip $(ITEM)),)
+ifneq ($(and $(strip $(ITEM)),$(strip $(DIFF))),)
+	@echo "ERROR: set ITEM or DIFF, not both (ITEM=$(ITEM) DIFF=$(DIFF))."; exit 2
+else ifneq ($(strip $(ITEM)),)
 	$(PYTHON) scripts/skill_router.py --item "$(ITEM)"
 else ifneq ($(strip $(DIFF)),)
 	$(PYTHON) scripts/skill_router.py --diff "$(DIFF)"
