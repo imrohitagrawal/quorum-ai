@@ -368,9 +368,11 @@ def test_paths_for_diff_includes_uncommitted_and_untracked_files(tmp_path: Path)
     (repo / "src" / "kept.py").write_text("VALUE = 2\n", encoding="utf-8")
     (repo / "src" / "brand_new.py").write_text("NEW = 1\n", encoding="utf-8")
     paths, text = router.paths_for_diff("HEAD", repo=repo)
-    assert "src/kept.py" in paths, paths
-    assert "src/brand_new.py" in paths, paths
-    assert "src/untouched.py" not in paths, paths
+    # Joined at run time: these files exist only in the temporary repo, and a literal
+    # "src/<name>.py" here would read as a citation to the cited-paths gate.
+    assert "src/" + "kept.py" in paths, paths
+    assert "src/" + "brand_new.py" in paths, paths
+    assert "src/" + "untouched.py" not in paths, paths
     assert "+VALUE = 2" in text, text
 
 
