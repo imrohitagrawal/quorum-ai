@@ -1,5 +1,7 @@
 # Feature Flag And Rollout Plan
 
+> **Not a current status.** This plan is a record of June 2026 and is not maintained; the flags it lists were never built under these names. Which switches production has on or off is in `docs/product-readiness.md`. Current status has three homes, named in `docs/README.md`: delivery is the board (`docs/65-open-work.md`) with GitHub; product readiness is `docs/product-readiness.md`, generated from production; decisions are `docs/19-change-control-log.md` and `docs/adr/`.
+
 ## Scope
 
 Feature flags protect provider spend, user data, AI safety, and public release readiness during Release 1 implementation. Defaults are conservative: user-facing provider-consuming features remain off until their slice evidence passes.

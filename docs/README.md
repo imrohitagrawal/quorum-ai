@@ -48,8 +48,8 @@ session be able to find the right file without guessing.
   June and July 2026, not maintained, and each says so at the top. The Status
   column of `docs/17` and the evidence columns of `docs/18` are the same
   (ADR-0161).
-- `docs/90-production-feedback-loop.md` and `feedback/STATUS.md` are June 2026
-  records with the same banner. The study and publishing drafts (`docs/study/`,
+- `docs/64-feature-flag-plan.md`, `docs/90-production-feedback-loop.md` and
+  `feedback/STATUS.md` are June 2026 records with the same banner. The study and publishing drafts (`docs/study/`,
   `docs/96-` to `docs/100-`) quote release statements from June 2026; they are
   not a status either.
 

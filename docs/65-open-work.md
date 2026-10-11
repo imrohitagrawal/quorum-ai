@@ -213,8 +213,8 @@ read is carried across faithfully but not fixed — settling that shape needs a
 live `:online` call, which is spend.
 
 **W2 — peer critique (#290, closure decided 2026-09-15). BUILT, shipping DEFAULT-OFF in
-`config.py`, switched ON in production by `fly.toml` from 2026-09-03, and
-coupled to the live window since 2026-09-24 (#458, ADR-0122).** ADR-0093's
+`config.py`, switched ON in production by `fly.toml` from 2026-09-03 until
+2026-09-24, when it was coupled to the live window and turned off (#458, ADR-0122).** ADR-0093's
 shape is implemented in full (decisions 1, 1a, 1b, 2, 3, 4, 5) behind
 `settings.peer_critique_enabled`, which defaults to `false`. ADR-0095 records
 why the flag exists and it is not caution: `_estimate_bound_usd` calls itself a
