@@ -25,7 +25,10 @@ import sys
 from pathlib import Path
 from types import ModuleType
 
-_ROOT = Path(__file__).resolve().parents[2]
+from tests.repo_root import find_repo_root
+from tests.subprocess_env import env_without_coverage
+
+_ROOT = find_repo_root(Path(__file__))
 _ROUTER_PATH = _ROOT / "scripts" / "skill_router.py"
 _SKILLS = _ROOT / ".agents" / "skills"
 
@@ -315,6 +318,7 @@ def test_cli_item_with_an_unknown_id_exits_1_with_a_message() -> None:
     # Red when: `skill_router.py --item W5S` exits 0, or exits 1 without a message on stderr.
     proc = subprocess.run(
         [sys.executable, str(_ROUTER_PATH), "--item", "W5S"],
+        env=env_without_coverage(),
         cwd=_ROOT,
         capture_output=True,
         text=True,
@@ -383,6 +387,7 @@ def test_cli_diff_with_no_changed_paths_exits_1(tmp_path: Path) -> None:
     script = repo / "scripts" / "skill_router.py"
     proc = subprocess.run(
         [sys.executable, str(script), "--diff", "HEAD"],
+        env=env_without_coverage(),
         cwd=repo,
         capture_output=True,
         text=True,
@@ -395,6 +400,7 @@ def test_cli_diff_with_no_changed_paths_exits_1(tmp_path: Path) -> None:
     (repo / "src" / "costs.py").write_text("DAILY_CAP_USD = 1\n", encoding="utf-8")
     proc = subprocess.run(
         [sys.executable, str(script), "--diff", "HEAD"],
+        env=env_without_coverage(),
         cwd=repo,
         capture_output=True,
         text=True,
@@ -413,6 +419,7 @@ def test_no_arguments_still_prints_the_old_route() -> None:
     # (the phase and driver lines that docs/00 and the mechanical handoff are built from).
     proc = subprocess.run(
         [sys.executable, str(_ROUTER_PATH)],
+        env=env_without_coverage(),
         cwd=_ROOT,
         capture_output=True,
         text=True,

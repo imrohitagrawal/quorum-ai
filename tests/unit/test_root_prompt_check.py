@@ -17,8 +17,9 @@ from pathlib import Path
 from types import ModuleType
 
 import pytest
+from tests.repo_root import find_repo_root
 
-_ROOT = Path(__file__).resolve().parents[2]
+_ROOT = find_repo_root(Path(__file__))
 _SCRIPT = _ROOT / "scripts" / "check_root_prompts.py"
 
 _GOOD = (

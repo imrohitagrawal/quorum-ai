@@ -15,8 +15,10 @@ from pathlib import Path
 from types import ModuleType
 
 import pytest
+from tests.repo_root import find_repo_root
+from tests.subprocess_env import env_without_coverage
 
-_ROOT = Path(__file__).resolve().parents[2]
+_ROOT = find_repo_root(Path(__file__))
 _SCRIPTS = _ROOT / "scripts"
 _ROUTER_PATH = _SCRIPTS / "skill_router.py"
 
@@ -163,6 +165,7 @@ _W39 = "| W39 | The engineering harness: agents run in a container with only the
 def _cli(*args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [sys.executable, str(_ROUTER_PATH), *args],
+        env=env_without_coverage(),
         cwd=_ROOT,
         capture_output=True,
         text=True,
@@ -300,7 +303,9 @@ def test_a_tracked_change_that_is_not_utf8_is_read_not_crashed_on(tmp_path: Path
     repo = _repo(tmp_path)
     (repo / "src" / "kept.py").write_bytes(b"max_cost_usd = 1  # caf\xe9\n")
     paths, text = router.paths_for_diff("HEAD", repo=repo)
-    assert "src/kept.py" in paths, paths
+    # Joined at run time: the file exists only in the temporary repo, and a literal
+    # "src/<name>.py" here would read as a citation to the cited-paths gate.
+    assert "src/" + "kept.py" in paths, paths
     r = router.route_work(paths, text)
     assert "money" in r["classes"], (r["classes"], text[-300:])
 

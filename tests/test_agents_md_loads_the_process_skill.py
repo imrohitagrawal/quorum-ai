@@ -11,7 +11,9 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-_ROOT = Path(__file__).resolve().parents[1]
+from tests.repo_root import find_repo_root
+
+_ROOT = find_repo_root(Path(__file__))
 _AGENTS = _ROOT / "AGENTS.md"
 _SKILL = _ROOT / ".agents" / "skills" / "work-item-delivery" / "SKILL.md"
 

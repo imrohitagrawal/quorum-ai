@@ -18,8 +18,10 @@ from pathlib import Path
 from types import ModuleType
 
 import pytest
+from tests.repo_root import find_repo_root
+from tests.subprocess_env import env_without_coverage
 
-_ROOT = Path(__file__).resolve().parents[2]
+_ROOT = find_repo_root(Path(__file__))
 _SCRIPTS = _ROOT / "scripts"
 _ROUTER_PATH = _SCRIPTS / "skill_router.py"
 _SKILLS = _ROOT / ".agents" / "skills"
@@ -100,6 +102,7 @@ def test_real_rows_with_no_path_route_by_their_words(item_id: str, row: str, exp
 def _cli(*args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [sys.executable, str(_ROUTER_PATH), *args],
+        env=env_without_coverage(),
         cwd=_ROOT,
         capture_output=True,
         text=True,

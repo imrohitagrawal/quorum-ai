@@ -15,7 +15,10 @@ import sys
 from pathlib import Path
 from types import ModuleType
 
-_ROOT = Path(__file__).resolve().parents[2]
+from tests.repo_root import find_repo_root
+from tests.subprocess_env import env_without_coverage
+
+_ROOT = find_repo_root(Path(__file__))
 _SCRIPT = _ROOT / "scripts" / "skill_router.py"
 
 # The real rows, copied from docs/65-open-work.md on 2026-10-11.
@@ -55,6 +58,7 @@ def test_the_cli_routes_w17_and_exits_0(tmp_path: Path) -> None:
     board.write_text(_BOARD_HEAD + _W17 + "\n", encoding="utf-8")
     result = subprocess.run(
         [sys.executable, str(_SCRIPT), "--item", "W17", "--board", str(board)],
+        env=env_without_coverage(),
         capture_output=True,
         text=True,
         check=False,
