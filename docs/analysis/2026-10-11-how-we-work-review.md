@@ -253,7 +253,7 @@ second researcher.
 - **From the owner's other projects:**
   - `citevyn` sizes review by blast radius, T0 to T3 (`citevyn/AGENTS.md:93-107`);
   - `aushraya-ai` gives each skill route a verification column and keeps an append-only log of
-    skills actually used (`docs/skill-plan.md`, `docs/skill-execution.md`);
+    skills actually used (its own `skill-plan.md` and `skill-execution.md`, in that repository's docs folder);
   - `agent-program-supervisor` (work in progress; read from a stale local branch) designs bounded
     correction waves with a named stop state (`ARCHITECTURE_REDESIGN_REQUIRED`). That is an idea to
     test, not a proven practice.
