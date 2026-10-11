@@ -21,7 +21,7 @@ defence and the test that must first be shown failing.
 
 | # | Failure | Defence | Test |
 |---|---|---|---|
-| P1 | **The skill is named only in passing,** for example "do not use work-item-delivery", or inside a code block. A substring check passes (`AGENTS.md` rule 8). | Require one line of a fixed form, outside code blocks: `**Process:** … .agents/skills/work-item-delivery/SKILL.md`. | A prompt that names the path only in prose, or only in a fenced block, is refused. |
+| P1 | **The skill is named only in passing,** for example "do not use work-item-delivery", or inside a code block. A substring check passes (`AGENTS.md` rule 8). | Parse the file as CommonMark and require a paragraph that opens with bold **Process:** and whose visible text names `.agents/skills/work-item-delivery/SKILL.md`. | A prompt that names the path only in prose, or only in a fenced block, is refused. |
 | P2 | **Untracked prompts are missed.** `git ls-files` sees only tracked files, and most prompts at the root are untracked. | Read the root directory itself. | An untracked prompt in a temporary root is refused. |
 | P3 | **The name pattern is too narrow.** `*-ULTRACODE-PROMPT.md` misses `CONTINUE-W55-W56-PROMPT.md`. | Match any root `.md` whose name contains `PROMPT`, in any case. | A file named `x-prompt.md` is checked. |
 | P4 | **An exemption outlives its file.** | An exempt name that no longer exists fails the check. | A test. |

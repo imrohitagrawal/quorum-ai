@@ -44,6 +44,9 @@ two gates that exist nowhere in the repository: `no-placeholder-gate` and `relea
    its roles, checks, reviewer skills and owner decisions. The classes are money, sign-in and
    session, interface, AI output and judge, CI, privacy and retention, settings, and docs only.
    A class matches by path, or by an identifier in the changed lines. The output is a checklist.
+   In item mode the row's words are read as changed lines, and a docs path in the row is a
+   citation, not the change: the item is docs-only only when its words match no class. An item
+   that matches nothing at all prints "NOT ROUTED" and exits 1.
 4. **The old route's code is not touched.** `scripts/factory_next.py` writes
    `docs/00-factory-console.md` from `route()`, and `scripts/session_handoff.py` prints it. The new
    behaviour is a new function. The two dead gate names are removed, and `skill-onboarding-check`

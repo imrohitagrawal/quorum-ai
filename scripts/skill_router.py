@@ -310,6 +310,10 @@ def route_work(paths: list[str], diff_text: str = "", *, docs_only: bool = True)
                 matched.append(cls)
         # A docs path next to code is read by the prose auditor; it is not "unclassified".
         unclassified = [p for p in paths if p not in covered and not _is_docs(p)]
+        if not matched and paths and all(_is_docs(p) for p in paths):
+            # Item mode: a row's words come first; a row that cites only docs and
+            # whose words match no class is docs work.
+            matched = [c for c in classes if c["id"] == "docs-only"]
     is_code = any(c["id"] != "docs-only" for c in matched)
     roles = cfg["base_roles"] + (cfg["code_roles"] if is_code else [])
     return {
