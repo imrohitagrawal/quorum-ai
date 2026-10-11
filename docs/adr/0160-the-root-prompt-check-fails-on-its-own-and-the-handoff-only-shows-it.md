@@ -30,8 +30,9 @@ If the check ran inside `make validate`, an untracked prompt in the main checkou
 
 1. **`make prompt-check`** (`scripts/check_root_prompts.py`) reads the root directory itself, so it
    sees tracked and untracked files. It checks every root `.md` whose name contains `PROMPT`, in any
-   case. Each must carry, outside code blocks, a line of the form
-   `**Process:** … .agents/skills/work-item-delivery/SKILL.md`. It exits 1 on any failure. It
+   case. Each must carry a line of the form
+   `**Process:** … .agents/skills/work-item-delivery/SKILL.md`, indented at most 3 spaces, and
+   not inside a fenced code block, an indented code block or an HTML comment. It exits 1 on any failure. It
    reports how many files it checked and how many were exempt, and it exits 1 when it finds no
    prompt file at all.
 2. **Exemptions are by name, with a reason, in the script.** An exemption whose file no longer
