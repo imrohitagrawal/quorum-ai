@@ -1,7 +1,7 @@
 # Session Handoff
 
 ## Date/time
-2026-10-11T02:53:02+05:30
+2026-10-13T00:32:50+05:30
 
 ## Open work
 `docs/65-open-work.md` — the source of truth for what is open, what blocks what,
@@ -11,26 +11,26 @@ line further down this file is the factory router's view of the lifecycle, not a
 work status.
 
 ## Latest narrative handoff
-`docs/analysis/2026-10-11-session-handoff.md` — read this for full context before editing. (today)
+`docs/analysis/2026-10-11-session-handoff.md` — read this for full context before editing. **(2 days old** — if a newer session ran since then and its narrative handoff was archived without a replacement being written, this may be stale; check `docs/archive/` for a newer one.)
 
 This file is a mechanical snapshot (branch/git-status/skill-route/live state) —
 regenerated fresh every `make handoff`. The narrative above (what happened,
 what's next, the traps) lives in the dated doc it points to, not here.
 
 ## Current branch/worktree
-docs/handoff-2026-10-11
+docs/handoff-2026-10-13
 
 ## Live state (measured fresh by this run, not hand-carried)
 Run `make handoff` again for current numbers instead of trusting this file
 once it ages -- every value below is read from git/gh/`/status` at
 generation time, per #134.
 
-- **`origin/main` tip:** `2a6959a50c12`
+- **`origin/main` tip:** `9d55a9642822`
 - **Last commit touching `src/`:** `2a6959a50c12`
-- **Production vs. last `src/` commit:** production build_sha 2a6959a is in sync with last src/ commit
-- **pytest collected (no execution):** 6403
+- **Production vs. last `src/` commit:** production build_sha 9d55a96 is in sync: it is `origin/main`'s tip, which holds the last src/ commit 2a6959a
+- **pytest collected (no execution):** 6691
 - **e2e lane spec counts:** invariants: 26, ops: 2, degraded: 1
-- **Open issues:** 9
+- **Open issues:** 2
 - **Changed-lines coverage:** not computed here -- `make diff-cover` shares
   coverage data with every pytest-invoking target and races with them if run
   concurrently (AGENTS.md rule 15), so this file does not run it. Run
@@ -41,6 +41,30 @@ generation time, per #134.
 - `proposal/268-web-search-context-tokens`
 - `w28/byok-pr1-plan`
 - `w29/judge-wiring-plan`
+
+## Product readiness
+`docs/product-readiness.md`, regenerated from production's `/status` and `/ready` by this run (`make readiness`):
+product readiness: verdict Not ready, written to docs/product-readiness.md
+
+## Board and GitHub
+From `make board-github-check`: DONE rows whose issue is still open, and open issues no row cites.
+board vs GitHub: 66 board rows, 2 open issues
+  the board and GitHub agree
+
+## Root prompt check
+`PASSED` (checked 0, exempt 1; `make prompt-check`)
+
+## Leftovers
+From `make session-clean`, which reports and never deletes.
+```text
+Feature branches and worktrees:
+- `worktree /Users/rohitagrawal/Projects/quorum-ai-wt-268` — remove with 'git worktree remove' once its branch is merged
+- `worktree /Users/rohitagrawal/Projects/quorum-ai-wt-byok` — remove with 'git worktree remove' once its branch is merged
+- `worktree /Users/rohitagrawal/Projects/quorum-ai-wt-handoff` — remove with 'git worktree remove' once its branch is merged
+
+Containers and images:
+- `docker` — could not be queried, so this category measured NOTHING -- is the daemon up?
+```
 
 ## Current phase
 Operate, learn, and improve
