@@ -19,8 +19,27 @@ evidence comment. Open issues are now #105 and #268, on the board as W14 and W13
 
 ## Next
 
-W55, then W56. The prompt is `CONTINUE-W55-W56-PROMPT.md` at the root. It names the skill and the
-approvals.
+W55, then W56. The prompt is `CONTINUE-W55-W56-PROMPT.md` in the owner's main checkout, untracked,
+so a fresh clone does not have it; the version it replaced is archived in `docs/archive/2026-10/`.
+It names the skill and the approvals. Without it, start from the skill and board rows W55 and W56.
+
+## The fresh-reader test (package B's user-journey test)
+
+The same question ("what is live, what is open, is it ready?", saved word for word) was put to a
+reader started with no project memory (`claude -p --safe-mode`):
+
+| | Before, on `main` at `c894f78` | After, on this handoff branch |
+|---|---|---|
+| Matched | 9 of 19 | 15 of 19 |
+| Partial | 2 | 3 |
+| Wrong | 4 | 0 |
+| Missing | 4 | 1 |
+
+The after reader took the build, the switches and the verdict from `docs/product-readiness.md`, and
+the open work from the board. It still met two answers in two places:
+- `/ready` reports `"status": "ready"` while the verdict says "Not ready". The file does not say that
+  `/ready`'s "ready" means only that the server is up;
+- the board's "Verified at" line names an older commit than its rows.
 
 ## Left as advisory
 
