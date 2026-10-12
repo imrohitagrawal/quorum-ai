@@ -1,5 +1,7 @@
 # Production Feedback Loop
 
+> **Not a current status.** This review is a record of June 2026 and is not maintained; it predates the production deployment. Current status has three homes, named in `docs/README.md`: delivery is the board (`docs/65-open-work.md`) with GitHub; product readiness is `docs/product-readiness.md`, generated from production; decisions are `docs/19-change-control-log.md` and `docs/adr/`.
+
 ## Evidence Review Date
 
 2026-06-17

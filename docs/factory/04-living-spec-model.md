@@ -12,7 +12,6 @@ The living spec prevents Codex from building from vague or stale requirements.
 - `docs/17-requirement-registry.md`
 - `docs/18-requirement-traceability-matrix.md`
 - `docs/19-change-control-log.md`
-- `docs/116-signoff-record.md`
 
 ## Requirement fields
 

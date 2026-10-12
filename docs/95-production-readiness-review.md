@@ -1,5 +1,7 @@
 # Production Readiness Review
 
+> **Not a current status.** This review is a record of 2026-06-21 and is not maintained. Current status has three homes, named in `docs/README.md`: delivery is the board (`docs/65-open-work.md`) with GitHub; product readiness is `docs/product-readiness.md`, generated from production; decisions are `docs/19-change-control-log.md` and `docs/adr/`.
+
 ## Summary
 
 - Product/release: Quorum AI Release 1 MVP.

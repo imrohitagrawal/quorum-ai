@@ -26,7 +26,7 @@ You are the lifecycle controller. You route work to driver skills, invite review
 2. Run `idea-intake-clarifier` before every other lifecycle skill. Ask the smallest useful set of clarifying questions and update `docs/00-factory-console.md`.
 3. Run `problem-statement-builder` once the blocking questions are answered or safe assumptions are approved.
 4. Run `next-action-coach` after every meaningful phase so the user always knows what to do next.
-5. Create or update `docs/factory-status.md` with gate status, owner, evidence, blockers, and current Jira/Confluence sync state.
+5. Do not update `docs/factory-status.md`: it is a record of 2026-06-20 and is not maintained (ADR-0161). Record status in its three homes, named in `docs/README.md`.
 6. Run lifecycle in this order:
    - idea-intake-clarifier
    - problem-statement-builder
@@ -133,7 +133,6 @@ Only one skill can be driver for a phase. Other relevant skills may review and p
 
 ## Required output
 
-- `docs/factory-status.md`
 - updated lifecycle artifacts from each stage
 - validation evidence from `make validate`
 

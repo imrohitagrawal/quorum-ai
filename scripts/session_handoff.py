@@ -52,14 +52,46 @@ def _short(sha: str | None, n: int = 7) -> str:
     return (sha or "")[:n]
 
 
-def _build_sha_drift_line(*, last_src_commit: str | None, prod_build_sha: str | None) -> str:
+def _is_ancestor(older: str, newer: str, root: Path = ROOT) -> bool:
+    """Whether commit ``older`` is in ``newer``'s history (``git merge-base --is-ancestor``).
+
+    False when git cannot say: a commit this clone has not fetched, or no git.
+    """
+    try:
+        done = subprocess.run(
+            ["git", "merge-base", "--is-ancestor", older, newer],
+            cwd=root,
+            capture_output=True,
+            check=False,
+        )
+    except OSError:
+        return False
+    return done.returncode == 0
+
+
+def _build_sha_drift_line(
+    *,
+    last_src_commit: str | None,
+    prod_build_sha: str | None,
+    main_tip: str | None = None,
+    src_commit_in_build: bool = False,
+    build_on_main: bool = True,
+) -> str:
     """Compare production's `/status.build_sha` to the last commit touching `src/`.
 
     This is the relationship AGENTS.md rule 18 asks a human to check by hand
     (`build_sha` == the merged SHA) -- a "relationship" fact in #134's own
     taxonomy, which survives merges instead of going stale like a quoted SHA
-    would. Pure comparison: the two values are fetched by the caller so this
+    would. Pure comparison: the values are fetched by the caller so this
     stays a same-process, mockable unit.
+
+    Every merge deploys, a docs-only one too (AGENTS.md rule 18a), so production
+    usually runs a commit NEWER than the last `src/` commit. That is in sync when
+    the build is `origin/main`'s tip (``main_tip``), or when the build contains
+    the last `src/` commit (``src_commit_in_build``, from :func:`_is_ancestor`)
+    AND is itself on main (``build_on_main``): a hotfix deployed from a branch
+    holds the last `src/` commit but is not what main says production runs.
+    Only otherwise is it the warning.
     """
     if not last_src_commit and not prod_build_sha:
         return "unavailable: could not read either the last src/ commit or production's build_sha"
@@ -75,6 +107,23 @@ def _build_sha_drift_line(*, last_src_commit: str | None, prod_build_sha: str | 
         )
     if last_src_commit.strip().lower() == prod_build_sha.strip().lower():
         return f"production build_sha {_short(prod_build_sha)} is in sync with last src/ commit"
+    if main_tip and main_tip.strip().lower() == prod_build_sha.strip().lower():
+        return (
+            f"production build_sha {_short(prod_build_sha)} is in sync: it is `origin/main`'s "
+            f"tip, which holds the last src/ commit {_short(last_src_commit)}"
+        )
+    if src_commit_in_build and not build_on_main:
+        return (
+            f"production build_sha {_short(prod_build_sha)} is not on main"
+            + (f" (`origin/main` is {_short(main_tip)})" if main_tip else "")
+            + f": it holds the last src/ commit {_short(last_src_commit)}, but main does"
+            " not hold it -- a deploy from a branch?"
+        )
+    if src_commit_in_build:
+        return (
+            f"production build_sha {_short(prod_build_sha)} is in sync: it holds the last "
+            f"src/ commit {_short(last_src_commit)}"
+        )
     return (
         f"production build_sha {_short(prod_build_sha)} does NOT match "
         f"last src/ commit {_short(last_src_commit)} -- a deploy may be in flight or overdue"
@@ -277,15 +326,24 @@ def _gather_live_state() -> dict:
         ["gh", "issue", "list", "--state", "open", "--json", "number", "--jq", "length"]
     )
     unmerged_raw = run(["git", "branch", "-r", "--no-merged", "refs/remotes/origin/main"])
+    src_known = (
+        last_src_commit if last_src_commit and "unavailable" not in last_src_commit else None
+    )
+    tip_known = main_tip if main_tip and "unavailable" not in main_tip else None
     return {
         "main_tip": main_tip,
         "last_src_commit": last_src_commit,
         "prod_build_sha": prod_build_sha,
         "build_sha_drift_line": _build_sha_drift_line(
-            last_src_commit=last_src_commit
-            if last_src_commit and "unavailable" not in last_src_commit
-            else None,
+            last_src_commit=src_known,
             prod_build_sha=prod_build_sha,
+            main_tip=tip_known,
+            src_commit_in_build=bool(
+                src_known and prod_build_sha and _is_ancestor(src_known, prod_build_sha)
+            ),
+            build_on_main=bool(
+                tip_known and prod_build_sha and _is_ancestor(prod_build_sha, tip_known)
+            ),
         ),
         "pytest_count": _parse_pytest_collected_count(pytest_raw),
         "e2e_lane_counts": _e2e_lane_counts(ROOT / "e2e" / "tests"),
@@ -351,9 +409,51 @@ def _prompt_check_section(root: Path) -> str:
     except Exception as exc:  # noqa: BLE001 — ADR-0045: degrade, never abort
         return f"## Root prompt check\nunavailable: {exc!r}\n"
     if not found:
-        return f"## Root prompt check\nPASSED ({counted}; `make prompt-check`)\n"
+        # "PASSED" is backticked: it is the gate's output quoted, and this file is
+        # in the completion check's scope (ADR-0162), where a bare "passed" must
+        # cite a commit. "FAILED" is not a completion word and stays bare.
+        return f"## Root prompt check\n`PASSED` ({counted}; `make prompt-check`)\n"
     lines = "".join(f"- {m}\n" for m in found)
     return f"## Root prompt check\nFAILED ({counted}) -- run `make prompt-check`\n{lines}"
+
+
+def _readiness_section() -> str:
+    """Regenerate `docs/product-readiness.md` (ADR-0161) and say what it found.
+
+    Through `run()`, as a child process, so it degrades like every other value
+    here (ADR-0045): `scripts/product_readiness.py` never fails its caller, and
+    offline it still writes the file, saying "unavailable".
+    """
+    out = run(
+        [
+            sys.executable,
+            str(ROOT / "scripts" / "product_readiness.py"),
+            "--out",
+            str(ROOT / "docs" / "product-readiness.md"),
+        ]
+    )
+    return (
+        "## Product readiness\n"
+        "`docs/product-readiness.md`, regenerated from production's `/status` and `/ready` "
+        "by this run (`make readiness`):\n"
+        f"{out or 'unavailable: product_readiness printed nothing'}\n"
+    )
+
+
+def _board_github_section() -> str:
+    """Whether the board and GitHub agree (ADR-0162), from `check_board_github`.
+
+    `--no-fail` makes a mismatch exit 0, so `run()` returns the report rather
+    than labelling it unavailable. Without `gh` or the network, it says
+    "unavailable" (ADR-0045).
+    """
+    out = run([sys.executable, str(ROOT / "scripts" / "check_board_github.py"), "--no-fail"])
+    return (
+        "## Board and GitHub\n"
+        "From `make board-github-check`: DONE rows whose issue is still open, and open "
+        "issues no row cites.\n"
+        f"{out or 'unavailable: check_board_github printed nothing'}\n"
+    )
 
 
 def _collect_leftovers() -> list[tuple[Any, list[Any]]] | None:
@@ -373,10 +473,14 @@ def _leftovers_section(found: list[tuple[Any, list[Any]]] | None) -> str:
     body = ""
     for category, findings in found:
         if findings:
-            body += f"\n**{category.title}**\n" + "".join(
+            body += f"\n{category.title}:\n" + "".join(
                 f"- `{f.label}` — {f.why}\n" for f in findings
             )
-    return head + (body or "None found\n")
+    # A fenced block: this is the tool's report quoted, and its titles and
+    # reasons say "merged" ("Merged branches and worktrees", "once its branch is
+    # merged"). This file is in the completion check's scope (ADR-0162), which
+    # reads a fenced block as quoted output, not as a claim.
+    return head + (f"```text{body}```\n" if body else "None found\n")
 
 
 def main() -> int:
@@ -388,6 +492,8 @@ def main() -> int:
     latest_narrative = _latest_narrative_handoff(ROOT / "docs" / "analysis")
     narrative_pointer = _narrative_pointer_line(latest_narrative)
     live_state = _live_state_section(_gather_live_state())
+    readiness = _readiness_section()
+    board_github = _board_github_section()
     prompt_check = _prompt_check_section(ROOT)
     leftovers = _leftovers_section(_collect_leftovers())
     text = f"""# Session Handoff
@@ -413,6 +519,8 @@ what's next, the traps) lives in the dated doc it points to, not here.
 {branch or "not a git branch / unavailable"}
 
 {live_state}
+{readiness}
+{board_github}
 {prompt_check}
 {leftovers}
 ## Current phase

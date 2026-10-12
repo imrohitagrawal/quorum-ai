@@ -88,6 +88,7 @@ import importlib.util
 import re
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -170,7 +171,10 @@ _ROW_COUNT = re.compile(
     r"^The board holds \*\*(\d+)\*\* rows, \*\*(\d+)\*\* of them unpinned\.$", re.MULTILINE
 )
 _ROW = re.compile(r"^\| *(W\d+) *\|(.+)$")
-_EVIDENCE = re.compile(r"^(ABSENT|PRESENT) (\S+) :: (.+)$")
+#: ``PRESENT@<sha>`` names a commit on ``main`` where the needle was in the file
+#: (ADR-0162, decision 4). The commit is checked by :func:`check_present_commits`;
+#: the derivation reads only the polarity.
+_EVIDENCE = re.compile(r"^(ABSENT|PRESENT(?:@[0-9a-f]{7,40})?) (\S+) :: (.+)$")
 #: A ``#`` that starts a line or follows whitespace begins a comment. The
 #: WHITESPACE GUARD is the load-bearing part: without it, a cut at the first
 #: ``//`` truncates W16's needle line to ``URL = "https:``. Only ``#`` is listed
@@ -306,7 +310,7 @@ def derive_states(board: Board, root: Path) -> tuple[dict[str, str], list[str], 
         if not match:
             failures.append(
                 f"{row.row_id}: evidence {row.evidence!r} is neither "
-                f"{_UNPINNED_CELL!r} nor '<ABSENT|PRESENT> <path> :: <needle>'"
+                f"{_UNPINNED_CELL!r} nor '<ABSENT|PRESENT|PRESENT@<sha>> <path> :: <needle>'"
             )
             continue
         polarity, rel_path, needle = match.group(1), match.group(2), match.group(3)
@@ -334,7 +338,7 @@ def derive_states(board: Board, root: Path) -> tuple[dict[str, str], list[str], 
             continue
         present = needle in _evidence_text(target)
         read += 1
-        open_form_says_present = polarity == "PRESENT"
+        open_form_says_present = polarity.startswith("PRESENT")
         states[row.row_id] = PENDING if present == open_form_says_present else DONE
     return states, failures, read
 
@@ -638,6 +642,125 @@ def check_anchor_is_on_main(board: Board, root: Path) -> tuple[list[str], str]:
     ], f", anchor on no known `{MAIN_BRANCH}`"
 
 
+#: The rows that used a plain ``PRESENT`` needle on 2026-10-11. ADR-0162 lets
+#: them keep it; every other ``PRESENT`` row must name a commit.
+GRANDFATHERED_PRESENT = frozenset(
+    {"W3", "W10", "W15", "W16", "W17", "W18", "W22", "W28", "W37", "W47"}
+)
+#: The commit whose board fixes WHICH needle each grandfathered row keeps: the
+#: cut-off of ADR-0162 (the merge of #558). A grandfathered row keeps its path and
+#: needle as they were there, not just its id, or W28's needle could be swapped
+#: for a made-up one and typed DONE (review round 1 of package B).
+GRANDFATHER_COMMIT = "b66b107f3f36eeaeb943ce93776b4fd4ef72095a"
+
+
+def grandfathered_needles(root: Path) -> dict[str, tuple[str, str]] | None:
+    """Each grandfathered row's (path, needle) on the board at :data:`GRANDFATHER_COMMIT`.
+
+    None when that commit's board cannot be read (a repository without that
+    commit, such as a shallow clone or a test's own small repository): then the
+    rows are grandfathered by id only, as before. CI checks out the full history
+    (``fetch-depth: 0``), where the needles are pinned.
+    """
+    shown = _git(root, "show", f"{GRANDFATHER_COMMIT}:docs/65-open-work.md")
+    if shown.returncode != 0:
+        return None
+    kept: dict[str, tuple[str, str]] = {}
+    for row in parse_board(shown.stdout).rows:
+        match = _EVIDENCE.match(row.evidence) if row.pinned else None
+        if match and match.group(1) == "PRESENT" and row.row_id in GRANDFATHERED_PRESENT:
+            kept[row.row_id] = (match.group(2), match.group(3))
+    return kept
+
+
+def _text_at_commit(root: Path, sha: str, rel_path: str) -> str | None:
+    """The searchable code text of ``rel_path`` as it was at ``sha``, or None.
+
+    Stripped exactly as :func:`_evidence_text` strips today's file: a ``.py``
+    file goes through ``tests/code_text.py``, which reads a path, so the old
+    text is written to a temporary file with the same suffix first.
+    """
+    shown = _git(root, "show", f"{sha}:{rel_path}")
+    if shown.returncode != 0:
+        return None
+    with tempfile.TemporaryDirectory() as folder:
+        target = Path(folder) / f"at_commit{Path(rel_path).suffix}"
+        target.write_text(shown.stdout, encoding="utf-8")
+        return _evidence_text(target)
+
+
+def check_present_commits(board: Board, root: Path) -> tuple[list[str], int]:
+    """A ``PRESENT`` row must name a commit on ``main`` holding its needle (ADR-0162).
+
+    WHY THIS EXISTS (claim I4 of the 2026-10-11 planted claims). A ``PRESENT``
+    needle states the OPEN form of a fact, so a needle that was never in the
+    file reads "absent" and derives DONE at once: a made-up needle was a DONE
+    for free. ``PRESENT@<sha> <path> :: <needle>`` closes that: the commit must
+    be an ancestor of a ``main`` this checkout can see, and the needle must be
+    in the file AT that commit. A plain ``PRESENT`` is allowed only for the
+    rows in :data:`GRANDFATHERED_PRESENT`, and only with the path and needle
+    each had at :data:`GRANDFATHER_COMMIT` (:func:`grandfathered_needles`).
+
+    It needs git, so :func:`check_all` runs it only on a git working tree.
+    Returns the failures and how many ``PRESENT@`` needles were read at their
+    commit.
+    """
+    failures: list[str] = []
+    checked = 0
+    refs: list[str] | None = None
+    kept: dict[str, tuple[str, str]] | None = None
+    kept_read = False
+    for row in board.rows:
+        match = _EVIDENCE.match(row.evidence) if row.pinned else None
+        if not match or not match.group(1).startswith("PRESENT"):
+            continue
+        polarity, rel_path, needle = match.group(1), match.group(2), match.group(3)
+        if polarity == "PRESENT":
+            if row.row_id not in GRANDFATHERED_PRESENT:
+                failures.append(
+                    f"{row.row_id}: a PRESENT needle must name a commit where it was in "
+                    f"the file: write `PRESENT@<sha> {rel_path} :: <needle>` with a commit "
+                    "on main (ADR-0162). Without one, a needle that was never in the "
+                    "file reads absent and derives DONE."
+                )
+                continue
+            if not kept_read:
+                kept, kept_read = grandfathered_needles(root), True
+            if kept is not None and kept.get(row.row_id) != (rel_path, needle):
+                was = kept.get(row.row_id)
+                failures.append(
+                    f"{row.row_id}: a plain PRESENT needle is grandfathered only as it was at "
+                    f"{GRANDFATHER_COMMIT[:7]}"
+                    + (f" (`PRESENT {was[0]} :: {was[1]}`)" if was else " (it had none)")
+                    + f". A changed path or needle must name a commit: write "
+                    f"`PRESENT@<sha> {rel_path} :: <needle>` with a commit on main where "
+                    "the needle is in the file (ADR-0162)."
+                )
+            continue
+        sha = polarity.split("@", 1)[1]
+        if refs is None:
+            refs = known_main_refs(root) or []
+        on_main = any(
+            _git(root, "merge-base", "--is-ancestor", sha, ref).returncode == 0 for ref in refs
+        )
+        if not on_main:
+            failures.append(
+                f"{row.row_id}: PRESENT@{sha[:12]} is not a commit on any `{MAIN_BRANCH}` "
+                f"this checkout can see (checked {', '.join(refs) or 'none'}). Name a "
+                "commit on main where the needle is in the file."
+            )
+            continue
+        then = _text_at_commit(root, sha, rel_path)
+        checked += 1
+        if then is None or needle not in then:
+            failures.append(
+                f"{row.row_id}: the needle is not in {rel_path} at PRESENT@{sha[:12]}"
+                + (" (the file does not exist there)" if then is None else "")
+                + ". A PRESENT needle must be one that was really in the file."
+            )
+    return failures, checked
+
+
 def check_freshness(board: Board, root: Path, max_drift: int = MAX_DRIFT_COMMITS) -> list[str]:
     """The anchor SHA exists, is behind ``HEAD``, and not by too much."""
     if board.sha is None:
@@ -711,16 +834,20 @@ def check_all(root: Path = ROOT, max_drift: int = MAX_DRIFT_COMMITS) -> tuple[li
         )
     git_note = ""
     if has_git_history(root):
+        present_failures, present_checked = check_present_commits(board, root)
+        failures += present_failures
+        git_note += f", {present_checked} PRESENT@ needles read at their commit"
         failures += check_freshness(board, root, max_drift)
         if board.sha is not None and anchor_commit_exists(root, board.sha):
-            squash_failures, git_note = check_anchor_is_on_main(board, root)
+            squash_failures, squash_note = check_anchor_is_on_main(board, root)
+            git_note += squash_note
             failures += squash_failures
         else:
             # No second opinion on an anchor the family above already refused
             # by name; a message about `main` would only bury the real one.
-            git_note = ", squash-survival SKIPPED (no anchor commit to check)"
+            git_note += ", squash-survival SKIPPED (no anchor commit to check)"
     else:
-        git_note = ", freshness SKIPPED (root is not a git working tree)"
+        git_note = ", freshness SKIPPED (root is not a git working tree; PRESENT@ not checked)"
     tally = {state: sum(1 for s in states.values() if s == state) for state in (PENDING, DONE)}
     report = (
         f"{parsed} rows ({tally[PENDING]} PENDING, {tally[DONE]} DONE), {read} "

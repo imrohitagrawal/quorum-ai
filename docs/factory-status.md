@@ -1,5 +1,7 @@
 # Factory Status
 
+> **Not a current status.** This table is a record of 2026-06-20. It is not maintained: do not update it. Current status has three homes, named in `docs/README.md`: delivery is the board (`docs/65-open-work.md`) with GitHub; product readiness is `docs/product-readiness.md`, generated from production; decisions are `docs/19-change-control-log.md` and `docs/adr/`.
+
 | Gate | Status | Owner | Evidence | Blockers |
 |---|---|---|---|---|
 | G0 Intake | Draft | Product owner | PRODUCT_IDEA.md | Update with real source links |

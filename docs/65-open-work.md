@@ -6,7 +6,7 @@ original, because a gate and an offline agent can read it and cannot read `gh`.
 
 Verified at: `4ba35cec0ce40f9dd48b9c1bf0b9aefeb862a28c`
 
-The board holds **55** rows, **15** of them unpinned.
+The board holds **66** rows, **26** of them unpinned.
 
 `scripts/check_open_work.py --check` reads every row's evidence off disk and
 refuses if a claim is false. It runs inside `make validate`, and
@@ -118,7 +118,7 @@ caught by any automated check and 10 of 16 by adversarial review
 | W21 | A redirect carries the API key off the guarded base | DONE | `ABSENT src/product_app/providers.py :: urlopen = CREDENTIAL_OPENER.open` | — | W18 |
 | W22 | The Tavily search call sends its key to a configured base with no scheme guard | DONE | `PRESENT src/product_app/providers.py :: url=f"{settings.tavily_api_base_url.rstrip('/')}/search"` | — | — |
 | W23 | The mutation gate cannot run when a changed function is covered by a schemathesis case | DONE | `ABSENT tests/conftest.py :: from tests.lazy_nodeid_selection import rewrite_lazy_case_args` | — | ADR-0117 |
-|  W24 | The `:online` web-search fee is measured at $0.007 and was priced at `0.0`, so every searching run's receipt and its daily-cap booking were $0.028 light — ACTIVATED 2026-09-15 by product-owner decision (CHG-007, ADR-0113) | DONE | `ABSENT src/product_app/config.py :: Field(default=0.007, ge=0, allow_inf_nan=False)` | #105 | —  |
+|  W24 | The `:online` web-search fee is measured at $0.007 and was priced at `0.0`, so every searching run's receipt and its daily-cap booking were $0.028 light — ACTIVATED 2026-09-15 by product-owner decision (CHG-007, ADR-0113). This was defect A of issue 105, which stays open for W14 | DONE | `ABSENT src/product_app/config.py :: Field(default=0.007, ge=0, allow_inf_nan=False)` | — | —  |
 | W25 | A truncated mutation run with no survivor passes, so the gate gets greener as it measures less | DONE | `ABSENT Makefile :: print("INCONCLUSIVE: no survivor` | #464 | ADR-0118 |
 | W26 | The citation gate reports `.tsx`, `.mdx` and `.pyi` citations under a truncated path nobody wrote | DONE | `ABSENT tests/unit/test_cited_paths_resolve.py :: def test_a_longer_extension_is_not_truncated_to_a_listed_shorter_one` | #469 | — |
 | W27 | 35 mutants of `_tavily_search` survive: the request's shape, its socket timeout and both of its log events are unasserted | DONE | `ABSENT src/product_app/providers.py :: _CONTENT_TYPE_HEADER: Final = "Content-Type"` | #465 | W25 |
@@ -151,6 +151,17 @@ caught by any automated check and 10 of 16 by adversarial review
 | W54 | Switch the judge's page reading on (W29's second step, CHG-026 (e), CHG-029): the owner approved one paid measured run and up to two extra (CHG-029); make it on the session's machine with the real keys after showing the owner the free estimate; measure the judge with pages (cost, the typical judge input `cost_judge_input_tokens`, time held in the run slot, verdict quality, and at least one non-English page for tokens per character); build first, with fetching still off: the plain-English trust-note wording for pages a website asks tools not to read (CHG-029 (b), which needs a served count of sources checked by preview only) and the passage picking for pages over 4,000 characters (CHG-029 (c)), compared against the first 4,000 characters in the extra runs; capture the golden output for `PR-EVAL-JUDGE-v2`, then set `QUORUM_SOURCE_FETCH_ENABLED` in `fly.toml`. Step 1 (the wording and the passage picking, fetching still off) is ADR-0150; the paid runs were made on 2026-10-07 (CHG-032); step 2 (previews for unreadable pages, the page reserve at one token per character, the typical judge input 8,400) is ADR-0152; step 3 (PDFs read by pypdf in a sandboxed child) is ADR-0153; step 3b (encrypted PDFs that open without a password, and PDFs served as binary downloads, CHG-036 (a), CHG-037) is ADR-0154; the typical judge input becomes 15,000 (CHG-036 (b)) in its own pull request, ADR-0155; the landing line about sources follows whether pages are read (CHG-039), ADR-0158; the paid runs on the final code (CHG-038) are the golden capture, and page reading is switched on in `fly.toml` (ADR-0156) | DONE | `ABSENT fly.toml :: QUORUM_SOURCE_FETCH_ENABLED = "true"` | — | — |
 | W55 | The cost-ledger rows that carry an anonymous network's spend key (W47, ADR-0144) are never deleted (nothing in `src/` deletes cost-ledger rows), so the hash outlives the 24-hour window it is used for; decide and build a retention period (CHG-029 (d)) | UNPINNED | `—` | — | — |
 | W56 | A run degraded to simulation at the global ceiling sends the anonymous network's spend key to Sentry as `account_id` in the same event as the visitor's address (`client_ip`), so Sentry can pair the two (ADR-0144 decision 5); stop sending them together (CHG-029 (d)) | UNPINNED | `—` | — | — |
+| W57 | The PDF reader's exit wait (`source_fetcher._wait_for_exit_unreaped`) uses `select.select`, so with more than 1,024 open files a readable PDF would come back `unusable`, by reading of the code (advisory from the 2026-10-11 handoff) | UNPINNED | `—` | — | — |
+| W58 | The 200-character floor for a fetched page counts control characters that are deleted later, for web pages and PDFs (advisory from the 2026-10-11 handoff) | UNPINNED | `—` | — | — |
+| W59 | `cffi` and `pycparser` are not pinned in the production image, because `uv pip install .` ignores `uv.lock` (advisory from the 2026-10-11 handoff) | UNPINNED | `—` | — | — |
+| W60 | The signed-in E2E lane failed on two runs (the push of `dbf314e`, PR #556) on specs no change in that session touched (history-refresh, shared-allowance); both re-runs passed (advisory from the 2026-10-11 handoff) | UNPINNED | `—` | — | — |
+| W61 | The advisory mutation-score job runs out of time before scoring on most pull requests (advisory from the 2026-10-11 handoff) | UNPINNED | `—` | — | — |
+| W62 | The full suite keeps growing; running it in parallel, or once per change instead of up to four times, is the lasting answer to the CI time limits (2026-10-11 handoff; plan package D1) | UNPINNED | `—` | — | — |
+| W63 | The deploy gate's no-limit check would wrongly flag a job whose `if:` is false on push (advisory from the 2026-10-11 handoff) | UNPINNED | `—` | — | — |
+| W64 | With the 15,000-token judge input, questions of 5,580 to 6,247 characters fit two runs a day, not three (advisory from the 2026-10-11 handoff) | UNPINNED | `—` | — | — |
+| W65 | With the model catalog unreachable, every page load fetched it again (763 fetches in about 6 minutes in a browser review), so a failed fetch appears not to be cached (advisory from the 2026-10-11 handoff) | UNPINNED | `—` | — | — |
+| W66 | A cited page over 256 KiB whose server states its size is refused and never read (Wikipedia's Photosynthesis article, 970,143 bytes, stated its size on 6 of 6 requests); decide whether to read the first 256 KiB (plan package D3) | UNPINNED | `—` | — | — |
+| W67 | The completion-word check (ADR-0162) lets a "no" answer with no colon cancel the claim that opens the next line: "Rollback needed? no" followed by "In production: yes" passes uncited (found by the narrow re-check of package B, 2026-10-11) | UNPINNED | `—` | — | — |
 
 **STOP** marks a row that cannot be finished without a human decision — a money,
 cost or safety guardrail value that only real measurement could justify. Do not
@@ -203,8 +214,8 @@ read is carried across faithfully but not fixed — settling that shape needs a
 live `:online` call, which is spend.
 
 **W2 — peer critique (#290, closure decided 2026-09-15). BUILT, shipping DEFAULT-OFF in
-`config.py`, switched ON in production by `fly.toml` from 2026-09-03, and
-coupled to the live window since 2026-09-24 (#458, ADR-0122).** ADR-0093's
+`config.py`, switched ON in production by `fly.toml` from 2026-09-03 until
+2026-09-24, when it was coupled to the live window and turned off (#458, ADR-0122).** ADR-0093's
 shape is implemented in full (decisions 1, 1a, 1b, 2, 3, 4, 5) behind
 `settings.peer_critique_enabled`, which defaults to `false`. ADR-0095 records
 why the flag exists and it is not caution: `_estimate_bound_usd` calls itself a
@@ -267,8 +278,9 @@ that reason. Re-derive:
 Until 2026-09-16 this block still quoted the 0.15 ladder as current and told a
 reader to hold it; it had been stale since `0b6b0b4`.
 
-Measured headroom (2026-09-16; live catalog, 441 models; production posture,
-peer critique ON and the judge `openai/gpt-4.1-mini` ON): with the `:online`
+Measured headroom (2026-09-16; live catalog, 441 models; production posture on that date,
+peer critique ON and the judge `openai/gpt-4.1-mini` ON; peer critique was turned off on 2026-09-24,
+ADR-0122): with the `:online`
 search fee at the `$0.007` it ships at since the 2026-09-15 activation
 (CHG-007, ADR-0113), the default mix on ADR-0102's own query bounds at
 **0.2110** against the **0.30** line — **ALLOW, about 8.9 cents** of headroom.
