@@ -28,12 +28,15 @@ It names the skill and the approvals. Without it, start from the skill and board
 The same question ("what is live, what is open, is it ready?", saved word for word) was put to a
 reader started with no project memory (`claude -p --safe-mode`):
 
-| | Before, on `main` at `c894f78` | After, on this handoff branch |
+| | Before, on `main` at `c894f78` | After, on this handoff branch at `c361fe4` |
 |---|---|---|
 | Matched | 9 of 19 | 15 of 19 |
 | Partial | 2 | 3 |
 | Wrong | 4 | 0 |
 | Missing | 4 | 1 |
+
+The two runs differ in one more way: the before reader had a one-commit snapshot with no git
+history, and the after reader had a full clone. Part of the gain may come from that.
 
 The after reader took the build, the switches and the verdict from `docs/product-readiness.md`, and
 the open work from the board. It still met two answers in two places:
@@ -60,6 +63,6 @@ the open work from the board. It still met two answers in two places:
   `make prompt-check` judges the rendered page, so a line inside a code block does not count.
 - `make prompt-check`, `make completion-check` and `make readiness` run through `uv run`: the
   system Python has neither the Markdown parser nor a certificate store.
-- Hand-written Markdown rules failed twice in both packages; both checks now use the CommonMark
-  parser the project already pins (ADR-0029).
+- Hand-written Markdown rules failed twice in package A and once in package B; both checks now use
+  the CommonMark parser the project already pins (ADR-0029).
 - A narrow re-check after round 2 found a regression in a round-2 fix both times. Budget for it.
