@@ -466,7 +466,8 @@ def test_partner_the_recipe_rule_refuses_each_shape(line: str) -> None:
     "line",
     [
         "UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python scripts/vuln_audit.py",
-        "@UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python scripts/check.py --image $(IMAGE)",
+        "@UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python scripts/check_image_matches_lock.py"
+        " --image $(IMAGE)",
         "docker build -t $(IMAGE) .",
     ],
 )
