@@ -1691,7 +1691,8 @@ class CostEstimationService:
 
         The two rails undo a charge differently and neither is optional:
 
-        * the durable ledger is append-only, so it gets a compensating
+        * the durable ledger never deletes a row (ADR-0165 wipes only the
+          spend key after 48 hours), so it gets a compensating
           ``cost_charge_voided`` event keyed on the run;
         * the in-process ring is a bounded buffer, so the charge is REMOVED.
 

@@ -963,7 +963,8 @@ def _start_reserved_query_run(
     # check-and-record (``try_record_run_charge``) placed BEFORE the handover,
     # so it precedes every dollar the worker can spend. F-01 is preserved by
     # the ``except`` below, which VOIDS the charge if the handover fails —
-    # a compensating event, because the sink is append-only.
+    # a compensating event, because the sink never deletes a row (ADR-0165
+    # removes only identifiers from rows older than 48 hours).
     response = _create_response_for(query_run)
     # The charge is INSIDE the try, not before it. Adversarial review pointed
     # out that everything between the durable insert and ``Thread.start()``

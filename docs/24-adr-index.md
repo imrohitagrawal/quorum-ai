@@ -167,6 +167,7 @@ ways, so the record shows what was believed on a date and what replaced it.
 | [ADR-0162](adr/0162-a-false-done-must-fail-a-check.md) | A false "done" must fail a check | Architecture | Accepted — 2026-10-11, under the plan the product owner approved (CHG-040 (b)) |
 | [ADR-0163](adr/0163-nothing-private-reaches-sentry.md) | Nothing private reaches Sentry | Architecture | Accepted — 2026-10-13 |
 | [ADR-0164](adr/0164-production-builds-from-the-lock-and-ci-audits-it.md) | Production builds from the lock, and CI audits it | Architecture | Accepted — 2026-10-13 |
+| [ADR-0165](adr/0165-ledger-keys-and-session-addresses-are-wiped-after-48-hours.md) | Ledger keys and session addresses are wiped after 48 hours | Architecture | Accepted — 2026-10-14 |
 
 **This index was itself stale** until 2026-07-30: ADR-0002 had existed since
 2026-07-19 and was never listed here. A hand-maintained index is a derived fact

@@ -756,7 +756,8 @@ current_readiness = run_startup_probe()
 openrouter_catalog_fetcher.prewarm()
 
 
-# Feedback audit storage. The store is append-only and powers the
+# Feedback audit storage. The store never deletes a row (it wipes spend keys
+# and visitor addresses from rows older than 48 hours, ADR-0165) and powers the
 # nightly feedback_audit job. The on-disk path defaults to
 # ``.data/feedback_events.sqlite3``; the audit job reads the same
 # path via the ``FEEDBACK_DB_PATH`` env var. In dev and tests the

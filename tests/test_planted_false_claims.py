@@ -18,6 +18,10 @@ differs from the appendix, the function says why:
   it, so an "Accepted" typed inside that paragraph would be supported.
 * I12b: ``docs/116`` is archived by this package, so its "G7 Approved, GA" line
   is planted in ``docs/74`` instead.
+* I4 and its partner plant on W14, not W55. W55 was the appendix's row, and it
+  was pinned and derived DONE when W55 was built (ADR-0165); the plant needs a
+  row that is still unpinned. W14 waits on production logs, so it is not
+  expected to be pinned soon; if it is, move the plant to another unpinned row.
 
 I3 (a row's polarity word flipped together with its state) is still ACCEPTED,
 on purpose: it is the limit the board documents
@@ -197,51 +201,51 @@ def plant_i3(clone: Path) -> Plant:
     return Plant({BOARD: _set_row(text, "W28", state="DONE", evidence=flipped)})
 
 
-def _made_up_w55(clone: Path, polarity: str) -> Plant:
+def _made_up_on_w14(clone: Path, polarity: str) -> Plant:
     text = _text(clone, BOARD)
-    assert _board_row(text, "W55")[3].strip() == "UNPINNED"
+    assert _board_row(text, "W14")[3].strip() == "UNPINNED"
     target = rel("src", "product_app", "feedback_store.py")
     needle = "def purge_spend_keys_older_than("
     assert needle not in _text(clone, target), "the needle must be made up"
-    text = _set_row(text, "W55", state="DONE", evidence=f"`{polarity} {target} :: {needle}`")
+    text = _set_row(text, "W14", state="DONE", evidence=f"`{polarity} {target} :: {needle}`")
     counted = re.search(r"\*\*(\d+)\*\* of them unpinned", text)
     assert counted, "the board's unpinned count sentence moved"
     unpinned = int(counted.group(1))
     text = replace_once(
         text, f"**{unpinned}** of them unpinned", f"**{unpinned - 1}** of them unpinned"
     )
-    return Plant({BOARD: text}, says=("W55", "PRESENT@"))
+    return Plant({BOARD: text}, says=("W14", "PRESENT@"))
 
 
 def plant_i4(clone: Path) -> Plant:
-    """I4: W55 pinned to a made-up PRESENT needle, typed DONE, unpinned count edited."""
-    return _made_up_w55(clone, "PRESENT")
+    """I4: W14 pinned to a made-up PRESENT needle, typed DONE, unpinned count edited."""
+    return _made_up_on_w14(clone, "PRESENT")
 
 
 def plant_i4_at_commit(clone: Path) -> Plant:
     """I4, naming a real commit on main where the made-up needle never was."""
     sha = git_out(clone, "rev-parse", "refs/remotes/origin/main")
-    plant = _made_up_w55(clone, f"PRESENT@{sha}")
-    plant.says = ("W55",)
+    plant = _made_up_on_w14(clone, f"PRESENT@{sha}")
+    plant.says = ("W14",)
     return plant
 
 
 def plant_i4_partner(clone: Path) -> Plant:
-    """PARTNER for I4: W55 pinned PRESENT@ a main commit where a REAL needle is in the file.
+    """PARTNER for I4: W14 pinned PRESENT@ a main commit where a REAL needle is in the file.
 
     The new form must be accepted when it is true, so I4's rejection is about the
     made-up needle and not about the PRESENT@ form. The needle is in the file today
     too, so the row derives PENDING.
     """
     text = _text(clone, BOARD)
-    assert _board_row(text, "W55")[3].strip() == "UNPINNED"
+    assert _board_row(text, "W14")[3].strip() == "UNPINNED"
     sha = git_out(clone, "rev-parse", "refs/remotes/origin/main")
     target = rel("src", "product_app", "feedback_store.py")
     needle = "class FeedbackStore:"
     assert needle in git_out(clone, "show", f"{sha}:{target}")
     assert needle in _text(clone, target)
     evidence = f"`PRESENT@{sha} {target} :: {needle}`"
-    text = _set_row(text, "W55", state="PENDING", evidence=evidence)
+    text = _set_row(text, "W14", state="PENDING", evidence=evidence)
     counted = re.search(r"\*\*(\d+)\*\* of them unpinned", text)
     assert counted, "the board's unpinned count sentence moved"
     unpinned = int(counted.group(1))

@@ -1091,7 +1091,8 @@ def _void_run_billing(
 ) -> None:
     """Take back the charge for a run whose worker never started (F-01).
 
-    The events sink is append-only, so the charge is cancelled by a later event
+    The events sink never deletes a row (it only wipes identifiers from rows
+    older than 48 hours, ADR-0165), so the charge is cancelled by a later event
     keyed on the same ``query_run_id``, never by a DELETE. Best-effort: this
     runs on a path that is already raising, and failing to tidy up must not
     mask that error. The direction it fails in is over-metering, which is the

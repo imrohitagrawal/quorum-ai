@@ -354,13 +354,16 @@ and does not repeat for as long as the fault lasts.
 ## Failure mode: full or nearly-full volume
 
 `/status`'s `degraded` value advertises "a full disk" as one of its causes, so
-it needs an entry here. The `events` table is append-only and has **no pruning,
+it needs an entry here. The `events` table never loses a row: its one
+retention rule, the identifier wipe (W55, ADR-0165), edits rows older than 48
+hours in place and frees no space. Before W55 it had **no pruning,
 retention policy or `VACUUM` anywhere in `src/`** (VERIFIED by grep 2026-07-28:
 `grep -rn 'VACUUM' src/` and `grep -rn 'DELETE FROM events' src/` are both empty;
 `grep -rni 'retention' src/` is **not** — it returns two hits, a landing-page
 suggestion chip in `templates/workspace.html` and a comment in `static/app.js`
 about intra-word underscores, neither of which is a retention policy or touches
-this table), so it grows without bound for the life of the volume. A volume
+this table); there is still no `VACUUM` and no row deletion in the app's
+paths, so it grows without bound for the life of the volume. A volume
 that fills is a scheduled future state of this deployment, not a hypothetical.
 
 **Symptom.** `/status` reports `feedback_db: "degraded"` and
@@ -698,3 +701,53 @@ is evidence of a restart, never of a repair.
   write side. If so it **must** be marker-guarded: run every boot, it would keep
   rewriting rows written after it, and if the rewrite removes spend the failure
   direction is under-metering.
+
+## Checking the identifier wipe (W55, ADR-0165)
+
+Since W55 every cost row older than 48 hours loses its spend key, and every
+`session_minted` row older than 48 hours loses the visitor's address
+(`FeedbackStore.wipe_expired_identifiers`). A pass runs at every store open and
+at most once an hour after a write, so a key can legitimately stay up to about
+an hour past 48 hours while the app runs. Each pass that changed rows logs one
+line, `feedback_store: identifier wipe: cost_keys_wiped=... session_addresses_wiped=...
+malformed_payloads=...` (counts only); a failed pass logs `feedback_store:
+identifier wipe did not run: <SQLite reason>`. The Fly log ring is short, so
+read `fly logs` soon after a deploy.
+
+To check the volume itself, run this inside the machine. It opens the file
+read-only, runs one autocommit statement per count and prints counts only. Do
+not leave an interactive `sqlite3` shell open on the file instead: an open read
+transaction makes the next billed write wait 5 seconds and fail (failure-modes
+doc item 10).
+
+```python
+import sqlite3
+c = sqlite3.connect("file:/data/feedback_events.sqlite3?mode=ro", uri=True)
+old = "julianday(recorded_at) < julianday('now', ?)"
+has_key = ("(account_id IS NOT NULL OR CASE WHEN json_valid(payload) "
+           "THEN json_type(payload, '$.account_id') IS NOT NULL ELSE 0 END)")
+has_ip = "CASE WHEN json_valid(payload) THEN json_type(payload, '$.ip') IS NOT NULL ELSE 0 END"
+mint = "recorder = 'session' AND event_type = 'session_minted'"
+q = {
+    "cost_keyed_past_cut": f"recorder = 'cost' AND {old} AND {has_key}",
+    "mint_addressed_past_cut": f"{mint} AND {old} AND {has_ip}",
+    "cost_rows_past_cut": f"recorder = 'cost' AND {old}",
+    "mint_rows_past_cut": f"{mint} AND {old}",
+    "malformed_payloads": "recorder IN ('cost', 'session') AND NOT json_valid(payload)",
+}
+for name, where in q.items():
+    args = ("-50 hours",) if "?" in where else ()
+    print(name, c.execute(f"SELECT COUNT(*) FROM events WHERE {where}", args).fetchone()[0])
+```
+
+The first two should read 0. The next two are their partners: a 0 over an
+empty set proves nothing, so they must be non-zero (CHG-044 recorded 142 cost
+rows and 70 session rows older than 48 hours on 2026-10-13). The cut is 50
+hours, not 48, to allow for the hourly throttle. A non-zero
+`malformed_payloads` means rows whose payload is not valid JSON: the wipe
+clears their `account_id` column but cannot edit the text, which may still hold
+a key.
+
+What the wipe cannot reach: Fly volume snapshots (retention UNVERIFIED), free
+pages and deleted journal blocks from before `secure_delete` was on, the
+in-memory cost ring, and Sentry. ADR-0165 lists them.
