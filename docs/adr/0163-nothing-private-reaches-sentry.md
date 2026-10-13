@@ -31,7 +31,7 @@ This record changes three earlier statements without editing their bodies:
 - **ADR-0023's title**, "Sentry payloads are scrubbed on every path", was true of the user's
   question and the sign-in callback's query only. Of the request header values, the SDK's own
   filter already removed seven (`cookie`, `authorization`, `x-forwarded-for` and four more; see
-  Measurements); ours (`fly-client-ip`, `x-csrf-token`, `x-csrf`, `x-account-id`) went through.
+  Measurements); ours (`fly-client-ip`, `x-csrf-token`, `x-csrf`, `x-account-id`, `forwarded`) went through.
   Key-shaped text was not scrubbed in exception values, `message`, `extra`, `tags`, `contexts`
   or spans until this change. (Key-shaped text in log messages was already redacted by
   ADR-0041's record factory before Sentry made breadcrumbs of them.)
@@ -50,7 +50,14 @@ This record changes three earlier statements without editing their bodies:
    `send_default_pii=False` (on, it would send cookies, `REMOTE_ADDR` and `user`; failure mode 11).
    Three channels skip both hooks (failure mode 12), and each is switched off in the options:
    metrics with `enable_metrics=False` (sentry-sdk 2.63.0 defaults it to on; review round 1
-   measured a key in a metric attribute reaching the transport as a `trace_metric` item), log
+   measured a key in a metric attribute reaching the transport as a `trace_metric` item) and,
+   since review round 3, with `before_send_metric=_drop_sentry_metric`, a hook that returns
+   `None` for every metric, so metrics are dropped whatever the library version. The switch
+   alone is not enough: the Docker image CI builds installs sentry-sdk **2.72.0**, not
+   the locked 2.63.0, because the Dockerfile does not install from `uv.lock` (CI docker-build
+   log of run 38382789055, line 1160: `+ sentry-sdk==2.72.0`), and it will keep doing so until
+   board row W68 builds the image from the lock. In 2.72.0 `enable_metrics=False` has no effect
+   (`sentry_sdk/client.py` line 688 warns "The enable_metrics option has no effect"); log
    forwarding with `enable_logs=False` (review round 2: 2.63.0 also turns it on through
    `_experiments["enable_logs"]`, and a mutation adding that left every earlier test green), and
    span streaming by passing no `_experiments["trace_lifecycle"]`.
@@ -101,6 +108,8 @@ This record changes three earlier statements without editing their bodies:
 | Nesting depth of a serialised event | 12 for an error event with a chained cause and frame locals ON; 4 for a transaction | a local probe that initialises Sentry with a capture transport and measures the depth inside `before_send` and `before_send_transaction` |
 | Incoming `baggage` reaches the envelope header `trace` (round 1) | before the fix: `sentry-user_segment=203.0.113.99` in the serialised envelope; after: absent, and the transaction still continues the visitor's trace id | `tests/security/test_w56_regressions.py::test_incoming_baggage_does_not_reach_the_envelope_header`, run before and after |
 | Metrics skip both hooks (round 1) | before `enable_metrics=False`: items `['event', 'trace_metric']` and the key in the serialised envelope; after: no `trace_metric` item and no key | `tests/security/test_w56_regressions.py::test_a_metric_produces_no_envelope_item`, and a probe with `enable_metrics=True` |
+| `enable_metrics=False` on sentry-sdk 2.72.0, the version production installs (round 3) | switch alone: items `['event', 'trace_metric']`; switch plus the drop hook: `['event']` | a standalone probe run with `uv run --no-project --with sentry-sdk==2.72.0` (a capture transport, one `metrics.count`, one `capture_message`) |
+| The drop hook on its own, metrics forced on (round 3) | with the hook: no `trace_metric` item; with the hook line deleted from `_sentry_options()` and the test's identity asserts removed: `AssertionError: ['event', 'trace_metric']` | `tests/security/test_w56_regressions.py::test_the_metric_hook_drops_metrics_even_when_metrics_are_on` |
 | A visitor-sent `sentry-trace` header forces sampling | 50 of 50 requests sent a transaction with it, 5 of 50 without, at `traces_sample_rate=0.1` | inherited from failure mode 10; not re-measured here |
 
 ## Rejected alternatives
@@ -138,7 +147,8 @@ This record changes three earlier statements without editing their bodies:
 - `tests/security/test_w56_nothing_private_reaches_sentry.py` holds the end-to-end checks:
   capture through a real transport, sweep the whole payload, and a partner beside every
   "absent" check. `tests/security/test_w56_regressions.py` holds the review round 1 and round 2
-  checks, with a transport that keeps whole envelopes, headers included.
+  checks, and round 3's metric hook check, with a transport that keeps whole envelopes, headers
+  included.
 - **The `query_run_id` value arrives blanked (advisory).** The rule in `_scrub_user_text` that
   predates W56 replaces every extra whose name contains "query" or "prompt" with `[REDACTED]`,
   so the alert's `query_run_id` key arrives with no usable value. W56 leaves that rule alone (it
@@ -173,11 +183,15 @@ This record changes three earlier statements without editing their bodies:
   leaves through it. Nothing here limits it.
 - **Source lines in stack frames (advisory).** Sentry sends a few source lines around each stack
   frame (`context_line`, `pre_context`, `post_context`), and the key walk applies the log
-  patterns to them too. Over `src/`, 9 lines that do not start with `#` change when run through
-  `_redact_secrets` (3 code lines, for example `readiness.py:300`
-  `api_key = settings.openrouter_api_key`, and 6 docstring lines), so a frame on one of them
-  arrives with that line partly `[REDACTED]`. Counted by running `_redact_secrets` over every
-  line of every `.py` file under `src/` and skipping lines whose first character is `#`.
+  patterns to them too. Over `src/`, 18 lines change when run through `_redact_secrets`: 3 code
+  lines (for example `readiness.py:300` `api_key = settings.openrouter_api_key`), 6 docstring
+  lines and 9 comment lines. A comment line is never a frame's own line, but it can sit in the
+  `pre_context` or `post_context` around one, so all 18 can arrive partly `[REDACTED]`. Counted
+  by running `_redact_secrets` over every line of every `.py` file under `src/`
+  (`PYTHONPATH=src`, comparing each line before and after): 18 changed in all; 15 when lines
+  whose first character is `#` are skipped; 9 when lines whose first non-space character is `#`
+  are skipped. An earlier version of this paragraph gave 9 and called it the first-character
+  count; 9 is the non-space count.
 - **Outgoing trace headers (advisory, outside W56).** `trace_propagation_targets` is not set, and
   sentry-sdk 2.63.0 defaults it to `['.*']` (`consts.py`, `MATCH_ALL`), so outgoing requests to
   OpenRouter and Google carry `sentry-trace` and `baggage` headers. They go to those third
@@ -189,11 +203,17 @@ This record changes three earlier statements without editing their bodies:
   UNVERIFIED.
 - **A future channel.** Three channels skip both hooks: span streaming, log forwarding and
   metrics. Turning one on adds a path through `before_send_span`, `before_send_log` or
-  `before_send_metric`, which this scrubber does not run in. All three are off. What the tests
-  pin: `enable_metrics` and `enable_logs` are `False` in `_sentry_options()`; its `_experiments`
-  (production sets none today) holds no `enable_logs`, `enable_metrics` or `trace_lifecycle`; and, with
-  the real options, a metric sends no `trace_metric` item and a `logging.warning` sends no `log`
-  item. No test sends a span with streaming on. Turning a channel on must add the scrub to it. A
+  `before_send_metric`, which this scrubber does not run in. All three are off, and metrics are
+  also dropped by `before_send_metric=_drop_sentry_metric` on every library version (2.72.0
+  ignores the off switch; see decision 1). What the tests pin: `enable_metrics` and
+  `enable_logs` are `False` in `_sentry_options()`; `before_send_metric` is
+  `_drop_sentry_metric` and returns `None`; its `_experiments` (production sets none today)
+  holds no `enable_logs`, `enable_metrics` or `trace_lifecycle`; with the real options, a metric
+  sends no `trace_metric` item and a `logging.warning` sends no `log` item; and with metrics
+  forced on, the hook alone still sends no `trace_metric` item. The tests run on the locked
+  2.63.0, not on 2.72.0; the 2.72.0 results are from standalone probes (the same probe shows
+  `enable_logs=False` still holds there: items `['event']`, against `['event', 'log']` with it
+  on). No test sends a span with streaming on. Turning a channel on must add the scrub to it. A
   channel a later SDK version adds, or a new switch for an existing one, is not covered by any
   test here.
 - **`docs/48-data-retention.md` has no gate.** A false sentence re-added there, or a citation

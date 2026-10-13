@@ -445,6 +445,25 @@ BUCKET_B_PIN_BEHAVIOUR = {
         "additionally pins every entry to a real occurrence in src/ so a rename cannot "
         "silently shrink the redaction set"
     ),
+    # --- Added 2026-10-13 with W56 (ADR-0163) ---
+    "main._SENTRY_HEADER_ALLOWLIST": (
+        "the header names whose values may reach Sentry; the list may grow, what "
+        "must hold is that every header outside it, in any case and any shape, "
+        "arrives redacted: tests/security/test_w56_nothing_private_reaches_sentry.py::"
+        "test_a_transaction_carries_no_private_header_value, "
+        "test_mixed_case_header_names_sent_by_a_client_are_still_redacted, "
+        "test_the_hooks_match_header_names_case_insensitively and "
+        "test_the_header_scrub_survives_odd_header_shapes"
+    ),
+    "main._SENTRY_SCRUB_MAX_DEPTH": (
+        "how deep the scrubber walks before it replaces a subtree; the value may "
+        "move, what must hold is that stack frames two calls deep survive, a "
+        "self-referencing value does not make the hook raise, and a key nested "
+        "past the limit does not come back: tests/security/test_w56_regressions.py::"
+        "test_an_error_two_calls_deep_keeps_its_stack_frames, "
+        "test_a_self_referencing_extra_does_not_make_the_hook_raise and "
+        "test_a_key_nested_past_the_depth_limit_does_not_come_back"
+    ),
     # --- Added 2026-08-06 with the #265 judge cap term ---
     "costs._JUDGE_EVIDENCE_SECTIONS": (
         "assert the judge reserve does NOT track settings.cost_synthesis_sections and "

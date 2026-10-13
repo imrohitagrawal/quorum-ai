@@ -197,8 +197,10 @@ def test_sentry_options_turn_metrics_off() -> None:
 def test_a_metric_produces_no_envelope_item(envelopes: _Envelopes) -> None:
     """A metric carrying a key in an attribute must not leave the process.
 
-    Red when: metrics are on again (``enable_metrics`` True or absent), so a
-    ``trace_metric`` item carrying the key is sent past both hooks.
+    Red when: metrics are on again AND nothing drops them (``enable_metrics``
+    True or absent, and no ``before_send_metric`` hook returning ``None``), so
+    a ``trace_metric`` item carrying the key is sent past both event hooks.
+    Since round 3 the hook alone keeps this green; the test below pins it.
     """
     sentry_sdk.metrics.count("w56r.metric", 1, attributes={"detail": KEY})
     sentry_sdk.capture_message("w56r metric partner")
@@ -208,6 +210,42 @@ def test_a_metric_produces_no_envelope_item(envelopes: _Envelopes) -> None:
     assert KEY not in envelopes.wire()
     # Partner: the transport is live and saw the message sent beside the metric.
     assert [e.get("message") for e in envelopes.items("event")] == ["w56r metric partner"]
+
+
+def test_the_metric_hook_drops_metrics_even_when_metrics_are_on() -> None:
+    """Production installs sentry-sdk 2.72.0, which ignores ``enable_metrics``.
+
+    The CI docker-build log of run 38382789055 prints ``+ sentry-sdk==2.72.0``
+    (the Dockerfile does not install from ``uv.lock``), and 2.72.0 warns that
+    "The enable_metrics option has no effect". So this test forces metrics ON,
+    as 2.72.0 effectively does, and relies on the hook alone.
+
+    Red when: ``_sentry_options()`` stops passing
+    ``before_send_metric=_drop_sentry_metric``, or the hook returns the metric,
+    so the forced-on metric below leaves as a ``trace_metric`` item.
+    """
+    options = main._sentry_options()
+    assert options["before_send_metric"] is main._drop_sentry_metric
+    sample = {"name": "w56r.metric", "type": "counter", "value": 1, "attributes": {}}
+    assert main._drop_sentry_metric(sample, {}) is None
+
+    transport = _EnvelopeTransport()
+    with sentry_sdk.isolation_scope():
+        sentry_sdk.init(dsn=FAKE_DSN, transport=transport, **{**options, "enable_metrics": True})
+        try:
+            sentry_sdk.metrics.count("w56r.forced", 1, attributes={"detail": KEY})
+            sentry_sdk.capture_message("w56r forced metric partner")
+            got = _Envelopes(transport)
+            types = got.item_types()
+            assert "trace_metric" not in types, types
+            assert KEY not in got.wire()
+            # Partner: the transport is live and saw the message sent beside it.
+            assert [e.get("message") for e in got.items("event")] == ["w56r forced metric partner"]
+        finally:
+            client = sentry_sdk.get_client()
+            client.flush(timeout=5)
+            client.close()
+            sentry_sdk.get_global_scope().set_client(None)
 
 
 # ---------------------------------------------------------------------------
