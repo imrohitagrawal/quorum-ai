@@ -273,15 +273,29 @@ class TestRecordGuardrailEventDoesNotPolluteTheMeterWhenDegraded:
             assert "cost_guardrail_degraded_to_simulation" in message
             assert kwargs.get("level") == "warning"
 
-    def test_sentry_scope_receives_the_client_ip_extra(self) -> None:
-        """§2.8: "a spend/account/IP breakdown in the event context"."""
+    def test_sentry_scope_carries_the_spend_key_and_no_client_ip_extra(self) -> None:
+        """W56 (owner decision 2026-10-13): drop the address, keep the id.
+
+        The alert used to carry ``client_ip`` beside ``account_id``, which let
+        Sentry pair a network's spend key with the visitor's address
+        (``docs/48-data-retention.md``). The real end-to-end capture is in
+        ``tests/security/test_w56_nothing_private_reaches_sentry.py``; this is
+        the fast unit partner.
+
+        Red when: ``record_guardrail_event`` sets a ``client_ip`` extra again
+        from any source; or (partners) it stops setting ``account_id``,
+        ``global_daily_ceiling_usd`` or the ``event_type`` tag, or stops using
+        ``push_scope`` so this fake scope records nothing at all (failure
+        mode 19 in ``docs/analysis/2026-10-13-w56-sentry-privacy-failure-modes.md``).
+        """
         with configure_for_tests():
             service = CostEstimationService()
             seen_extras: dict[str, object] = {}
+            seen_tags: dict[str, object] = {}
 
             class _FakeScope:
-                def set_tag(self, *_a: object, **_k: object) -> None:
-                    pass
+                def set_tag(self, key: str, value: object) -> None:
+                    seen_tags[key] = value
 
                 def set_extra(self, key: str, value: object) -> None:
                     seen_extras[key] = value
@@ -304,9 +318,10 @@ class TestRecordGuardrailEventDoesNotPolluteTheMeterWhenDegraded:
                     threshold_action=CostThresholdAction.ALLOW,
                     confirmed=False,
                     global_ceiling_reached=True,
-                    client_ip="9.9.9.9",
                 )
-            assert seen_extras["client_ip"] == "9.9.9.9"
+            assert "client_ip" not in seen_extras
+            assert seen_extras["account_id"] == str(ACCOUNT_A)
+            assert seen_tags["event_type"] == "cost_guardrail_degraded_to_simulation"
             assert seen_extras["global_daily_ceiling_usd"] == str(GLOBAL_DAILY_CEILING_USD)
 
     def test_ordinary_accepted_event_unaffected_when_ceiling_not_reached(

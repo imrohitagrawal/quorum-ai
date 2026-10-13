@@ -1044,7 +1044,6 @@ def _record_run_billing(
     session: SessionContext,
     query_run: QueryRun,
     cost_decision: CostGuardrailDecision,
-    client_ip: str | None = None,
 ) -> ChargeOutcome:
     """Open the one spend-counted charge for a run that is about to execute.
 
@@ -1081,7 +1080,6 @@ def _record_run_billing(
         # honesty: it would keep pushing the global meter past the
         # ceiling on money that was never spent).
         global_ceiling_reached=query_run.cost_estimate.global_ceiling_reached,
-        client_ip=client_ip,
     )
 
 

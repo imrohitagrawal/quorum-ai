@@ -238,11 +238,17 @@ class SessionMintCapExceeded(Exception):
     moment the answer is cheap to compute, and because a page that cannot
     name a time must say nothing rather than round an unknown down to
     "try again now".
+
+    The message is fixed and holds no address (W56 review round 2). It used
+    to BE ``client_ip``, so a later failure while the refusal was being
+    handled sent the visitor's address to Sentry as the chained exception's
+    ``value``, past the header scrub. ``client_ip`` is still accepted so the
+    caller's signature is unchanged, but nothing reads it, so it is not kept.
     """
 
     def __init__(self, client_ip: str, *, retry_after_seconds: int | None = None) -> None:
-        super().__init__(client_ip)
-        self.client_ip = client_ip
+        del client_ip
+        super().__init__("new-session limit reached for this network")
         self.retry_after_seconds = retry_after_seconds
 
 

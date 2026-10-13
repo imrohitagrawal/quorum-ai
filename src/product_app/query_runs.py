@@ -807,11 +807,9 @@ def create_query_run(
             capacity_permit=capacity_permit,
             spend_key=spend.key,
             shared_by_network=spend.shared_by_network,
-            # Issue #100 §2.8: the global-ceiling Sentry alert wants an
-            # IP breakdown alongside account_id. The visitor's own address
-            # (VisitorAddressMiddleware, ADR-0132); the session limits key on
-            # ``auth.client_ip_of`` instead, which counts IPv6 by /64.
-            client_ip=(request.client.host if request.client else None),
+            # W56 (ADR-0163): no visitor address is passed down. The
+            # global-ceiling Sentry alert carries the spend key only; it used
+            # to carry the address too, which paired the two in Sentry.
         )
     except BaseException:
         # Nothing below took ownership of the permit (the worker thread only
@@ -872,7 +870,6 @@ def _start_reserved_query_run(
     capacity_permit: BoundedSemaphore | None,
     spend_key: UUID,
     shared_by_network: bool,
-    client_ip: str | None = None,
 ) -> QueryRunCreateResponse:
     """Create, bill and launch a run whose capacity permit is already held.
 
@@ -925,7 +922,7 @@ def _start_reserved_query_run(
     # background thread that cannot block the request response.
     if session.legacy:
         charge = _record_run_billing(
-            session=session, query_run=query_run, cost_decision=cost_decision, client_ip=client_ip
+            session=session, query_run=query_run, cost_decision=cost_decision
         )
         # Same three-way decision as the production path below. Kept in step
         # deliberately: a rail that only holds on one of the two paths is a rail
@@ -976,7 +973,7 @@ def _start_reserved_query_run(
     # demonstrated reachable; closed anyway, because it costs one indent.
     try:
         charge = _record_run_billing(
-            session=session, query_run=query_run, cost_decision=cost_decision, client_ip=client_ip
+            session=session, query_run=query_run, cost_decision=cost_decision
         )
         if charge is ChargeOutcome.OVER_DAILY_CAP:
             # The cap was crossed between this run's estimate and its charge —

@@ -24,7 +24,7 @@ from contextlib import asynccontextmanager
 from datetime import UTC
 from html import escape
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, cast
 from uuid import UUID
 
 import sentry_sdk
@@ -79,7 +79,7 @@ from product_app.google_signin import (
     signed_in_account,
 )
 from product_app.google_signin import router as google_signin_router
-from product_app.logging_config import setup_json_logging
+from product_app.logging_config import _redact_secrets, setup_json_logging
 from product_app.model_slots import (
     ModelDefaultsResponse,
     default_model_slots,
@@ -147,6 +147,80 @@ def _mentions_user_text(value: object) -> bool:
     return any(field in lowered for field in _USER_TEXT_FIELDS)
 
 
+#: Request headers whose VALUES may reach Sentry; every other header's value
+#: is replaced with "[REDACTED]". Matched on the lower-cased name.
+#:
+#: A list to KEEP, not a list to drop (W56, ADR-0163). The SDK's own header
+#: filter covers none of ours (``Fly-Client-IP``, ``X-CSRF-Token``,
+#: ``X-Account-Id``). The probe measured two more leaking that a list to drop
+#: holding only those three would have missed: ``X-CSRF`` (a second token
+#: header ``auth.py`` accepts) and ``Forwarded: for=<address>``. A header added
+#: tomorrow is redacted until someone chooses to keep it.
+_SENTRY_HEADER_ALLOWLIST = frozenset(
+    {
+        "accept",
+        "accept-encoding",
+        "accept-language",
+        "connection",
+        "content-length",
+        "content-type",
+        "host",
+        "user-agent",
+    }
+)
+
+#: How deep the key-redaction walk goes. The SDK hands the hooks an already
+#: serialised event, so real depth is small: a local probe measured 12 levels
+#: for an error event with a chained cause and frame locals ON (production
+#: turns them off) and 4 for a transaction (ADR-0163). Past this depth a
+#: container is replaced, not returned as-is, so a cycle or pathological
+#: nesting in a direct call ends the walk instead of raising (a hook that
+#: raises makes the SDK drop the event).
+_SENTRY_SCRUB_MAX_DEPTH = 32
+
+
+def _redact_secret_strings(value: object, depth: int = 0) -> object:
+    """Return a copy of ``value`` with every string passed through the log
+    redaction (``logging_config._redact_secrets``).
+
+    W56 (ADR-0163): a key inside an exception message reached Sentry in
+    ``exception.values[].value`` (the cause as well as the outer exception)
+    while the JSON log line for the same traceback printed ``[REDACTED]``.
+    Walking the whole event covers the message, ``logentry``, ``extra``,
+    ``tags``, ``contexts``, breadcrumbs and spans without naming each one.
+    Dict KEYS are not redacted (ADR-0163, "what it cannot see").
+    """
+    if isinstance(value, str):
+        return _redact_secrets(value)
+    if isinstance(value, dict | list | tuple) and depth >= _SENTRY_SCRUB_MAX_DEPTH:
+        return "[REDACTED]"
+    if isinstance(value, dict):
+        return {key: _redact_secret_strings(item, depth + 1) for key, item in value.items()}
+    if isinstance(value, list | tuple):
+        return [_redact_secret_strings(item, depth + 1) for item in value]
+    return value
+
+
+def _redact_request_headers(request: dict[str, Any]) -> None:
+    """Keep header values only for :data:`_SENTRY_HEADER_ALLOWLIST`.
+
+    W56 (ADR-0163). Measured: the visitor's address (``Fly-Client-IP``), the
+    anti-forgery token and the account header all arrived on transactions,
+    on error events, and on events from worker threads that inherit the
+    request's scope. A ``headers`` value that is not a dict is replaced
+    whole: its shape is unknown, so nothing in it is known to be safe.
+    """
+    if "headers" not in request:
+        return
+    headers = request["headers"]
+    if not isinstance(headers, dict):
+        request["headers"] = "[REDACTED]"
+        return
+    for name in list(headers):
+        if str(name).lower() not in _SENTRY_HEADER_ALLOWLIST:
+            headers[name] = "[REDACTED]"
+
+
 def _scrub_user_text(event: SentryEvent) -> SentryEvent:
     """Strip user-supplied prose from a Sentry payload, whatever its shape.
 
@@ -158,8 +232,24 @@ def _scrub_user_text(event: SentryEvent) -> SentryEvent:
 
     Written to be shared by BOTH `before_send` and `before_send_transaction`,
     because the transaction path was the one that shipped `request.data` raw.
+
+    W56 (ADR-0163) added three steps, for the same two hooks: every string in
+    the event is key-redacted first (on a copy), request header values are
+    kept only for the allow-list, and the trace's dynamic sampling context is
+    dropped.
     """
+    event = cast(SentryEvent, _redact_secret_strings(event))
+    contexts = event.get("contexts")
+    trace = contexts.get("trace") if isinstance(contexts, dict) else None
+    if isinstance(trace, dict):
+        # W56 round 1. The SDK copies a visitor's incoming ``baggage`` header
+        # here, and after this hook ``sentry_sdk/client.py`` pops the key and
+        # sends it as the ENVELOPE header ``trace``, which no hook sees.
+        # Measured: ``sentry-user_segment=<address>`` reached that header.
+        trace.pop("dynamic_sampling_context", None)
     request = event.get("request")
+    if isinstance(request, dict):
+        _redact_request_headers(request)
     if isinstance(request, dict) and "data" in request:
         request["data"] = "[REDACTED]"
     if isinstance(request, dict) and CALLBACK_PATH in str(request.get("url", "")):
@@ -211,16 +301,35 @@ def _redact_sentry_transaction(event: SentryEvent, _hint: dict[str, Any]) -> Sen
     return _scrub_user_text(event)
 
 
+def _drop_sentry_metric(_metric: dict[str, Any], _hint: dict[str, Any]) -> None:
+    """Drop every Sentry metric (``trace_metric`` item) before it is sent.
+
+    ``enable_metrics=False`` alone is not enough: sentry-sdk 2.72.0, which the
+    image built from the Dockerfile installs (W56 review round 3), ignores that
+    option and sends metrics anyway. Returning ``None`` drops them on every
+    version.
+    """
+    return None
+
+
 # Sentry: error tracking in production. This is a no-op when
 # SENTRY_DSN is not set, so local dev and tests run unaffected.
 # When the DSN is present (set via `fly secrets set SENTRY_DSN=...`),
 # unhandled exceptions and performance traces are reported to the
 # Sentry project. The integration also enriches events with the
-# FastAPI request context (path, method, headers).
+# FastAPI request context (path, method, headers); header values are
+# redacted except an allow-list (W56, ``_SENTRY_HEADER_ALLOWLIST``).
 SENTRY_DSN = settings.sentry_dsn or os.environ.get("SENTRY_DSN", "")
-if SENTRY_DSN:
-    sentry_sdk.init(
-        dsn=SENTRY_DSN,
+
+
+def _sentry_options() -> dict[str, Any]:
+    """Every keyword production passes to ``sentry_sdk.init`` except the DSN.
+
+    One function so the tests initialise Sentry with exactly production's
+    options (``tests/security/test_w56_nothing_private_reaches_sentry.py``),
+    and a test pins that the real call passes nothing else.
+    """
+    return dict(
         # Sample 10% of transactions for performance monitoring.
         # Higher rates eat into the Sentry quota without proportional
         # signal; 10% is enough to spot regressions.
@@ -228,7 +337,8 @@ if SENTRY_DSN:
         # Sample 100% of error events - we want to see every crash.
         sample_rate=1.0,
         environment=settings.runtime_environment.value,
-        # Don't send the user's query text or any LLM response content.
+        # Don't send the user's query text or any LLM response content, and
+        # (W56) no header value outside the allow-list and no key-shaped text.
         before_send=_redact_sentry_event,
         # SEPARATE hook, and not optional: `before_send` is NEVER called for
         # transaction items. Measured 2026-08-07 against a loopback collector,
@@ -241,8 +351,28 @@ if SENTRY_DSN:
         # `stacktrace.frames[].vars` as `payload`, `body_bytes` and `query_run`.
         include_local_variables=False,
         # PII is not enabled - we never want to send user data to Sentry.
+        # Turning it on would also send cookies, ``REMOTE_ADDR`` and ``user``
+        # (W56 failure mode 11); a W56 test pins it off.
         send_default_pii=False,
+        # W56 round 1: metrics (``trace_metric`` items) pass through neither
+        # hook above, and sentry-sdk 2.63.0 turns them on by default.
+        enable_metrics=False,
+        # W56 round 3: the hook drops every metric whatever the library
+        # version. The Dockerfile production deploys from ignores uv.lock
+        # (until W68), so the image installs sentry-sdk 2.72.0, not the locked
+        # 2.63.0 (CI docker-build log of run 38382789055, line 1160:
+        # `+ sentry-sdk==2.72.0`), and 2.72.0 ignores ``enable_metrics=False``.
+        before_send_metric=_drop_sentry_metric,
+        # W56 review round 2: ``log`` items pass through neither hook either.
+        # 2.63.0 already defaults this to False, but it also forwards logs
+        # when ``_experiments["enable_logs"]`` is true, so the off switch is
+        # written here and a test pins both switches.
+        enable_logs=False,
     )
+
+
+if SENTRY_DSN:
+    sentry_sdk.init(dsn=SENTRY_DSN, **_sentry_options())
 
 
 # Self-hosted interactive-docs assets. FastAPI's built-in ``/docs`` loads Swagger
