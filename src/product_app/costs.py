@@ -1407,7 +1407,6 @@ class CostEstimationService:
         confirmed: bool,
         preview: bool = False,
         global_ceiling_reached: bool = False,
-        client_ip: str | None = None,
     ) -> None:
         # Map the (threshold_action, confirmed, preview, global_ceiling_reached)
         # combination to an event type.
@@ -1486,8 +1485,9 @@ class CostEstimationService:
                     if query_run_id is not None:
                         scope.set_extra("query_run_id", str(query_run_id))
                     if event_type == "cost_guardrail_degraded_to_simulation":
-                        if client_ip is not None:
-                            scope.set_extra("client_ip", client_ip)
+                        # W56 (ADR-0163): no visitor address here. The spend
+                        # key above is what an operator acts on; the address
+                        # beside it let Sentry pair a network's key with an IP.
                         from product_app.feedback_store import (
                             get_store,  # local import to avoid cycles
                         )
@@ -1523,7 +1523,6 @@ class CostEstimationService:
         threshold_action: CostThresholdAction,
         confirmed: bool,
         global_ceiling_reached: bool,
-        client_ip: str | None = None,
     ) -> ChargeOutcome:
         """Open this run's charge, re-testing both rails ATOMICALLY as it does.
 
@@ -1565,7 +1564,6 @@ class CostEstimationService:
                 threshold_action=threshold_action,
                 confirmed=confirmed,
                 global_ceiling_reached=True,
-                client_ip=client_ip,
             )
             return ChargeOutcome.OVER_GLOBAL_CEILING
 
@@ -1643,7 +1641,6 @@ class CostEstimationService:
                 threshold_action=threshold_action,
                 confirmed=confirmed,
                 global_ceiling_reached=True,
-                client_ip=client_ip,
             )
         return outcome
 
