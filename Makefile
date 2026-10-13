@@ -59,7 +59,7 @@ DIFF_BASE ?= origin/main
 # disagrees with the real pathspec is a lie waiting to be believed; the banner
 # now states the pathspec the code actually uses.
 
-.PHONY: docs-map-check check-python publishing-check skill-onboarding-check skill-discover handoff check-breaking apply-orbi-profile skill-route prompt-check start next capture-idea validate validate-strict fr-completeness openapi-export openapi-check adr-index-check open-work-check open-work-write completion-check board-github-check readiness quality format format-check lint type-check test evals test-report gate-min-collected gate-min-executed perf-gate api-contract mutation-baseline diff-cover security-scan close-guard ci-evidence run docker-build feedback-audit session-clean close-window
+.PHONY: docs-map-check check-python publishing-check skill-onboarding-check skill-discover handoff check-breaking apply-orbi-profile skill-route prompt-check start next capture-idea validate validate-strict fr-completeness openapi-export openapi-check adr-index-check open-work-check open-work-write completion-check board-github-check readiness quality format format-check lint type-check test evals test-report gate-min-collected gate-min-executed perf-gate api-contract mutation-baseline diff-cover security-scan close-guard ci-evidence run docker-build vuln-audit image-lock-check feedback-audit session-clean close-window
 
 check-python:
 	@if [ -z "$(PYTHON)" ]; then 		echo "ERROR: Python 3 is required. Install python3, or set PYTHON=/path/to/python3."; 		exit 127; 	fi
@@ -1134,8 +1134,22 @@ ci-evidence: test-report security-scan
 run:
 	UV_CACHE_DIR=$(UV_CACHE_DIR) PYTHONPATH=src uv run uvicorn product_app.main:app --host 0.0.0.0 --port 8000 $(if $(filter 1 true yes on,$(RELOAD)),--reload,)
 
+# The tag docker-build builds and image-lock-check reads (W68, ADR-0164).
+IMAGE ?= quorum-ai:local
+
 docker-build:
-	docker build -t quorum-ai:local .
+	docker build -t $(IMAGE) .
+
+# W68 (ADR-0164): known vulnerabilities in the libraries uv.lock pins for
+# production. Exits 1 on any finding, 2 when it audited nothing. Needs the
+# network (PyPI's vulnerability service).
+vuln-audit:
+	UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python scripts/vuln_audit.py
+
+# W68 (ADR-0164): the image docker-build tagged holds exactly the runtime
+# packages uv.lock pins. Run after docker-build.
+image-lock-check:
+	UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python scripts/check_image_matches_lock.py --image $(IMAGE)
 
 feedback-audit:
 	@if [ -z "$$OPENROUTER_API_KEY" ]; then 		echo "OPENROUTER_API_KEY is required for the audit LLM call."; 		echo "Without it, the audit runs in local-only mode (statistics only)."; 		echo "Set OPENROUTER_LIVE_EXECUTION_ENABLED=true and OPENROUTER_API_KEY to enable findings."; 	fi

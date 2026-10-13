@@ -28,14 +28,14 @@ dependencies = [
   # attempts at that decision were rejected by adversarial review for
   # deleting real citations at block boundaries they got wrong. ADR-0029.
   #
-  # PINNED EXACTLY, deliberately breaking the range convention above. The
-  # production image is built with `uv pip install .` (Dockerfile:10), which
-  # resolves from THIS range and ignores uv.lock, while every CI lane uses
-  # `uv sync` and honours the lock. A grounding score is a pure function of
-  # this parser's tokenisation, so a range would let the first rebuild after
-  # any upstream release change 0.30 of the served trust score for identical
-  # answers, with no code change and no failing test. A version bump here
-  # must be a reviewed decision, not a side effect of a rebuild.
+  # PINNED EXACTLY, deliberately breaking the range convention above. When
+  # this pin was made the production image was built with `uv pip install .`,
+  # which resolved from THIS range and ignored uv.lock. Since W68 (ADR-0164)
+  # the image installs from uv.lock, but the exact pin stays: a grounding
+  # score is a pure function of this parser's tokenisation, so a range would
+  # let a routine `uv lock --upgrade` change 0.30 of the served trust score
+  # for identical answers, with no code change and no failing test. A version
+  # bump here must be a reviewed decision, not a side effect of a lock update.
   "markdown-it-py==4.2.0",
   "pypdf==6.19.0",
   # pypdf needs it to open AES-encrypted PDFs; pinned exactly like pypdf (ADR-0154).
@@ -225,6 +225,11 @@ also_copy = [
   # --no-proxy-headers. tests/security/test_trusted_proxy_ips.py reads it from
   # ``REPO_ROOT`` to prove uvicorn's own proxy handling stays off (ADR-0132).
   "Dockerfile",
+  # ``uv.lock`` is read from ``REPO_ROOT`` by
+  # tests/unit/test_w68_build_from_lock.py, which pins anyio and urllib3 at or
+  # above their fixed releases (W68, ADR-0164). Caught by
+  # ``test_mutation_copy_completeness``, which named this fix in its failure.
+  "uv.lock",
   # ``fly.toml`` pins the deployed posture (RUNTIME_ENVIRONMENT=production,
   # secure cookies, no session-rate override). Stage B's
   # tests/unit/test_session_rate_lane_posture.py reads it from ``REPO_ROOT``;

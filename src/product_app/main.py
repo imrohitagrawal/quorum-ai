@@ -358,10 +358,12 @@ def _sentry_options() -> dict[str, Any]:
         # hook above, and sentry-sdk 2.63.0 turns them on by default.
         enable_metrics=False,
         # W56 round 3: the hook drops every metric whatever the library
-        # version. The Dockerfile production deploys from ignores uv.lock
-        # (until W68), so the image installs sentry-sdk 2.72.0, not the locked
-        # 2.63.0 (CI docker-build log of run 38382789055, line 1160:
-        # `+ sentry-sdk==2.72.0`), and 2.72.0 ignores ``enable_metrics=False``.
+        # version. Before W68 the image ignored uv.lock and installed
+        # sentry-sdk 2.72.0, not the locked 2.63.0 (CI docker-build log of run
+        # 38382789055, line 1160: `+ sentry-sdk==2.72.0`), and 2.72.0 ignores
+        # ``enable_metrics=False``. Since W68 (ADR-0164) the image installs the
+        # locked version; the hook stays as defence in depth, so a later
+        # sentry-sdk update cannot turn metrics back on.
         before_send_metric=_drop_sentry_metric,
         # W56 review round 2: ``log`` items pass through neither hook either.
         # 2.63.0 already defaults this to False, but it also forwards logs

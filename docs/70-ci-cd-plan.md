@@ -8,7 +8,9 @@
 - Type check
 - Report-generating pytest with JUnit XML and coverage XML
 - Deterministic repository security scan
+- Known-vulnerability audit of the libraries `uv.lock` pins for production (`make vuln-audit`, ADR-0164)
 - Docker image build
+- The built image holds exactly what `uv.lock` pins (`make image-lock-check`, ADR-0164)
 - Non-secret release evidence artifact upload
 
 ## Artifact Evidence
