@@ -127,7 +127,10 @@ hooks and `send_default_pii=False`, with a capture transport and every request s
     - Span streaming (`_experiments={"trace_lifecycle": "stream"}`) copies every unfiltered
       header into `http.request.header.*` span attributes (`_asgi_common.py:118-121`,
       `asgi.py:320-324`). It runs `before_send_span`, not `before_send_transaction`.
-    - `enable_logs` runs `before_send_log` (`client.py:1200-1215`).
+    - `enable_logs` runs `before_send_log` (`client.py:1200-1215`). It has a second switch:
+      `utils.py:2077-2084` (`has_logs_enabled`) also reads `_experiments["enable_logs"]`. Review
+      round 2 found a mutation adding that switch left every test green; W56 now passes
+      `enable_logs=False` and a test pins both switches.
     - Both are off: `tracing_utils.py:112-116`, `consts.py:1316`.
     - Metrics: `enable_metrics` defaults to True (`consts.py:1319`) and sends `trace_metric`
       items, which run `before_send_metric`, not either hook. Review round 1 measured a key in a
@@ -138,7 +141,7 @@ hooks and `send_default_pii=False`, with a capture transport and every request s
 
 13. **Stripping headers in a middleware does nothing.** Sentry wraps `Starlette.__call__`
     outside every app middleware (`starlette.py:432-443`), and reads the raw scope.
-    `VisitorAddressMiddleware` copies the scope (`auth.py:127`) and needs `Fly-Client-IP` to
+    `VisitorAddressMiddleware` copies the ASGI scope (`auth.py:130`) and needs `Fly-Client-IP` to
     work. Scrub in the hooks.
 
 14. **List of headers to drop, or list of headers to keep.**
@@ -169,8 +172,11 @@ hooks and `send_default_pii=False`, with a capture transport and every request s
 18. **Changing shared objects.**
     - Safe: each event gets its own deep copy of `request` (`asgi.py:402-405`,
       `starlette.py:541`).
-    - Not safe: breadcrumb dicts are the scope's own objects (`scope.py:1643`). Editing them
-      in the hook changes them for later events and for forked thread scopes.
+    - Also safe, in sentry-sdk 2.63.0: breadcrumbs. `client.py:870-879` serialises the event
+      before `before_send` runs, and the serialiser builds new dicts, so the hook edits a copy.
+      (This line said the opposite until W56 review round 2.) Measured: a hook that rewrote
+      every breadcrumb message sent the rewritten text on two events, and the isolation scope's
+      breadcrumb still read `original` afterwards (a scratch probe with a capture transport).
 
 19. **The existing alert test cannot fail.**
     - Where: `tests/unit/test_global_spend_ceiling.py:276-309` mocks `sentry_sdk.push_scope`,

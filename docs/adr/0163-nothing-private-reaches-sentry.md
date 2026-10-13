@@ -29,14 +29,16 @@ findings S1 and S2 of `docs/analysis/2026-10-13-security-review.md`. Those probe
 This record changes three earlier statements without editing their bodies:
 
 - **ADR-0023's title**, "Sentry payloads are scrubbed on every path", was true of the user's
-  question and the sign-in callback's query only. Header values were not scrubbed, and
-  key-shaped text was not scrubbed in exception values, `message`, `extra`, `tags`, `contexts`
-  or spans, until this change. (Key-shaped text in log messages was already redacted by
+  question and the sign-in callback's query only. Of the request header values, the SDK's own
+  filter already removed seven (`cookie`, `authorization`, `x-forwarded-for` and four more; see
+  Measurements); ours (`fly-client-ip`, `x-csrf-token`, `x-csrf`, `x-account-id`) went through.
+  Key-shaped text was not scrubbed in exception values, `message`, `extra`, `tags`, `contexts`
+  or spans until this change. (Key-shaped text in log messages was already redacted by
   ADR-0041's record factory before Sentry made breadcrumbs of them.)
 - **ADR-0144 decision 5** says the ceiling alert "now carries the network key beside" the
   visitor's address, "so Sentry can pair the two". After this change the alert carries the key
   and no address.
-- **ADR-0132, line 108**, says the alert "reads `request.client.host`" and "was designed to
+- **ADR-0132, lines 108-110**, say the alert "reads `request.client.host`" and "was designed to
   carry the visitor's" address. It no longer reads or sends it.
 
 ## Decision
@@ -45,11 +47,13 @@ This record changes three earlier statements without editing their bodies:
    `sentry_sdk.init` except the DSN, and production calls exactly
    `sentry_sdk.init(dsn=SENTRY_DSN, **_sentry_options())`. The tests initialise Sentry with the
    same function, and a test pins that the real call passes nothing else. It also pins
-   `send_default_pii=False` (on, it would send cookies, `REMOTE_ADDR` and `user`; failure mode 11)
-   and that log forwarding and span streaming, two channels outside both hooks, stay off
-   (failure mode 12). Metrics, a third such channel, are turned off with
-   `enable_metrics=False` (sentry-sdk 2.63.0 defaults it to on; review round 1 measured a key in
-   a metric attribute reaching the transport as a `trace_metric` item).
+   `send_default_pii=False` (on, it would send cookies, `REMOTE_ADDR` and `user`; failure mode 11).
+   Three channels skip both hooks (failure mode 12), and each is switched off in the options:
+   metrics with `enable_metrics=False` (sentry-sdk 2.63.0 defaults it to on; review round 1
+   measured a key in a metric attribute reaching the transport as a `trace_metric` item), log
+   forwarding with `enable_logs=False` (review round 2: 2.63.0 also turns it on through
+   `_experiments["enable_logs"]`, and a mutation adding that left every earlier test green), and
+   span streaming by passing no `_experiments["trace_lifecycle"]`.
 2. **Header values are kept only for a list of eight names**, matched on the lower-cased name:
    `accept`, `accept-encoding`, `accept-language`, `connection`, `content-length`,
    `content-type`, `host`, `user-agent`. Every other value becomes `[REDACTED]`; a `headers`
@@ -72,9 +76,18 @@ This record changes three earlier statements without editing their bodies:
    `CostEstimationService.record_guardrail_event` and `try_record_run_charge` no longer take a
    `client_ip` parameter, the `client_ip` extra is gone, and the plumbing that carried
    `request.client.host` from `create_query_run` down to them is removed. `account_id`,
-   `estimated_cost_usd`, `query_run_id`, the ceiling, and the global spend when a store is
-   configured, stay in the alert. The
-   session limits' own use of the address (`auth.py`, `main.py`) is untouched.
+   `estimated_cost_usd`, the ceiling, and the global spend when a store is configured, stay in
+   the alert with their values. The `query_run_id` key also arrives, but its value is
+   `[REDACTED]`: an older rule in `_scrub_user_text` blanks every extra whose name contains
+   "query" (it predates W56 and is left alone; see Consequences). The session limits' own use
+   of the address (`auth.py`, `main.py`) is untouched.
+7. **The session-limit error carries no address** (review round 2). `SessionMintCapExceeded`'s
+   message was the visitor's address, so a failure raised while `/ui` handled a refused mint
+   sent the address to Sentry as the chained exception's `value`, past the header scrub. Its
+   message is now fixed (`new-session limit reached for this network`), and the address it is
+   given is not kept, since nothing read it. A grep of `src/` for other exceptions built from an
+   address-like value found one more, `source_fetcher.py`'s resolve timeout, which names the
+   host of a cited web page, not the visitor; it is left as is.
 
 ## Measurements
 
@@ -118,13 +131,18 @@ This record changes three earlier statements without editing their bodies:
 - The ceiling alert names the spend key, not the visitor. Matching it to a network needs the
   server secret, as before.
 - `docs/48-data-retention.md` rows for the signed-in and anonymous spend keys say the alert
-  carries the key without the address. How long the cost ledger keeps the key is still open
-  (W55); how long Sentry may keep it has not yet been asked. CHG-043 decides only what the alert
-  carries.
+  carries the key without the address. How long the cost ledger keeps the anonymous network's
+  key: decided: 48 hours (CHG-033 (c)); not yet built (board row W55). How long the ledger keeps a
+  signed-in account's key, and how long Sentry may keep either key, has not yet been asked.
+  CHG-043 decides only what the alert carries.
 - `tests/security/test_w56_nothing_private_reaches_sentry.py` holds the end-to-end checks:
   capture through a real transport, sweep the whole payload, and a partner beside every
-  "absent" check. `tests/security/test_w56_regressions.py` holds the review round 1 checks,
-  with a transport that keeps whole envelopes, headers included.
+  "absent" check. `tests/security/test_w56_regressions.py` holds the review round 1 and round 2
+  checks, with a transport that keeps whole envelopes, headers included.
+- **The `query_run_id` value arrives blanked (advisory).** The rule in `_scrub_user_text` that
+  predates W56 replaces every extra whose name contains "query" or "prompt" with `[REDACTED]`,
+  so the alert's `query_run_id` key arrives with no usable value. W56 leaves that rule alone (it
+  guards the user's question and is out of scope here).
 - With no `trace` envelope header, Sentry receives no dynamic sampling context from this app.
   Sampling is decided in the process (`traces_sample_rate`); whether the Sentry organisation
   relies on server-side dynamic sampling is UNVERIFIED (its settings were not read).
@@ -148,15 +166,35 @@ This record changes three earlier statements without editing their bodies:
   No route is known to take either in its query today (UNVERIFIED across every route).
 - **Dict keys.** The walk redacts values, not keys, so a key-shaped dict key (a tag name, an
   `extra` name) is sent as is. Redacting keys could merge two keys into one `[REDACTED]`.
-- **Sampling.** A visitor can force every one of their requests into a transaction with a
-  `sentry-trace` header (failure mode 10). Nothing here limits that; it is advisory, and the
-  scrub applies to every transaction anyway.
+- **Sampling (advisory).** A visitor can force every one of their requests into a transaction
+  with a `sentry-trace` header (failure mode 10). Review round 2 measured it again on this
+  branch: `forced=40/40 plain=2/40 rate=0.1` (reported by the reviewer, not re-run by the
+  session). It costs Sentry quota only; the scrub applies to every transaction, so no data
+  leaves through it. Nothing here limits it.
+- **Source lines in stack frames (advisory).** Sentry sends a few source lines around each stack
+  frame (`context_line`, `pre_context`, `post_context`), and the key walk applies the log
+  patterns to them too. Over `src/`, 9 lines that do not start with `#` change when run through
+  `_redact_secrets` (3 code lines, for example `readiness.py:300`
+  `api_key = settings.openrouter_api_key`, and 6 docstring lines), so a frame on one of them
+  arrives with that line partly `[REDACTED]`. Counted by running `_redact_secrets` over every
+  line of every `.py` file under `src/` and skipping lines whose first character is `#`.
+- **Outgoing trace headers (advisory, outside W56).** `trace_propagation_targets` is not set, and
+  sentry-sdk 2.63.0 defaults it to `['.*']` (`consts.py`, `MATCH_ALL`), so outgoing requests to
+  OpenRouter and Google carry `sentry-trace` and `baggage` headers. They go to those third
+  parties, not to Sentry, so W56 does not cover them (reported by review round 2).
+- **The board row's evidence.** W56's needle in `docs/65-open-work.md` pins only the alert fix
+  (`scope.set_extra("client_ip", client_ip)` gone from `costs.py`). The header scrub and the key
+  walk are pinned by the tests named under Consequences, not by the board (advisory).
 - **Sentry's own settings.** Server-side scrubbing and retention in the Sentry organisation are
   UNVERIFIED.
 - **A future channel.** Three channels skip both hooks: span streaming, log forwarding and
   metrics. Turning one on adds a path through `before_send_span`, `before_send_log` or
-  `before_send_metric`, which this scrubber does not run in. All three are off (metrics since
-  review round 1) and tests pin them off; turning one on must add the scrub to it. A channel a
-  later SDK version adds is not covered by any test here.
+  `before_send_metric`, which this scrubber does not run in. All three are off. What the tests
+  pin: `enable_metrics` and `enable_logs` are `False` in `_sentry_options()`; its `_experiments`
+  (production sets none today) holds no `enable_logs`, `enable_metrics` or `trace_lifecycle`; and, with
+  the real options, a metric sends no `trace_metric` item and a `logging.warning` sends no `log`
+  item. No test sends a span with streaming on. Turning a channel on must add the scrub to it. A
+  channel a later SDK version adds, or a new switch for an existing one, is not covered by any
+  test here.
 - **`docs/48-data-retention.md` has no gate.** A false sentence re-added there, or a citation
   of a CHG row that does not exist, passes every check. This predates W56 and is advisory.

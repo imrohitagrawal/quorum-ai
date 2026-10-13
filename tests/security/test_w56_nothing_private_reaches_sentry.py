@@ -567,8 +567,12 @@ def test_sentry_options_pin_the_privacy_settings() -> None:
 
     Red when: ``_sentry_options`` is missing (AttributeError), or
     ``send_default_pii`` / ``include_local_variables`` is turned on, or either
-    hook is dropped, or log forwarding or span streaming (two channels outside
-    both hooks) is switched on.
+    hook is dropped, or the top-level ``enable_logs`` keyword is true, or
+    ``_experiments`` holds a ``trace_lifecycle`` key (span streaming). This
+    test does NOT see ``_experiments["enable_logs"]``, the second switch for
+    log forwarding; ``test_w56_regressions.py``
+    (``test_sentry_options_pin_log_forwarding_off_by_both_switches``) pins
+    that one, and ``enable_metrics``.
     """
     options = main._sentry_options()
     assert options["send_default_pii"] is False

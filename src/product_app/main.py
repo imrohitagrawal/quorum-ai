@@ -346,6 +346,11 @@ def _sentry_options() -> dict[str, Any]:
         # W56 round 1: metrics (``trace_metric`` items) pass through neither
         # hook above, and sentry-sdk 2.63.0 turns them on by default.
         enable_metrics=False,
+        # W56 review round 2: ``log`` items pass through neither hook either.
+        # 2.63.0 already defaults this to False, but it also forwards logs
+        # when ``_experiments["enable_logs"]`` is true, so the off switch is
+        # written here and a test pins both switches.
+        enable_logs=False,
     )
 
 
