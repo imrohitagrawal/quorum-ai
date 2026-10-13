@@ -5,15 +5,32 @@ WORKDIR /app
 
 # Copy only the dependency manifest first to leverage layer caching.
 # This layer is invalidated only when pyproject.toml or uv.lock changes.
-# --compile-bytecode: the runtime stage sets PYTHONDONTWRITEBYTECODE=1, so the
-# .pyc files this stage writes are the only ones the image has. The PDF child
-# (ADR-0153) imports pypdf on every PDF inside a 2 s CPU limit. Measured on a
-# Mac (W54 step 3 review) with no standard-library bytecode, as the python:slim
-# base image is built (read from its Dockerfile, not run): about 0.18 s of CPU
-# with this venv compiled against about 0.28 s without.
 COPY pyproject.toml uv.lock ./
-RUN uv venv /opt/venv \
-    && uv pip install --python /opt/venv/bin/python --no-cache --compile-bytecode .
+
+# Install exactly what uv.lock pins (W68, ADR-0164). Until W68 this stage ran
+# `uv pip install .`, which resolves from the version ranges in pyproject.toml
+# and ignores uv.lock, so the image CI built ran library versions CI's tests
+# never ran.
+# - --frozen: read the lock as it is, never re-resolve.
+# - --no-dev, and no --extra: the dev and quality extras stay out of the image.
+# - --no-install-project: the app is not installed as a package; the runtime
+#   stage puts /app/src on PYTHONPATH.
+# - UV_PROJECT_ENVIRONMENT: sync into /opt/venv, which the runtime stage copies.
+# - UV_PYTHON and UV_PYTHON_DOWNLOADS=never: build the venv on this image's own
+#   /usr/local/bin/python3.12, the same path python:3.12-slim has, so the venv's
+#   interpreter link still resolves in the runtime stage. uv never downloads one.
+# - --compile-bytecode: the runtime stage sets PYTHONDONTWRITEBYTECODE=1, so the
+#   .pyc files this stage writes are the only ones the image has. The PDF child
+#   (ADR-0153) imports pypdf on every PDF inside a 2 s CPU limit. Measured on a
+#   Mac (W54 step 3 review) with no standard-library bytecode, as the python:slim
+#   base image is built (read from its Dockerfile, not run): about 0.18 s of CPU
+#   with this venv compiled against about 0.28 s without.
+# `make image-lock-check` (CI, after `make docker-build`) fails when the built
+# image's packages differ from the lock.
+ENV UV_PROJECT_ENVIRONMENT=/opt/venv \
+    UV_PYTHON=/usr/local/bin/python3.12 \
+    UV_PYTHON_DOWNLOADS=never
+RUN uv sync --frozen --no-dev --no-install-project --compile-bytecode --no-cache
 
 # Copy the application source
 COPY src ./src

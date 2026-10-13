@@ -62,7 +62,7 @@ jobs:
         run: uv python install 3.12
 
       - name: Install backend dependencies
-        run: uv sync --all-extras --dev
+        run: uv sync --locked --all-extras --dev
 
       - name: Golden-set structural gate (hermetic, blocking in the default suite)
         run: uv run pytest tests/evals/test_golden_set_gate.py -q --no-cov

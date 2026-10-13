@@ -62,7 +62,7 @@ jobs:
         run: uv python install 3.12
 
       - name: Install dependencies
-        run: uv sync --all-extras --dev
+        run: uv sync --locked --all-extras --dev
 
       # tests/unit/test_negative_assertion_guard.py drives the #131 checker as
       # a subprocess, so it needs node and e2e/node_modules. Without them every

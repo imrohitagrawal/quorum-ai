@@ -213,12 +213,13 @@ def test_a_metric_produces_no_envelope_item(envelopes: _Envelopes) -> None:
 
 
 def test_the_metric_hook_drops_metrics_even_when_metrics_are_on() -> None:
-    """Production installs sentry-sdk 2.72.0, which ignores ``enable_metrics``.
+    """The metric hook holds even on a sentry-sdk that ignores ``enable_metrics``.
 
-    The CI docker-build log of run 38382789055 prints ``+ sentry-sdk==2.72.0``
-    (the Dockerfile does not install from ``uv.lock``), and 2.72.0 warns that
-    "The enable_metrics option has no effect". So this test forces metrics ON,
-    as 2.72.0 effectively does, and relies on the hook alone.
+    Before W68 production installed sentry-sdk 2.72.0: the CI docker-build log
+    of run 38382789055 prints ``+ sentry-sdk==2.72.0`` (the Dockerfile did not
+    install from ``uv.lock`` then; since W68, ADR-0164, it does), and 2.72.0
+    warns that "The enable_metrics option has no effect". So this test forces
+    metrics ON, as 2.72.0 effectively does, and relies on the hook alone.
 
     Red when: ``_sentry_options()`` stops passing
     ``before_send_metric=_drop_sentry_metric``, or the hook returns the metric,

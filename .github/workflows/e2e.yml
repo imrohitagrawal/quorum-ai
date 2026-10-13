@@ -115,7 +115,7 @@ jobs:
         run: uv python install 3.12
 
       - name: Install backend dependencies
-        run: uv sync --all-extras --dev
+        run: uv sync --locked --all-extras --dev
 
       - name: Set up Node
         uses: actions/setup-node@v4

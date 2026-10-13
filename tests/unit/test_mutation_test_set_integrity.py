@@ -160,6 +160,11 @@ DESELECTED_FROM_THE_MUTANT_RUN = (
     # into `./mutants/` (`also_copy` does not list it). It imports nothing
     # from `product_app`, so it can kill no `src/` mutant.
     "tests/unit/test_w54_dockerfile_compiles_bytecode.py",
+    # W68 (ADR-0164). Parses the repository's `Dockerfile`, `uv.lock`,
+    # `.github/workflows/ci.yml` and `Makefile`. It imports nothing from
+    # `product_app` (only `re`, `shlex`, `tomllib`, `yaml`, `packaging` and
+    # the `tests` helpers), so it can kill no `src/` mutant.
+    "tests/unit/test_w68_build_from_lock.py",
 )
 
 MARKER = "repo_introspection"
