@@ -14,11 +14,15 @@ Each finding carries a class (`AGENTS.md` triage): only `REQUIRED_CONTRACT` and
 
 ## The answer in short
 
-- **The app's own defences held** against every attack the agents ran: sign-in, sessions, the
-  page fetcher and the spend limits (section 3).
-- **Three things are live today:** the visitor's address and anti-forgery token reach Sentry
-  (finding S1); six known library vulnerabilities, with no check in CI that would notice them
-  (S3); and a production build that does not install the versions CI tested (S4).
+- **Agents reported, and the session did not re-run, that most of the app's own defences held:**
+  sign-in, sessions, the page fetcher and the spend limits (section 3). The exceptions are S7
+  and the rows of section 2.
+- **Live today:**
+  - the visitor's address and anti-forgery token reach Sentry (finding S1);
+  - the production build does not install the versions locked in `uv.lock` (S4);
+  - nothing in CI checks for known library vulnerabilities (S3).
+- **Six known vulnerabilities** are in the locked versions of two libraries (S3). Which versions
+  production actually runs is UNVERIFIED, because of S4.
 - **Nothing costs money today**, because live answers are off (`fly.toml:80`,
   `OPENROUTER_LIVE_EXECUTION_ENABLED = "false"`). Several findings must be fixed before they
   are switched back on (S7 to S9).
@@ -26,9 +30,13 @@ Each finding carries a class (`AGENTS.md` triage): only `REQUIRED_CONTRACT` and
   `src/product_app/query_run_orchestration.py:1249` sets
   `credential_source = ProviderCredentialSource.APP_OWNED`, and `BYO_OPENROUTER` appears only
   where it is defined (`src/product_app/provider_keys.py:7`).
-- **There was no security reviewer in the process.** `configs/skill-router.json` routes the
-  security skills only for sign-in changes (`security-threat-modeling`, `owasp-control-mapper`)
-  and AI-output changes (`prompt-injection-defense`). The break-it reviewer is a correctness
+- **There was no security reviewer in the process.**
+  - Per-item routing (`make skill-route ITEM=` or `DIFF=`, the `work_item_routing` classes in
+    `configs/skill-router.json`) names security skills only for sign-in changes
+    (`security-threat-modeling`, `owasp-control-mapper`) and AI-output changes
+    (`prompt-injection-defense`).
+  - The whole-repository route also adds security skills through `risk_triggers`, for the
+    `backend_api_python` and `security_privacy_data` risks. The break-it reviewer is a correctness
   lens, not an attacker. Row W77 adds the role.
 
 ## 1. Verified by the session
@@ -129,8 +137,10 @@ once and the `.js` file zero times. Row W70.
 
 ### S6. GitHub Actions are not pinned to commits — `ADVISORY_DEBT`
 
-- 50 `uses:` lines in `.github/workflows/*.yml` name a third-party action, and 1 of them is
-  pinned to a full commit id.
+- 50 `uses:` lines in `.github/workflows/*.yml` name an action from outside this repository:
+  37 are GitHub's own `actions/*` and 13 are third-party (`astral-sh/setup-uv` 12,
+  `superfly/flyctl-actions` 1).
+- 1 of the 50 is pinned to a full commit id.
 - A moved tag would run new code with this repository's secrets.
 - Row W69.
 
@@ -185,8 +195,9 @@ once and the `.js` file zero times. Row W70.
   `ABSENT` and types its State as DONE. That false "done" is caught 0 times, as
   `docs/65-open-work.md` "What this cannot see" says. Row W78.
 - History: earlier on 2026-10-13, `gitleaks git --redact` over all commits returned 20 hits. The
-  session inspected each one's file and shape: all were fake test keys or benign. No real secret
-  is in git history.
+  session inspected each one's file and shape: all were fake test keys or benign. So none of
+  gitleaks' 20 hits is a real secret. A secret in a shape gitleaks does not know would not be
+  among them.
 
 ## 2. Reported by agents, not re-run by the session
 
@@ -210,10 +221,12 @@ as leads until re-run.
 | `FLY_API_TOKEN` is a repository secret with no environment rules; a manual deploy from any branch skips the gates; the `flyctl` version is "latest" | workflow read | `ADVISORY_DEBT` | W69 |
 | The secret scan also misses `.ts`, `.sh` and `.example` files, split or joined keys, and names such as `FLY_API_TOKEN`, `GOOGLE_CLIENT_SECRET` and `SENTRY_DSN` | probes | `REQUIRED_CONTRACT` | W70 |
 | Dependabot alerts and private vulnerability reporting are off; no `SECURITY.md`; 0 required approvals | `gh api` | owner settings | W79 |
-| `docs/41-security-controls.md` CTRL-012 claims scanning that does not exist; `docs/45-control-mapping.md` says "Evidence: Not available" | doc read | `ADVISORY_DEBT` | W77 |
+| `docs/41-security-controls.md` CTRL-012 claims scanning that does not exist; `docs/45-control-mapping.md` says "Evidence remains `Not available`" | doc read | `ADVISORY_DEBT` | W77 |
 
 The money agent also tested a "per-request fee" attack. The session refuted it: a read of
-OpenRouter's public model list on 2026-10-13 found 0 models with a per-request fee.
+OpenRouter's public model list on 2026-10-13 found 0 models with a per-request fee. Re-run the
+same day: a keyless `curl -s https://openrouter.ai/api/v1/models`, counting models whose
+`pricing.request` is above 0, printed `models 459` and `request fee >0: 0`.
 
 ## 3. What held
 
@@ -317,6 +330,14 @@ W28's pull request should turn these into tests written first.
     findings by default, so give it instructions that include cost and flooding.
 - **For live model attacks** (`garak`, `promptfoo` or `PyRIT`): these make paid model calls and
   need the owner's approval. Row W74.
+  - What has run so far is narrower. On 2026-08-07, three hand-written injection attacks were run
+    against the judge on `openai/gpt-5-mini`, and none raised its score
+    (`tests/evals/golden/measured/judge_behaviour_2026-08-07.json`, read by
+    `tests/evals/test_measured_judge_behaviour.py`).
+  - `docs/44-model-risk-register.md` AIR-003 still reads "Not measured", because no attack
+    corpus exists.
+  - The session told the owner on 2026-10-13 that these defences had never met a real model.
+    That was wrong.
 - **Not adopted:** LLM Guard, which is archived.
 - **Standards checked against:**
   - OWASP Top 10:2025, which adds software supply chain;
