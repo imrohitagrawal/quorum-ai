@@ -29,7 +29,7 @@ hooks and `send_default_pii=False`, with a capture transport and every request s
      arrived. The SDK's own header filter covers only the following: `x-forwarded-for`,
      `x-real-ip`, `cookie`, `set-cookie`, `authorization`, `proxy-authorization` and
      `x-api-key` (`sentry_sdk/integrations/_wsgi_common.py:27-40`, `:212-228`). The built-in
-     `EventScrubber` matches exact key names (`sentry_sdk/scrubber.py:15-61`, `:108-110`), and
+     `EventScrubber` matches exact key names (`sentry_sdk/scrubber.py:15-61`, `:117`), and
      none of our names is on its list, `client_ip` included.
    - Test: capture a real transaction through a transport, then sweep the whole serialised
      payload for each value. Do not test a hand-built dict.
@@ -55,7 +55,11 @@ hooks and `send_default_pii=False`, with a capture transport and every request s
 4. **Worker threads inherit the request's headers.**
    - Evidence: `ThreadingIntegration(propagate_scope=True)` forks the request's scope into
      every new `Thread` (`sentry_sdk/integrations/threading.py:31`, `:78-92`). Probe F: an
-     exception captured in a thread started inside a request carried all three headers.
+     exception captured in a thread started inside a request carried the private headers.
+     Re-measured in W56 review round 1, with the header scrub removed in place and the W56
+     worker test run: the event carried the values of the four private headers
+     (`fly-client-ip`, `x-csrf-token`, `x-csrf`, `x-account-id`) and of the unknown header,
+     and the address (sent in both `fly-client-ip` and `forwarded`).
      Production's run worker is such a thread (`query_runs.py:1005`), so every provider or
      judge error sent after the response is affected.
    - Test: probe F's shape.
@@ -67,15 +71,18 @@ hooks and `send_default_pii=False`, with a capture transport and every request s
    - Test: send `X-CSRF`, and send mixed-case header names.
 
 6. **Address headers the visitor sends.**
-   - Evidence: `Forwarded: for=<ip>` leaked (probe A). Fly keeps a client's own forwarding
-     headers (`auth.py:113-117`).
+   - Evidence: `Forwarded: for=<ip>` leaked (probe A). Fly was measured keeping a client's own
+     `X-Forwarded-For` (`auth.py:113-117`); whether it keeps a client's `Forwarded` is
+     UNVERIFIED.
    - UNVERIFIED, not probed but the same mechanism: `True-Client-IP`, `X-Client-IP`,
      `CF-Connecting-IP`.
    - Test: send an unknown header holding an address, and assert it is dropped.
 
 7. **The query string is kept with personal data off.**
-   - Evidence: `_asgi_common.py:96`. Probe A2: the address and the key arrived in
-     `request.query_string`. Today's scrubber clears the query only on the sign-in callback
+   - Evidence: `_asgi_common.py:96`. Re-measured in W56 review round 1 on the fixed tree:
+     `GET /health?addr=203.0.113.88&k=<key>` sent a transaction whose `request.query_string`
+     was `addr=203.0.113.88&k=[REDACTED]`, so the address still arrives and the key is now
+     redacted by W56's key walk. Today's scrubber clears the query only on the sign-in callback
      path (`main.py:160-166`).
    - No route is known to take a key or an address in its query today (UNVERIFIED across
      every route). The general case overlaps W76.
@@ -115,13 +122,17 @@ hooks and `send_default_pii=False`, with a capture transport and every request s
     - All of these return if `send_default_pii` is turned on, and no test pins it: grep of
       `tests/` for `send_default_pii` finds nothing. Pin it.
 
-12. **Two channels outside both hooks, both off today.**
+12. **Three channels outside both hooks.** (This item named two until W56 review round 1,
+    which found the third, metrics, ON by default.)
     - Span streaming (`_experiments={"trace_lifecycle": "stream"}`) copies every unfiltered
       header into `http.request.header.*` span attributes (`_asgi_common.py:118-121`,
       `asgi.py:320-324`). It runs `before_send_span`, not `before_send_transaction`.
     - `enable_logs` runs `before_send_log` (`client.py:1200-1215`).
     - Both are off: `tracing_utils.py:112-116`, `consts.py:1316`.
-    - Test: pin that `init` turns on neither.
+    - Metrics: `enable_metrics` defaults to True (`consts.py:1319`) and sends `trace_metric`
+      items, which run `before_send_metric`, not either hook. Review round 1 measured a key in a
+      metric attribute reaching the transport. W56 now passes `enable_metrics=False`.
+    - Test: pin that `init` turns on none of the three.
 
 ## Design failure modes
 
@@ -131,7 +142,8 @@ hooks and `send_default_pii=False`, with a capture transport and every request s
     work. Scrub in the hooks.
 
 14. **List of headers to drop, or list of headers to keep.**
-    - A list to drop already missed `X-CSRF` and `Forwarded` (items 5 and 6).
+    - No list to drop was built. The probe measured `X-CSRF` and `Forwarded` leaking (items 5
+      and 6), which a list to drop holding only the three named headers would have missed.
     - A list to keep fails the other way: it drops headers an operator needs. Choose them on
       purpose, for example `host`, `user-agent`, `accept`, `content-type` and `x-request-id`.
     - Test: an unknown header must be dropped. That test goes red for a list-to-drop design.

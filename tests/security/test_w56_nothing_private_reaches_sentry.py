@@ -352,7 +352,10 @@ def test_the_header_scrub_survives_odd_header_shapes(headers: object) -> None:
 
     Red when: the header scrub indexes or calls string methods on
     ``request.headers`` or a header value without a type guard.
-    Partner, passes now (today's scrubber never touches headers).
+    This was a partner at the red commit 18299a0 (the scrubber then never
+    touched headers, so it passed while its neighbours failed). Now it
+    guards the header scrub's type guards: every odd shape must come back
+    without the hook raising.
     """
     for hook in (main._redact_sentry_event, main._redact_sentry_transaction):
         event = {"request": {"headers": headers}, "message": "w56 survives"}
@@ -432,7 +435,7 @@ def _message_text(event: dict[str, Any]) -> str:
 def test_a_key_in_a_captured_message_does_not_reach_sentry(sentry_capture: _Captured) -> None:
     """Failure mode 8: ``capture_message`` text.
 
-    Red when: the scrubber stops redacting ``message`` / ``logentry`` strings.
+    Red when: the scrubber stops redacting the ``message`` string.
     """
     sentry_sdk.capture_message(f"budget check rejected {KEY} at step 3")
 

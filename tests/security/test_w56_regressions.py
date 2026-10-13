@@ -1,0 +1,403 @@
+"""W56 review round 1: the holes the first review found in "nothing private reaches Sentry".
+
+Each test here pins one reproduced finding from round 1 (the W56 pull request):
+
+* incoming ``baggage`` reached Sentry in the ENVELOPE HEADER ``trace``, which
+  no hook sees (``sentry_sdk/client.py`` pops ``dynamic_sampling_context``
+  out of the event after ``before_send`` has run);
+* Sentry metrics (``trace_metric`` items, on by default in sentry-sdk 2.63.0)
+  skip both hooks;
+* the ceiling-alert test never ran inside a request whose ``request.client.host``
+  WAS the visitor's address, so the address could come back under another name;
+* a depth limit small enough to strip stack traces passed every test;
+* a non-dict ``headers`` value left as-is passed every test;
+* no test sent a ``Cookie`` header.
+
+Unlike ``test_w56_nothing_private_reaches_sentry.py``, the capture transport
+here keeps the WHOLE serialised envelope, headers included, because the first
+finding lives in the envelope header, not in any item.
+"""
+
+from __future__ import annotations
+
+import json
+from collections.abc import Iterator
+from decimal import Decimal
+from typing import Any, cast
+from uuid import uuid4
+
+import pytest
+import sentry_sdk
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+from sentry_sdk.envelope import Envelope
+from sentry_sdk.transport import Transport
+
+from product_app import costs, main
+from product_app.feedback_store import configure_for_tests
+from product_app.model_slots import DEFAULT_MODEL_IDS
+from product_app.safety import WARNING_VERSION, WarningType
+
+FAKE_DSN = "https://abc@o1.ingest.sentry.io/1"
+VISITOR_IP = "203.0.113.99"
+USER_AGENT = "w56-regressions-agent"
+KEY = "sk-or-v1-" + "fedcba9876543210" * 4
+INCOMING_TRACE_ID = "771a43a4192642f0b136d5159a501700"
+INCOMING_SPAN_ID = "a1b2c3d4e5f60718"
+CEILING_EVENT_TYPE = "cost_guardrail_degraded_to_simulation"
+#: Inside ``auth.TRUSTED_PROXY_NETWORKS`` (172.16.0.0/12), so
+#: ``VisitorAddressMiddleware`` believes its ``Fly-Client-IP``.
+TRUSTED_PEER = "172.16.0.9"
+
+
+class _EnvelopeTransport(Transport):
+    """Keep every envelope exactly as it would go on the wire."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.envelopes: list[Envelope] = []
+
+    def capture_envelope(self, envelope: Envelope) -> None:
+        self.envelopes.append(envelope)
+
+
+class _Envelopes:
+    def __init__(self, transport: _EnvelopeTransport) -> None:
+        self._transport = transport
+
+    def _all(self) -> list[Envelope]:
+        sentry_sdk.flush(timeout=5)
+        return list(self._transport.envelopes)
+
+    def wire(self) -> str:
+        """Every envelope, headers and items, serialised as the SDK sends it."""
+        return "\n".join(e.serialize().decode("utf-8", "replace") for e in self._all())
+
+    def items(self, item_type: str) -> list[dict[str, Any]]:
+        return [
+            cast(dict[str, Any], item.payload.json)
+            for envelope in self._all()
+            for item in envelope.items
+            if item.type == item_type and isinstance(item.payload.json, dict)
+        ]
+
+    def item_types(self) -> list[str]:
+        return [str(item.type) for envelope in self._all() for item in envelope.items]
+
+    def envelope_headers(self) -> list[dict[str, Any]]:
+        return [dict(e.headers) for e in self._all()]
+
+
+@pytest.fixture
+def envelopes() -> Iterator[_Envelopes]:
+    """Sentry with production's options, every request sampled, nothing sent."""
+    options = {**main._sentry_options(), "traces_sample_rate": 1.0}
+    transport = _EnvelopeTransport()
+    with sentry_sdk.isolation_scope():
+        sentry_sdk.get_isolation_scope().clear_breadcrumbs()
+        sentry_sdk.init(dsn=FAKE_DSN, transport=transport, **options)
+        try:
+            yield _Envelopes(transport)
+        finally:
+            client = sentry_sdk.get_client()
+            client.flush(timeout=5)
+            client.close()
+            sentry_sdk.get_global_scope().set_client(None)
+
+
+@pytest.fixture
+def temporary_routes() -> Iterator[FastAPI]:
+    """Yield ``main.app``; remove every ``/__w56r_`` route on teardown."""
+    app = main.app
+    try:
+        yield app
+    finally:
+        app.router.routes[:] = [
+            r for r in app.router.routes if not str(getattr(r, "path", "")).startswith("/__w56r_")
+        ]
+
+
+# ---------------------------------------------------------------------------
+# Finding 1: incoming baggage reached the envelope header ``trace``
+# ---------------------------------------------------------------------------
+
+
+def test_incoming_baggage_does_not_reach_the_envelope_header(
+    envelopes: _Envelopes, temporary_routes: FastAPI
+) -> None:
+    """A visitor's ``baggage`` header must not ride out in the envelope header.
+
+    The SDK copies incoming ``sentry-*`` baggage into
+    ``contexts.trace.dynamic_sampling_context``; after both hooks have run,
+    ``client.py`` pops that key and sends it as the envelope header ``trace``.
+
+    Red when: the shared scrubber stops removing
+    ``contexts.trace.dynamic_sampling_context``, so ``sentry-user_segment=<address>``
+    arrives in the envelope header of the transaction and of the event.
+    """
+
+    def _report() -> dict[str, bool]:
+        sentry_sdk.capture_message("w56r message inside a traced request")
+        return {"ok": True}
+
+    temporary_routes.add_api_route("/__w56r_traced__", _report, methods=["GET"])
+    baggage = (
+        f"sentry-trace_id={INCOMING_TRACE_ID},sentry-public_key=abc,"
+        f"sentry-user_segment={VISITOR_IP},sentry-w56_key={KEY}"
+    )
+    headers = {
+        "sentry-trace": f"{INCOMING_TRACE_ID}-{INCOMING_SPAN_ID}-1",
+        "baggage": baggage,
+        "User-Agent": USER_AGENT,
+    }
+    with TestClient(main.app) as client:
+        assert client.get("/__w56r_traced__", headers=headers).status_code == 200
+
+    wire = envelopes.wire()
+    assert VISITOR_IP not in wire, [
+        h.get("trace") for h in envelopes.envelope_headers() if "trace" in h
+    ]
+    assert KEY not in wire
+    # Partners: the request really continued the visitor's trace (so the
+    # baggage was consumed, not ignored), and both items still arrive.
+    transactions = [
+        t for t in envelopes.items("transaction") if "/__w56r_traced__" in str(t.get("transaction"))
+    ]
+    assert len(transactions) == 1
+    assert transactions[0]["contexts"]["trace"]["trace_id"] == INCOMING_TRACE_ID
+    messages = [
+        e
+        for e in envelopes.items("event")
+        if e.get("message") == "w56r message inside a traced request"
+    ]
+    assert len(messages) == 1
+    assert messages[0]["contexts"]["trace"]["trace_id"] == INCOMING_TRACE_ID
+
+
+# ---------------------------------------------------------------------------
+# Finding 2: metrics skip both hooks
+# ---------------------------------------------------------------------------
+
+
+def test_sentry_options_turn_metrics_off() -> None:
+    """``trace_metric`` items pass through neither ``before_send`` hook.
+
+    Red when: ``_sentry_options()`` stops passing ``enable_metrics=False``
+    (sentry-sdk 2.63.0 defaults it to True).
+    """
+    assert main._sentry_options()["enable_metrics"] is False
+
+
+def test_a_metric_produces_no_envelope_item(envelopes: _Envelopes) -> None:
+    """A metric carrying a key in an attribute must not leave the process.
+
+    Red when: metrics are on again (``enable_metrics`` True or absent), so a
+    ``trace_metric`` item carrying the key is sent past both hooks.
+    """
+    sentry_sdk.metrics.count("w56r.metric", 1, attributes={"detail": KEY})
+    sentry_sdk.capture_message("w56r metric partner")
+
+    types = envelopes.item_types()
+    assert "trace_metric" not in types, types
+    assert KEY not in envelopes.wire()
+    # Partner: the transport is live and saw the message sent beside the metric.
+    assert [e.get("message") for e in envelopes.items("event")] == ["w56r metric partner"]
+
+
+# ---------------------------------------------------------------------------
+# Finding 3: the real ceiling alert, inside a request from the visitor's address
+# ---------------------------------------------------------------------------
+
+
+def _run_body(client: TestClient, headers: dict[str, str]) -> dict[str, object]:
+    body: dict[str, object] = {
+        "query_text": "Compare the managed Postgres options for a small team.",
+        "model_slots": DEFAULT_MODEL_IDS,
+    }
+    preview = client.post("/v1/query-runs/estimate", json=body, headers=headers)
+    assert preview.status_code == 200, preview.text
+    estimate = preview.json()["cost_estimate"]
+    assert estimate["global_ceiling_reached"] is True, estimate
+    body["safety_acknowledgements"] = [
+        {"warning_type": WarningType.SENSITIVE_DATA, "version": WARNING_VERSION}
+    ]
+    if estimate["threshold_action"] == "require_confirmation":
+        body["cost_confirmation"] = {
+            "estimated_cost_usd": estimate["estimated_cost_usd"],
+            "confirmation_token": estimate["confirmation_token"],
+        }
+    return body
+
+
+def test_the_ceiling_alert_from_a_real_run_carries_exactly_the_operator_fields(
+    envelopes: _Envelopes, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The real ``POST /v1/query-runs``, with ``request.client.host`` = the visitor.
+
+    The request comes from a peer inside ``TRUSTED_PROXY_NETWORKS`` with
+    ``Fly-Client-IP`` set, so ``VisitorAddressMiddleware`` makes the visitor's
+    address ``request.client.host`` — the value ``create_query_run`` used to
+    pass down as ``client_ip``. The global ceiling is forced by setting it to
+    $0. A store is configured, so the path sets all five of the alert's own
+    extras; the sixth, ``sys.argv``, is added to every event by the SDK's
+    default ``ArgvIntegration`` (``sentry_sdk/integrations/argv.py``) and holds
+    the process command line, not request data.
+
+    Red when: the alert carries any extra beyond ``account_id``,
+    ``estimated_cost_usd``, ``query_run_id``, ``global_daily_spend_usd``,
+    ``global_daily_ceiling_usd`` and the SDK's ``sys.argv`` (the address
+    re-added under any name), or the address reaches any envelope by any route.
+    """
+    monkeypatch.setattr(costs, "GLOBAL_DAILY_CEILING_USD", Decimal("0"))
+    headers = {
+        "Fly-Client-IP": VISITOR_IP,
+        "X-Account-Id": str(uuid4()),
+        "User-Agent": USER_AGENT,
+    }
+    with configure_for_tests(), TestClient(main.app, client=(TRUSTED_PEER, 1234)) as client:
+        created = client.post("/v1/query-runs", json=_run_body(client, headers), headers=headers)
+        assert created.status_code == 202, created.text
+        run_id = created.json()["query_run_id"]
+
+        alerts = [
+            e
+            for e in envelopes.items("event")
+            if (e.get("tags") or {}).get("event_type") == CEILING_EVENT_TYPE
+        ]
+        wire = envelopes.wire()
+
+    assert len(alerts) == 1, f"expected exactly one ceiling alert, got {len(alerts)}"
+    extra = alerts[0]["extra"]
+    assert set(extra) == {
+        "account_id",
+        "estimated_cost_usd",
+        "query_run_id",
+        "global_daily_spend_usd",
+        "global_daily_ceiling_usd",
+        "sys.argv",
+    }, sorted(extra)
+    assert VISITOR_IP not in wire
+    # Partners: the operator's field arrived, the alert went out with the
+    # request attached, and the ceiling really was the forced one. (Not
+    # ``query_run_id == run_id``: the pre-W56 rule that blanks any extra whose
+    # name contains "query" blanks this one too, a separate finding.)
+    assert extra["account_id"] == headers["X-Account-Id"], (extra["account_id"], run_id)
+    assert extra["global_daily_ceiling_usd"] == "0"
+    assert alerts[0]["request"]["headers"]["user-agent"] == USER_AGENT
+
+
+# ---------------------------------------------------------------------------
+# Finding 4: the depth limit must not strip stack traces
+# ---------------------------------------------------------------------------
+
+
+def _w56r_inner_failure() -> None:
+    raise RuntimeError("w56r raised two calls deep")
+
+
+def _w56r_outer_call() -> None:
+    _w56r_inner_failure()
+
+
+def test_an_error_two_calls_deep_keeps_its_stack_frames(
+    envelopes: _Envelopes, temporary_routes: FastAPI
+) -> None:
+    """The key-redaction walk must not replace stack frames with a placeholder.
+
+    Red when: ``_SENTRY_SCRUB_MAX_DEPTH`` is small enough (6 or less) that the
+    walk replaces each frame of ``exception.values[].stacktrace.frames``.
+    """
+
+    async def _raise() -> None:
+        _w56r_outer_call()
+
+    temporary_routes.add_api_route("/__w56r_deep__", _raise, methods=["GET"])
+    with TestClient(main.app, raise_server_exceptions=False) as client:
+        assert client.get("/__w56r_deep__").status_code == 500
+
+    errors = [
+        e
+        for e in envelopes.items("event")
+        if any(
+            v.get("value") == "w56r raised two calls deep"
+            for v in (e.get("exception") or {}).get("values", [])
+        )
+    ]
+    assert len(errors) == 1
+    frames = errors[0]["exception"]["values"][-1]["stacktrace"]["frames"]
+    functions = [f.get("function") for f in frames if isinstance(f, dict)]
+    assert "_w56r_inner_failure" in functions, frames
+    assert "_w56r_outer_call" in functions, frames
+
+
+# ---------------------------------------------------------------------------
+# Finding 5: a list-shaped headers value
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "hook", [main._redact_sentry_event, main._redact_sentry_transaction], ids=["event", "txn"]
+)
+def test_list_shaped_headers_lose_the_address(hook: Any) -> None:
+    """A ``headers`` value that is a list of pairs is not known safe.
+
+    Red when: the header scrub leaves a non-dict ``headers`` value as it is,
+    so ``[["fly-client-ip", <address>]]`` reaches Sentry.
+    """
+    event = {
+        "request": {"headers": [["fly-client-ip", VISITOR_IP]], "method": "GET"},
+        "message": "w56r list headers",
+    }
+    result = hook(cast(Any, event), {})
+    assert result is not None
+    assert VISITOR_IP not in json.dumps(result)
+    # Partner: the rest of the event survives.
+    assert result["message"] == "w56r list headers"
+    assert result["request"]["method"] == "GET"
+
+
+# ---------------------------------------------------------------------------
+# Finding 6: a Cookie header
+# ---------------------------------------------------------------------------
+
+
+def test_a_cookie_header_does_not_reach_sentry(
+    envelopes: _Envelopes, temporary_routes: FastAPI
+) -> None:
+    """A cookie is a session credential; it can leave as a header or as ``request.cookies``.
+
+    The request both captures a message (an event, which the SDK gives
+    ``request.cookies`` when ``send_default_pii`` is on) and is a sampled
+    transaction (which carries the ``cookie`` header only).
+
+    Red when: ``send_default_pii`` is turned on (the event then carries
+    ``request.cookies``). Adding ``cookie`` to the header allow-list alone
+    stays green: with ``send_default_pii`` off the SDK's own header filter
+    removes the ``cookie`` header before the hook runs (measured, W56 round 1).
+    """
+    cookie_value = "w56rcookievalue5d1e"
+
+    def _report() -> dict[str, bool]:
+        sentry_sdk.capture_message("w56r cookie request")
+        return {"ok": True}
+
+    temporary_routes.add_api_route("/__w56r_cookie__", _report, methods=["GET"])
+    with TestClient(main.app) as client:
+        response = client.get(
+            "/__w56r_cookie__",
+            headers={"Cookie": f"qa_session={cookie_value}", "User-Agent": USER_AGENT},
+        )
+    assert response.status_code == 200
+
+    assert cookie_value not in envelopes.wire()
+    # Partners: both payloads arrived with a real request block, and the
+    # allow-listed header survived on each.
+    transactions = [
+        t for t in envelopes.items("transaction") if "/__w56r_cookie__" in str(t.get("transaction"))
+    ]
+    events = [e for e in envelopes.items("event") if e.get("message") == "w56r cookie request"]
+    assert len(transactions) == 1
+    assert len(events) == 1
+    for payload in (transactions[0], events[0]):
+        headers = {str(k).lower(): v for k, v in payload["request"]["headers"].items()}
+        assert headers["user-agent"] == USER_AGENT

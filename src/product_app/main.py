@@ -152,10 +152,10 @@ def _mentions_user_text(value: object) -> bool:
 #:
 #: A list to KEEP, not a list to drop (W56, ADR-0163). The SDK's own header
 #: filter covers none of ours (``Fly-Client-IP``, ``X-CSRF-Token``,
-#: ``X-Account-Id``), and a list to drop already missed two that leaked when
-#: measured: ``X-CSRF`` (a second token header ``auth.py`` accepts) and
-#: ``Forwarded: for=<address>``. A header added tomorrow is redacted until
-#: someone chooses to keep it.
+#: ``X-Account-Id``). The probe measured two more leaking that a list to drop
+#: holding only those three would have missed: ``X-CSRF`` (a second token
+#: header ``auth.py`` accepts) and ``Forwarded: for=<address>``. A header added
+#: tomorrow is redacted until someone chooses to keep it.
 _SENTRY_HEADER_ALLOWLIST = frozenset(
     {
         "accept",
@@ -233,11 +233,20 @@ def _scrub_user_text(event: SentryEvent) -> SentryEvent:
     Written to be shared by BOTH `before_send` and `before_send_transaction`,
     because the transaction path was the one that shipped `request.data` raw.
 
-    W56 (ADR-0163) added two steps, for the same two hooks: every string in
-    the event is key-redacted first (on a copy), and request header values
-    are kept only for the allow-list.
+    W56 (ADR-0163) added three steps, for the same two hooks: every string in
+    the event is key-redacted first (on a copy), request header values are
+    kept only for the allow-list, and the trace's dynamic sampling context is
+    dropped.
     """
     event = cast(SentryEvent, _redact_secret_strings(event))
+    contexts = event.get("contexts")
+    trace = contexts.get("trace") if isinstance(contexts, dict) else None
+    if isinstance(trace, dict):
+        # W56 round 1. The SDK copies a visitor's incoming ``baggage`` header
+        # here, and after this hook ``sentry_sdk/client.py`` pops the key and
+        # sends it as the ENVELOPE header ``trace``, which no hook sees.
+        # Measured: ``sentry-user_segment=<address>`` reached that header.
+        trace.pop("dynamic_sampling_context", None)
     request = event.get("request")
     if isinstance(request, dict):
         _redact_request_headers(request)
@@ -334,6 +343,9 @@ def _sentry_options() -> dict[str, Any]:
         # Turning it on would also send cookies, ``REMOTE_ADDR`` and ``user``
         # (W56 failure mode 11); a W56 test pins it off.
         send_default_pii=False,
+        # W56 round 1: metrics (``trace_metric`` items) pass through neither
+        # hook above, and sentry-sdk 2.63.0 turns them on by default.
+        enable_metrics=False,
     )
 
 

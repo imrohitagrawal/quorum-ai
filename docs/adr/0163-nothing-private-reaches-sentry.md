@@ -29,7 +29,10 @@ findings S1 and S2 of `docs/analysis/2026-10-13-security-review.md`. Those probe
 This record changes three earlier statements without editing their bodies:
 
 - **ADR-0023's title**, "Sentry payloads are scrubbed on every path", was true of the user's
-  question only. Headers and key-shaped text were not scrubbed on any path until this change.
+  question and the sign-in callback's query only. Header values were not scrubbed, and
+  key-shaped text was not scrubbed in exception values, `message`, `extra`, `tags`, `contexts`
+  or spans, until this change. (Key-shaped text in log messages was already redacted by
+  ADR-0041's record factory before Sentry made breadcrumbs of them.)
 - **ADR-0144 decision 5** says the ceiling alert "now carries the network key beside" the
   visitor's address, "so Sentry can pair the two". After this change the alert carries the key
   and no address.
@@ -44,7 +47,9 @@ This record changes three earlier statements without editing their bodies:
    same function, and a test pins that the real call passes nothing else. It also pins
    `send_default_pii=False` (on, it would send cookies, `REMOTE_ADDR` and `user`; failure mode 11)
    and that log forwarding and span streaming, two channels outside both hooks, stay off
-   (failure mode 12).
+   (failure mode 12). Metrics, a third such channel, are turned off with
+   `enable_metrics=False` (sentry-sdk 2.63.0 defaults it to on; review round 1 measured a key in
+   a metric attribute reaching the transport as a `trace_metric` item).
 2. **Header values are kept only for a list of eight names**, matched on the lower-cased name:
    `accept`, `accept-encoding`, `accept-language`, `connection`, `content-length`,
    `content-type`, `host`, `user-agent`. Every other value becomes `[REDACTED]`; a `headers`
@@ -55,10 +60,15 @@ This record changes three earlier statements without editing their bodies:
    that replaces the container with `[REDACTED]` rather than raising (the SDK drops an event
    whose hook raises; failure mode 16). It covers exception values and their causes, `message`,
    `logentry`, `extra`, `tags`, `contexts`, breadcrumbs and spans without naming each one.
-4. **Both steps run inside `_scrub_user_text`**, the function both hooks already share
+4. **The trace's dynamic sampling context is dropped.** The SDK copies a visitor's incoming
+   `baggage` header into `contexts.trace.dynamic_sampling_context`; after both hooks have run,
+   `sentry_sdk/client.py` (2.63.0, lines 1114-1123) pops that key and sends it as the envelope
+   header `trace`, which no hook sees. Review round 1 measured `sentry-user_segment=<address>`
+   reaching that header. The scrubber removes the key, so no envelope carries a `trace` header.
+5. **All three steps run inside `_scrub_user_text`**, the function both hooks already share
    (ADR-0023 decision 1), so neither the error path nor the transaction path can be left out
    (failure mode 17).
-5. **The ceiling alert drops the address and keeps the spend key** (CHG-043).
+6. **The ceiling alert drops the address and keeps the spend key** (CHG-043).
    `CostEstimationService.record_guardrail_event` and `try_record_run_charge` no longer take a
    `client_ip` parameter, the `client_ip` extra is gone, and the plumbing that carried
    `request.client.host` from `create_query_run` down to them is removed. `account_id`,
@@ -76,13 +86,16 @@ This record changes three earlier statements without editing their bodies:
 | The same two files after this change | `38 passed` | `.venv/bin/python -m pytest <the two files> -q -p no:cacheprovider --no-cov` |
 | This change with the header scrub and the key walk both removed, in a scratch copy | `12 failed, 9 passed` in the W56 file: every leak test goes red, the options and signature tests stay green | same scratch-copy method, the two calls deleted from `_scrub_user_text` |
 | Nesting depth of a serialised event | 12 for an error event with a chained cause and frame locals ON; 4 for a transaction | a local probe that initialises Sentry with a capture transport and measures the depth inside `before_send` and `before_send_transaction` |
+| Incoming `baggage` reaches the envelope header `trace` (round 1) | before the fix: `sentry-user_segment=203.0.113.99` in the serialised envelope; after: absent, and the transaction still continues the visitor's trace id | `tests/security/test_w56_regressions.py::test_incoming_baggage_does_not_reach_the_envelope_header`, run before and after |
+| Metrics skip both hooks (round 1) | before `enable_metrics=False`: items `['event', 'trace_metric']` and the key in the serialised envelope; after: no `trace_metric` item and no key | `tests/security/test_w56_regressions.py::test_a_metric_produces_no_envelope_item`, and a probe with `enable_metrics=True` |
 | A visitor-sent `sentry-trace` header forces sampling | 50 of 50 requests sent a transaction with it, 5 of 50 without, at `traces_sample_rate=0.1` | inherited from failure mode 10; not re-measured here |
 
 ## Rejected alternatives
 
-- **A list of headers to drop.** It had already missed two that leaked when measured: `X-CSRF`,
-  the second token header `auth.py` accepts, and `Forwarded: for=<address>` (failure modes 5 and
-  6). Every new header would be sent until someone remembered to add it. The cost of a list to
+- **A list of headers to drop.** None was built. The probe measured `X-CSRF` (the second token
+  header `auth.py` accepts) and `Forwarded: for=<address>` leaking, and a list to drop holding
+  only the three named headers (`Fly-Client-IP`, `X-CSRF-Token`, `X-Account-Id`) would have
+  missed both (failure modes 5 and 6). Every new header would be sent until someone remembered to add it. The cost of a list to
   keep is the opposite mistake: a header an operator wants is redacted until someone adds it.
   That mistake is visible in Sentry; the other one is not.
 - **Dropping both the spend key and the address from the ceiling alert.** The key is what an
@@ -106,10 +119,24 @@ This record changes three earlier statements without editing their bodies:
   server secret, as before.
 - `docs/48-data-retention.md` rows for the signed-in and anonymous spend keys say the alert
   carries the key without the address. How long the cost ledger keeps the key is still open
-  (W55).
+  (W55); how long Sentry may keep it has not yet been asked. CHG-043 decides only what the alert
+  carries.
 - `tests/security/test_w56_nothing_private_reaches_sentry.py` holds the end-to-end checks:
   capture through a real transport, sweep the whole payload, and a partner beside every
-  "absent" check.
+  "absent" check. `tests/security/test_w56_regressions.py` holds the review round 1 checks,
+  with a transport that keeps whole envelopes, headers included.
+- With no `trace` envelope header, Sentry receives no dynamic sampling context from this app.
+  Sampling is decided in the process (`traces_sample_rate`); whether the Sentry organisation
+  relies on server-side dynamic sampling is UNVERIFIED (its settings were not read).
+- **Harmless text can be over-scrubbed.** The walk applies the log patterns to every string, so a
+  labelled-credential shape that holds no credential loses its tail:
+  `authorization: missing header` arrives as `[REDACTED] header` (run through
+  `_redact_secrets`). No current `src/` message has that shape as far as a one-line grep can
+  tell: over the 36 `.py` files in `src/product_app` other than `logging_config.py`, lines with
+  `raise`, a logger call, `capture_*`, `set_extra`, `set_tag` or `detail=` that also hold a
+  credential label followed by `:` or `=` numbered 0 (the same grep counts 1 on
+  `raise ValueError('authorization: missing header')`). A message built across several lines
+  is not covered by that grep, so beyond it this is UNVERIFIED.
 
 ## What it cannot see
 
@@ -126,6 +153,10 @@ This record changes three earlier statements without editing their bodies:
   scrub applies to every transaction anyway.
 - **Sentry's own settings.** Server-side scrubbing and retention in the Sentry organisation are
   UNVERIFIED.
-- **A future channel.** Turning on span streaming or log forwarding adds a path through
-  `before_send_span` or `before_send_log`, which this scrubber does not run in. A test pins both
-  off; turning one on must add the scrub to it.
+- **A future channel.** Three channels skip both hooks: span streaming, log forwarding and
+  metrics. Turning one on adds a path through `before_send_span`, `before_send_log` or
+  `before_send_metric`, which this scrubber does not run in. All three are off (metrics since
+  review round 1) and tests pin them off; turning one on must add the scrub to it. A channel a
+  later SDK version adds is not covered by any test here.
+- **`docs/48-data-retention.md` has no gate.** A false sentence re-added there, or a citation
+  of a CHG row that does not exist, passes every check. This predates W56 and is advisory.
