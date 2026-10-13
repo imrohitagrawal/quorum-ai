@@ -362,8 +362,13 @@ retention policy or `VACUUM` anywhere in `src/`** (VERIFIED by grep 2026-07-28:
 `grep -rni 'retention' src/` is **not** — it returns two hits, a landing-page
 suggestion chip in `templates/workspace.html` and a comment in `static/app.js`
 about intra-word underscores, neither of which is a retention policy or touches
-this table); there is still no `VACUUM` and no row deletion in the app's
-paths, so it grows without bound for the life of the volume. A volume
+this table); there is still no row deletion in the app's paths, so it grows
+without bound for the life of the volume. W55 added one `VACUUM`, run once per
+file at the first open after W55 ships (ADR-0165); it rebuilds the file and
+shrinks it only by the free space already in it. It needs free disk space on
+the order of the file's size (a temporary copy and a rollback journal; SQLite's
+documentation says up to twice the file), so on a full volume it fails, logs at
+INFO and is retried at each open. A volume
 that fills is a scheduled future state of this deployment, not a hypothetical.
 
 **Symptom.** `/status` reports `feedback_db: "degraded"` and
@@ -706,9 +711,12 @@ is evidence of a restart, never of a repair.
 
 Since W55 every cost row older than 48 hours loses its spend key, and every
 `session_minted` row older than 48 hours loses the visitor's address
-(`FeedbackStore.wipe_expired_identifiers`). A pass runs at every store open and
-at most once an hour after a write, so a key can legitimately stay up to about
-an hour past 48 hours while the app runs. Each pass that changed rows logs one
+(`FeedbackStore.wipe_expired_identifiers`). A pass runs at every store open
+and, while the app runs, at the first write (a landed `record()`, a recorded
+charge or a recorded session mint) that comes at least an hour after the
+previous pass. So past its 48 hours a key can legitimately stay about an hour
+more with steady traffic, until the next write when there are none, and until
+the next start while the machine is stopped. Each pass that changed rows logs one
 line, `feedback_store: identifier wipe: cost_keys_wiped=... session_addresses_wiped=...
 malformed_payloads=...` (counts only); a failed pass logs `feedback_store:
 identifier wipe did not run: <SQLite reason>`. The Fly log ring is short, so
@@ -743,11 +751,22 @@ for name, where in q.items():
 The first two should read 0. The next two are their partners: a 0 over an
 empty set proves nothing, so they must be non-zero (CHG-044 recorded 142 cost
 rows and 70 session rows older than 48 hours on 2026-10-13). The cut is 50
-hours, not 48, to allow for the hourly throttle. A non-zero
+hours, not 48, to allow for the hourly throttle; run it soon after a deploy,
+whose start runs a pass, because on a machine with no writes for hours a row can
+legitimately be past 50 hours with its key until the next write. A non-zero
 `malformed_payloads` means rows whose payload is not valid JSON: the wipe
 clears their `account_id` column but cannot edit the text, which may still hold
 a key.
 
-What the wipe cannot reach: Fly volume snapshots (retention UNVERIFIED), free
-pages and deleted journal blocks from before `secure_delete` was on, the
-in-memory cost ring, and Sentry. ADR-0165 lists them.
+Since W55 the store's connection runs with `secure_delete` on, so space SQLite
+frees is zeroed, and the first open after W55 ships runs one `VACUUM` (recorded
+in `schema_migrations` as `w55_vacuum_after_secure_delete`) that rewrites the
+file and so drops copies left in free space by earlier writes. If that `VACUUM`
+cannot run (read-only volume, another connection holding a lock, a full disk)
+it logs `feedback_store: one-shot VACUUM did not run: <reason>` at INFO, the
+store opens anyway, and the next open tries again; a success logs
+`feedback_store: one-shot VACUUM done in <seconds> s`.
+
+What the wipe cannot reach: Fly volume snapshots (retention UNVERIFIED), the
+blocks of deleted `-journal` files (including the one the `VACUUM` itself
+writes), the in-memory cost ring, and Sentry. ADR-0165 lists them.

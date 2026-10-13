@@ -6,13 +6,17 @@ Accepted — 2026-10-14. The keep time and its scope are the owner's: CHG-033 (c
 for an anonymous network's key in the cost ledger, CHG-044 (a) widened it to every cost-ledger
 row, signed-in and anonymous alike, and CHG-044 (b) added the visitor's address in session rows
 (board row W55). The design below (the method, its three triggers, the one-hour throttle,
-`secure_delete`, "never raises", the trigger outside the money lock) is the session's.
+`secure_delete`, the one-shot `VACUUM`, "never raises", the trigger outside the money lock) is
+the session's. So is wiping `invite:<link id>` mint keys along with addresses: the owner was
+asked about raw IP addresses (CHG-044 (b)), and an invite key sits in the same `"ip"` field.
 
 ## Context
 
 `src/product_app/feedback_store.py` keeps one `events` table. Until now it was append-only:
 recorders only ever `INSERT`, and nothing deleted or edited a row except the one-shot F-01
-relabel. Two kinds of row in it carry an identifier nothing reads after 24 hours:
+relabel and `delete_all_session_mints_for_tests`, a test-support method that deletes mint rows
+and has no caller in `src/`. Two kinds of row in it carry an identifier nothing reads after
+24 hours:
 
 - **Cost-ledger rows** (`recorder = 'cost'`) hold the spend key twice: in the `account_id`
   column and as `"account_id"` in the JSON `payload`. The key is a keyed hash of a signed-in
@@ -37,7 +41,9 @@ This record changes these earlier statements without editing their bodies:
   call the sink and the ledger append-only, and ADR-0073 line 296 says the `events` table "is
   append-only by contract". Read all of them now as: rows are never deleted, and amounts are
   never edited; identifiers are removed from old rows in place. (ADR-0073 line 66 and ADR-0055
-  line 296, "nothing prunes" the table, stay true: no row is deleted.)
+  line 296, "nothing prunes" the table, stay true: no row is deleted. ADR-0055 line 296 says
+  `feedback_store.py` "records that nothing prunes that table"; that wording no longer exists
+  there, since this change reworded the comment to "Nothing deletes rows from this table".)
 - ADR-0132 line 91 says nothing prunes the table and each new-session row keeps the address
   with no end date. Since this record the address goes after 48 hours.
 - ADR-0144 line 76 rejects an alternative because it "writes a visitor's address into rows
@@ -68,10 +74,23 @@ In `feedback_store.py`:
   format with or without a microsecond fraction (FM 15) and is how the 24-hour rails already
   compare. Any other stored shape (another offset, a naive stamp) is compared with `julianday`,
   which compares instants; unreadable text gives NULL and is never wiped.
-- **One transaction, with `secure_delete`.** When at least one row is due, the pass sets
-  `PRAGMA secure_delete = ON`, runs one `BEGIN IMMEDIATE` transaction (count the malformed rows,
-  update cost rows, update session rows, commit), and restores the previous setting. When no
-  row is due it writes nothing at all.
+- **One transaction.** When at least one row is due, the pass runs one `BEGIN IMMEDIATE`
+  transaction (count the malformed rows, update cost rows, update session rows, commit). When
+  no row is due it writes nothing at all.
+- **`secure_delete` on for the whole connection.** `__init__` sets `PRAGMA secure_delete = ON`
+  on the store's connection before anything else and nothing turns it off. Turning it on only
+  for the wipe, as the first build did, is not enough: ordinary inserts move cells when a page
+  splits and leave the old bytes in free space, which no later wipe rewrites (measurements
+  below). It is a connection setting, not a write, so a read-only file accepts it.
+- **One `VACUUM`, once per file.** Space freed before this release still holds old copies.
+  After the open-time wipe, `__init__` runs `VACUUM` once and records
+  `w55_vacuum_after_secure_delete` in `schema_migrations`, like the F-01 relabel; a file with
+  that row is never vacuumed again. It runs only in `__init__`, before the store is published,
+  so never inside a charge's or a mint's lock hold. It never stops the store opening: on a
+  read-only file, a locked file (after the 5 s busy timeout) or a full disk it logs one INFO
+  line (not WARNING, so a read-only volume's boot still shows only the backfills' warnings),
+  writes no marker and is tried again at the next open. On an already-marked file it only reads
+  the marker, so an already-migrated read-only volume still opens with zero writes.
 - **Never raises.** Any exception is caught; the pass logs one WARNING line (the SQLite reason,
   or only the exception's type name for anything else, never a key or an address) and returns
   zeros. A pass that changed rows logs one INFO line with the three counts (WARNING when
@@ -103,6 +122,11 @@ In `feedback_store.py`:
 | An outside reader holding a read transaction | the UPDATE waited the 5 s busy timeout, then raised `database is locked` | MEASURED, FM 10; the same reader makes a billed INSERT fail today, so the production check below must not hold one |
 | SQLite version on the Fly machine | not recorded in the repo (`python:3.12-slim` by tag) | UNVERIFIED, FM 28; JSON functions are built in from 3.38; check with `fly ssh console -C "python3 -c 'import sqlite3; print(sqlite3.sqlite_version)'"` |
 | Fly volume snapshot retention | not set or recorded anywhere in the repo | UNVERIFIED, FM 31; check with `fly volumes snapshots list <volume id>` |
+| `secure_delete` on only during the wipe (the first build) | copies left in the file after the wipe: review (Codex) measured 20 public charges leaving 20 key copies and 100 mints leaving 29 address copies; review (break-it) measured a brand-new file with 40 rows leaving 26 of the 40 column keys in page 2's unused space; this session measured 200 public charges and 200 public mints leaving 15 key copies and 8 address copies. With it on for the connection: 0 and 0 | the review figures are INHERITED from round 1, not re-run here; this session's figure is MEASURED by a scratch probe and pinned by `tests/unit/test_w55_regressions.py::test_public_writes_leave_no_copy_of_a_key_or_address_after_the_wipe` (red with the first build's setting: `assert 15 == 0`) |
+| No `secure_delete` at all, on the seed of `test_wiped_key_bytes_do_not_stay_in_the_database_file` | 19 copies of the key and 5 of the address after the wipe; 0 and 0 with it | MEASURED by this session (3 runs, same counts), SQLite 3.50.4 |
+| Copies in free space from before any store opened the file (300 rows deleted with `secure_delete` off) | 42 copies before the first open; 0 after it | MEASURED; pinned by `tests/unit/test_w55_regressions.py::test_the_first_open_vacuums_away_copies_left_in_free_space` |
+| The one-shot `VACUUM` on a 20,000-row file | 18,000 cost rows plus 2,000 session rows (12.6 MB, 8.5 MB after): 0.034, 0.042, 0.053 s, whole open 0.09-0.14 s including the first wipe; 20,000 provider rows of 2 KB (87.6 MB, 85.2 MB after): 0.365, 0.411, 0.433 s | MEASURED by this session, SQLite 3.50.4, macOS, local SSD, load average about 6.8; Fly is slower by an UNVERIFIED amount |
+| Cost of a pass at scale | 300,000 cost rows plus 300,000 session rows plus 200,000 other rows: first pass 1.14 s, a pass with nothing due 0.128 s, both under the store lock | INHERITED from review round 1, not re-run here |
 
 ## Rejected alternatives
 
@@ -125,26 +149,46 @@ In `feedback_store.py`:
   only, from now on" and "Anonymous only, guessed for old rows".
 - **A one-shot migration marker**, like the F-01 relabel. New rows keep turning 48 hours old, so
   the rule must run again and again (FM 6). The matching risk, a wrong WHERE clause rewriting
-  fresh rows on every pass, is pinned by the 47-hour partner rows in every wipe test.
+  fresh rows on every pass, is pinned by the rows under 48 hours that these tests check keep
+  their identifier: in `tests/unit/test_w55_identifier_wipe.py`,
+  `test_cost_rows_past_48_hours_lose_both_keys_and_nothing_else`,
+  `test_the_48_hour_cut_is_strict`, `test_session_mint_rows_lose_the_address_whatever_its_shape`,
+  `test_the_mint_cap_still_counts_after_a_wipe`, `test_metering_is_unchanged_by_a_wipe`,
+  `test_opening_the_store_wipes_expired_rows` and
+  `test_the_record_path_wipe_uses_the_wall_clock_not_the_rows_time`; in
+  `tests/unit/test_w55_identifier_wipe_edges.py`,
+  `test_a_row_stamped_with_another_offset_is_compared_by_instant`; in
+  `tests/unit/test_w55_regressions.py`, `test_the_cut_is_exact_for_whole_second_stamps_and_cuts`.
+  (The one-shot `VACUUM` IS marker-guarded: it removes old copies, a job done once per file.)
 - **Stamping a write failure when the wipe fails.** That would read `failing` on `/status` from
   boot on a read-only volume and degrade every run until a record landed, and a corrupt row would
   raise a false write failure (FM 9). The wipe logs its own WARNING instead.
-- **`VACUUM`.** It would also clear space freed before `secure_delete` was on, but it takes an
-  exclusive lock and needs free space about the size of the file (FM 29). Not done here.
+- **`VACUUM` on every pass, or on a timer.** It takes an exclusive lock for its whole run and
+  needs free space on the order of the file's size (FM 29), and with `secure_delete` on for the
+  connection there is nothing new for it to clear. The first build did no `VACUUM` at all;
+  review round 1 showed that left copies written before this release, so it now runs once per
+  file (Decision above).
 
 ## Consequences
 
 - The `events` table is no longer strictly append-only: rows are never deleted and amounts never
   change, but identifiers are removed from rows older than 48 hours. The module docstring, the
   class docstring and the code comments that called it append-only now say so.
-- The 48 hours is a floor, not a ceiling. While the app runs and writes, a key or address can stay
-  up to about one more hour plus the time to the next write; while the machine is stopped, until
-  its next start, when the open-time pass removes it before the store serves anything.
-  `docs/48-data-retention.md` states this bound.
+- The 48 hours is a floor, not a ceiling. While the app runs, a key or address goes at the first
+  write that comes at least an hour after the previous pass: about one more hour with steady
+  traffic, and until the next write when there are none. While the machine is stopped it stays
+  until the next start, when the open-time pass removes it before the store serves anything.
+  Fly volume snapshots may keep older copies (retention UNVERIFIED).
+  `docs/48-data-retention.md` and the runbook state this bound.
+- The first open after this release rewrites the whole file once (`VACUUM`). Measured below at
+  0.034-0.053 s for 20,000 ledger-shaped rows and 0.37-0.43 s for 20,000 rows of 2 KB. Where it
+  cannot run it adds one failed attempt to each open until it can, up to the 5 s busy timeout
+  when another connection holds a lock.
 - A store opened on a database with due rows now writes at open. On an already-wiped,
   already-migrated read-only volume it still writes nothing, which `store_reconnect.py` depends
   on. On a read-only volume with due rows the pass fails and logs one WARNING at each open; no write
-  lands there, so the write-path trigger never fires.
+  lands there, so the write-path trigger never fires. On a read-only volume that has not had the
+  one-shot `VACUUM` yet, that also fails at each open, at INFO.
 - The operator CLI that opens the live file under `fly ssh console` (`docs/23-data-model.md`)
   also runs the open-time pass: a second writer for milliseconds (FM 11).
 - **The production check after the deploy** (FM 36 and 37): inside the machine, read-only
@@ -160,17 +204,23 @@ In `feedback_store.py`:
 
 - **Fly volume snapshots** keep un-wiped copies until they age out; how long Fly keeps them is
   UNVERIFIED (FM 31). A restored snapshot is re-wiped at its first open.
-- **Freed pages from before this change, and the deleted rollback journal.** `secure_delete`
-  cleans only space freed from now on; older free space (for example from the F-01 relabel) and
-  the blocks of a deleted `-journal` file may still hold old keys until reused (FM 29, FM 30).
+- **Deleted rollback journals, and a file the one-shot `VACUUM` has not yet reached.** The
+  blocks of a deleted `-journal` file (including the one the `VACUUM` writes, which holds the
+  old pages) may hold old keys until the filesystem reuses them (FM 30). Until the `VACUUM` has
+  run on a file (it waits for a writable, unlocked volume with room), space freed before this
+  release still holds old copies there (FM 29).
 - **The in-memory cost ring** (`InMemoryCostEventRecorder`, up to 1,024 events) holds keys until
   eviction or process exit, which on a quiet machine can be longer than 48 hours (FM 32).
 - **Logs and Sentry.** A ceiling-degraded run sends the key to Sentry as `account_id`; how long
   Sentry keeps it is not asked (FM 34).
 - **Accounts created before the spend key existed (pre-W7).** Their spend key equals their
   account id (`session_store.py`, the `spend_key = account_id` backfill), and that id stays on
-  the account's provider, synthesis, debate, model-slot, safety and sign-in rows in the same table
-  and in `run_history.sqlite3` (FM 33). Those rows are outside CHG-044's words, which name cost
-  rows and session rows only. Recorded here for the owner, not widened.
+  the account's provider, synthesis, debate, model-slot, safety and evaluation rows in the same
+  table (the evaluation recorder writes `account_id=query_run.account_id`,
+  `query_run_orchestration.py` ~1966-1969) and in the `runs` table of `run_history.sqlite3`
+  (`run_history_store.py:147`) (FM 33). Sign-in events are not in this table: they are in
+  `sessions.sqlite3`'s `sign_in_events`, kept 30 days and at most 10 rows per account, and
+  deleted with the account. Those rows are outside CHG-044's words, which name cost rows and
+  session rows only. Recorded here for the owner, not widened.
 - **The 48 hours is measured on the wall clock.** A forward clock step wipes early, but the rails
   read the same clock, so they had already stopped reading those rows (FM 17).

@@ -646,10 +646,21 @@ BUCKET_B_PIN_BEHAVIOUR = {
     # W55 (ADR-0165): the SQL fragments that pick the rows the identifier
     # wipe rewrites. Their behaviour is the contract, not their text.
     "feedback_store.FeedbackStore._OLDER_THAN_CUT": (
-        "assert a row at exactly 48h keeps its key and one at 48h+1s loses it, "
-        "for whole-second and fractional stamps -- tests/unit/"
-        "test_w55_identifier_wipe.py::test_the_48_hour_cut_is_strict and "
-        "test_cost_rows_past_48_hours_lose_both_keys_and_nothing_else"
+        "assert a row at exactly 48h keeps its key and one at 48h+1s loses it "
+        "(fractional stamps: tests/unit/test_w55_identifier_wipe.py::"
+        "test_the_48_hour_cut_is_strict), and the same at a whole-second cut "
+        "with whole-second and fractional stamps either side, and a "
+        "whole-second stamp against a fractional cut (tests/unit/"
+        "test_w55_regressions.py::test_the_cut_is_exact_for_whole_second_stamps_and_cuts)"
+    ),
+    # W55 round 1 (ADR-0165): the marker that makes the VACUUM at open a
+    # one-shot per file.
+    "feedback_store.FeedbackStore._W55_VACUUM_MIGRATION": (
+        "assert the first open VACUUMs once and records the marker, a second "
+        "open does not VACUUM, and a write path never does -- tests/unit/"
+        "test_w55_regressions.py::test_the_vacuum_runs_once_per_file_and_never_on_a_write_path "
+        "(a renamed marker would only re-VACUUM each file once more; the "
+        "behaviour, not the string, is the contract)"
     ),
     "feedback_store.FeedbackStore._COST_KEY_DUE": (
         "assert only old cost rows still holding a key are rewritten, a "

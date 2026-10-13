@@ -509,9 +509,11 @@ def test_wiped_key_bytes_do_not_stay_in_the_database_file(
 ) -> None:
     """With ``secure_delete`` on, no copy of a wiped key or address stays on disk.
 
-    Red when: ``PRAGMA secure_delete`` is not on for the wipe (SQLite leaves the
-    old cell bytes in free space: on this exact seed, a plain UPDATE without it
-    left 7 copies of the key and 10 of the address; with it, 0 and 0).
+    Red when: ``PRAGMA secure_delete`` is not on for the store's connection
+    (SQLite leaves the old cell bytes in free space: on this exact seed, with no
+    ``secure_delete`` on the store's connection, the wipe left 19 copies of the
+    key and 5 of the address, measured in W55 review round 1, three runs; with
+    it, 0 and 0).
     """
     db, store = _new_db(tmp_path, opened)
     now = _now()
@@ -938,9 +940,9 @@ def _row_whose_first_cell(predicate: Callable[[str], bool]) -> list[str]:
 def test_docs_48_states_48_hours_for_each_wiped_identifier() -> None:
     """docs/48's rows for the two spend keys and the session address say 48 hours.
 
-    Fails until the builder edits ``docs/48-data-retention.md`` (the
-    session-address row does not exist yet; the two spend-key rows still say the
-    key outlives the 24 hours).
+    Written before ``docs/48-data-retention.md`` was edited, when the
+    session-address row did not exist and the two spend-key rows said the key
+    outlives the 24 hours; the W55 build added and changed those rows.
 
     Red when: any of the three rows' handling cell lacks "48 hours", still says
     the key "outlives the 24 hours", or the session-address row is missing.

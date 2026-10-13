@@ -102,11 +102,12 @@ the check that would settle it).
     second pass changed 0 rows in 0.003 s, and the 1,000 newer rows kept their key. Query plan:
     `SEARCH events USING INDEX events_recorder_type_time_idx (recorder=?)`. Only the
     `recorder` prefix is used, because the wipe does not name an event type, so each pass
-    reads every cost row ever written. Production has 142 cost rows (CHG-044). Fly's
+    reads every cost row ever written. Production had 142 cost rows on 2026-10-13 (read-only count, CHG-044). Fly's
     shared CPU and volume will be slower; by how much is UNVERIFIED.
 13. **A full disk makes the wipe fail.** An UPDATE needs room for its rollback journal.
     Removing a key does not shrink the file (no `VACUUM` anywhere in `src/`, per the
-    runbook). On `database or disk is full` the wipe must log and carry on. It cannot help a
+    runbook, when this was written; review round 1 added one `VACUUM` per file at open,
+    ADR-0165). On `database or disk is full` the wipe must log and carry on. It cannot help a
     full volume.
 
 ## C. The 48-hour cut
@@ -242,14 +243,18 @@ the check that would settle it).
     On a quiet machine that stays up it can hold a key longer than 48 hours. It is memory,
     not disk.
 33. **Other recorders keep an account id beside the same run id.** Provider, synthesis,
-    debate, model slot, safety and sign-in rows write `account_id` into the same table
+    debate, model slot, safety and evaluation rows write `account_id` into the same table
     (READ: `providers.py:720`, `synthesis.py:455`, `debate.py:947`, `model_slots.py:208`,
-    `safety.py:231`, `google_signin.py:545`). They carry the session's account id, not the
+    `safety.py:231`, `query_run_orchestration.py` ~1966-1969 for the evaluation recorder).
+    Sign-in events are NOT in this table: `google_signin.py` writes them to
+    `sessions.sqlite3`'s `sign_in_events` (`session_store.record_sign_in_event`), kept 30 days
+    and at most 10 rows per account and deleted with the account (corrected in review round
+    1; this item first listed sign-in rows here). They carry the session's account id, not the
     spend key, so an anonymous network's key does not survive there. But for a signed-in
     account created before W7 the spend key IS the account id (READ, `session_store.py:472`,
     `UPDATE accounts SET spend_key = account_id`), so that key stays, unwiped, on every
-    non-cost row of that account. `run_history.sqlite3` keeps `query_run.account_id` per run
-    (READ, `query_run_orchestration.py:1968`), same consequence. This is outside CHG-044's
+    non-cost row of that account. `run_history.sqlite3` keeps an `account_id` per run in its
+    `runs` table (READ, `run_history_store.py:147`), same consequence. This is outside CHG-044's
     words. It should be reported to the owner, not widened silently.
 34. **Sentry and logs.** A blocked or ceiling-degraded run sends `account_id` to Sentry
     (READ, `costs.py` ~1483). How long Sentry keeps it is "not yet asked" (docs/48 rows 13,
@@ -362,9 +367,11 @@ Each pass: one `BEGIN IMMEDIATE` transaction; `PRAGMA secure_delete=ON` on the c
 NULL the column for every eligible row; `json_remove` only where `json_valid`; restrict to
 rows that still hold a key; a strict 48-hour cut on the wipe's own injectable clock; one INFO
 line with counts; leave the write-health stamps alone. Bound to state in docs/48: "48 hours,
-up to about one hour more while the app runs; while the machine is stopped, until its next
-start; and up to the volume snapshot retention (UNVERIFIED, Fly's default is 5 days) in
-snapshots."
+while the app runs, until the first write at least an hour after the previous pass (about
+one hour more with steady traffic, until the next write with none); while the machine is
+stopped, until its next start; and up to the volume snapshot retention (UNVERIFIED, Fly's
+default is 5 days) in snapshots." (Corrected in review round 1: this said "up to about one
+hour more while the app runs", which is false when the app runs without writes.)
 
 Tests this needs, each with what turns it red:
 - A cost row 47 h 59 m old keeps its key and still counts in `daily_spend_for`; one 48 h 1 s

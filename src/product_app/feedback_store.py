@@ -7,7 +7,9 @@ the last 24 hours of activity, regardless of how many runs that was — so the
 in-memory recorders are paired with this SQLite-backed sink.
 
 The sink never deletes a row: the audit job reads it and the recorders only
-ever ``INSERT``. There are two exceptions that EDIT rows in place. One is
+ever ``INSERT``. (The one method that deletes rows,
+``delete_all_session_mints_for_tests``, is test support with no caller in
+``src/``.) There are two exceptions that EDIT rows in place. One is
 schema migration — a numbered, once-only repair recorded in the
 ``schema_migrations`` table and applied on the first open that finds it
 unapplied (today: the F-01 relabel, see ``_F01_PREVIEW_SELECT``). Every open,
@@ -17,6 +19,10 @@ migration is added writes. The other is the identifier wipe (W55, ADR-0165,
 ``IDENTIFIER_KEEP`` (48 hours) lose the spend key from cost rows and the
 visitor's address from session-mint rows, at every open and at most hourly
 after a write. Amounts, times and run ids are never edited, so no total moves.
+The connection runs with ``secure_delete`` on, and the first open of each file
+after W55 runs one ``VACUUM`` (also recorded in ``schema_migrations``), so a
+wiped identifier leaves no copy in the file's free space (pinned by
+``tests/unit/test_w55_regressions.py``).
 A single ``events`` table stores one row per recorder call, identified by the
 recorder's event-type string and the account/run correlation ids.
 
@@ -479,6 +485,10 @@ class FeedbackStore:
         "id INTEGER PRIMARY KEY CHECK (id = 1), max_event_id INTEGER NOT NULL)"
     )
 
+    #: Name of the one-shot VACUUM in ``schema_migrations`` (W55, ADR-0165).
+    #: See :meth:`_vacuum_once_after_secure_delete`.
+    _W55_VACUUM_MIGRATION = "w55_vacuum_after_secure_delete"
+
     def __init__(
         self,
         db_path: str,
@@ -519,6 +529,14 @@ class FeedbackStore:
         )
         self._conn.row_factory = sqlite3.Row
         with self._lock:
+            # W55 (ADR-0165): on for the life of the connection, not only for
+            # the identifier wipe. Ordinary inserts move cells when a page
+            # splits, and without this SQLite leaves the moved bytes in the old
+            # page's free space, where no later wipe can reach them. MEASURED
+            # (round-1 review): with it on only during the wipe, 20 public
+            # charges left 20 copies of their keys in the file after the wipe.
+            # A connection setting, not a write: a read-only file accepts it.
+            self._conn.execute("PRAGMA secure_delete = ON")
             self._conn.executescript(self._SCHEMA)
             # Best-effort, and AFTER the schema: see ``_SPEND_RAIL_INDEX``. A
             # read-only volume must still boot and serve reads; it simply runs
@@ -541,6 +559,10 @@ class FeedbackStore:
         # read-only volume still opens with zero writes (``store_reconnect.py``
         # depends on that).
         self._run_identifier_wipe()
+        # Then, once per database file ever, a VACUUM: it rewrites the file and
+        # so drops the copies that writes made before ``secure_delete`` was on
+        # for the whole connection. Never raises; see the method.
+        self._vacuum_once_after_secure_delete()
         _open_stores.add(self)
 
     def _backfill_f01_preview_rows(self) -> None:
@@ -777,6 +799,51 @@ class FeedbackStore:
                 exc,
             )
             return 0
+
+    def _vacuum_once_after_secure_delete(self) -> None:
+        """Rewrite the file once, so writes from before W55 leave no stray copies.
+
+        W55, ADR-0165. ``secure_delete`` is on for the whole connection from
+        this release on, so freed space is zeroed from now on. Space freed
+        BEFORE it (by every insert that split a page, and by the F-01 relabel)
+        can still hold old keys and addresses. ``VACUUM`` rebuilds the file
+        from its live rows and so drops them. It is needed once per file, so
+        it is recorded in ``schema_migrations`` like the F-01 relabel and never
+        runs again on that file.
+
+        Runs only from ``__init__``, after the open-time identifier wipe and
+        before the store is published, so no charge or mint can be holding the
+        lock; it takes the lock like every other statement.
+
+        NEVER RAISES and never stops the store opening. A read-only file, a
+        locked file (another connection holding a transaction, after the 5 s
+        busy timeout) or a full disk makes the ``VACUUM`` fail; it is logged at
+        INFO, the marker is not written, and the next open tries again. INFO,
+        not WARNING: a read-only volume already logs the backfills' WARNINGs,
+        and the identifier wipe logs its own if it cannot run. The write-health
+        stamps are not moved, for the reason given in
+        :meth:`wipe_expired_identifiers`. On an already-marked file it only
+        reads the marker, so an already-migrated read-only volume still opens
+        with zero writes.
+        """
+        started = time.monotonic()
+        try:
+            with self._lock:
+                self._conn.execute(self._MIGRATIONS_DDL)
+                if self._migration_applied(self._W55_VACUUM_MIGRATION):
+                    return
+                self._conn.execute("VACUUM")
+                self._conn.execute(
+                    "INSERT OR IGNORE INTO schema_migrations (name, applied_at) VALUES (?, ?)",
+                    (self._W55_VACUUM_MIGRATION, datetime.now(UTC).isoformat()),
+                )
+        except Exception as exc:  # noqa: BLE001 — best-effort, see docstring
+            _log.info("feedback_store: one-shot VACUUM did not run: %s", exc)
+            return
+        _log.info(
+            "feedback_store: one-shot VACUUM done in %.3f s",
+            time.monotonic() - started,
+        )
 
     @classmethod
     def from_env(cls) -> FeedbackStore:
@@ -1034,10 +1101,12 @@ class FeedbackStore:
         Only rows that still hold an identifier are rewritten, so a repeat pass
         changes nothing. When no row is due it writes nothing at all, which is
         what lets an already-migrated read-only volume open with zero writes.
-        Otherwise one ``BEGIN IMMEDIATE`` transaction, with ``PRAGMA
-        secure_delete`` on for it (without it SQLite leaves the old cell bytes
-        in free space: MEASURED, 73 copies of a key after a plain UPDATE over
-        50 rows, 0 with it); the previous setting is restored afterwards.
+        Otherwise one ``BEGIN IMMEDIATE`` transaction. ``PRAGMA secure_delete``
+        is on for the store's whole connection (set in ``__init__``): without
+        it SQLite leaves the old cell bytes in free space (MEASURED, 73 copies
+        of a key after a plain UPDATE over 50 rows, 0 with it), and with it on
+        only for this pass, page splits during ordinary inserts still leave
+        copies (ADR-0165).
 
         NEVER RAISES. Any error is logged in one line, without a key or an
         address, and the result is all zeros; the stamps behind
@@ -1093,37 +1162,33 @@ class FeedbackStore:
         ).fetchone()
         if not cost_due and not mint_due:
             return WipeResult(0, 0, 0)
-        previous = int(self._conn.execute("PRAGMA secure_delete").fetchone()[0])
-        self._conn.execute("PRAGMA secure_delete = ON")
+        # ``secure_delete`` is already on: ``__init__`` sets it for the whole
+        # connection and nothing turns it off.
+        self._conn.execute("BEGIN IMMEDIATE")
         try:
-            self._conn.execute("BEGIN IMMEDIATE")
-            try:
-                malformed = self._conn.execute(
-                    f"SELECT COUNT(*) FROM events WHERE {self._COST_KEY_DUE} "
-                    "AND NOT json_valid(payload)",
-                    cut,
-                ).fetchone()[0]
-                cost = self._conn.execute(
-                    "UPDATE events SET account_id = NULL, payload = CASE "
-                    "WHEN NOT json_valid(payload) THEN payload "
-                    "WHEN json_type(payload, '$.account_id') IS NULL THEN payload "
-                    "ELSE json_remove(payload, '$.account_id') END "
-                    f"WHERE {self._COST_KEY_DUE}",
-                    cut,
-                ).rowcount
-                mint = self._conn.execute(
-                    "UPDATE events SET payload = json_remove(payload, '$.ip') "
-                    f"WHERE {self._MINT_ADDRESS_DUE}",
-                    cut,
-                ).rowcount
-                self._conn.execute("COMMIT")
-            except BaseException:
-                with suppress(sqlite3.Error):
-                    self._conn.execute("ROLLBACK")
-                raise
-        finally:
+            malformed = self._conn.execute(
+                f"SELECT COUNT(*) FROM events WHERE {self._COST_KEY_DUE} "
+                "AND NOT json_valid(payload)",
+                cut,
+            ).fetchone()[0]
+            cost = self._conn.execute(
+                "UPDATE events SET account_id = NULL, payload = CASE "
+                "WHEN NOT json_valid(payload) THEN payload "
+                "WHEN json_type(payload, '$.account_id') IS NULL THEN payload "
+                "ELSE json_remove(payload, '$.account_id') END "
+                f"WHERE {self._COST_KEY_DUE}",
+                cut,
+            ).rowcount
+            mint = self._conn.execute(
+                "UPDATE events SET payload = json_remove(payload, '$.ip') "
+                f"WHERE {self._MINT_ADDRESS_DUE}",
+                cut,
+            ).rowcount
+            self._conn.execute("COMMIT")
+        except BaseException:
             with suppress(sqlite3.Error):
-                self._conn.execute(f"PRAGMA secure_delete = {previous}")
+                self._conn.execute("ROLLBACK")
+            raise
         return WipeResult(int(cost), int(mint), int(malformed))
 
     def _maybe_wipe_identifiers(self) -> None:
