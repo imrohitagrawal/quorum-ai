@@ -7,7 +7,9 @@ with the distributions the image's ``/opt/venv/bin/python`` can see.
 
 Exit codes:
   0  same packages at the same versions
-  1  a package is missing, extra or at another version; each is printed
+  1  a package is missing, extra, at another version, or installed twice
+     (two versions of one distribution: Python imports only one of them);
+     each is printed
   2  refusing: either side lists nothing (no image, a failed export)
 """
 
@@ -27,7 +29,12 @@ Run = Callable[..., Any]
 EXPORT = ["uv", "export", "--frozen", "--no-dev", "--no-emit-project", "--no-hashes"]
 
 #: The image: python:3.12-slim (Debian, CPython). Every marker variable is set,
-#: so nothing falls back to the machine running the check.
+#: so nothing falls back to the machine running the check. Two values are
+#: hard-coded rather than read from the image: ``platform_machine`` is x86_64
+#: and the patch level is 3.12.0. Neither changes a locked marker today:
+#: ``grep -c platform_machine uv.lock`` is 0, and every ``python_full_version``
+#: marker in uv.lock compares against 3.13, 3.14 or 3.15, where 3.12.0 and any
+#: other 3.12 release give the same answer.
 IMAGE_ENV: dict[str, str] = {
     "sys_platform": "linux",
     "platform_system": "Linux",
@@ -42,9 +49,6 @@ IMAGE_ENV: dict[str, str] = {
     "platform_python_implementation": "CPython",
 }
 
-#: Installer tooling a base image may carry; not runtime libraries.
-TOOLING = {"pip", "setuptools", "wheel"}
-
 #: Run inside the image: one ``name==version`` line per installed distribution.
 LISTING = (
     "import importlib.metadata as m\n"
@@ -53,13 +57,14 @@ LISTING = (
 )
 
 
-def _normalize(name: str) -> str:
+def normalize(name: str) -> str:
     return re.sub(r"[-_.]+", "-", name).lower()
 
 
-def parse_pins(text: str, env: dict[str, str] | None = None) -> dict[str, str]:
-    """``{normalized name: version}`` for each pinned line whose marker holds in ``env``."""
-    pins: dict[str, str] = {}
+def pinned_pairs(text: str, env: dict[str, str] | None = None) -> list[tuple[str, str]]:
+    """``(normalized name, version)`` for each pinned line whose marker holds in
+    ``env`` (the image's by default), in order, duplicates kept."""
+    pairs: list[tuple[str, str]] = []
     for line in text.splitlines():
         requirement, _, marker = line.partition(";")
         requirement = requirement.strip()
@@ -68,8 +73,25 @@ def parse_pins(text: str, env: dict[str, str] | None = None) -> dict[str, str]:
         if marker.strip() and not Marker(marker.strip()).evaluate(env or IMAGE_ENV):
             continue
         name, _, version = requirement.partition("==")
-        pins[_normalize(name.strip())] = version.strip()
-    return pins
+        pairs.append((normalize(name.strip()), version.strip()))
+    return pairs
+
+
+def parse_pins(text: str, env: dict[str, str] | None = None) -> dict[str, str]:
+    """``{normalized name: version}`` for each pinned line whose marker holds in ``env``."""
+    return dict(pinned_pairs(text, env))
+
+
+def duplicates(pairs: list[tuple[str, str]]) -> list[str]:
+    """One line per name listed more than once, with every version it has."""
+    versions: dict[str, list[str]] = {}
+    for name, version in pairs:
+        versions.setdefault(name, []).append(version)
+    return [
+        f"installed more than once: {name} ({', '.join(found)})"
+        for name, found in sorted(versions.items())
+        if len(found) > 1
+    ]
 
 
 def compare(locked: dict[str, str], installed: dict[str, str]) -> list[str]:
@@ -79,8 +101,7 @@ def compare(locked: dict[str, str], installed: dict[str, str]) -> list[str]:
         if name not in installed:
             diffs.append(f"missing from the image: {name}=={locked[name]}")
         elif name not in locked:
-            if name not in TOOLING:
-                diffs.append(f"in the image but not in uv.lock: {name}=={installed[name]}")
+            diffs.append(f"in the image but not in uv.lock: {name}=={installed[name]}")
         elif locked[name] != installed[name]:
             diffs.append(f"{name}: uv.lock pins {locked[name]}, the image has {installed[name]}")
     return diffs
@@ -102,7 +123,8 @@ def main(argv: Sequence[str] | None = None, run: Run = subprocess.run) -> int:
         check=False,
     )
     locked = parse_pins(export.stdout) if export.returncode == 0 else {}
-    installed = parse_pins(listing.stdout) if listing.returncode == 0 else {}
+    listed = pinned_pairs(listing.stdout) if listing.returncode == 0 else []
+    installed = dict(listed)
     print(f"image-lock-check: locked {len(locked)}, installed {len(installed)}")
     if not locked or not installed:
         print(
@@ -112,7 +134,7 @@ def main(argv: Sequence[str] | None = None, run: Run = subprocess.run) -> int:
             file=sys.stderr,
         )
         return 2
-    diffs = compare(locked, installed)
+    diffs = duplicates(listed) + compare(locked, installed)
     for line in diffs:
         print(f"image-lock-check: {line}")
     if diffs:

@@ -5,7 +5,8 @@
 Accepted — 2026-10-13. The work is the owner's choice: CHG-042 (b) put "lock file + library
 updates + vulnerability check" second, after W56 (board row W68). The design below (`uv sync
 --frozen` in the Dockerfile, `pip-audit` through `uvx`, two steps inside the required
-`validate-and-test` job, a check of the built image against the lock) is the session's.
+`validate-and-test` job, a check of the built image against the lock, `--locked` on every CI
+install) is the session's.
 
 ## Context
 
@@ -51,20 +52,31 @@ This record changes three earlier statements without editing their bodies:
 3. **`make vuln-audit`** (`scripts/vuln_audit.py`) exports the production set
    (`uv export --frozen --no-dev --no-emit-project --no-hashes`) and audits exactly that list
    with `uvx --python 3.12 --from pip-audit==2.10.1 pip-audit -r <file> --no-deps --disable-pip
-   --format json`. It exits 1 on any known vulnerability and prints each as
-   `<name> <version> <id> fixed in <versions>`. It exits 2, refusing, when the export fails or
-   pins nothing, when pip-audit's output is not JSON, or when the report audited no package.
-   It prints how many lines pip-audit left out because their marker does not hold for
-   Python 3.12.
+   --strict --cache-dir <fresh temporary folder> --format json`. The fresh cache folder means
+   every run asks the vulnerability service again; an old cache cannot answer for it. It
+   prints `vuln-audit: exported N pinned lines, M apply to the image (Linux, CPython 3.12)`
+   first and `vuln-audit: M packages, V known vulnerabilities` last. It exits 1 on any known
+   vulnerability and prints each as `<name> <version> <id> fixed in <versions>`. It exits 2,
+   refusing, when the export fails or pins nothing for the image, when pip-audit's output is
+   not JSON, when pip-audit skipped any package, or when the set of `(name, version)` pairs
+   pip-audit audited differs from the pairs the export pins for the image (markers evaluated
+   as `make image-lock-check` evaluates them). Each missing pair is printed as
+   `vuln-audit: not audited: <name>==<version>`.
 4. **`make image-lock-check`** (`scripts/check_image_matches_lock.py --image $(IMAGE)`, `IMAGE`
    defaulting to `quorum-ai:local`, the tag `make docker-build` builds) lists every distribution
    the image's `/opt/venv/bin/python` can see and compares it with the same export, markers
    evaluated for Linux CPython 3.12. It exits 1 on a missing, extra or different-version
-   package (`pip`, `setuptools` and `wheel` are allowed extras) and 2 when either side is
-   empty.
+   package, or on one distribution listed twice (two versions installed side by side: Python
+   imports only one, and a name-to-version map would keep only one). No extra is allowed:
+   the image's venv holds no `pip`, `setuptools` or `wheel` (measurement 15), and an
+   allowance for them would hide a vulnerable one. It exits 2 when either side is empty.
 5. **Both run as blocking steps of the required `validate-and-test` job**: `make vuln-audit`
    after `make security-scan`, `make image-lock-check` after `make docker-build`. No
    `continue-on-error`, no `if:`.
+6. **Every `uv sync` in `.github/workflows/` carries `--locked`** (12 steps in 8 files). A
+   stale `uv.lock` now fails the install step instead of being rewritten on the runner.
+   Without it, CI audited, tested and built a re-locked set while production built the
+   committed lock (measurement 11).
 
 ## Measurements
 
@@ -73,16 +85,21 @@ with Docker Desktop.
 
 | # | Fact | Value | Command |
 |---|---|---|---|
-| 1 | What CI's image installed before this change (run 38408508822, the push of `1b6adf9`) | `anyio==4.15.1`, `sentry-sdk==2.72.0`, `urllib3==2.8.0`; the same job's `uv sync` installed the locked `anyio==4.14.0`, `sentry-sdk==2.63.0`, `urllib3==2.7.0` | `gh run view 38408508822 --job 115334339883 --log`, grep `+ <name>==` |
-| 2 | The audit on `1b6adf9`'s lock | exit 1; 6 known vulnerabilities (the six in S3); "31 packages" audited of 32 pinned lines | `python3 scripts/vuln_audit.py` in a folder holding only `1b6adf9`'s `pyproject.toml` and `uv.lock` |
-| 3 | The audit on this branch | exit 0; `vuln-audit: checked 33 locked runtime packages`, `pip-audit listed 31 of 33 pinned lines`, `31 packages, 0 known vulnerabilities` | `make vuln-audit` |
+| 1 | What CI's image installed before this change (run 38408508822, the pull-request run of PR #562's head `9685224`; the push run of `1b6adf9` is 38412480320) | `anyio==4.15.1`, `sentry-sdk==2.72.0`, `urllib3==2.8.0`; the same job's `uv sync` installed the locked `anyio==4.14.0`, `sentry-sdk==2.63.0`, `urllib3==2.7.0` | `gh run view 38408508822 --job 115334339883 --log`, grep `+ <name>==` |
+| 2 | The audit on `1b6adf9`'s lock | exit 1; 6 known vulnerabilities (the six in S3); `vuln-audit: exported 32 pinned lines, 31 apply to the image (Linux, CPython 3.12)`, `vuln-audit: 31 packages, 6 known vulnerabilities` | `scripts/vuln_audit.py` run in a folder holding only `1b6adf9`'s `pyproject.toml` and `uv.lock` |
+| 3 | The audit on this branch | exit 0; `vuln-audit: exported 33 pinned lines, 31 apply to the image (Linux, CPython 3.12)`, `vuln-audit: 31 packages, 0 known vulnerabilities` | `make vuln-audit` |
 | 4 | The image built from this branch | `uv sync` used `CPython 3.12.12 interpreter at: /usr/local/bin/python3.12`, installed 31 packages including `anyio==4.14.2`, `sentry-sdk==2.63.0`, `urllib3==2.8.0`, and compiled 934 files; `/opt/venv/bin/python -> /usr/local/bin/python3.12` | `make docker-build`; `docker run --rm --entrypoint sh quorum-ai:local -c 'ls -l /opt/venv/bin/python'` |
 | 5 | The image against the lock | exit 0; `image-lock-check: locked 31, installed 31` | `make image-lock-check` |
 | 6 | The check bites | the same image against `1b6adf9`'s lock: exit 1, `anyio: uv.lock pins 4.14.0, the image has 4.14.2` and the same for `urllib3`; a tag that does not exist: exit 2, refusing | `scripts/check_image_matches_lock.py` run in that folder, and with `--image quorum-ai:no-such-tag` |
 | 7 | The app starts without the project installed | `/health` 200 and `/ready` 200 (`live_readiness.state: offline_by_config`) with no secrets set | `docker run --rm -d -p 18231:8000 quorum-ai:local`, `curl` |
-| 8 | Time locally | `make vuln-audit` 3.54 s on its first run (before pip-audit was pinned to `--python 3.12`), 0.61 s after, both on a warm uv cache; `make image-lock-check` 0.98 to 1.01 s; `make docker-build` 16.98 s with cached base layers, its `uv sync` step 8.9 s | `/usr/bin/time -p make <target>` |
+| 8 | Time locally | `make vuln-audit` 2.20 s, 1.99 s and 5.02 s on three runs with a fresh pip-audit cache each time (warm uv cache); `make image-lock-check` 0.98 to 1.01 s; `make docker-build` 16.98 s with cached base layers, its `uv sync` step 8.9 s | `/usr/bin/time -p make <target>` |
 | 9 | Time budget in CI | `validate-and-test` took 25 min 5 s (13:52:14 to 14:17:19) against its 35-minute limit; its Docker build step took about 15 s | run 38408508822, `gh run view --json jobs` and the step timestamps in its log. The two new steps' time in CI is UNVERIFIED until the first run of this branch; pip-audit's first download there is not measured |
 | 10 | The lock change | `anyio` 4.14.0 became two entries: 4.14.2 for Python below 3.15 and 4.15.1 for 3.15 and above; `urllib3` 2.7.0 became 2.8.0; no other package changed version | `uv lock --upgrade-package anyio --upgrade-package urllib3`, then the `[[package]]` versions diffed before and after |
+| 11 | A stale lock got through both gates before `--locked` | Reported by the round 1 break-it review, not re-run here: a lock pinning `anyio` 4.14.0 and `urllib3` 2.7.0 behind a `pyproject.toml` that needed a re-lock exited 0 from `make vuln-audit`, `make docker-build` and `make image-lock-check` in CI's order, because `uv sync --all-extras` re-locked the runner's copy first, while a fresh checkout's `uv sync --frozen` image held the vulnerable versions | the reviewer's reproduction |
+| 12 | `uv sync --locked` refuses a stale lock | On a scratch copy with `"six>=1.16"` added to `pyproject.toml` and no re-lock: uv 0.11.18 printed ``The lockfile at `uv.lock` needs to be updated, but `--locked` was provided. To update the lockfile, run `uv lock`.`` and exited 1; uv 0.13.0 printed ``error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.`` and exited 1; the lock file was left unchanged (`cmp`) | `uv sync --locked --all-extras`, and `uvx --from uv==0.13.0 uv sync --locked --all-extras` |
+| 13 | This branch's lock is not stale for CI's uv | CI installed uv 0.13.0 (run 38412480320's log: `Successfully installed uv version 0.13.0`); `uv lock --check` exits 0 under uv 0.11.18 and under 0.13.0 | `uv lock --check`; `uvx --from uv==0.13.0 uv lock --check` |
+| 14 | The audit refuses offline even after an online run | exit 2, `vuln-audit: refusing: pip-audit exited 1 without a JSON report`, run straight after an online run. The round 1 version, using pip-audit's default cache, exited 0 in the same case (reported by the round 1 prose review, not re-run here) | `HTTPS_PROXY=http://127.0.0.1:9 HTTP_PROXY=http://127.0.0.1:9 make vuln-audit` |
+| 15 | The image's venv holds no installer tooling | on an image built from this branch (tag `w68fix-check`, removed after): `[]` for `pip`, `setuptools` and `wheel`; `image-lock-check: locked 31, installed 31` with no allowance | `docker run --rm --pull never --entrypoint /opt/venv/bin/python <image> -c ...` listing those names; `make image-lock-check IMAGE=<image>` |
 
 Why `anyio` forks (row 10): `anyio` 4.15.1 needs `typing_extensions>=4.16.0` below Python 3.15
 (its PyPI metadata), and the lock keeps `typing-extensions` 4.15.0 because only `anyio` and
@@ -100,7 +117,8 @@ are at or above the fixed 4.14.2.
   with `pyproject.toml`; `--frozen` does not look. uv does not accept both (`uv sync --locked
   --frozen` exits 2: "the argument '--locked' cannot be used with '--frozen'"). In the image,
   `--frozen` is what is wanted: install what the lock says, and nothing resolved at build time.
-  The out-of-date-lock case is a gap, listed below.
+  The out-of-date-lock case is closed in CI instead, by `--locked` on every install (decision
+  6): a stale lock fails the required `validate-and-test` job at its install step.
 - **osv-scanner instead of pip-audit.** It reads `uv.lock` directly and covers more
   ecosystems, but it is a Go binary that would need its own install step and its own pinning in
   CI. pip-audit runs through `uvx`, which CI already has, pinned with one `==`, and can query
@@ -110,8 +128,9 @@ are at or above the fixed 4.14.2.
   branch protection names it as required, and that list is the owner's setting. A step inside
   `validate-and-test`, already required and part of the "CI" workflow that `deploy.yml`'s gate
   waits for (`scripts/deploy_gate.py`, `REQUIRED_WORKFLOWS`), blocks without a settings
-  change. The cost is the job's time; measurements 8 and 9 put it at
-  seconds against about 10 minutes of headroom.
+  change. The cost is the job's time. Locally the two steps take seconds (measurement 8);
+  their time in CI is UNVERIFIED (measurement 9). On run 38408508822 the job finished about
+  10 minutes inside its limit.
 - **Audit the installed CI venv (`pip-audit` with no `-r`).** That venv holds the `dev` and
   `quality` extras, which production does not ship, so a finding there could block a merge
   over a library the product never runs, and the count would not describe production.
@@ -127,9 +146,8 @@ are at or above the fixed 4.14.2.
   decision for whoever meets that case.
 - The audit needs the network: `uvx` downloads pip-audit, and pip-audit asks PyPI's
   vulnerability service (its default, `--vulnerability-service pypi`) about each package. When
-  the service cannot be reached, the step refuses (exit 2) rather than passing: run locally
-  with the proxy pointed at a closed port, it printed `vuln-audit: refusing: pip-audit exited 1
-  without a JSON report` and exited 2.
+  the service cannot be reached, the step refuses (exit 2) rather than passing, even right
+  after an online run, because each run starts with an empty pip-audit cache (measurement 14).
 - A library update is now an explicit commit to `uv.lock`, reviewed like any change. Before,
   an image rebuild picked up new releases silently.
 
@@ -139,14 +157,19 @@ are at or above the fixed 4.14.2.
   image) are not audited. Neither is the Python interpreter itself.
 - **A vulnerability published after a merge** is caught only on the next CI run. Production
   keeps running the old image until then; no scheduled audit exists.
-- **An out-of-date lock.** If `pyproject.toml` changes and `uv.lock` is not updated, the image
-  installs the old lock (`--frozen` does not look), while CI's `Install dependencies` step
-  (`uv sync --all-extras`, no `--locked`) re-locks on the runner and tests the new set. Checked
-  on a scratch copy with one dependency added to `pyproject.toml`: `uv lock --check` exited 1,
-  `uv export --frozen` did not list the new package, and `uv sync --dry-run` printed `Would
-  update lockfile at: uv.lock`. Running `uv sync --locked` in CI would close this; not done here.
-- **Lines whose marker does not hold for Python 3.12 on Linux or macOS** are not audited:
+- **An out-of-date lock is no longer a gap in CI.** Before decision 6, a `pyproject.toml`
+  change without a re-lock gave an image built from the old lock (`--frozen` does not look),
+  while CI's `uv sync --all-extras` re-locked on the runner and tested, audited and built the
+  new set; the round 1 review reproduced a vulnerable lock passing both gates this way
+  (measurement 11). Every CI install now runs `uv sync --locked`, which exits 1 on a stale
+  lock (measurement 12), so such a change fails each CI job at its install step, before
+  either W68 gate runs. A deploy of a commit CI did not run on is outside this check.
+- **Lines whose marker does not hold for the image** (Linux, CPython 3.12) are not audited:
   today `colorama` (Windows only) and the `anyio` 4.15.1 entry (Python 3.15 and above). Neither
-  is installed in the image. The audit prints how many it left out.
-- **The audit's own trust**: pip-audit 2.10.1 is pinned by version, not by hash, and its
-  advisory data is whatever PyPI's service returns that day.
+  is installed in the image. The first output line shows how many lines apply; if pip-audit
+  leaves out a line that applies to the image (it evaluates markers for the machine it runs
+  on), the audit refuses and names it.
+- **The audit's own trust**: pip-audit 2.10.1 is pinned by version, not by hash. Only
+  pip-audit itself is pinned: `uvx` resolves its dependencies when it runs, with no lock or
+  constraints file from this repository, so they can change between runs without a commit.
+  Its advisory data is whatever PyPI's service returns that day.

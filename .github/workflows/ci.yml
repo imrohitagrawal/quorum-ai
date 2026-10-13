@@ -76,7 +76,7 @@ jobs:
 
       - uses: astral-sh/setup-uv@v5
       - name: Install dependencies
-        run: uv sync --all-extras
+        run: uv sync --locked --all-extras
       - name: Validate enterprise factory gates
         run: make validate
       - name: Assert openapi.yaml is in sync with app.openapi()
@@ -161,7 +161,7 @@ jobs:
       - name: Set up Python
         run: uv python install 3.12
       - name: Install dependencies
-        run: uv sync --all-extras
+        run: uv sync --locked --all-extras
       - name: Perf gate
         run: make perf-gate
 
@@ -214,7 +214,7 @@ jobs:
       - name: Set up Python
         run: uv python install 3.12
       - name: Install dependencies
-        run: uv sync --all-extras
+        run: uv sync --locked --all-extras
       - name: Contract fuzzing against /openapi.json
         run: make api-contract
 
@@ -243,7 +243,7 @@ jobs:
       - name: Set up Python
         run: uv python install 3.12
       - name: Install dependencies
-        run: uv sync --all-extras
+        run: uv sync --locked --all-extras
       - name: Fetch base branch
         run: git fetch origin ${{ github.base_ref }}:refs/remotes/origin/${{ github.base_ref }}
       - name: Changed-lines coverage
@@ -371,7 +371,7 @@ jobs:
       - name: Set up Python
         run: uv python install 3.12
       - name: Install dependencies
-        run: uv sync --all-extras
+        run: uv sync --locked --all-extras
       - name: Mutation score on changed functions
         run: make mutation-baseline DIFF_BASE=origin/${{ github.base_ref || 'main' }}
       # HONEST STATUS: this step reports SKIPPED on this runner, always.

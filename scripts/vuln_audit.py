@@ -3,14 +3,19 @@
 
 Exports what ``uv.lock`` pins for production (no dev or optional extras, no
 project, no hashes) and hands exactly that list to a pinned ``pip-audit``,
-with ``--no-deps`` so nothing is resolved again.
+with ``--no-deps`` so nothing is resolved again, ``--strict`` so a package it
+cannot collect fails the run, and a fresh ``--cache-dir`` so every run asks
+the vulnerability service again instead of answering from an old cache.
 
 Exit codes:
-  0  every audited package is free of known vulnerabilities
+  0  every package that applies to the image was audited, and none has a
+     known vulnerability
   1  at least one known vulnerability; each is printed
-  2  refusing: the export or the audit produced nothing to judge (a failed
-     export, an export with no pinned package, output that is not JSON, or a
-     report that lists no audited package). A gate over nothing must not pass.
+  2  refusing: the audit cannot vouch for the image's packages (a failed
+     export, an export with nothing that applies to the image, output that is
+     not JSON, a package pip-audit skipped, or an audited set that differs
+     from the packages the export pins for the image). A gate over nothing,
+     or over part of the set, must not pass.
 """
 
 from __future__ import annotations
@@ -22,6 +27,10 @@ import tempfile
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
+
+# The sibling script owns marker evaluation for the image (Linux, CPython 3.12).
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from check_image_matches_lock import normalize, pinned_pairs  # noqa: E402
 
 Run = Callable[..., Any]
 
@@ -56,16 +65,23 @@ def main(argv: Sequence[str] | None = None, run: Run = subprocess.run) -> int:
     except RuntimeError as error:
         print(f"vuln-audit: refusing: {error}", file=sys.stderr)
         return 2
-    pinned = count_pinned(requirements)
-    print(f"vuln-audit: checked {pinned} locked runtime packages")
-    if pinned == 0:
-        print("vuln-audit: refusing: the export pins no package", file=sys.stderr)
+    expected = set(pinned_pairs(requirements))
+    print(
+        f"vuln-audit: exported {count_pinned(requirements)} pinned lines, "
+        f"{len(expected)} apply to the image (Linux, CPython 3.12)"
+    )
+    if not expected:
+        print("vuln-audit: refusing: the export pins no package for the image", file=sys.stderr)
         return 2
 
     with tempfile.TemporaryDirectory() as folder:
         path = Path(folder) / "requirements.txt"
         path.write_text(requirements, encoding="utf-8")
-        command = [*PIP_AUDIT, "-r", str(path), "--no-deps", "--disable-pip", "--format", "json"]
+        command = [
+            *PIP_AUDIT,
+            *["-r", str(path), "--no-deps", "--disable-pip", "--strict"],
+            *["--cache-dir", str(Path(folder) / "cache"), "--format", "json"],
+        ]
         result = run(command, capture_output=True, text=True, check=False)
 
     try:
@@ -88,14 +104,19 @@ def main(argv: Sequence[str] | None = None, run: Run = subprocess.run) -> int:
             vulns += 1
             fixed = ", ".join(vuln.get("fix_versions") or []) or "no release"
             print(f"{dep['name']} {dep['version']} {vuln['id']} fixed in {fixed}")
-    if len(dependencies) != pinned:
-        print(
-            f"vuln-audit: pip-audit listed {len(dependencies)} of {pinned} pinned lines; "
-            "it leaves out lines whose marker does not hold for Python 3.12 here"
-        )
     print(f"vuln-audit: {len(audited)} packages, {vulns} known vulnerabilities")
-    if not audited:
-        print("vuln-audit: refusing: pip-audit audited no package", file=sys.stderr)
+
+    seen = {(normalize(str(d["name"])), str(d["version"])) for d in audited}
+    for name, version in sorted(expected - seen):
+        print(f"vuln-audit: not audited: {name}=={version}")
+    for name, version in sorted(seen - expected):
+        print(f"vuln-audit: audited but not pinned for the image: {name}=={version}")
+    if skipped or seen != expected:
+        print(
+            f"vuln-audit: refusing: pip-audit audited {len(seen & expected)} of the "
+            f"{len(expected)} packages that apply to the image, and skipped {len(skipped)}",
+            file=sys.stderr,
+        )
         return 2
     return 1 if vulns else 0
 

@@ -7,7 +7,7 @@ Findings S3 and S4 of ``docs/analysis/2026-10-13-security-review.md``:
   version ranges in ``pyproject.toml`` and ignores ``uv.lock``. CI's
   docker-build log for run 38408508822 installs sentry-sdk 2.72.0, anyio
   4.15.1 and urllib3 2.8.0 while ``uv.lock`` pins 2.63.0, 4.14.0 and 2.7.0, so
-  production ran versions CI never tested.
+  the image CI built ran library versions CI's tests never ran.
 * S3: the locked anyio 4.14.0 and urllib3 2.7.0 carry six known
   vulnerabilities (fixed in 4.14.2 and 2.8.0), and no CI job audits libraries.
 

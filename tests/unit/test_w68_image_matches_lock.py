@@ -212,17 +212,19 @@ def test_compare_counts_every_difference() -> None:
     assert len(_module().compare(locked, installed)) == 4
 
 
-def test_compare_ignores_only_pip_setuptools_and_wheel_as_extras() -> None:
+def test_compare_reports_pip_setuptools_and_wheel_as_extras() -> None:
     """Red when: ``pip``, ``setuptools`` or ``wheel`` present in the image but
-    not the lock is reported (they are installer tooling, not runtime
-    libraries), or when that allowance leaks to other names: ``pipx`` and
-    ``wheel-extra`` installed but not locked must still be reported."""
+    not the lock is NOT reported. The image's venv holds none of them (round 1
+    review), and an allowance for them would hide a vulnerable one: setuptools
+    75.0.0 carries two PYSEC advisories. Three extras are three differences,
+    each naming its package."""
     mod = _module()
     locked = {"anyio": "4.14.0"}
-    tooling = {"anyio": "4.14.0", "pip": "25.2", "setuptools": "80.9.0", "wheel": "0.45.1"}
-    assert mod.compare(locked, tooling) == []
-    lookalikes = {"anyio": "4.14.0", "pipx": "1.7.1", "wheel-extra": "1.0"}
-    assert len(mod.compare(locked, lookalikes)) == 2
+    tooling = {"anyio": "4.14.0", "pip": "25.2", "setuptools": "75.0.0", "wheel": "0.45.1"}
+    diffs = mod.compare(locked, tooling)
+    assert len(diffs) == 3, diffs
+    for name in ("pip", "setuptools", "wheel"):
+        assert sum(f"{name}==" in line for line in diffs) == 1, (name, diffs)
 
 
 # ---------------------------------------------------------------------------

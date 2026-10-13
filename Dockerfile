@@ -9,7 +9,8 @@ COPY pyproject.toml uv.lock ./
 
 # Install exactly what uv.lock pins (W68, ADR-0164). Until W68 this stage ran
 # `uv pip install .`, which resolves from the version ranges in pyproject.toml
-# and ignores uv.lock, so production ran library versions CI never tested.
+# and ignores uv.lock, so the image CI built ran library versions CI's tests
+# never ran.
 # - --frozen: read the lock as it is, never re-resolve.
 # - --no-dev, and no --extra: the dev and quality extras stay out of the image.
 # - --no-install-project: the app is not installed as a package; the runtime

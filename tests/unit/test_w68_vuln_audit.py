@@ -212,13 +212,15 @@ def test_locked_runtime_requirements_exports_the_frozen_runtime_set() -> None:
 def test_clean_audit_exits_0_and_reports_what_it_checked(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """Red when: a clean audit does not exit 0, the ``checked N`` or summary
-    line is missing or carries the wrong number, pip-audit is not called
+    """Red when: a clean audit does not exit 0, the ``exported N pinned
+    lines, M apply to the image`` or summary line is missing or carries the
+    wrong number, pip-audit is not called
     exactly once, or the file handed to pip-audit is not the export."""
     fake = _FakeRun(_Done(0, _EXPORT_3), _audit(_clean_deps()))
     assert _module().main([], run=fake) == 0
     lines, _ = _lines(capsys)
-    assert "vuln-audit: checked 3 locked runtime packages" in [ln.strip() for ln in lines], lines
+    first = "vuln-audit: exported 3 pinned lines, 3 apply to the image (Linux, CPython 3.12)"
+    assert first in [ln.strip() for ln in lines], lines
     assert _summary(lines) == (3, 0)
     assert len(fake.tool_calls("uv")) == 1
     assert len(fake.tool_calls("uvx")) == 1
@@ -253,13 +255,15 @@ def test_empty_export_refuses_with_2_and_never_runs_pip_audit(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """Red when: an export with no pinned package does not exit 2 with a
-    "refusing" message, does not report ``checked 0``, or pip-audit is called
+    "refusing" message, does not report ``exported 0 pinned lines, 0 apply``,
+    or pip-audit is called
     anyway (auditing nothing passes trivially). Partner: the clean test above,
     where pip-audit is called exactly once."""
     fake = _FakeRun(_Done(0, _EXPORT_EMPTY))
     assert _module().main([], run=fake) == 2
     lines, everything = _lines(capsys)
-    assert "vuln-audit: checked 0 locked runtime packages" in [ln.strip() for ln in lines], lines
+    first = "vuln-audit: exported 0 pinned lines, 0 apply to the image (Linux, CPython 3.12)"
+    assert first in [ln.strip() for ln in lines], lines
     assert "refusing" in everything.lower(), everything
     assert fake.tool_calls("uvx") == []
 
