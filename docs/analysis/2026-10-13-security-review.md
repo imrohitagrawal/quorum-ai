@@ -15,8 +15,8 @@ Each finding carries a class (`AGENTS.md` triage): only `REQUIRED_CONTRACT` and
 ## The answer in short
 
 - **Agents reported, and the session did not re-run, that most of the app's own defences held:**
-  sign-in, sessions, the page fetcher and the spend limits (section 3). The exceptions are S7,
-  S8, S10 and the rows of section 2.
+  sign-in, sessions, the page fetcher and the spend limits (section 3). The exceptions are S1
+  (it sends the session's anti-forgery token to Sentry), S7, S8, S10 and the rows of section 2.
 - **Live today:**
   - the visitor's address and anti-forgery token reach Sentry (finding S1);
   - the production build does not install the versions locked in `uv.lock` (S4);
@@ -52,7 +52,8 @@ was active, and the copy was deleted afterwards.
 `docs/48-data-retention.md` (the anonymous spend-key row) and the W56 row record that Sentry
 receiving a network's spend key beside the visitor's address lets Sentry pair the two, and CHG-029
 (d) put it on the board as W56. The probe below sent one request through the app with production's Sentry
-settings (`src/product_app/main.py:222-245`) and captured what would be sent.
+scrubbing settings (`src/product_app/main.py:222-245`) and captured what would be sent. It
+differs from production in two ways: it samples every request, and it sets no `environment`.
 
 ```python
 import json, sentry_sdk
@@ -84,6 +85,8 @@ Printed: `PROBE1 items 1 ip True csrf True`.
   no value was read.
 - UNVERIFIED: whether error events raised during a request carry the same headers. The probe
   captured one performance record, not an error.
+- ADR-0023's title says "Sentry payloads are scrubbed on every path". This finding contradicts
+  it for request headers.
 - Owner decision: CHG-042 (a) widens W56 to cover this.
 
 ### S2. A key inside an error message reaches Sentry — `REQUIRED_CONTRACT` for W56 and bring-your-own key
@@ -192,14 +195,17 @@ once and the `.js` file zero times. Row W70.
   agent reading `.env`. Rule: `AGENTS.md` and the owner's standing instruction. Row W81.
 - `docs/83-runbook.md` and `docs/84-incident-response.md` each contain the word "rotat" 0 times
   (`grep -ci`), so neither says how to replace a leaked key. Row W79.
-- Gaps in the gates themselves, found by this review's falsification lens in its own copies and
-  recorded as `ADVISORY_DEBT`:
-  - A NEW row can be born DONE: give it a needle that already contradicts its claim, and lower
-    the unpinned count by one. `scripts/check_open_work.py --check` and `make validate` both
-    passed it. It is a cousin of I3, on a new row instead of a flipped one. Row W78.
+- Gaps in the gates themselves, recorded as `ADVISORY_DEBT`. The review's falsification lens
+  found them in its own copies, and a second reviewer re-ran the first; the session did not
+  re-run them:
+  - A NEW row can be born DONE, with a needle that already contradicts its claim.
+    `scripts/check_open_work.py --check` passed it (and `make validate`, in the first
+    reviewer's run). It is a cousin of I3, on a new row instead of a flipped one. Row W78.
   - A change-log row with a missing `|` passed `make validate`. Nothing counts that table's
-    columns.
-  - A home-directory path added to a document passed `scripts/security_scan.py`. Row W70.
+    columns. The session checked that CHG-005 and CHG-006 on `main` already have 9 fields where
+    the header has 10 (`awk -F'|'`).
+  - `scripts/security_scan.py` has no rule for a home-directory path. The session counted 28
+    files under `docs/` on `main` that already contain one (`git grep -l`). Row W70.
   - A changed owner quote in a CHG row is caught by nothing. Nothing compares the quote with
     the transcript.
 - The board's I3 limit: `tests/test_planted_false_claims.py:455` reads
@@ -374,7 +380,24 @@ Disclosed so they are not repeated.
 - The session made free reads of production: `/status`, and the names (not values) of its
   secrets.
 
-## 9. Order
+## 9. What this review did not cover
+
+The completeness critic named these. Each is a gap in this report, not a finding.
+
+- Which ASVS Level 2 items the app fails. Section 7 lists the standard only.
+- What a person whose session is stolen can do: sign-out everywhere (ADR-0137) and idle expiry
+  (ADR-0138) exist, but this report does not walk through them.
+- How much the app's OpenRouter key can spend before a credit limit stops it, and how a theft
+  would be noticed.
+- Bring-your-own key: one stolen machine would give both the master key (a Fly secret) and the
+  database. Section 5 does not weigh that.
+- Evidence not used:
+  - `docs/40-threat-model.md`;
+  - the session ADRs, ADR-0130 to ADR-0139;
+  - the response headers and cookie flags a free `GET /status` would show;
+  - read-only `fly` and `gh api` settings, which are listed only as agents' claims.
+
+## 10. Order
 
 From CHG-042 (b):
 1. W56, widened.
