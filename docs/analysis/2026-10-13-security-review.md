@@ -15,8 +15,8 @@ Each finding carries a class (`AGENTS.md` triage): only `REQUIRED_CONTRACT` and
 ## The answer in short
 
 - **Agents reported, and the session did not re-run, that most of the app's own defences held:**
-  sign-in, sessions, the page fetcher and the spend limits (section 3). The exceptions are S7
-  and the rows of section 2.
+  sign-in, sessions, the page fetcher and the spend limits (section 3). The exceptions are S7,
+  S8, S10 and the rows of section 2.
 - **Live today:**
   - the visitor's address and anti-forgery token reach Sentry (finding S1);
   - the production build does not install the versions locked in `uv.lock` (S4);
@@ -35,9 +35,11 @@ Each finding carries a class (`AGENTS.md` triage): only `REQUIRED_CONTRACT` and
     `configs/skill-router.json`) names security skills only for sign-in changes
     (`security-threat-modeling`, `owasp-control-mapper`) and AI-output changes
     (`prompt-injection-defense`).
-  - The whole-repository route also adds security skills through `risk_triggers`, for the
-    `backend_api_python` and `security_privacy_data` risks. The break-it reviewer is a correctness
-  lens, not an attacker. Row W77 adds the role.
+  - The whole-repository route (`make skill-route` with no item) also adds security skills
+    through `risk_triggers`: `security_privacy_data`, `backend_api_python`,
+    `ai_llm_rag_agentic` (`prompt-injection-defense`) and `external_skill_or_mcp`
+    (`external-skill-security-auditor`).
+  - The break-it reviewer is a correctness lens, not an attacker. Row W77 adds the role.
 
 ## 1. Verified by the session
 
@@ -190,6 +192,16 @@ once and the `.js` file zero times. Row W70.
   agent reading `.env`. Rule: `AGENTS.md` and the owner's standing instruction. Row W81.
 - `docs/83-runbook.md` and `docs/84-incident-response.md` each contain the word "rotat" 0 times
   (`grep -ci`), so neither says how to replace a leaked key. Row W79.
+- Gaps in the gates themselves, found by this review's falsification lens in its own copies and
+  recorded as `ADVISORY_DEBT`:
+  - A NEW row can be born DONE: give it a needle that already contradicts its claim, and lower
+    the unpinned count by one. `scripts/check_open_work.py --check` and `make validate` both
+    passed it. It is a cousin of I3, on a new row instead of a flipped one. Row W78.
+  - A change-log row with a missing `|` passed `make validate`. Nothing counts that table's
+    columns.
+  - A home-directory path added to a document passed `scripts/security_scan.py`. Row W70.
+  - A changed owner quote in a CHG row is caught by nothing. Nothing compares the quote with
+    the transcript.
 - The board's I3 limit: `tests/test_planted_false_claims.py:455` reads
   `("I3", plant_i3, OPEN_WORK, 0)`. The plant flips W28's needle word from `PRESENT` to
   `ABSENT` and types its State as DONE. That false "done" is caught 0 times, as
