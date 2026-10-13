@@ -1141,8 +1141,8 @@ docker-build:
 	docker build -t $(IMAGE) .
 
 # W68 (ADR-0164): known vulnerabilities in the libraries uv.lock pins for
-# production. Exits 1 on any finding, 2 when it audited nothing. Needs the
-# network (PyPI's vulnerability service).
+# production. Exits 1 on any finding, 2 when it audited nothing or skipped or
+# left out a package. Needs the network (PyPI's vulnerability service).
 vuln-audit:
 	UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python scripts/vuln_audit.py
 

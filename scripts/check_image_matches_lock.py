@@ -3,13 +3,16 @@
 
 Compares ``uv export --frozen --no-dev --no-emit-project --no-hashes`` (markers
 evaluated for the Linux CPython 3.12 image, not for the machine running this)
-with the distributions the image's ``/opt/venv/bin/python`` can see.
+with the distributions the image's ``/opt/venv/bin/python`` can see. The image's
+listing is read verbatim, with no marker evaluation: every installed
+distribution is importable, whatever its metadata says.
 
 Exit codes:
   0  same packages at the same versions
   1  a package is missing, extra, at another version, or installed twice
-     (two versions of one distribution: Python imports only one of them);
-     each is printed
+     (two versions of one distribution: Python imports only one of them),
+     or a line of the image's listing is not ``name==version``; each is
+     printed
   2  refusing: either side lists nothing (no image, a failed export)
 """
 
@@ -29,12 +32,15 @@ Run = Callable[..., Any]
 EXPORT = ["uv", "export", "--frozen", "--no-dev", "--no-emit-project", "--no-hashes"]
 
 #: The image: python:3.12-slim (Debian, CPython). Every marker variable is set,
-#: so nothing falls back to the machine running the check. Two values are
-#: hard-coded rather than read from the image: ``platform_machine`` is x86_64
-#: and the patch level is 3.12.0. Neither changes a locked marker today:
-#: ``grep -c platform_machine uv.lock`` is 0, and every ``python_full_version``
-#: marker in uv.lock compares against 3.13, 3.14 or 3.15, where 3.12.0 and any
-#: other 3.12 release give the same answer.
+#: so nothing falls back to the machine running the check, and every value is
+#: hard-coded rather than read from the image. Three of them are guesses that
+#: change no locked marker today: ``platform_machine`` is x86_64 (``grep -c
+#: platform_machine uv.lock`` is 0); ``platform_release`` and
+#: ``platform_version`` are "" (``grep -c platform_release uv.lock`` and
+#: ``grep -c platform_version uv.lock`` are both 0); and the patch level is
+#: 3.12.0, where every ``python_full_version`` marker in uv.lock compares
+#: against 3.13, 3.14 or 3.15, so 3.12.0 and any other 3.12 release give the
+#: same answer.
 IMAGE_ENV: dict[str, str] = {
     "sys_platform": "linux",
     "platform_system": "Linux",
@@ -75,6 +81,32 @@ def pinned_pairs(text: str, env: dict[str, str] | None = None) -> list[tuple[str
         name, _, version = requirement.partition("==")
         pairs.append((normalize(name.strip()), version.strip()))
     return pairs
+
+
+#: A distribution name as PEP 508 allows it.
+NAME = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?")
+
+
+def installed_pairs(text: str) -> tuple[list[tuple[str, str]], list[str]]:
+    """Read the image's listing with no marker evaluation.
+
+    Returns ``(normalized name, version)`` for each ``name==version`` line, in
+    order, duplicates kept, where the version is everything after the first
+    ``==``, verbatim (so ``9.9 ; os_name == "nt"`` is a version that matches no
+    pin, not a marker that hides the package); and one difference line for each
+    non-blank line that is not ``name==version``.
+    """
+    pairs: list[tuple[str, str]] = []
+    unreadable: list[str] = []
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        name, separator, version = line.strip().partition("==")
+        if separator and version and NAME.fullmatch(name):
+            pairs.append((normalize(name), version))
+        else:
+            unreadable.append(f"not a name==version line in the image's listing: {line!r}")
+    return pairs, unreadable
 
 
 def parse_pins(text: str, env: dict[str, str] | None = None) -> dict[str, str]:
@@ -123,7 +155,7 @@ def main(argv: Sequence[str] | None = None, run: Run = subprocess.run) -> int:
         check=False,
     )
     locked = parse_pins(export.stdout) if export.returncode == 0 else {}
-    listed = pinned_pairs(listing.stdout) if listing.returncode == 0 else []
+    listed, unreadable = installed_pairs(listing.stdout) if listing.returncode == 0 else ([], [])
     installed = dict(listed)
     print(f"image-lock-check: locked {len(locked)}, installed {len(installed)}")
     if not locked or not installed:
@@ -134,7 +166,7 @@ def main(argv: Sequence[str] | None = None, run: Run = subprocess.run) -> int:
             file=sys.stderr,
         )
         return 2
-    diffs = duplicates(listed) + compare(locked, installed)
+    diffs = unreadable + duplicates(listed) + compare(locked, installed)
     for line in diffs:
         print(f"image-lock-check: {line}")
     if diffs:

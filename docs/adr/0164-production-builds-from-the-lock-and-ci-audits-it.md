@@ -65,9 +65,12 @@ This record changes three earlier statements without editing their bodies:
 4. **`make image-lock-check`** (`scripts/check_image_matches_lock.py --image $(IMAGE)`, `IMAGE`
    defaulting to `quorum-ai:local`, the tag `make docker-build` builds) lists every distribution
    the image's `/opt/venv/bin/python` can see and compares it with the same export, markers
-   evaluated for Linux CPython 3.12. It exits 1 on a missing, extra or different-version
-   package, or on one distribution listed twice (two versions installed side by side: Python
-   imports only one, and a name-to-version map would keep only one). No extra is allowed:
+   evaluated for Linux CPython 3.12. The image's listing is read verbatim, with no marker
+   evaluation: the version is everything after the first `==`, so a metadata version such as
+   `9.9 ; os_name == "nt"` cannot hide an installed package. It exits 1 on a missing, extra or
+   different-version package, on one distribution listed twice in any spelling (two versions
+   installed side by side: Python imports only one, and a name-to-version map would keep only
+   one), or on a listing line that is not `name==version`. No extra is allowed:
    the image's venv holds no `pip`, `setuptools` or `wheel` (measurement 15), and an
    allowance for them would hide a vulnerable one. It exits 2 when either side is empty.
 5. **Both run as blocking steps of the required `validate-and-test` job**: `make vuln-audit`
@@ -155,6 +158,21 @@ are at or above the fixed 4.14.2.
 
 - **Operating-system packages in the base images** (`python:3.12-slim`, and the uv builder
   image) are not audited. Neither is the Python interpreter itself.
+- **The base image's own Python packages, outside `/opt/venv`**, are neither audited nor
+  compared. Reported by the round 2 break-it review, not re-run here: `python:3.12-slim` ships
+  pip 25.0.1 at `/usr/local/lib/python3.12/site-packages`, it is on `PATH` in the container,
+  and the venv has `include-system-site-packages = false`, so the app cannot import it. Re-run
+  by this change on 2026-10-14: pip-audit 2.10.1 over a requirements file holding only
+  `pip==25.0.1`, with `--no-deps`, reports 6 distinct PYSEC ids (12 entries), fixed in releases
+  from 25.3 to 26.2. This change does not remove it.
+- **`uv sync --frozen` in a workflow** passes the workflow test by design, except in
+  `validate-and-test`'s install step, which must use `--locked`. The workflow test refuses
+  a `uv sync` with neither `--locked` nor `--frozen`, a `uv sync` step with `||`, and any `uv
+  lock` but `uv lock --check`, and no workflow uses `--frozen` today.
+- **`UV_PYTHON_DOWNLOADS=never` and `UV_PYTHON` in the Dockerfile are not pinned by a test.**
+  They are defence in depth: `make image-lock-check` lists what `/opt/venv/bin/python` sees,
+  whichever interpreter built the venv, and refuses (exit 2) when that interpreter does not
+  start.
 - **A vulnerability published after a merge** is caught only on the next CI run. Production
   keeps running the old image until then; no scheduled audit exists.
 - **An out-of-date lock is no longer a gap in CI.** Before decision 6, a `pyproject.toml`
@@ -162,8 +180,8 @@ are at or above the fixed 4.14.2.
   while CI's `uv sync --all-extras` re-locked on the runner and tested, audited and built the
   new set; the round 1 review reproduced a vulnerable lock passing both gates this way
   (measurement 11). Every CI install now runs `uv sync --locked`, which exits 1 on a stale
-  lock (measurement 12), so such a change fails each CI job at its install step, before
-  either W68 gate runs. A deploy of a commit CI did not run on is outside this check.
+  lock (measurement 12), so such a change fails each CI job that installs (`fr-completeness`
+  installs nothing) at its install step, before either W68 gate runs. A deploy of a commit CI did not run on is outside this check.
 - **Lines whose marker does not hold for the image** (Linux, CPython 3.12) are not audited:
   today `colorama` (Windows only) and the `anyio` 4.15.1 entry (Python 3.15 and above). Neither
   is installed in the image. The first output line shows how many lines apply; if pip-audit

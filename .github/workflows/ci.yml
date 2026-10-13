@@ -92,7 +92,8 @@ jobs:
       - name: Security scan
         run: make security-scan
       # W68 (ADR-0164): known vulnerabilities in the libraries uv.lock pins for
-      # production. Blocking: exits 1 on a finding, 2 when it audited nothing.
+      # production. Blocking: exits 1 on a finding, 2 when it audited nothing
+      # or skipped or left out a package.
       - name: Audit locked libraries for known vulnerabilities
         run: make vuln-audit
       - name: Build Docker image
