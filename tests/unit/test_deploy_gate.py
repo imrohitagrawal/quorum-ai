@@ -335,8 +335,10 @@ def test_gh_fetch_api_error_is_pending(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_main_dispatch_proceeds(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Red when: ``main()`` stops proceeding on a manual dispatch from ``refs/heads/main``."""
     out = tmp_path / "gh_out"
     monkeypatch.setenv("GITHUB_EVENT_NAME", "workflow_dispatch")
+    monkeypatch.setenv("GITHUB_REF", "refs/heads/main")  # W69: dispatch proceeds only from main
     monkeypatch.setenv("GITHUB_OUTPUT", str(out))
     assert gate.main() == 0
     assert "proceed=true" in out.read_text()
