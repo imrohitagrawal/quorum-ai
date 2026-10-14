@@ -14,7 +14,7 @@ name: Deploy to Fly.io
 # there ``scripts/deploy_gate.py`` fails the `gate` job (a red run, not a quiet
 # skip), and the `deploy` job's own ``if:`` refuses it as well. It does NOT
 # stop a branch that carries an older or an edited copy of this file: such a
-# branch runs its own copy, with the same ``FLY_API_TOKEN``. The only boundary
+# branch runs its own copy, with the same ``FLY_API_TOKEN``. A boundary
 # that stops that is a GitHub deployment environment restricted to ``main``
 # that holds the token — a repository setting, not yet made (ADR-0166).
 #

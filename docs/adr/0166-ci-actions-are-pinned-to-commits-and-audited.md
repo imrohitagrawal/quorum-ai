@@ -48,9 +48,10 @@ to 6):
    `deploy_gate.py`. So both checks bind only a branch or tag whose files already carry this
    change: they catch an operator who picks the wrong ref in the dropdown. They cannot stop a
    branch whose `deploy.yml` or `deploy_gate.py` is older or edited. Every one of the 5 remote
-   branches on 2026-10-14 is such a branch: each carries the old gate
-   (`git show origin/<branch>:scripts/deploy_gate.py | grep -c ungated` printed 2 for each).
-   Anyone who can push a branch can also edit `deploy.yml` on it. The boundary that does stop
+   branches other than `main` on 2026-10-14 is such a branch: each carries the old gate
+   (`git show origin/<branch>:scripts/deploy_gate.py | grep -c ungated` printed 2 for each; it
+   prints 2 for `main` too, until this change merges).
+   Anyone who can push a branch can also edit `deploy.yml` on it. A boundary that does stop
    this is a GitHub deployment environment restricted to `main` that holds `FLY_API_TOKEN` and is
    attached to the deploy job. That is a repository setting this work was not approved to
    change; see the owner action under Consequences.
@@ -72,7 +73,9 @@ to 6):
 
    Six findings are suppressed in `.github/zizmor.yml`, each with its reason:
    - `dangerous-triggers` on `deploy.yml`: the `workflow_run` trigger is the deploy gate
-     (ADR-0024), and the gate job runs only for a push to this repository's `main`;
+     (ADR-0024). The gate job's `if:` admits a `workflow_run` only for a push to this
+     repository's `main`, and also admits any `workflow_dispatch`, which `deploy_gate.py` then
+     refuses unless the ref is `refs/heads/main` (Decision 3);
    - persisted credentials at `seed-visual-baselines.yml:38`: that job pushes the baselines back;
    - `self-repository` in 4 files: zizmor suggests GitHub's new `$/` form for the in-repo action
      `./.github/actions/bound-apt-waits`. That is a separate change (Consequences).
@@ -88,7 +91,7 @@ All on 2026-10-14. The branch is `w69/pin-actions`, cut from `b604c69`.
 | 3 | The tool versions in use | `uv` 0.13.0 (CI run 38506956039 on `main`: `Downloading uv from ".../download/0.13.0/..."`); `flyctl` 0.4.117 (Deploy run 38508871831: `Acquired 0.4.117`) | `gh run view <id> --log` |
 | 4 | `setup-flyctl`'s default | `version` defaults to `latest` | `gh api 'repos/superfly/flyctl-actions/contents/setup-flyctl/action.yml?ref=ed8efb3…'` |
 | 5 | A manual deploy from another branch | before this change, `deploy_gate.py`'s `main()` returned 0 and wrote `proceed=true` for any `workflow_dispatch`, whatever the ref (`scripts/deploy_gate.py:280` at `b604c69`); the deploy job checks out `github.sha`, the dispatching ref's commit. The 3 manual Deploy runs in the API's history all ran from `main` | reading the code at `b604c69`; `tests/unit/test_w69_manual_deploy_main_only.py` failed 14 cases there; `gh run list --workflow 'Deploy to Fly.io' --event workflow_dispatch` |
-| 6 | zizmor's findings before | zizmor 1.30.1, offline, with only the hash-pin policy, on `b604c69`'s `.github`: exit 14, `106 findings (23 suppressed, 29 unsafe fixes)`: 49 unpinned actions, 19 persisted credentials, 9 template injection, 4 self-repository, 1 excessive permissions, 1 dangerous trigger. The security review's agent also reported 106. zizmor 1.14.2 with no config shows 42 (26 suppressed): its default allows a tag for `actions/*` | `git archive b604c69 .github`, then `zizmor --offline --config <hash-pin only> <copy>/.github`; `uvx zizmor@1.14.2 --offline .github/workflows .github/actions` |
+| 6 | zizmor's findings before | zizmor 1.30.1, offline, with only the hash-pin policy, on `b604c69`'s `.github`: exit 14, `106 findings (23 suppressed, 29 unsafe fixes)`: 49 unpinned actions, 19 persisted credentials, 9 template injection, 4 self-repository, 1 excessive permissions, 1 dangerous trigger. The security review's agent also reported 106. zizmor 1.14.2 with no config reports 68 findings, 26 of them suppressed (42 shown): its default allows a tag for `actions/*` | `git archive b604c69 .github`, then `zizmor --offline --config <hash-pin only> <copy>/.github`; `uvx zizmor@1.14.2 --offline .github/workflows .github/actions` |
 | 7 | zizmor after | exit 0, `No findings to report. Good job! (6 ignored, 22 suppressed)` | `make workflow-audit` |
 | 8 | The lock change | only `zizmor` 1.30.1 added; no other package moved | `git diff uv.lock` |
 
@@ -105,7 +108,7 @@ All on 2026-10-14. The branch is `w69/pin-actions`, cut from `b604c69`.
   hand until this is revisited.
 - **Treat the in-file refusal of a non-`main` dispatch as the boundary.** It is not one: a
   manual dispatch runs the picked ref's own `deploy.yml` and `deploy_gate.py` (Decision 3).
-  The real boundary is a deployment environment, which needs a repository setting.
+  A boundary that holds is a deployment environment, which needs a repository setting.
 - **A separate audit job.** It would block a merge only if branch protection named it, which is
   a repository setting this work was not approved to change. A step in `validate-and-test`
   blocks without one, as in ADR-0164.
@@ -120,6 +123,10 @@ All on 2026-10-14. The branch is `w69/pin-actions`, cut from `b604c69`.
 - A new zizmor finding in a workflow fails `validate-and-test`. A line-scoped suppression
   (`seed-visual-baselines.yml:38`) goes red if lines above it move; update the number with the
   edit.
+- The audit's behaviour, not only its recipe text, is tested:
+  `tests/unit/test_w69_round2_regressions.py` runs the exact command `make -n workflow-audit`
+  prints against a planted template injection and requires a non-zero exit, and against a
+  clean workflow and requires exit 0.
 - A manual deploy from a branch or tag cut after this change fails at the gate. A manual
   deploy from a branch with an older or an edited `deploy.yml` or `deploy_gate.py` is NOT
   stopped: it runs that branch's own copy, with the same `FLY_API_TOKEN` (Decision 3).
@@ -128,10 +135,10 @@ All on 2026-10-14. The branch is `w69/pin-actions`, cut from `b604c69`.
   no protection rules, and no workflow uses it), add a deployment-branch rule to it that
   allows only `main`, attach `environment: production` to the `deploy` job, then delete the
   repository-level `FLY_API_TOKEN`. This session did not do it, because repository settings
-  were not approved. The last step is the one that protects: GitHub's documentation says a job
-  receives repository secrets whether or not it names an environment, so while the
-  repository-level secret exists, a branch whose `deploy.yml` drops `environment:` still gets
-  the token (documented behaviour, not tested here).
+  were not approved. The last step is the one that protects: GitHub's documentation says that when a
+  secret of the same name exists at several levels, the environment's copy takes precedence.
+  That implies the repository's copy stays visible to a job that names an environment, and so
+  to a branch whose `deploy.yml` drops `environment:`, while it exists (not tested here).
 - Rolling back does not go through `deploy.yml`. It redeploys an earlier image:
   `fly releases --image -a quorum-ai` lists each release's image, and
   `fly deploy --image <that image> -a quorum-ai` deploys it (`DEPLOY.md`). Both flags exist in
@@ -156,4 +163,12 @@ All on 2026-10-14. The branch is `w69/pin-actions`, cut from `b604c69`.
     `tests/unit/test_w69_actions_pinned.py` nor zizmor, which both read only `.github`;
   - the whole-file `dangerous-triggers` ignore on `deploy.yml` would also hide a new trigger
     added to that file; `tests/unit/test_w69_round1_regressions.py` now fails if `deploy.yml`'s
-    triggers are anything but `workflow_run` and `workflow_dispatch`.
+    triggers are anything but `workflow_run` and `workflow_dispatch`;
+  - zizmor's default persona hides some findings and counts them only as "suppressed". An
+    explicit `persist-credentials: true` on a checkout is reported only with
+    `--persona auditor`, and so are the 4 workflow-wide write permissions
+    (`excessive-permissions`), though zizmor marks both "audit confidence → High". On this
+    tree, `--persona auditor` exits 14 with 28 findings;
+  - a workflow file that zizmor's schema rejects is skipped with a warning, and the audit still
+    exits 0. `--strict-collection` fails on such a file (exit 1, measured on a planted one), and
+    the real `.github` passes with it (exit 0).

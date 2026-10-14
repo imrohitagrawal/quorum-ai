@@ -313,6 +313,19 @@ This procedure has not been run against production. After it, `/status`
 reports the `build_sha` baked into that earlier image; check it is the one you
 meant.
 
+Two caveats, read from the help text of flyctl 0.4.113, not tested:
+
+- **Run it from an up-to-date `main` checkout.** `fly deploy` takes a working
+  directory (`fly deploy [WORKING_DIRECTORY]`) and an application configuration
+  file (`-c, --config`, "Path to application configuration file"), so it reads
+  the `fly.toml` of the checkout you run it from. It follows that settings in
+  `fly.toml` are not rolled back with the image.
+- **The image reference does not name the commit.** `deploy.yml` passes no
+  `--image-label`, and `fly deploy --help` says the label defaults to
+  `deployment-{timestamp}`. Match the release's time in
+  `fly releases --image` to the Deploy run that produced it, and after the
+  redeploy confirm `/status` reports the `build_sha` you meant.
+
 ---
 
 ## Environment variables reference

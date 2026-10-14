@@ -19,9 +19,12 @@ rules:
     ignore:
       # deploy.yml's `workflow_run` trigger IS the deploy gate (ADR-0024): it
       # fires when CI, Tests or E2E complete. No code from the triggering run
-      # is executed: the `gate` job runs only for a run whose event is `push`,
-      # whose head branch is `main` and whose head repository is this one, and
-      # scripts/deploy_gate.py re-applies that filter to every run it counts.
+      # is executed: the `gate` job's `if:` admits a `workflow_run` only for a
+      # run whose event is `push`, whose head branch is `main` and whose head
+      # repository is this one, and scripts/deploy_gate.py re-applies that
+      # filter to every run it counts. The `if:` also admits any
+      # `workflow_dispatch`, which scripts/deploy_gate.py refuses unless the
+      # ref is `refs/heads/main` (ADR-0166, Decision 3).
       # Both jobs check out the commit that passed, never a fork's. Pinned by
       # tests/unit/test_stranded_deploy_fails_loud.py. The finding points at
       # the file's `on:` key, so a line number would be no narrower.
