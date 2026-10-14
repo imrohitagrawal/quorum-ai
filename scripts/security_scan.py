@@ -35,6 +35,11 @@ EXCLUDED_DIRS = {
     # committable; only the fallback walk below ever meets it, and only in a
     # copy where someone ran ``npm ci``. Thousands of third-party files.
     "node_modules",
+    # Hypothesis's example database. Gitignored, so the git listing never
+    # lists it; but the fallback walk meets it after any local test run, and
+    # it holds strings drawn from the tests (this scanner's own fixtures
+    # among them), which turned the walk red.
+    ".hypothesis",
 }
 
 #: Generated files excluded by NAME rather than by directory.
@@ -69,10 +74,11 @@ _PYTHON_PASSTHROUGH_VALUE = re.compile(
     r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*\s*[,)]?\s*(?:#.*)?$"
 )
 #: A file with a NUL byte in its first this-many bytes is binary and not read.
-#: The same window git itself uses to call a file binary.
+#: A little more than git's own window, which is 8000 bytes (measured: a NUL at
+#: offset 7999 makes a file binary to git, one at offset 8000 does not).
 BINARY_SNIFF_BYTES = 8192
 
-#: Every check this scan runs, in the order they are reported.
+#: Every check this scan runs.
 CHECK_IDS = [
     "raw_openrouter_key_pattern",
     "private_key_material",
@@ -86,7 +92,7 @@ CHECK_IDS = [
 
 #: Floor on the number of files the scan must actually read.
 #:
-#: Measured 2026-07-29: the scan reads well over 400 files. The floor is set
+#: Measured 2026-10-14: the scan reads 1686 files. The floor is set
 #: far below that so ordinary churn never trips it, while zero — or a handful,
 #: which is what a broken root or ignore rule produces — still fails.
 MINIMUM_FILES_SCANNED = 50
@@ -156,7 +162,7 @@ def _run_checks() -> tuple[list[SecurityFinding], int]:
     for path in _iter_text_files():
         scanned += 1
         relative = path.relative_to(root).as_posix()
-        text = path.read_bytes().decode("utf-8", errors="replace")
+        text = _read_text(path)
         is_code = path.suffix in CODE_SUFFIXES
         for line_number, line in enumerate(text.splitlines(), start=1):
             # NO ``tests/`` exemption here, deliberately. It used to be exempt
@@ -290,6 +296,9 @@ def _walk(root: Path) -> list[Path]:
     out: list[Path] = []
     for folder, dirs, files in os.walk(root):
         dirs[:] = [d for d in dirs if d not in EXCLUDED_DIRS]
+        # os.walk lists a link to a folder under ``dirs`` and does not enter
+        # it; the link itself is still a file git would commit.
+        out.extend(Path(folder) / d for d in dirs if (Path(folder) / d).is_symlink())
         out.extend(Path(folder) / name for name in files)
     return out
 
@@ -299,12 +308,25 @@ def _is_binary(path: Path) -> bool:
         return b"\0" in handle.read(BINARY_SNIFF_BYTES)
 
 
+def _read_text(path: Path) -> str:
+    """What git would commit for *path*: a symbolic link's own text, else the file.
+
+    Git commits a link as the path it points to, never the target's contents,
+    so a link is never followed: a dangling link is still read, and a link to a
+    file outside the repository does not report that file.
+    """
+    if path.is_symlink():
+        return os.readlink(path)
+    return path.read_bytes().decode("utf-8", errors="replace")
+
+
 def _iter_text_files() -> list[Path]:
     """The files the scan reads, whatever their suffix: no suffix allow-list.
 
     Skipped, in both modes: a listed path missing on disk (``--cached`` still
     lists a file deleted from the work tree), a binary file, and the generated
-    files in ``EXCLUDED_FILES``.
+    files in ``EXCLUDED_FILES``. A symbolic link is always read, as its link
+    text (``_read_text``), whether or not its target exists.
     """
     root = Path(ROOT)
     listed = _git_listing(root)
@@ -312,6 +334,9 @@ def _iter_text_files() -> list[Path]:
     paths: list[Path] = []
     for path in candidates:
         if path.name in EXCLUDED_FILES:
+            continue
+        if path.is_symlink():
+            paths.append(path)
             continue
         if not path.is_file() or _is_binary(path):
             continue
@@ -442,16 +467,23 @@ _NAMED_ASSIGNMENT = re.compile(
     r")"
 )
 
-#: An unquoted value runs to the first of these.
-_UNQUOTED_VALUE = re.compile(r"[^\s'\"`,;)\]}(#]*")
+#: An unquoted value runs to the first of these. ``#`` is not one: inside a
+#: shell or YAML word it is a character (``Hunter2#x``), and a value that
+#: STARTS with it is a comment, which ``_assigned_value`` treats as empty.
+_UNQUOTED_VALUE = re.compile(r"[^\s'\"`,;)\]}(]*")
 
 #: An unquoted value that is really the NEXT assignment's name, so the value
 #: here was empty: ``SENTRY_DSN= UV_CACHE_DIR=/tmp/x`` (make / shell).
 _NEXT_ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
 
-#: Characters a secret value is made of (hex, base64, base64url, URL-ish).
+#: Characters an UNQUOTED secret value is made of: hex, base64, base64url,
+#: URL-ish, and the punctuation people put in passwords (``!#%&*?@^~``).
 #: Anything else (``(``, ``[``, a space) means code or prose, not a secret.
-_SECRET_VALUE = re.compile(r"[A-Za-z0-9_\-+/=.:@]+")
+_SECRET_VALUE = re.compile(r"[A-Za-z0-9_\-+/=.:@!#%&*?^~]+")
+
+#: A QUOTED value may hold any printable character but a space: inside quotes
+#: a password's punctuation is just text (``"Tr0ub4dor&3xyzQ"``).
+_QUOTED_SECRET_VALUE = re.compile(r"\S+")
 
 #: Words that mark a value as a stand-in, matched case-insensitively anywhere
 #: in the VALUE (never the name or the rest of the line, so a real secret on a
@@ -486,14 +518,25 @@ _WORD_PHRASE = re.compile(r"[a-z]+(?:[-_][a-z]+)+")
 
 
 def _assigned_value(rest: str) -> tuple[str, bool]:
-    """The value at the start of *rest* (text after ``=`` / ``:``), and whether quoted."""
+    """The value at the start of *rest* (text after ``=`` / ``:``), and whether quoted.
+
+    A quoted value followed by adjacent quoted fragments (``"GOCSPX-" "<rest>"``)
+    is returned joined, as ``_joined_fragments`` joins them.
+    """
     if rest[:1] in {'"', "'"}:
-        quote = rest[0]
-        end = rest.find(quote, 1)
-        return (rest[1:] if end < 0 else rest[1:end]), True
-    match = _UNQUOTED_VALUE.match(rest)
-    value = match.group(0) if match else ""
-    if _NEXT_ASSIGNMENT.match(value):
+        first = _QUOTED_FRAGMENT.match(rest)
+        if first is None:  # no closing quote on this line
+            return rest[1:], True
+        parts: list[str] = []
+        match: re.Match[str] | None = first
+        while match is not None:
+            parts.append(match.group(1) if match.group(1) is not None else match.group(2))
+            gap = _FRAGMENT_GAP.match(rest, match.end())
+            match = _QUOTED_FRAGMENT.match(rest, gap.end()) if gap else None
+        return "".join(parts), True
+    unquoted = _UNQUOTED_VALUE.match(rest)
+    value = unquoted.group(0) if unquoted else ""
+    if value.startswith("#") or _NEXT_ASSIGNMENT.match(value):
         return "", False
     return value, False
 
@@ -516,20 +559,29 @@ def _contains_named_secret_assignment(line: str, *, is_code: bool = False) -> bo
     Not flagged: an empty value (including make/shell ``NAME= NEXT=...``), a
     value under 12 characters, a placeholder (``_PLACEHOLDER_WORDS``, ``$``
     variables and substitutions, ``<...>``, a repeated character, a lower-case
-    word phrase), a value with a space or any character no secret has
-    (``"REAFFIRM live-execution"`` is a sentence), in code files an unquoted
-    value (a variable or attribute pass-through such as
+    word phrase), a value with a space (``"REAFFIRM live-execution"`` is a
+    sentence), an unquoted value with a character no secret has (``(``, ``[``),
+    in code files an unquoted value (a variable or attribute such as
     ``X_TOKEN = settings.x_token``), and a name in ``_NOT_A_CREDENTIAL_NAMES``.
+    A quoted value split into adjacent fragments is joined first.
     """
     for match in _NAMED_ASSIGNMENT.finditer(line):
         if match.group("name").casefold() in _NOT_A_CREDENTIAL_NAMES:
             continue
-        value, quoted = _assigned_value(line[match.end() :].lstrip())
+        rest = line[match.end() :].lstrip()
+        opened = line[match.start() - 1 : match.start()]
+        if opened in {'"', "'"} and opened not in match.group(0) and rest.startswith(opened):
+            # The name and its ``:`` or ``=`` are text INSIDE a string
+            # (``"client_secret:"`` in a bundled UI): the quote after them
+            # closes that string, it does not open a value.
+            continue
+        value, quoted = _assigned_value(rest)
         if not quoted and is_code:
             continue
         if len(value) < _NAMED_SECRET_MIN_LENGTH:
             continue
-        if not _SECRET_VALUE.fullmatch(value) or _is_placeholder(value):
+        shape = _QUOTED_SECRET_VALUE if quoted else _SECRET_VALUE
+        if not shape.fullmatch(value) or not value.isprintable() or _is_placeholder(value):
             continue
         return True
     return False
@@ -542,10 +594,18 @@ def _contains_named_secret_assignment(line: str, *, is_code: bool = False) -> bo
 #: Not preceded by a character that would make the match the tail of a longer word.
 _EDGE = r"(?<![A-Za-z0-9_])"
 
+#: The Fly.io token prefixes flyctl itself recognises (v0.4.113 matches
+#: ``(fo1_|fm1[ar]_|fm2_)[a-zA-Z0-9/+_-]+=*``).
+_FLY_PREFIX = r"(?:fo1_|fm1[ar]_|fm2_)"
+
 _KNOWN_SECRET_SHAPES = [
-    # Fly.io macaroon tokens: ``FlyV1 fm2_<base64>``; real ones run to hundreds
-    # of characters, so 20 is far below any real token.
-    re.compile(_EDGE + r"FlyV1 f[mo][0-9]_[A-Za-z0-9+/=_-]{20,}"),
+    # Fly.io macaroon tokens: ``FlyV1 fm2_<base64>``, the word in any case and
+    # one or more spaces; real ones run to hundreds of characters, so 20 is far
+    # below any real token.
+    re.compile(_EDGE + r"(?i:FlyV1)[ \t]+" + _FLY_PREFIX + r"[A-Za-z0-9+/=_-]{20,}"),
+    # The same token pasted without its ``FlyV1`` word: a bare prefix and a
+    # long token. 40, not 20, because nothing else on the line says "Fly".
+    re.compile(_EDGE + _FLY_PREFIX + r"[A-Za-z0-9+/_-]{40,}"),
     # Google OAuth client secret: ``GOCSPX-`` + 28 characters.
     re.compile(_EDGE + r"GOCSPX-[A-Za-z0-9_-]{28,}"),
     # Sentry DSN: the 32-hex public key before ``@...sentry.io``.
@@ -560,7 +620,9 @@ _KNOWN_SECRET_SHAPES = [
 
 
 def _contains_known_secret_shape(line: str) -> bool:
-    return any(shape.search(line) for shape in _KNOWN_SECRET_SHAPES)
+    # A shape split into adjacent quoted fragments is joined and tested too.
+    texts = [line, *_joined_fragments(line)]
+    return any(shape.search(text) for text in texts for shape in _KNOWN_SECRET_SHAPES)
 
 
 # --------------------------------------------------------------------------
@@ -571,10 +633,25 @@ def _contains_known_secret_shape(line: str) -> bool:
 #: this file never holds a literal home-folder path itself.
 _HOME_ROOTS = ("Users", "home")
 
-#: ``/<root>/<name>/`` where the name is a real folder name, not all dots
-#: (``.../`` is the repository's own placeholder) and not ``<you>`` (the angle
-#: brackets fall outside the name's characters).
-_HOME_DIRECTORY_PATH = re.compile("/(?:" + "|".join(_HOME_ROOTS) + r")/(?!\.+/)[A-Za-z0-9._-]+/")
+#: The one named folder under a home root that is not a person: macOS's own
+#: ``Shared`` folder, which every Mac has. Excused under both roots, as no
+#: Linux account is expected to be called that.
+_NOT_A_PERSON = "Shared"
+
+#: A name's characters. The name ends at the first other character (``/``, a
+#: space, a quote, ``:``, ``)``, ``,``) or at the end of the line.
+_NAME_CHAR = r"[A-Za-z0-9._-]"
+
+#: ``/<root>/<name>`` where the name is a real folder name: not empty (the bare
+#: root, or ``<you>``, whose angle brackets fall outside the name's
+#: characters), not all dots (``...`` is the repository's own placeholder), and
+#: not the macOS ``Shared`` folder.
+_HOME_DIRECTORY_PATH = re.compile(
+    "/(?:"
+    + "|".join(_HOME_ROOTS)
+    + ")/"
+    + rf"(?!(?:\.+|{_NOT_A_PERSON})(?!{_NAME_CHAR})){_NAME_CHAR}+"
+)
 
 
 def _contains_home_directory_path(line: str) -> bool:
