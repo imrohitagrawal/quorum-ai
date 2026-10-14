@@ -736,7 +736,12 @@ reconnect, a hand-run CLI) waits the busy timeout more than once: the round-2
 break-it reviewer measured 10.81 s on a small file and 21.74 s on 20,000 rows,
 against 0.00 s before W55. The HTTP check on `/ready` allows a 20 s grace
 (`fly.toml:186`). So: the one-shot script below, then exit; never a shell left
-open.
+open. One way to run it as a single command, from a checkout with the script
+saved as `w55check.py`, is
+`fly ssh console -a quorum-ai -C "/opt/venv/bin/python -c \"$(sed 's/"/\\"/g' w55check.py)\""`,
+which is how it was run on 2026-10-14 before the W55 deploy (142 keyed cost
+rows and 70 addressed session rows past the cut, 0 malformed). If the machine
+is stopped, wake it first with a free `GET /ready`; that start runs a pass.
 
 ```python
 import sqlite3
@@ -766,9 +771,10 @@ whose start runs a pass, because on a machine with no writes for hours a row can
 legitimately be past 50 hours with its key until the next write. A non-zero
 `malformed_payloads` means rows whose payload is not valid JSON. Since W55
 review round 2 the wipe replaces such a cost or `session_minted` row's payload
-with a fixed marker once it is past 48 hours, so a non-zero count here means
-rows under 48 hours old, or session rows of another event type, which the wipe
-does not touch. No writer produces such a row, so any count above zero means
+with a fixed marker once a pass reaches it past 48 hours. This count has no
+time filter, so a non-zero count means rows under 48 hours old, rows past 48
+hours that no pass has reached yet, or session rows of another event type,
+which the wipe does not touch. No writer produces such a row, so any count above zero means
 damage worth a look; a malformed charge inside 24 hours also makes the spend
 meters raise `JSONDecodeError`.
 

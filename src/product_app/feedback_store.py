@@ -1932,8 +1932,10 @@ class FeedbackStore:
                 when=when,
             )
         # The identifier wipe (W55, ADR-0165) runs only AFTER the lock hold that
-        # guards the check-and-insert, so a slow or failing pass can neither
-        # stall the rails nor change this outcome.
+        # guards the check-and-insert, so a failing pass cannot change this
+        # outcome. A slow pass still takes the store's lock while it runs, so
+        # other threads' charges wait for it (a pass with nothing due took about
+        # 6 ms on 20,000 rows locally; on Fly it is unmeasured).
         if outcome is ChargeOutcome.RECORDED:
             self._maybe_wipe_identifiers()
         return outcome
