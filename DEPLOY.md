@@ -179,7 +179,7 @@ git push origin main
 fly deploy
 ```
 
-The `deploy.yml` workflow runs `/health` and `/ready` smoke tests post-deploy. If they fail, the workflow fails (but the previous version is **not** auto-rolled back — check `fly releases rollback` to do that manually).
+The `deploy.yml` workflow runs `/health` and `/ready` smoke tests post-deploy. If they fail, the workflow fails (but the previous version is **not** auto-rolled back — see "Rollback to a previous version" below to do that manually).
 
 ### View logs
 
@@ -296,13 +296,22 @@ INVITE_LINK_SIGNING_KEY INVITE_LINK_REVOKED_IDS -a quorum-ai` turns links off.
 
 ### Rollback to a previous version
 
-```bash
-# List recent releases
-fly releases
+flyctl has no `rollback` subcommand (`fly releases --help` on flyctl 0.4.113
+shows only `fly releases [flags]`). Rolling back means deploying an earlier
+release's image again. It does not go through `deploy.yml`.
 
-# Rollback to a specific version
-fly releases rollback <version>
+```bash
+# List each release with the image it ran
+fly releases --image -a quorum-ai
+
+# Deploy that earlier image
+fly deploy --image <that image> -a quorum-ai
 ```
+
+Both flags exist in flyctl 0.4.113 (`fly releases --help`, `fly deploy --help`).
+This procedure has not been run against production. After it, `/status`
+reports the `build_sha` baked into that earlier image; check it is the one you
+meant.
 
 ---
 

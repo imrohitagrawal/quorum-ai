@@ -99,8 +99,10 @@ jobs:
         run: make security-scan
       # W69 (ADR-0166): zizmor audits every workflow and composite action
       # under .github, offline, with .github/zizmor.yml (every outside action
-      # pinned to a commit id, no ${{ }} pasted into run:, no credentials left
-      # in checkouts). Blocking: any finding the config does not suppress
+      # pinned to a commit id; it flags ${{ }} in run: that may carry text
+      # from outside the workflow file, so a matrix value set in the file
+      # still passes; no credentials left in checkouts). Blocking: any
+      # finding the config does not suppress
       # fails this job. zizmor comes from uv.lock via the install step above.
       - name: Audit workflows (zizmor)
         run: make workflow-audit

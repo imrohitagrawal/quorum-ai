@@ -112,7 +112,8 @@ OpenRouter-403 incident shape).
   product; request-ID log correlation (OD-3) covers per-request forensics.
 - **Backup/restore**: the only durable state is the feedback-event volume
   (issue #27 / PR #44); no further backup mechanism — accepted for a demo.
-- **Rollback**: `fly releases rollback` — procedure lives in `DEPLOY.md`
+- **Rollback**: redeploy an earlier image (`fly releases --image`, then
+  `fly deploy --image <image>`) — procedure lives in `DEPLOY.md`
   (no auto-rollback on a failed smoke test; deliberate).
 - **Incident runbook**: `docs/runbooks/live-provider-outage.md` (OD-6) —
   written from the real 2026-07-15 incident.

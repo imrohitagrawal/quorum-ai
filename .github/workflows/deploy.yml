@@ -4,13 +4,19 @@ name: Deploy to Fly.io
 # AFTER every required workflow — "CI" (ci.yml), "Tests" (test.yml), and
 # "E2E (axe + parity)" (e2e.yml) — has concluded SUCCESSFULLY for the SAME commit
 # on main. A red build in ANY of the three never reaches production (issues #21,
-# #37). ``workflow_dispatch`` remains as a manual escape hatch FROM ``main``
-# ONLY (W69): it deploys the commit main pointed at when the dispatch was made,
-# without waiting on the required workflows — the operator's explicit choice.
-# The "Run workflow" button lets the operator pick ANY branch or tag, so a
-# dispatch from any ref other than ``refs/heads/main`` is refused twice:
-# ``scripts/deploy_gate.py`` fails the `gate` job (a red run, not a quiet skip),
-# and the `deploy` job's own ``if:`` refuses it as well.
+# #37). ``workflow_dispatch`` remains as a manual escape hatch meant for
+# ``main`` (W69): from main it deploys the commit main pointed at when the
+# dispatch was made, without waiting on the required workflows — the
+# operator's explicit choice. The "Run workflow" button lets the operator pick
+# ANY branch or tag, and GitHub then runs THIS FILE AS IT IS ON THAT REF, with
+# that ref's ``scripts/deploy_gate.py``. So the refusal below works only on a
+# branch or tag whose files already carry W69 (the mistaken-dropdown case):
+# there ``scripts/deploy_gate.py`` fails the `gate` job (a red run, not a quiet
+# skip), and the `deploy` job's own ``if:`` refuses it as well. It does NOT
+# stop a branch that carries an older or an edited copy of this file: such a
+# branch runs its own copy, with the same ``FLY_API_TOKEN``. The only boundary
+# that stops that is a GitHub deployment environment restricted to ``main``
+# that holds the token — a repository setting, not yet made (ADR-0166).
 #
 # Mechanism: each of the three workflows completing on main fires this via
 # ``workflow_run``. The `gate` job (``scripts/deploy_gate.py``) then WAITS —
@@ -89,7 +95,9 @@ jobs:
     # A manual dispatch is admitted here from ANY ref on purpose (W69): the
     # gate script must run so it can refuse a ref other than refs/heads/main
     # with a red job. A ref condition on THIS ``if:`` would turn that refusal
-    # into a silent skip. Pinned by tests/unit/test_w69_manual_deploy_main_only.py.
+    # into a silent skip. The refusal holds only where the dispatched ref's
+    # own copy of this file and of the gate script carry W69 (see the header).
+    # Pinned by tests/unit/test_w69_manual_deploy_main_only.py.
     #
     # NOTE the absence of a ``workflow_run.conclusion == 'success'`` term, and
     # do NOT restore it (issues #62, #245). It made this job SKIP whenever a
@@ -189,8 +197,12 @@ jobs:
   deploy:
     name: Deploy to Fly.io
     needs: gate
-    # W69: a second, independent refusal of a manual dispatch from any ref but
-    # main, so this job cannot run even if the gate script were bypassed.
+    # W69: a second refusal of a manual dispatch from any ref but main. It is
+    # NOT independent of the gate in two ways. First, it lives in the same
+    # file, so a ref whose copy of this file is older or edited does not have
+    # it (see the header). Second, GitHub compares strings in expressions
+    # ignoring case, so ``refs/heads/MAIN`` passes this ``if:``; only
+    # ``deploy_gate.py``, which compares exactly, refuses that one.
     # ``github.ref``, not ``github.ref_name``: a TAG named ``main`` has
     # ref_name ``main`` too. The ref term applies only to a dispatch, so a
     # workflow_run trigger is unaffected.

@@ -1,4 +1,4 @@
-"""W69: a manual deploy runs only from ``main``.
+"""W69: a manual deploy is refused from any ref but ``main``, on refs that carry W69.
 
 ``deploy.yml`` accepts ``workflow_dispatch``, and the "Run workflow" button
 lets the person pressing it choose ANY branch or tag. Before W69 the deploy
@@ -7,14 +7,18 @@ gate (``scripts/deploy_gate.py``) waved every manual dispatch through, and the
 was chosen. So anyone with write access could ship an unreviewed branch to
 production without it ever passing CI.
 
-After W69, two independent checks refuse it:
+After W69, two checks in the files of the chosen ref refuse it:
 
 1. ``deploy_gate.main()`` on a ``workflow_dispatch`` proceeds only when
    ``GITHUB_REF`` is exactly ``refs/heads/main``. Any other ref, or no ref at
    all, writes ``proceed=false`` and returns 1, so the Deploy run shows a red
    failure rather than a quiet skip.
-2. The ``deploy`` job's own ``if:`` also refuses a dispatch from any other ref,
-   so the job cannot run even if the gate script were bypassed.
+2. The ``deploy`` job's own ``if:`` also refuses a dispatch from any other ref.
+   GitHub compares strings there ignoring case, so it is weaker than (1).
+
+GitHub runs the CHOSEN ref's own ``deploy.yml`` and ``deploy_gate.py``, so
+neither check stops a branch whose copies predate W69 or were edited. Only a
+deployment environment restricted to ``main`` does (ADR-0166, Consequences).
 
 The gate JOB's ``if:`` deliberately still admits a dispatch from any ref — it
 must run so the script can fail loudly.

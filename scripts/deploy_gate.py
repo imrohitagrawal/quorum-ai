@@ -31,11 +31,17 @@ Decision rules (fail-safe — never deploy what we cannot positively verify):
 * One or more still pending (queued / in progress / not yet visible via the REST
   API, or a transient ``gh api`` error): keep polling until they resolve or the
   overall ``timeout`` elapses. On timeout: do NOT deploy (unverified).
-* ``workflow_dispatch``: the manual escape hatch, from ``main`` ONLY (W69).
+* ``workflow_dispatch``: the manual escape hatch, meant for ``main`` (W69).
   When ``GITHUB_REF`` is exactly ``refs/heads/main`` it proceeds immediately,
   without waiting on the required workflows. Any other ref (a branch, a tag,
   even one named ``main``) or no ref at all is refused: ``proceed=false`` and
   exit 1, so the Deploy run reports failure rather than a quiet skip.
+  This refusal runs only where the dispatched ref's own copy of this script
+  carries it: GitHub runs ``deploy.yml`` and this file as they are on the ref
+  the operator picked. It catches a mistaken pick of a branch or tag cut after
+  W69; it cannot stop a branch with an older or an edited copy. Only a GitHub
+  deployment environment restricted to ``main``, holding ``FLY_API_TOKEN``,
+  can (a repository setting, not made yet; ADR-0166).
 
 The core :func:`evaluate_gate` takes injectable ``fetch_conclusion`` / ``sleep``
 / ``monotonic`` collaborators so it is unit-tested with zero network and zero
@@ -287,7 +293,11 @@ def main() -> int:
     event_name = os.environ.get("GITHUB_EVENT_NAME", "")
     if event_name == "workflow_dispatch":
         # W69: the "Run workflow" button accepts ANY branch or tag, and the
-        # deploy job checks out that ref's commit. Only main may ship this way.
+        # deploy job checks out that ref's commit. Refuse every ref but main.
+        # This line runs only from a ref whose copy of this script has it:
+        # GitHub runs the picked ref's deploy.yml and deploy_gate.py, so a
+        # branch with an older or an edited copy is not stopped here (see the
+        # module docstring and ADR-0166).
         ref = os.environ.get("GITHUB_REF")
         if ref != MAIN_REF:
             print(

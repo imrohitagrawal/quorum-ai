@@ -1,9 +1,10 @@
 """A stranded merge must make the Deploy run RED, not silently skipped.
 
 ``scripts/deploy_gate.py`` already contains the whole stranding decision
-(``deploy_gate.py:310-321``): when a required workflow did not succeed AND the
-SHA is still ``main``'s tip, nothing else will ever deploy that commit, so the
-gate returns 1 and the Deploy run reports failure. That code is unit-tested and
+(the ``if stranded:`` branch of ``deploy_gate.py``'s ``main()``): when a
+required workflow did not succeed AND the SHA is still ``main``'s tip,
+nothing else will ever deploy that commit, so the gate returns 1 and the
+Deploy run reports failure. That code is unit-tested and
 correct (``test_deploy_gate.py::test_main_blocked_failure_with_sha_still_tip_exits_nonzero``).
 
 It has never once run since it was written. Measured 2026-08-07, scoped to the
