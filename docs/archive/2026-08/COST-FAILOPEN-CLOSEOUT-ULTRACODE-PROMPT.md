@@ -35,7 +35,7 @@ gh issue list --state open --limit 20
 | Your scope | **#109**, **#110**, and the unfiled reconnect residual (§1 ITEM 2) |
 | Untouchable | `feat/ui-pr1-quickfixes` and any `.claude/worktrees/wf_*` — another session owns them |
 
-Check `git status` in `/Users/rohitagrawal/Projects/quorum-ai` before assuming anything about
+Check `git status` in `~/Projects/quorum-ai` before assuming anything about
 that tree, and run **NO git write command there**. Work only in your own worktrees.
 
 **Line numbers below WILL have drifted. Locate by symbol.**

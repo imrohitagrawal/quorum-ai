@@ -54,6 +54,13 @@ from typing import Any
 
 import pytest
 
+#: Two tests here read the REAL repository through git, and that listing is
+#: empty inside mutmut's gitignored ``./mutants/`` copy. The module tests
+#: ``scripts/security_scan.py``, not ``src/``, so it can kill no mutant. It is
+#: pinned in ``DESELECTED_FROM_THE_MUTANT_RUN``
+#: (``tests/unit/test_mutation_test_set_integrity.py``).
+pytestmark = pytest.mark.repo_introspection
+
 REPO = Path(__file__).resolve().parents[2]
 _SCANNER_PATH = REPO / "scripts" / "security_scan.py"
 

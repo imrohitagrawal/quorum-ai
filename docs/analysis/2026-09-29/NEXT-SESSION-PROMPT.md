@@ -12,7 +12,7 @@
 
 Read `INDEX.md` in this folder first for the catalog. Then read in order: `AGENTS.md`, `docs/analysis/2026-09-29-session-handoff.md`, then
 this file and `ENGINEERING-REVIEW-2026-09-29.md` (same folder as this file:
-`/Users/rohitagrawal/Projects/quorum-ai-evidence/2026-09-29/`). Evidence for every
+`~/Projects/quorum-ai-evidence/2026-09-29/`). Evidence for every
 claim is in this folder: `inv-*/probe/` (reproductions of the owner's 9 bugs, with
 a signed-in browser harness `harness.py`), `eng-review/` (defect census CSV, probes),
 `workflow-reports/` (all review and map reports of 2026-09-28/29).

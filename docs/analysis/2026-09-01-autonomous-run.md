@@ -30,7 +30,7 @@
 
 ```
 git fetch origin && git status -sb        -> ## main...origin/main [ahead 1]
-git worktree list                          -> only /Users/rohitagrawal/Projects/quorum-ai (ec84ebb, main)
+git worktree list                          -> only ~/Projects/quorum-ai (ec84ebb, main)
 python3 scripts/check_open_work.py --check -> 22 rows (5 PENDING, 12 DONE), 17 needles, 5 unpinned; EXIT=0
 gh issue list --state open                 -> #418 #402 #290 #268 #105
 curl -s https://quorum.stackclimb.com/status | jq '{build_sha, live_execution}'

@@ -118,7 +118,7 @@ hole ADR-0058 had just closed.
   `origin/<branch>` before adjudicating**, and say which tip you tested.
 - **A bare `uv run` in a worktree** built a CPython 3.14.5 venv with no ruff;
   `make quality` died at `format-check` in a way that reads like a diff
-  regression. Fix: `UV_PROJECT_ENVIRONMENT=/Users/rohitagrawal/Projects/quorum-ai/.venv`.
+  regression. Fix: `UV_PROJECT_ENVIRONMENT=~/Projects/quorum-ai/.venv`.
 - **A merge fires three deploy runs**; the two earlier ones are `cancelled` by
   concurrency dedupe and the newest succeeds. Re-resolve by `createdAt` every time.
 - **Parallel packages collide on `docs/24-adr-index.md`.** It is generated —

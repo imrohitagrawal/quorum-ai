@@ -6,7 +6,7 @@ points at the commit body or command that holds them (the last session's lesson)
 ## 0. Preconditions
 
 ```bash
-cd /Users/rohitagrawal/Projects/quorum-ai
+cd ~/Projects/quorum-ai
 git status --porcelain            # expect only CONTINUE-105-BACKLOG-ULTRACODE-PROMPT.md (untracked, now stale; see §4)
 git worktree list                 # expect only quorum-ai (main)
 curl -s https://quorum.stackclimb.com/status | jq '{build_sha,live_execution,peer_critique_enabled}'

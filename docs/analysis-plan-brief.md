@@ -15,7 +15,7 @@ is the durable bridge (not a chat paste of learnings, which evaporates).
 
 ```
 You are taking over a large analysis + planning task for the `quorum-ai` project
-(/Users/rohitagrawal/Projects/quorum-ai). Below this prompt I will paste the full
+(~/Projects/quorum-ai). Below this prompt I will paste the full
 transcript of a ~30-hour working session. Turn it into a GRANULAR, VERIFIED,
 categorized implementation plan — down to the smallest module — written as durable
 repo files under docs/, NOT as chat.

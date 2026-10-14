@@ -165,6 +165,11 @@ DESELECTED_FROM_THE_MUTANT_RUN = (
     # `product_app` (only `re`, `shlex`, `tomllib`, `yaml`, `packaging` and
     # the `tests` helpers), so it can kill no `src/` mutant.
     "tests/unit/test_w68_build_from_lock.py",
+    # W70. Two of its tests list the REAL repository with `git ls-files`, and
+    # inside `./mutants/` (a gitignored folder) that listing is empty. It loads
+    # only `scripts/security_scan.py` (stdlib imports only) and imports nothing
+    # from `product_app`, so it can kill no `src/` mutant.
+    "tests/unit/test_security_scan_w70.py",
 )
 
 MARKER = "repo_introspection"

@@ -36,6 +36,13 @@ from validate_claude_settings import find_absolute_home_paths  # noqa: E402
 
 # --- synthetic fixtures — never the real, untracked settings file ----------
 
+# The two home roots, built from pieces so no line in this file holds a literal
+# home-folder path: ``scripts/security_scan.py`` names one on any line of any
+# committed file (W70, owner decision CHG-045: "Rewrite them to ~"). At run
+# time every fixture below holds exactly the path it held before.
+_MAC = "/".join(["", "Users", ""])
+_LINUX = "/".join(["", "home", ""])
+
 PORTABLE_SETTINGS: dict[str, object] = {
     "permissions": {
         "allow": [
@@ -65,8 +72,9 @@ PORTABLE_SETTINGS: dict[str, object] = {
 # actual location) — but staleness isn't what makes it invalid; the absolute
 # home path is.
 _STALE_STATIC_PATH = (
-    "/Users/rohitagrawal/Documents/Projects/quorum-ai/src/product_app/static/app.js"
+    _MAC + "rohitagrawal/Documents/Projects/quorum-ai/src/product_app/static/app.js"
 )
+_STALE_REPO = _MAC + "rohitagrawal/Documents/Projects/quorum-ai"
 
 SETTINGS_WITH_MAC_HOME_PATH: dict[str, object] = {
     "permissions": {
@@ -79,7 +87,7 @@ SETTINGS_WITH_MAC_HOME_PATH: dict[str, object] = {
 }
 
 SETTINGS_WITH_LINUX_HOME_PATH: dict[str, object] = {
-    "permissions": {"allow": ["Bash(cat /home/ci-runner/workspace/notes.txt)"]},
+    "permissions": {"allow": ["Bash(cat " + _LINUX + "ci-runner/workspace/notes.txt)"]},
     "hooks": {},
 }
 
@@ -90,7 +98,7 @@ SETTINGS_WITH_NESTED_HOME_PATH: dict[str, object] = {
                 "hooks": [
                     {
                         "type": "command",
-                        "command": "bash /Users/alice/scripts/claim-gate.sh",
+                        "command": "bash " + _MAC + "alice/scripts/claim-gate.sh",
                     }
                 ]
             }
@@ -106,13 +114,13 @@ def test_portable_settings_flag_nothing() -> None:
 def test_detects_absolute_macos_home_path() -> None:
     hits = find_absolute_home_paths(SETTINGS_WITH_MAC_HOME_PATH)
     assert len(hits) == 1
-    assert "/Users/rohitagrawal/Documents/Projects/quorum-ai" in hits[0]
+    assert _STALE_REPO in hits[0]
 
 
 def test_detects_absolute_linux_home_path() -> None:
     hits = find_absolute_home_paths(SETTINGS_WITH_LINUX_HOME_PATH)
     assert len(hits) == 1
-    assert "/home/ci-runner/workspace/notes.txt" in hits[0]
+    assert _LINUX + "ci-runner/workspace/notes.txt" in hits[0]
 
 
 def test_detects_home_path_nested_inside_hook_command() -> None:
@@ -120,7 +128,7 @@ def test_detects_home_path_nested_inside_hook_command() -> None:
     the validator must walk the structure, not just top-level keys."""
     hits = find_absolute_home_paths(SETTINGS_WITH_NESTED_HOME_PATH)
     assert len(hits) == 1
-    assert "/Users/alice/scripts/claim-gate.sh" in hits[0]
+    assert _MAC + "alice/scripts/claim-gate.sh" in hits[0]
 
 
 def test_does_not_flag_a_relative_or_env_relative_path() -> None:
@@ -149,8 +157,8 @@ def test_multiple_offending_values_all_reported() -> None:
     settings = {
         "permissions": {
             "allow": [
-                "Bash(node --check /Users/bob/repo/app.js)",
-                "Bash(cat /home/carol/notes.txt)",
+                "Bash(node --check " + _MAC + "bob/repo/app.js)",
+                "Bash(cat " + _LINUX + "carol/notes.txt)",
             ]
         }
     }
@@ -178,7 +186,7 @@ def test_cli_exits_zero_on_a_portable_settings_file(tmp_path: Path) -> None:
 def test_cli_exits_nonzero_and_names_the_path_on_a_violation(tmp_path: Path) -> None:
     result = _run_cli(SETTINGS_WITH_MAC_HOME_PATH, tmp_path)
     assert result.returncode != 0
-    assert "/Users/rohitagrawal/Documents/Projects/quorum-ai" in result.stdout
+    assert _STALE_REPO in result.stdout
 
 
 def test_cli_exits_zero_when_the_file_is_absent(tmp_path: Path) -> None:

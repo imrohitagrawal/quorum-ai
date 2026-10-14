@@ -540,7 +540,7 @@ selecting a work package — but rule 17 still binds, one CONCERN per PR.
 ## FIRST MOVE — run these before anything else
 
 ```bash
-cd /Users/rohitagrawal/Projects/quorum-ai
+cd ~/Projects/quorum-ai
 git fetch -q origin && git rev-list --left-right --count main...origin/main   # expect 0  0
 curl -s https://quorum-ai.fly.dev/status | python3 -m json.tool               # posture + build_sha
 uv run python scripts/live_posture_check.py > /tmp/p.log 2>&1; echo "EXIT=$?"; cat /tmp/p.log

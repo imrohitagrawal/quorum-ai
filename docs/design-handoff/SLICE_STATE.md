@@ -54,7 +54,7 @@
    reviewer, and do NOT author a new custom skill (the repo library already covers
    every dimension). MECHANISM: the `.agents/skills/<name>/` skills are NOT
    Skill-tool-registered this session — the reviewer must `Read`
-   `/home/user/repo/.agents/skills/<name>/SKILL.md` and APPLY its checklist. Only
+   `~/repo/.agents/skills/<name>/SKILL.md` and APPLY its checklist. Only
    `taste-check` + `uiux-*` + built-ins (`code-review`, `security-review`) are
    Skill-tool-invokable.**
    - Backend slices → `code-quality-review` + `python-fastapi-backend-guardrails`;

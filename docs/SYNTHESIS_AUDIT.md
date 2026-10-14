@@ -16,7 +16,7 @@ in production at `https://quorum-ai.fly.dev`).
 The audit is the source of truth for the behavioral changes in C2.
 Every defect named here is addressed by a specific item in
 `PR2_SYNTHESIS_PROMPT.md` and the C2 plan in
-`/Users/rohitagrawal/.claude/plans/elegant-tickling-wadler.md`.
+`~/.claude/plans/elegant-tickling-wadler.md`.
 
 ---
 

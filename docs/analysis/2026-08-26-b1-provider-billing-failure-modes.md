@@ -24,7 +24,7 @@ starts from measurements rather than from a fresh guess.
 
 **Scope.** `ProviderClient._post_messages` (`src/product_app/providers.py:1164`) and everything downstream of its four return values, on `d96e115`. Written for one builder, per AGENTS.md rule 16e.
 
-**How this page was checked.** 38 candidate modes from four lenses, deduplicated to 19. Every mode marked CRITICAL_BLOCKER or REQUIRED_CONTRACT, and every mode a lens marked `verified: true`, was re-run by me against my own `git archive HEAD` copy at `/private/tmp/claude-501/-Users-rohitagrawal-Projects-quorum-ai/a71c5a66-65c1-486e-9233-5b5079c1fb79/scratchpad/dedup/tree`, driven by `/Users/rohitagrawal/Projects/quorum-ai/.venv/bin/python -B` (3.12.13) with `PYTHONDONTWRITEBYTECODE=1`. Nothing was written, run, or mutated under `/Users/rohitagrawal/Projects/quorum-ai`; `git status --porcelain` at the end shows only the two pre-existing untracked prompt files. No network call left loopback. No money.
+**How this page was checked.** 38 candidate modes from four lenses, deduplicated to 19. Every mode marked CRITICAL_BLOCKER or REQUIRED_CONTRACT, and every mode a lens marked `verified: true`, was re-run by me against my own `git archive HEAD` copy at `/private/tmp/claude-501/-Users-rohitagrawal-Projects-quorum-ai/a71c5a66-65c1-486e-9233-5b5079c1fb79/scratchpad/dedup/tree`, driven by `~/Projects/quorum-ai/.venv/bin/python -B` (3.12.13) with `PYTHONDONTWRITEBYTECODE=1`. Nothing was written, run, or mutated under `~/Projects/quorum-ai`; `git status --porcelain` at the end shows only the two pre-existing untracked prompt files. No network call left loopback. No money.
 
 ---
 

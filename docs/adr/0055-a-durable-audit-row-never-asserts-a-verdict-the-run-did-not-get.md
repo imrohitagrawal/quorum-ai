@@ -197,7 +197,7 @@ from a storage fault.
 ## Measured
 
 Every row names the command that produced it. Run from
-`/Users/rohitagrawal/Projects/quorum-ai-wt-342` unless stated.
+`~/Projects/quorum-ai-wt-342` unless stated.
 
 | Question | Command | Measured |
 |---|---|---|

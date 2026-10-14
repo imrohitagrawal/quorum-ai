@@ -223,6 +223,30 @@ def find_poisoned_state() -> list[Finding]:
     )
 
 
+def tilde(path: str) -> str:
+    """Show a path inside the home folder as ``~/<rest>``; any other path unchanged.
+
+    W70, owner decision CHG-045 ("Rewrite them to ~"): ``make handoff`` copies
+    these labels into the TRACKED ``docs/session-handoff.md``, so a full path
+    would commit the owner's home folder, and the secret scan names home-folder
+    paths. The home folder is read from ``HOME`` (``Path.home()`` on POSIX).
+
+    The match stops at a folder boundary: a sibling whose name merely starts
+    with the home folder's name is NOT inside it and is printed as it is.
+    """
+    try:
+        home = str(Path.home()).rstrip("/")
+    except RuntimeError:  # no HOME and no password-database entry
+        return path
+    if not home:  # HOME=/ : every path would be "inside" it; rewrite nothing
+        return path
+    if path == home:
+        return "~"
+    if path.startswith(home + "/"):
+        return "~" + path[len(home) :]
+    return path
+
+
 def worktree_paths() -> list[str]:
     """Every worktree's path, from the porcelain form.
 
@@ -353,7 +377,7 @@ def find_branches_and_worktrees() -> list[Finding]:
     for path in worktree_paths()[1:]:
         out.append(
             Finding(
-                label=f"worktree {path}",
+                label=f"worktree {tilde(path)}",
                 verb=REPORT,
                 why="remove with 'git worktree remove' once its branch is merged",
             )
@@ -408,7 +432,7 @@ def find_branches_and_worktrees() -> list[Finding]:
         elif verdict:
             note = f"content already on {base}, squash-aware"
             if worktree.strip():
-                note += f"; CHECKED OUT at {worktree.strip()} -- remove that worktree first"
+                note += f"; CHECKED OUT at {tilde(worktree.strip())} -- remove that worktree first"
             out.append(
                 Finding(
                     label=f"branch {branch}",

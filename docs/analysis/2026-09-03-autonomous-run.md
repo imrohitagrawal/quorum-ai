@@ -453,7 +453,7 @@ because "unstable" reads like a blocker and is not one here.
 
 ## NOT DONE, and deliberately: the owner's local `main`
 
-`/Users/rohitagrawal/Projects/quorum-ai` sits at `df4d534`, **10 ahead and 10
+`~/Projects/quorum-ai` sits at `df4d534`, **10 ahead and 10
 behind** `origin/main`. The 10 local commits are `docs(analysis)` run logs whose
 content is BYTE-IDENTICAL to what is already on `origin/main` (verified at the
 start of this session with `diff` against `git show origin/main:<path>` for all

@@ -58,9 +58,9 @@ board vs GitHub: 80 board rows, 2 open issues
 From `make session-clean`, which reports and never deletes.
 ```text
 Feature branches and worktrees:
-- `worktree /Users/rohitagrawal/Projects/quorum-ai-wt-268` — remove with 'git worktree remove' once its branch is merged
-- `worktree /Users/rohitagrawal/Projects/quorum-ai-wt-byok` — remove with 'git worktree remove' once its branch is merged
-- `worktree /Users/rohitagrawal/Projects/quorum-ai-wt-handoff` — remove with 'git worktree remove' once its branch is merged
+- `worktree ~/Projects/quorum-ai-wt-268` — remove with 'git worktree remove' once its branch is merged
+- `worktree ~/Projects/quorum-ai-wt-byok` — remove with 'git worktree remove' once its branch is merged
+- `worktree ~/Projects/quorum-ai-wt-handoff` — remove with 'git worktree remove' once its branch is merged
 ```
 
 ## Current phase

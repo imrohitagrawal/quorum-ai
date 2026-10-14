@@ -6,7 +6,7 @@ test anatomy, requirements, rules and skills, industry research, public skills),
 one synthesis draft, then two independent contests — Codex (through its Claude
 Code subagent) and a separate Claude sceptic — and my own re-checks of the
 load-bearing claims. Every figure below names its source. Full evidence:
-`/Users/rohitagrawal/Projects/quorum-ai-evidence/2026-09-29/` (probe scripts,
+`~/Projects/quorum-ai-evidence/2026-09-29/` (probe scripts,
 `eng-review/probe_census/census.csv`, workflow reports, the draft and both contests).
 
 ---
