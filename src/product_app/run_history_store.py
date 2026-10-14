@@ -11,8 +11,9 @@ it reuses the same proven SQLite-on-a-Fly-volume pattern (``RLock``,
 ``check_same_thread=False``, autocommit, module singleton), but keeps a
 SEPARATE table with a SEPARATE concern:
 
-* ``feedback_store`` is an append-only *event* trail (many rows per run) read
-  by the nightly audit. Overloading it would muddy that aggregate.
+* ``feedback_store`` is an *event* trail (many rows per run) read by the
+  nightly audit; its rows are never deleted, though their identifiers are
+  wiped after 48 hours (ADR-0165). Overloading it would muddy that aggregate.
 * This store holds one *row per terminal run*, keyed by ``query_run_id``, with
   INSERT-OR-REPLACE idempotency so a double-fire on the terminal transition
   cannot create duplicates.

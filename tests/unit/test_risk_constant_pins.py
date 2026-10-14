@@ -297,6 +297,14 @@ BUCKET_A_LITERAL_PIN = (
     "feedback_store.COST_ACCEPTED_SIMULATED_EVENT",
     "feedback_store.COST_RECONCILED_EVENT",
     "feedback_store.COST_CHARGE_VOIDED_EVENT",
+    # W55 (ADR-0165): the owner's 48-hour keep for ledger keys and session
+    # addresses (CHG-033 (c), CHG-044), and the write-path throttle that bounds
+    # how long past it a key can stay. A LITERAL pin: a shorter keep would wipe
+    # keys the 24-hour rails still read, a longer one keeps personal data past
+    # what the owner approved, and docs/48 states both numbers. Pinned in
+    # tests/unit/test_w55_identifier_wipe.py.
+    "feedback_store.IDENTIFIER_KEEP",
+    "feedback_store.IDENTIFIER_WIPE_INTERVAL",
     # --- Added with #145/#160: class-level constants the fixed detector
     # can now see. Already pinned by `test_session_rate_limit_override.py`
     # (`_InMemoryIpRateLimiter.CAPACITY == 10` etc, `test_production_default_is_ten`
@@ -634,6 +642,53 @@ BUCKET_B_PIN_BEHAVIOUR = {
         "test_the_boundary_is_stable_across_restarts (a wrong/renamed marker "
         "would re-freeze the cutover forward on every restart, silently "
         "excluding every live charge written since the last boot)"
+    ),
+    # W55 (ADR-0165): the SQL fragments that pick the rows the identifier
+    # wipe rewrites. Their behaviour is the contract, not their text.
+    "feedback_store.FeedbackStore._OLDER_THAN_CUT": (
+        "assert a row at exactly 48h keeps its key and one at 48h+1s loses it "
+        "(fractional stamps: tests/unit/test_w55_identifier_wipe.py::"
+        "test_the_48_hour_cut_is_strict), and the same at a whole-second cut "
+        "with whole-second and fractional stamps either side, and a "
+        "whole-second stamp against a fractional cut (tests/unit/"
+        "test_w55_regressions.py::test_the_cut_is_exact_for_whole_second_stamps_and_cuts)"
+    ),
+    # W55 round 1 (ADR-0165): the marker that makes the VACUUM at open a
+    # one-shot per file.
+    "feedback_store.FeedbackStore._W55_VACUUM_MIGRATION": (
+        "assert the first open VACUUMs once and records the marker, a second "
+        "open does not VACUUM, and a write path never does -- tests/unit/"
+        "test_w55_regressions.py::test_the_vacuum_runs_once_per_file_and_never_on_a_write_path "
+        "(a renamed marker would only re-VACUUM each file once more; the "
+        "behaviour, not the string, is the contract)"
+    ),
+    "feedback_store.FeedbackStore._COST_KEY_DUE": (
+        "assert only old cost rows still holding a key are rewritten, a "
+        "malformed payload still loses its column key, and a repeat pass "
+        "changes nothing -- tests/unit/test_w55_identifier_wipe.py::"
+        "test_a_malformed_payload_does_not_stop_the_others, "
+        "test_a_second_wipe_changes_nothing and "
+        "test_other_recorders_and_other_session_events_are_untouched; and an "
+        "old malformed payload with no column key is due too -- tests/unit/"
+        "test_w55_regressions.py::test_an_unreadable_cost_payload_past_the_cut_loses_its_key"
+    ),
+    "feedback_store.FeedbackStore._MINT_ADDRESS_DUE": (
+        "assert old session_minted rows lose ip whatever its shape, a 47h row "
+        "and non-mint session rows keep it, and the 24h mint count is unchanged "
+        "-- tests/unit/test_w55_identifier_wipe.py::"
+        "test_session_mint_rows_lose_the_address_whatever_its_shape and "
+        "test_the_mint_cap_still_counts_after_a_wipe; and an old malformed "
+        "mint payload is due too -- tests/unit/test_w55_regressions.py::"
+        "test_an_unreadable_mint_payload_past_the_cut_loses_its_address"
+    ),
+    # W55 round 2 (ADR-0165): what an unreadable payload past the cut becomes.
+    "feedback_store.UNREADABLE_PAYLOAD_MARKER": (
+        "assert an old cost or session_minted row whose payload is not valid "
+        "JSON ends up with exactly this marker, with the key or address gone "
+        "from the row and the file's bytes, a second pass changes nothing (the "
+        "marker is valid JSON with no identifier), and a 30h row is untouched "
+        "-- tests/unit/test_w55_regressions.py section 4 (the test file writes "
+        "the marker out as a literal; the text may change, the behaviour may not)"
     ),
 }
 
@@ -1422,6 +1477,19 @@ def test_the_session_mint_window_is_pinned() -> None:
     `SESSION_MINT_WINDOW` itself would move with the code and pin nothing.
     """
     assert timedelta(hours=24) == feedback_store.FeedbackStore.SESSION_MINT_WINDOW
+
+
+def test_the_identifier_keep_and_wipe_interval_are_pinned() -> None:
+    """Turns red if: the 48-hour keep for ledger keys and session addresses, or
+    the one-hour write-path wipe throttle, moves.
+
+    W55 (ADR-0165, CHG-033 (c), CHG-044). The behaviour is pinned in
+    ``tests/unit/test_w55_identifier_wipe.py``, which also asserts these
+    literals, but through a module alias this file's detector does not resolve;
+    this is the form it reads. Literals on both sides (rule 7a).
+    """
+    assert timedelta(hours=48) == feedback_store.IDENTIFIER_KEEP
+    assert timedelta(hours=1) == feedback_store.IDENTIFIER_WIPE_INTERVAL
 
 
 def test_the_rate_limiter_eviction_windows_are_pinned() -> None:

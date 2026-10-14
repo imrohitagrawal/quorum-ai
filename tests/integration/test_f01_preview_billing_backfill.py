@@ -167,6 +167,7 @@ def test_pre_fix_preview_rows_stop_metering_once_the_fixed_code_opens_the_store(
         assert _migration_names(db) == [
             "f01_preview_billing_relabel",
             "live_charge_posture_cutover",
+            "w55_vacuum_after_secure_delete",
         ]
     finally:
         post_fix.close()
@@ -250,6 +251,7 @@ def test_backfill_is_idempotent_and_a_no_op_on_a_post_fix_store(tmp_path: Path) 
     assert _migration_names(db) == [
         "f01_preview_billing_relabel",
         "live_charge_posture_cutover",
+        "w55_vacuum_after_secure_delete",
     ]
 
 
@@ -352,7 +354,10 @@ def test_a_corrupt_row_rolls_the_whole_migration_back_instead_of_half_applying_i
         # posture-cutover migration is unrelated data (it never reads
         # ``payload``) and lands independently, in its own transaction, even
         # though F-01 failed in the same boot.
-        assert _migration_names(db) == ["live_charge_posture_cutover"]
+        assert _migration_names(db) == [
+            "live_charge_posture_cutover",
+            "w55_vacuum_after_secure_delete",
+        ]
     finally:
         store.close()
 
@@ -371,6 +376,7 @@ def test_a_corrupt_row_rolls_the_whole_migration_back_instead_of_half_applying_i
         assert _migration_names(db) == [
             "f01_preview_billing_relabel",
             "live_charge_posture_cutover",
+            "w55_vacuum_after_secure_delete",
         ]
         assert recovered.daily_spend_for(account) == Decimal("0")
     finally:
@@ -505,6 +511,7 @@ def test_read_only_database_degrades_to_pre_backfill_behaviour_instead_of_failin
         assert _migration_names(db) == [
             "f01_preview_billing_relabel",
             "live_charge_posture_cutover",
+            "w55_vacuum_after_secure_delete",
         ]
     finally:
         recovered.close()

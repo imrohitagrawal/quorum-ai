@@ -6,12 +6,23 @@ feedback-audit job needs to read *more* than the last N events — at minimum
 the last 24 hours of activity, regardless of how many runs that was — so the
 in-memory recorders are paired with this SQLite-backed sink.
 
-The sink is append-only in normal operation: the audit job reads it and the
-recorders only ever ``INSERT``. The one exception is schema migration — a
-numbered, once-only repair recorded in the ``schema_migrations`` table and
-applied on the first open that finds it unapplied (today: the F-01 relabel,
-see ``_F01_PREVIEW_SELECT``). Every open, including the audit job's read-only
-one, checks that table; only the first one after a migration is added writes.
+The sink never deletes a row: the audit job reads it and the recorders only
+ever ``INSERT``. (The one method that deletes rows,
+``delete_all_session_mints_for_tests``, is test support with no caller in
+``src/``.) There are two exceptions that EDIT rows in place. One is
+schema migration — a numbered, once-only repair recorded in the
+``schema_migrations`` table and applied on the first open that finds it
+unapplied (today: the F-01 relabel, see ``_F01_PREVIEW_SELECT``). Every open,
+including the audit job's, checks that table; only the first one after a
+migration is added writes. The other is the identifier wipe (W55, ADR-0165,
+:meth:`FeedbackStore.wipe_expired_identifiers`): rows older than
+``IDENTIFIER_KEEP`` (48 hours) lose the spend key from cost rows and the
+visitor's address from session-mint rows, at every open and at most hourly
+after a write. Amounts, times and run ids are never edited, so no total moves.
+The connection runs with ``secure_delete`` on, and the first open of each file
+after W55 runs one ``VACUUM`` (also recorded in ``schema_migrations``), so a
+wiped identifier leaves no copy in the file's free space (pinned by
+``tests/unit/test_w55_regressions.py``).
 A single ``events`` table stores one row per recorder call, identified by the
 recorder's event-type string and the account/run correlation ids.
 
@@ -206,8 +217,9 @@ def charge_event_type(*, live_execution: bool) -> str:
 COST_RECONCILED_EVENT = "cost_reconciled"
 
 #: The event type that CANCELS a charge for a run that never started (F-01).
-#: The events table is append-only, so a charge is undone by a later event
-#: keyed on the same ``query_run_id``, never by a DELETE.
+#: The events table never deletes a row (ADR-0165 wipes only identifiers), so a
+#: charge is undone by a later event keyed on the same ``query_run_id``, never
+#: by a DELETE.
 COST_CHARGE_VOIDED_EVENT = "cost_charge_voided"
 
 #: The (recorder, event_type) pairs that ARE the daily spend meter.
@@ -289,6 +301,53 @@ def _json_default(value: Any) -> Any:
     raise TypeError(f"feedback_store: cannot serialise {type(value).__name__} for SQLite")
 
 
+#: How long a cost-ledger row keeps its spend key, and a ``session_minted`` row
+#: keeps the visitor's address (W55; the owner's decisions CHG-033 (c) and
+#: CHG-044 in ``docs/19-change-control-log.md``; ADR-0165). After this the row,
+#: its amounts, time, event type and run id stay; only the identifier goes. It
+#: is twice the 24-hour windows that read those identifiers
+#: (:meth:`FeedbackStore.daily_spend_for`, ``SESSION_MINT_WINDOW``), so no
+#: reader ever sees a wiped row inside its window. A FLOOR, not a ceiling: see
+#: ``IDENTIFIER_WIPE_INTERVAL`` and ADR-0165 for how much later a key can go.
+IDENTIFIER_KEEP = timedelta(hours=48)
+
+#: At most how often a write starts a wipe pass, on the store's MONOTONIC
+#: clock: a row landed by :meth:`FeedbackStore.record`, a charge that returned
+#: ``RECORDED``, or a session mint that passed its limit (whether or not that
+#: mint's row landed; a reconciliation starts none). The store also wipes once
+#: at every open, unthrottled. So while the process runs and writes, a key
+#: outlives ``IDENTIFIER_KEEP`` by at most about this much plus the time to the
+#: next such write; while the machine is stopped, until its next start.
+IDENTIFIER_WIPE_INTERVAL = timedelta(hours=1)
+
+#: What the payload of a cost or ``session_minted`` row past ``IDENTIFIER_KEEP``
+#: becomes when it is not valid JSON (W55 review round 2). ``json_remove``
+#: cannot edit such text, and it may still hold a key or an address, so the
+#: whole text is replaced. Nothing can read an amount from it anyway: the
+#: meters ``json.loads`` each payload they sum and raise on unreadable text,
+#: and they read only the last 24 hours. No writer produces such a row
+#: (every insert is ``json.dumps`` of a dict), so this reaches only damaged rows.
+UNREADABLE_PAYLOAD_MARKER = '{"payload_unreadable_wiped": true}'
+
+
+@dataclass(frozen=True)
+class WipeResult:
+    """What one :meth:`FeedbackStore.wipe_expired_identifiers` pass changed.
+
+    ``cost_keys_wiped`` counts cost rows whose key was removed from the
+    ``account_id`` column OR the payload. ``session_addresses_wiped`` counts
+    ``session_minted`` rows that lost ``"ip"``. A row whose payload was not
+    valid JSON is counted in its own kind's total, and ALSO in
+    ``malformed_payloads``: its payload was replaced whole with
+    ``UNREADABLE_PAYLOAD_MARKER`` (and a cost row's column cleared). All three
+    are zero when the pass failed.
+    """
+
+    cost_keys_wiped: int
+    session_addresses_wiped: int
+    malformed_payloads: int
+
+
 @dataclass(frozen=True)
 class FeedbackEventRow:
     """A single row read back from the events table.
@@ -309,7 +368,10 @@ class FeedbackEventRow:
 
 
 class FeedbackStore:
-    """Append-only sink + read API for the feedback audit.
+    """Durable event sink + read API for the feedback audit.
+
+    Rows are never deleted; identifiers older than ``IDENTIFIER_KEEP`` are wiped
+    in place (:meth:`wipe_expired_identifiers`, ADR-0165).
 
     Thread-safe: a single ``RLock`` guards the connection. The audit job
     reads via a dedicated ``iter_events`` method that returns a generator
@@ -347,8 +409,9 @@ class FeedbackStore:
     #: Why it exists: the rails seek on ``(recorder, event_type)`` AND the 24h
     #: window, and without ``recorded_at`` in the index the window is filtered
     #: during the row visit — so every charge scans the table's LIFETIME
-    #: history, not the day's. Nothing prunes this table and it lives on a
-    #: persistent volume. MEASURED in adversarial review at 600 cost rows/day,
+    #: history, not the day's. Nothing deletes rows from this table (ADR-0165
+    #: wipes identifiers in place) and it lives on a persistent volume.
+    #: MEASURED in adversarial review at 600 cost rows/day,
     #: with the store's single global lock held for the whole call: 605 rows ->
     #: 2.13 ms per charge, 60,015 rows (100 days) -> 41.68 ms, 180,020 rows
     #: (300 days) -> 96.40 ms. Linear in history, not in the window.
@@ -432,6 +495,10 @@ class FeedbackStore:
         "id INTEGER PRIMARY KEY CHECK (id = 1), max_event_id INTEGER NOT NULL)"
     )
 
+    #: Name of the one-shot VACUUM in ``schema_migrations`` (W55, ADR-0165).
+    #: See :meth:`_vacuum_once_after_secure_delete`.
+    _W55_VACUUM_MIGRATION = "w55_vacuum_after_secure_delete"
+
     def __init__(
         self,
         db_path: str,
@@ -472,6 +539,14 @@ class FeedbackStore:
         )
         self._conn.row_factory = sqlite3.Row
         with self._lock:
+            # W55 (ADR-0165): on for the life of the connection, not only for
+            # the identifier wipe. Ordinary inserts move cells when a page
+            # splits, and without this SQLite leaves the moved bytes in the old
+            # page's free space, where no later wipe can reach them. MEASURED
+            # (round-1 review): with it on only during the wipe, 20 public
+            # charges left 20 copies of their keys in the file after the wipe.
+            # A connection setting, not a write: a read-only file accepts it.
+            self._conn.execute("PRAGMA secure_delete = ON")
             self._conn.executescript(self._SCHEMA)
             # Best-effort, and AFTER the schema: see ``_SPEND_RAIL_INDEX``. A
             # read-only volume must still boot and serve reads; it simply runs
@@ -484,6 +559,20 @@ class FeedbackStore:
         #: unknown, ABSENT any tighter proof — see :meth:`last_live_charge_at`.
         #: Frozen once, at this boot, by :meth:`_backfill_live_charge_posture_cutover`.
         self._live_charge_cutover_id: int = self._backfill_live_charge_posture_cutover()
+        #: Monotonic reading at the last identifier-wipe pass this store
+        #: started (W55, ADR-0165). Stamped here, at open, so the write-path
+        #: throttle counts its first interval from the open-time pass.
+        self._identifier_wipe_at: float = self._monotonic()
+        # Once at every open, AFTER the backfills and outside any lock hold:
+        # covers every start, deploy, reconnect and snapshot restore. Never
+        # raises, and writes nothing when no row is due, so an already-migrated
+        # read-only volume still opens with zero writes (``store_reconnect.py``
+        # depends on that).
+        self._run_identifier_wipe()
+        # Then, once per database file ever, a VACUUM: it rewrites the file and
+        # so drops the copies that writes made before ``secure_delete`` was on
+        # for the whole connection. Never raises; see the method.
+        self._vacuum_once_after_secure_delete()
         _open_stores.add(self)
 
     def _backfill_f01_preview_rows(self) -> None:
@@ -721,6 +810,55 @@ class FeedbackStore:
             )
             return 0
 
+    def _vacuum_once_after_secure_delete(self) -> None:
+        """Rewrite the file once, so writes from before W55 leave no stray copies.
+
+        W55, ADR-0165. ``secure_delete`` is on for the whole connection from
+        this release on, so freed space is zeroed from now on. Space freed
+        BEFORE it (by every insert that split a page, and by the F-01 relabel)
+        can still hold old keys and addresses. ``VACUUM`` rebuilds the file
+        from its live rows and so drops them. It is needed once per file, so
+        it is recorded in ``schema_migrations`` like the F-01 relabel and never
+        runs again on that file.
+
+        Runs only from ``__init__``, before the store is published, so no
+        charge or mint can be holding the lock; it takes the lock like every
+        other statement. It runs after the open-time identifier wipe, but that
+        order is not load-bearing and no test pins it: ``secure_delete`` is on
+        for both, so the wipe zeroes the cells it rewrites whichever runs
+        first, and the ``VACUUM`` drops older copies either way. What IS pinned
+        is that ``secure_delete`` is the open's first statement.
+
+        NEVER RAISES and never stops the store opening. A read-only file, a
+        locked file (another connection holding a transaction, after the 5 s
+        busy timeout) or a full disk makes the ``VACUUM`` fail; it is logged at
+        INFO, the marker is not written, and the next open tries again. INFO,
+        not WARNING: a read-only volume already logs the backfills' WARNINGs,
+        and the identifier wipe logs its own if it cannot run. The write-health
+        stamps are not moved, for the reason given in
+        :meth:`wipe_expired_identifiers`. On an already-marked file it only
+        reads the marker, so an already-migrated read-only volume still opens
+        with zero writes.
+        """
+        started = time.monotonic()
+        try:
+            with self._lock:
+                self._conn.execute(self._MIGRATIONS_DDL)
+                if self._migration_applied(self._W55_VACUUM_MIGRATION):
+                    return
+                self._conn.execute("VACUUM")
+                self._conn.execute(
+                    "INSERT OR IGNORE INTO schema_migrations (name, applied_at) VALUES (?, ?)",
+                    (self._W55_VACUUM_MIGRATION, datetime.now(UTC).isoformat()),
+                )
+        except Exception as exc:  # noqa: BLE001 — best-effort, see docstring
+            _log.info("feedback_store: one-shot VACUUM did not run: %s", exc)
+            return
+        _log.info(
+            "feedback_store: one-shot VACUUM done in %.3f s",
+            time.monotonic() - started,
+        )
+
     @classmethod
     def from_env(cls) -> FeedbackStore:
         """Construct using ``FEEDBACK_DB_PATH`` or the default."""
@@ -773,6 +911,45 @@ class FeedbackStore:
         landed provider/synthesis/debate write overwrites the failure stamp of a
         charge lost microseconds earlier — which is the ordinary production
         interleaving, not a corner case (see :meth:`lost_billed_writes`).
+
+        After a row LANDS this also starts an identifier-wipe pass, at most once
+        per ``IDENTIFIER_WIPE_INTERVAL`` (W55, ADR-0165). The pass runs AFTER the
+        insert and its stamps, outside the lock, and cannot raise, so it can
+        never turn a landed row into a reported loss. The store's own
+        check-and-record methods hold the lock across their insert, so they call
+        :meth:`_insert_event` instead; the charge and the session mint start the
+        pass themselves once the lock is released (a reconciliation does not).
+        """
+        landed = self._insert_event(
+            recorder=recorder,
+            event_type=event_type,
+            account_id=account_id,
+            query_run_id=query_run_id,
+            recorded_at=recorded_at,
+            payload=payload,
+        )
+        if landed:
+            self._maybe_wipe_identifiers()
+        return landed
+
+    def _insert_event(
+        self,
+        *,
+        recorder: str,
+        event_type: str,
+        account_id: UUID | None,
+        query_run_id: UUID | None,
+        recorded_at: datetime,
+        payload: dict[str, Any],
+    ) -> bool:
+        """The insert behind :meth:`record`, WITHOUT the identifier-wipe trigger.
+
+        Same contract as :meth:`record` (best-effort, stamps, the lost-billed
+        counter). Safe to call with ``self._lock`` held, which
+        :meth:`try_record_cost_charge`, :meth:`try_record_cost_reconciliation`
+        and :meth:`try_record_session_mint` do. A wipe started from inside
+        their lock hold would stall every charge behind it and, had it been
+        inside this method's ``try``, report a landed charge as lost.
         """
         row = (
             recorder,
@@ -879,6 +1056,190 @@ class FeedbackStore:
             return False
         self._lost_cost_event_logged_at = now
         return True
+
+    #: SQL true when a row's ``recorded_at`` is STRICTLY before the bound
+    #: ``:cut`` (an aware-UTC ``isoformat()`` string). Every production writer
+    #: stamps ``datetime.now(UTC).isoformat()``, i.e. ``...+00:00`` with or
+    #: without a 6-digit fraction; for those rows a text comparison is exact
+    #: (MEASURED in the W55 failure-modes doc, item 15: ``+`` sorts before
+    #: ``.``, so a whole-second row and a fractional one both order correctly)
+    #: and is what the 24-hour rails already use. Any other shape (another
+    #: offset, a naive stamp) goes through ``julianday``, which compares
+    #: instants; unreadable text gives NULL, so that row is never wiped.
+    _OLDER_THAN_CUT = (
+        "(CASE WHEN recorded_at LIKE '%+00:00' THEN recorded_at < :cut "
+        "ELSE julianday(recorded_at) < julianday(:cut) END)"
+    )
+
+    #: Cost rows past the cut that still hold a spend key, in the column OR the
+    #: payload, or whose payload is not valid JSON (it may hold a key nothing
+    #: can find; the pass replaces it, review round 2). ``json_type`` raises on
+    #: malformed text even in a WHERE, so it sits behind ``json_valid`` in a
+    #: CASE (SQLite evaluates CASE branches lazily; the order of an ``AND`` is
+    #: not promised). The column half is NOT behind that guard.
+    _COST_KEY_DUE = (
+        "recorder = 'cost' AND " + _OLDER_THAN_CUT + " AND (account_id IS NOT NULL OR "
+        "CASE WHEN json_valid(payload) "
+        "THEN json_type(payload, '$.account_id') IS NOT NULL ELSE 1 END)"
+    )
+
+    #: ``session_minted`` rows past the cut whose payload still holds ``"ip"``
+    #: (an address, an IPv6 /64 or an ``invite:`` key; all are wiped), or is
+    #: not valid JSON (replaced whole, like a cost row's).
+    _MINT_ADDRESS_DUE = (
+        "recorder = 'session' AND event_type = 'session_minted' AND "
+        + _OLDER_THAN_CUT
+        + " AND CASE WHEN json_valid(payload) "
+        "THEN json_type(payload, '$.ip') IS NOT NULL ELSE 1 END"
+    )
+
+    def wipe_expired_identifiers(self, *, now: datetime | None = None) -> WipeResult:
+        """Remove spend keys and visitor addresses older than ``IDENTIFIER_KEEP``.
+
+        W55; the owner's decisions CHG-033 (c) and CHG-044; ADR-0165. For every
+        row with ``recorded_at`` strictly before ``now - IDENTIFIER_KEEP``:
+
+        * a ``recorder = 'cost'`` row (every event type, anonymous and signed-in
+          alike, CHG-044 (a)) gets ``account_id = NULL`` and loses the
+          ``"account_id"`` key from its payload;
+        * a ``session_minted`` row loses the ``"ip"`` key from its payload
+          (CHG-044 (b)); it keeps its account id and time;
+        * either kind whose payload is not valid JSON has the whole payload
+          replaced with ``UNREADABLE_PAYLOAD_MARKER`` (a cost row's column is
+          cleared too) and is counted in ``malformed_payloads``. The text may
+          hold a key or an address that ``json_remove`` cannot reach.
+
+        Nothing else changes: no row is deleted and no amount, time, event type
+        or run id is touched, so the ledger's totals are the same before and
+        after. (An unreadable payload carried no amount any meter could read:
+        the meters ``json.loads`` it and raise, and only inside 24 hours.)
+        NULL, never a sentinel: the per-account rail filters
+        ``account_id = ?`` and NULL equals nothing, while the global rails drop
+        that predicate and still count the row. Both rails, and the session
+        limit, read only the last 24 hours, which this never reaches.
+
+        Only rows that still hold an identifier are rewritten, so a repeat pass
+        changes nothing. When no row is due it writes nothing at all, which is
+        what lets an already-migrated read-only volume open with zero writes.
+        Otherwise one ``BEGIN IMMEDIATE`` transaction. ``PRAGMA secure_delete``
+        is on for the store's whole connection (set in ``__init__``): without
+        it SQLite leaves the old cell bytes in free space (MEASURED, 73 copies
+        of a key after a plain UPDATE over 50 rows, 0 with it), and with it on
+        only for this pass, page splits during ordinary inserts still leave
+        copies (ADR-0165).
+
+        NEVER RAISES. Any error is logged in one line, without a key or an
+        address, and the result is all zeros; the stamps behind
+        :meth:`write_health` and :meth:`lost_billed_writes` are left alone (a
+        failed wipe is not a lost billed write, and stamping it would degrade
+        every run on a read-only volume from boot). Takes ``self._lock`` for
+        the pass, so call it with the lock NOT held by a charge or a mint.
+
+        Args:
+            now: The instant the 48 hours are measured back from. Defaults to
+                the wall clock. The triggers never pass the written row's
+                time, so a row stamped in the future cannot drag the cut
+                forward.
+        """
+        when = now or datetime.now(UTC)
+        if when.tzinfo is None:
+            when = when.replace(tzinfo=UTC)
+        cut = {
+            "cut": (when - IDENTIFIER_KEEP).astimezone(UTC).isoformat(),
+            "marker": UNREADABLE_PAYLOAD_MARKER,
+        }
+        try:
+            with self._lock:
+                result = self._wipe_locked(cut)
+        except sqlite3.Error as exc:
+            _log.warning("feedback_store: identifier wipe did not run: %s", exc)
+            return WipeResult(0, 0, 0)
+        except Exception as exc:  # noqa: BLE001 — the contract is "never raises"
+            _log.warning("feedback_store: identifier wipe did not run: %s", type(exc).__name__)
+            return WipeResult(0, 0, 0)
+        if result.malformed_payloads:
+            _log.warning(
+                "feedback_store: identifier wipe: cost_keys_wiped=%s "
+                "session_addresses_wiped=%s malformed_payloads=%s (the payload of "
+                "each malformed row was not valid JSON, so it was replaced whole "
+                "with a fixed marker)",
+                result.cost_keys_wiped,
+                result.session_addresses_wiped,
+                result.malformed_payloads,
+            )
+        elif result.cost_keys_wiped or result.session_addresses_wiped:
+            _log.info(
+                "feedback_store: identifier wipe: cost_keys_wiped=%s "
+                "session_addresses_wiped=%s malformed_payloads=0",
+                result.cost_keys_wiped,
+                result.session_addresses_wiped,
+            )
+        return result
+
+    def _wipe_locked(self, cut: dict[str, str]) -> WipeResult:
+        """One wipe pass. Call with ``self._lock`` held; may raise."""
+        cost_due, mint_due = self._conn.execute(
+            f"SELECT (SELECT COUNT(*) FROM events WHERE {self._COST_KEY_DUE}), "
+            f"(SELECT COUNT(*) FROM events WHERE {self._MINT_ADDRESS_DUE})",
+            cut,
+        ).fetchone()
+        if not cost_due and not mint_due:
+            return WipeResult(0, 0, 0)
+        # ``secure_delete`` is already on: ``__init__`` sets it for the whole
+        # connection and nothing turns it off.
+        self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            malformed = self._conn.execute(
+                f"SELECT COUNT(*) FROM events WHERE (({self._COST_KEY_DUE}) "
+                f"OR ({self._MINT_ADDRESS_DUE})) AND NOT json_valid(payload)",
+                cut,
+            ).fetchone()[0]
+            cost = self._conn.execute(
+                "UPDATE events SET account_id = NULL, payload = CASE "
+                "WHEN NOT json_valid(payload) THEN :marker "
+                "WHEN json_type(payload, '$.account_id') IS NULL THEN payload "
+                "ELSE json_remove(payload, '$.account_id') END "
+                f"WHERE {self._COST_KEY_DUE}",
+                cut,
+            ).rowcount
+            mint = self._conn.execute(
+                "UPDATE events SET payload = CASE WHEN json_valid(payload) "
+                "THEN json_remove(payload, '$.ip') ELSE :marker END "
+                f"WHERE {self._MINT_ADDRESS_DUE}",
+                cut,
+            ).rowcount
+            self._conn.execute("COMMIT")
+        except BaseException:
+            with suppress(sqlite3.Error):
+                self._conn.execute("ROLLBACK")
+            raise
+        return WipeResult(int(cost), int(mint), int(malformed))
+
+    def _maybe_wipe_identifiers(self) -> None:
+        """Start a wipe pass if ``IDENTIFIER_WIPE_INTERVAL`` has passed. Never raises.
+
+        Call with ``self._lock`` NOT held. The check and the stamp are one
+        critical section, so concurrent writers start one pass, not one each;
+        the pass itself runs after the lock is released.
+        """
+        now = self._monotonic()
+        with self._lock:
+            if now - self._identifier_wipe_at < IDENTIFIER_WIPE_INTERVAL.total_seconds():
+                return
+            self._identifier_wipe_at = now
+        self._run_identifier_wipe()
+
+    def _run_identifier_wipe(self) -> None:
+        """Call the PUBLIC :meth:`wipe_expired_identifiers`, isolating any raise.
+
+        That method already promises not to raise; this guard is for a future
+        edit that breaks the promise, so a wipe fault can never reach a charge,
+        a mint, a record or the store's open.
+        """
+        try:
+            self.wipe_expired_identifiers()
+        except Exception as exc:  # noqa: BLE001 — a wipe must never break a write
+            _log.warning("feedback_store: identifier wipe raised: %s", type(exc).__name__)
 
     def lost_billed_writes(self) -> int:
         """How many BILLED cost events this process failed to persist.
@@ -1204,7 +1565,8 @@ class FeedbackStore:
         The daily cap reads from here. The in-memory ring buffer is bounded
         to ``MAX_EVENTS`` (~1024), so it cannot be the source of truth for
         a daily total — a busy day could push old events out of the buffer.
-        The SQLite sink is durable and append-only.
+        The SQLite sink is durable and never deletes a row; after 48 hours a
+        row loses its key (ADR-0165), long after this 24-hour window.
 
         Only the two opening-charge events count — ``cost_guardrail_accepted``
         and ``cost_guardrail_accepted_simulated``, i.e.
@@ -1558,45 +1920,78 @@ class FeedbackStore:
             :class:`ChargeOutcome`. Only ``RECORDED`` wrote anything.
         """
         when = now or datetime.now(UTC)
-        cutoff = when - timedelta(hours=24)
         with self._lock:
-            # ONE lock hold, two rails, two DIFFERENT meters (issue #376). The
-            # per-account rail counts live + simulated; the global ceiling counts
-            # live only. Both reads stay inside this hold — ADR-0002 pins this
-            # store to one connection and one lock, and moving either read out
-            # reopens the check-and-insert race measured in this docstring.
-            already = self._spend_total_locked(
-                cutoff=cutoff,
-                account_id=account_id,
-                charge_event_types=_ACCOUNT_CHARGE_EVENTS,
-            )
-            if already + estimated_cost_usd > daily_cap_usd:
-                return ChargeOutcome.OVER_DAILY_CAP
-            global_spent = self._spend_total_locked(
-                cutoff=cutoff,
-                account_id=None,
-                charge_event_types=_LIVE_CHARGE_EVENTS,
-            )
-            if global_spent >= global_ceiling_usd:
-                return ChargeOutcome.OVER_GLOBAL_CEILING
-            landed = self.record(
-                recorder="cost",
-                event_type=charge_event_type(live_execution=live_execution),
+            outcome = self._check_rails_and_charge_locked(
                 account_id=account_id,
                 query_run_id=query_run_id,
-                recorded_at=when,
+                estimated_cost_usd=estimated_cost_usd,
                 payload=payload,
+                daily_cap_usd=daily_cap_usd,
+                global_ceiling_usd=global_ceiling_usd,
+                live_execution=live_execution,
+                when=when,
             )
-            if not landed:
-                # The rails were readable a microsecond ago and the write still
-                # failed, so this run is unmetered from here on. Saying
-                # RECORDED would authorise live spend against a ledger with no
-                # row in it — demonstrated in adversarial review, with
-                # ``daily_spend_for`` reading 0 while the run went live.
-                # Degrade instead: the run costs $0 and the operator gets the
-                # ``lost_billed_writes`` ERROR ``record()`` just raised.
-                return ChargeOutcome.METERING_UNAVAILABLE
-            return ChargeOutcome.RECORDED
+        # The identifier wipe (W55, ADR-0165) runs only AFTER the lock hold that
+        # guards the check-and-insert, so a failing pass cannot change this
+        # outcome. A slow pass still takes the store's lock while it runs, so
+        # other threads' charges wait for it (a pass with nothing due took about
+        # 6 ms on 20,000 rows locally; on Fly it is unmeasured).
+        if outcome is ChargeOutcome.RECORDED:
+            self._maybe_wipe_identifiers()
+        return outcome
+
+    def _check_rails_and_charge_locked(
+        self,
+        *,
+        account_id: UUID,
+        query_run_id: UUID,
+        estimated_cost_usd: Decimal,
+        payload: dict[str, Any],
+        daily_cap_usd: Decimal,
+        global_ceiling_usd: Decimal,
+        live_execution: bool,
+        when: datetime,
+    ) -> ChargeOutcome:
+        """The body of :meth:`try_record_cost_charge`. Call with ``self._lock`` held."""
+        cutoff = when - timedelta(hours=24)
+        # ONE lock hold, two rails, two DIFFERENT meters (issue #376). The
+        # per-account rail counts live + simulated; the global ceiling counts
+        # live only. Both reads stay inside this hold — ADR-0002 pins this
+        # store to one connection and one lock, and moving either read out
+        # reopens the check-and-insert race measured in
+        # :meth:`try_record_cost_charge`'s docstring.
+        already = self._spend_total_locked(
+            cutoff=cutoff,
+            account_id=account_id,
+            charge_event_types=_ACCOUNT_CHARGE_EVENTS,
+        )
+        if already + estimated_cost_usd > daily_cap_usd:
+            return ChargeOutcome.OVER_DAILY_CAP
+        global_spent = self._spend_total_locked(
+            cutoff=cutoff,
+            account_id=None,
+            charge_event_types=_LIVE_CHARGE_EVENTS,
+        )
+        if global_spent >= global_ceiling_usd:
+            return ChargeOutcome.OVER_GLOBAL_CEILING
+        landed = self._insert_event(
+            recorder="cost",
+            event_type=charge_event_type(live_execution=live_execution),
+            account_id=account_id,
+            query_run_id=query_run_id,
+            recorded_at=when,
+            payload=payload,
+        )
+        if not landed:
+            # The rails were readable a microsecond ago and the write still
+            # failed, so this run is unmetered from here on. Saying
+            # RECORDED would authorise live spend against a ledger with no
+            # row in it — demonstrated in adversarial review, with
+            # ``daily_spend_for`` reading 0 while the run went live.
+            # Degrade instead: the run costs $0 and the operator gets the
+            # ``lost_billed_writes`` ERROR ``_insert_event()`` just raised.
+            return ChargeOutcome.METERING_UNAVAILABLE
+        return ChargeOutcome.RECORDED
 
     def try_record_cost_reconciliation(
         self,
@@ -1657,7 +2052,7 @@ class FeedbackStore:
                 return False
             if COST_RECONCILED_EVENT in seen or COST_CHARGE_VOIDED_EVENT in seen:
                 return False
-            self.record(
+            self._insert_event(
                 recorder="cost",
                 event_type=COST_RECONCILED_EVENT,
                 account_id=account_id,
@@ -1683,8 +2078,9 @@ class FeedbackStore:
     ) -> None:
         """Cancel the charge for a run that never started (F-01).
 
-        The events table is append-only, so a charge is undone by a later event
-        keyed on the same ``query_run_id``, never by a DELETE.
+        The events table never deletes a row (ADR-0165 wipes only identifiers),
+        so a charge is undone by a later event keyed on the same
+        ``query_run_id``, never by a DELETE.
 
         Best-effort on purpose, and the direction it fails in is the safe one:
         a lost void leaves the account charged for a run that never ran, i.e.
@@ -1743,7 +2139,7 @@ class FeedbackStore:
             count = sum(1 for row in cursor if json.loads(row["payload"]).get("ip") == ip)
             if count >= cap:
                 return False
-            self.record(
+            self._insert_event(
                 recorder="session",
                 event_type="session_minted",
                 account_id=account_id,
@@ -1751,7 +2147,10 @@ class FeedbackStore:
                 recorded_at=when,
                 payload={"ip": ip},
             )
-            return True
+        # After the lock hold, like the charge: a deployment whose only traffic
+        # is new visitors still wipes old addresses while it stays up (W55).
+        self._maybe_wipe_identifiers()
+        return True
 
     #: Rolling length of the SESSION-MINT window, and the one definition of
     #: it: all three mint-window call sites read this

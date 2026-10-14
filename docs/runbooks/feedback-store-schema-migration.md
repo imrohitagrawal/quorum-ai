@@ -354,13 +354,21 @@ and does not repeat for as long as the fault lasts.
 ## Failure mode: full or nearly-full volume
 
 `/status`'s `degraded` value advertises "a full disk" as one of its causes, so
-it needs an entry here. The `events` table is append-only and has **no pruning,
+it needs an entry here. The `events` table never loses a row: its one
+retention rule, the identifier wipe (W55, ADR-0165), edits rows older than 48
+hours in place and frees no space. Before W55 it had **no pruning,
 retention policy or `VACUUM` anywhere in `src/`** (VERIFIED by grep 2026-07-28:
 `grep -rn 'VACUUM' src/` and `grep -rn 'DELETE FROM events' src/` are both empty;
 `grep -rni 'retention' src/` is **not** — it returns two hits, a landing-page
 suggestion chip in `templates/workspace.html` and a comment in `static/app.js`
 about intra-word underscores, neither of which is a retention policy or touches
-this table), so it grows without bound for the life of the volume. A volume
+this table); there is still no row deletion in the app's paths, so it grows
+without bound for the life of the volume. W55 added one `VACUUM`, run once per
+file at the first open after W55 ships (ADR-0165); it rebuilds the file and
+shrinks it only by the free space already in it. It needs free disk space on
+the order of the file's size (a temporary copy and a rollback journal; SQLite's
+documentation says up to twice the file), so on a full volume it fails, logs at
+INFO and is retried at each open. A volume
 that fills is a scheduled future state of this deployment, not a hypothetical.
 
 **Symptom.** `/status` reports `feedback_db: "degraded"` and
@@ -698,3 +706,97 @@ is evidence of a restart, never of a repair.
   write side. If so it **must** be marker-guarded: run every boot, it would keep
   rewriting rows written after it, and if the rewrite removes spend the failure
   direction is under-metering.
+
+## Checking the identifier wipe (W55, ADR-0165)
+
+Since W55 every cost row older than 48 hours loses its spend key, and every
+`session_minted` row older than 48 hours loses the visitor's address
+(`FeedbackStore.wipe_expired_identifiers`). A cost or `session_minted` row
+past the cut whose payload is not valid JSON has the whole payload replaced
+with `{"payload_unreadable_wiped": true}` (its text may hold a key or an
+address that the JSON edit cannot reach). A pass runs at every store open
+and, while the app runs, at the first of these that comes at least an hour
+after the previous pass: a landed `record()`, a charge that returned
+`RECORDED`, or a session mint that passed its limit (whether or not the mint's
+own row landed; a cost reconciliation starts none). So past its 48 hours a key
+can legitimately stay about an hour more with steady traffic, until the next
+such event when there are none, and until the next start while the machine is
+stopped. Each pass that changed rows logs one
+line, `feedback_store: identifier wipe: cost_keys_wiped=... session_addresses_wiped=...
+malformed_payloads=...` (counts only); a failed pass logs `feedback_store:
+identifier wipe did not run: <SQLite reason>`. The Fly log ring is short, so
+read `fly logs` soon after a deploy.
+
+To check the volume itself, run this inside the machine. It opens the file
+read-only, runs one autocommit statement per count and prints counts only. Do
+not leave an interactive `sqlite3` shell open on the file instead: an open read
+transaction makes the next billed write wait 5 seconds and fail (failure-modes
+doc item 10), and a store opened while it is held (a deploy, a restart, a
+reconnect, a hand-run CLI) waits the busy timeout more than once: the round-2
+break-it reviewer measured 10.81 s on a small file and 21.74 s on 20,000 rows,
+against 0.00 s before W55. The HTTP check on `/ready` allows a 20 s grace
+(`fly.toml:186`). So: the one-shot script below, then exit; never a shell left
+open. One way to run it as a single command, from a checkout with the script
+saved as `w55check.py`, is
+`fly ssh console -a quorum-ai -C "/opt/venv/bin/python -c \"$(sed 's/"/\\"/g' w55check.py)\""`,
+which is how it was run on 2026-10-14 before the W55 deploy (142 keyed cost
+rows and 70 addressed session rows past the cut, 0 malformed). If the machine
+is stopped, wake it first with a free `GET /ready`; that start runs a pass.
+
+```python
+import sqlite3
+c = sqlite3.connect("file:/data/feedback_events.sqlite3?mode=ro", uri=True)
+old = "julianday(recorded_at) < julianday('now', ?)"
+has_key = ("(account_id IS NOT NULL OR CASE WHEN json_valid(payload) "
+           "THEN json_type(payload, '$.account_id') IS NOT NULL ELSE 0 END)")
+has_ip = "CASE WHEN json_valid(payload) THEN json_type(payload, '$.ip') IS NOT NULL ELSE 0 END"
+mint = "recorder = 'session' AND event_type = 'session_minted'"
+q = {
+    "cost_keyed_past_cut": f"recorder = 'cost' AND {old} AND {has_key}",
+    "mint_addressed_past_cut": f"{mint} AND {old} AND {has_ip}",
+    "cost_rows_past_cut": f"recorder = 'cost' AND {old}",
+    "mint_rows_past_cut": f"{mint} AND {old}",
+    "malformed_payloads": "recorder IN ('cost', 'session') AND NOT json_valid(payload)",
+}
+for name, where in q.items():
+    args = ("-50 hours",) if "?" in where else ()
+    print(name, c.execute(f"SELECT COUNT(*) FROM events WHERE {where}", args).fetchone()[0])
+```
+
+The first two should read 0. The next two are their partners: a 0 over an
+empty set proves nothing, so they must be non-zero (CHG-044 recorded 142 cost
+rows and 70 session rows older than 48 hours on 2026-10-13). The cut is 50
+hours, not 48, to allow for the hourly throttle; run it soon after a deploy,
+whose start runs a pass, because on a machine with no writes for hours a row can
+legitimately be past 50 hours with its key until the next write. A non-zero
+`malformed_payloads` means rows whose payload is not valid JSON. Since W55
+review round 2 the wipe replaces such a cost or `session_minted` row's payload
+with a fixed marker once a pass reaches it past 48 hours. This count has no
+time filter, so a non-zero count means rows under 48 hours old, rows past 48
+hours that no pass has reached yet, or session rows of another event type,
+which the wipe does not touch. No writer produces such a row, so any count above zero means
+damage worth a look; a malformed charge inside 24 hours also makes the spend
+meters raise `JSONDecodeError`.
+
+**If the wipe never lands** (the pass logs `identifier wipe did not run:
+database or disk is full` at every open while the keyed counts above stay
+non-zero): the first pass is one transaction and needs free room on the
+volume. The round-2 break-it reviewer measured a 13.8 MB, 20,000-row file:
+6.3 MB free and the wipe never ran; 11 MB free and the wipe ran but the
+one-shot `VACUUM` waited; 13 MB or more and both ran. Check with
+`fly ssh console -C "df -h /data"` and the file's size; extend the volume or
+free space, then restart. The production file's size and free space are
+UNVERIFIED as of W55.
+
+Since W55 the store's connection runs with `secure_delete` on, so space SQLite
+frees is zeroed, and the first open after W55 ships runs one `VACUUM` (recorded
+in `schema_migrations` as `w55_vacuum_after_secure_delete`) that rewrites the
+file and so drops copies left in free space by earlier writes. If that `VACUUM`
+cannot run (read-only volume, another connection holding a lock, a full disk)
+it logs `feedback_store: one-shot VACUUM did not run: <reason>` at INFO, the
+store opens anyway, and the next open tries again; a success logs
+`feedback_store: one-shot VACUUM done in <seconds> s`.
+
+What the wipe cannot reach: Fly volume snapshots (retention UNVERIFIED), the
+blocks of deleted `-journal` files (including the one the `VACUUM` itself
+writes), the in-memory cost ring, and Sentry. ADR-0165 lists them.

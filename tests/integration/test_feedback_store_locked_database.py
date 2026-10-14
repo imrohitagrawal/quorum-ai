@@ -295,6 +295,7 @@ def test_exclusive_lock_still_blocks_when_the_schema_is_already_present(
     assert _migration_names(db) == [
         "f01_preview_billing_relabel",
         "live_charge_posture_cutover",
+        "w55_vacuum_after_secure_delete",
     ]
 
     with (
