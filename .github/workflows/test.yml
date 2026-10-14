@@ -27,6 +27,13 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# W69 (zizmor excessive-permissions): without this block the job's token got
+# the repository's default permissions. The job only checks out the code,
+# installs dependencies and runs pytest; no step is given the token as
+# GH_TOKEN and nothing pushes, so reading the contents is all it needs.
+permissions:
+  contents: read
+
 jobs:
   test:
     name: pytest (Python 3.12)
@@ -44,8 +51,9 @@ jobs:
     timeout-minutes: 35
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
+          persist-credentials: false
           # Full history: tests/test_day_one_carry_forward_audit.py reads a
           # pre-supersede blob via `git show <sha>:...`; a shallow clone lacks
           # that commit and the audit would skip. (The test skips gracefully
@@ -53,9 +61,9 @@ jobs:
           fetch-depth: 0
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
         with:
-          version: "latest"
+          version: "0.13.0"
           enable-cache: true
 
       - name: Set up Python
@@ -69,7 +77,7 @@ jobs:
       # test in that file skipped here and in validate-and-test — a required
       # lane reporting green over a gate it never exercised (ADR-0058).
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "22"
           cache: "npm"

@@ -59,7 +59,7 @@ DIFF_BASE ?= origin/main
 # disagrees with the real pathspec is a lie waiting to be believed; the banner
 # now states the pathspec the code actually uses.
 
-.PHONY: docs-map-check check-python publishing-check skill-onboarding-check skill-discover handoff check-breaking apply-orbi-profile skill-route prompt-check start next capture-idea validate validate-strict fr-completeness openapi-export openapi-check adr-index-check open-work-check open-work-write completion-check board-github-check readiness quality format format-check lint type-check test evals test-report gate-min-collected gate-min-executed perf-gate api-contract mutation-baseline diff-cover security-scan close-guard ci-evidence run docker-build vuln-audit image-lock-check feedback-audit session-clean close-window
+.PHONY: docs-map-check check-python publishing-check skill-onboarding-check skill-discover handoff check-breaking apply-orbi-profile skill-route prompt-check start next capture-idea validate validate-strict fr-completeness openapi-export openapi-check adr-index-check open-work-check open-work-write completion-check board-github-check readiness quality format format-check lint type-check test evals test-report gate-min-collected gate-min-executed perf-gate api-contract mutation-baseline diff-cover security-scan close-guard ci-evidence run docker-build vuln-audit workflow-audit image-lock-check feedback-audit session-clean close-window
 
 check-python:
 	@if [ -z "$(PYTHON)" ]; then 		echo "ERROR: Python 3 is required. Install python3, or set PYTHON=/path/to/python3."; 		exit 127; 	fi
@@ -1145,6 +1145,14 @@ docker-build:
 # left out a package. Needs the network (PyPI's vulnerability service).
 vuln-audit:
 	UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python scripts/vuln_audit.py
+
+# W69 (ADR-0166): audit every workflow and composite action under .github with
+# zizmor (unpinned actions, script injection through ${{ }}, credentials left
+# in checkouts, and more). zizmor comes from uv.lock via the `quality` extra.
+# Offline: no network, no token. Exits non-zero on any finding the config in
+# .github/zizmor.yml does not suppress.
+workflow-audit:
+	UV_CACHE_DIR=$(UV_CACHE_DIR) uv run zizmor --offline --config .github/zizmor.yml .github
 
 # W68 (ADR-0164): the image docker-build tagged holds exactly the runtime
 # packages uv.lock pins. Run after docker-build.

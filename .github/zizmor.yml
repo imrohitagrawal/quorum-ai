@@ -1,0 +1,49 @@
+# zizmor configuration (W69, ADR-0166). Read by `make workflow-audit`, which
+# runs `zizmor --offline --config .github/zizmor.yml .github` as a blocking
+# step of CI's validate-and-test job.
+#
+# Every suppression below is scoped to one file (and, where the finding has a
+# stable position, one line) and says why. Fix a finding before adding one.
+rules:
+  unpinned-uses:
+    config:
+      policies:
+        # Every outside action, GitHub's own `actions/*` included, must name a
+        # full commit id. A tag can be moved to different code by whoever
+        # controls the action's repository; a commit id cannot.
+        # tests/unit/test_w69_workflow_audit.py proves this config rejects
+        # `actions/checkout@v4`.
+        "*": hash-pin
+
+  dangerous-triggers:
+    ignore:
+      # deploy.yml's `workflow_run` trigger IS the deploy gate (ADR-0024): it
+      # fires when CI, Tests or E2E complete. No code from the triggering run
+      # is executed: the `gate` job runs only for a run whose event is `push`,
+      # whose head branch is `main` and whose head repository is this one, and
+      # scripts/deploy_gate.py re-applies that filter to every run it counts.
+      # Both jobs check out the commit that passed, never a fork's. Pinned by
+      # tests/unit/test_stranded_deploy_fails_loud.py. The finding points at
+      # the file's `on:` key, so a line number would be no narrower.
+      - deploy.yml
+
+  artipacked:
+    ignore:
+      # The one checkout in this manual-only workflow keeps its credentials
+      # because the job's last step pushes the generated baselines back to the
+      # dispatched branch (`git push origin "HEAD:${BRANCH}"`). Every other
+      # checkout in .github sets `persist-credentials: false`.
+      - seed-visual-baselines.yml:38
+
+  self-repository:
+    ignore:
+      # zizmor 1.30 suggests GitHub's `$/` self-repository syntax (announced
+      # 2026-07-30) instead of `./` for the in-repo action
+      # .github/actions/bound-apt-waits. Not adopted in W69: W69 pins OUTSIDE
+      # actions, and tests/unit/test_w69_actions_pinned.py exempts exactly the
+      # `./` form, so switching needs its own change with its own tests. Each
+      # file below uses `./` only for that one action.
+      - csp-smoke.yml
+      - e2e.yml
+      - flake-scan.yml
+      - seed-visual-baselines.yml
