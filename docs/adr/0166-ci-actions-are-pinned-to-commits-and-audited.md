@@ -94,6 +94,7 @@ All on 2026-10-14. The branch is `w69/pin-actions`, cut from `b604c69`.
 | 6 | zizmor's findings before | zizmor 1.30.1, offline, with only the hash-pin policy, on `b604c69`'s `.github`: exit 14, `106 findings (23 suppressed, 29 unsafe fixes)`: 49 unpinned actions, 19 persisted credentials, 9 template injection, 4 self-repository, 1 excessive permissions, 1 dangerous trigger. The security review's agent also reported 106. zizmor 1.14.2 with no config reports 68 findings, 26 of them suppressed (42 shown): its default allows a tag for `actions/*` | `git archive b604c69 .github`, then `zizmor --offline --config <hash-pin only> <copy>/.github`; `uvx zizmor@1.14.2 --offline .github/workflows .github/actions` |
 | 7 | zizmor after | exit 0, `No findings to report. Good job! (6 ignored, 22 suppressed)` | `make workflow-audit` |
 | 8 | The lock change | only `zizmor` 1.30.1 added; no other package moved | `git diff uv.lock` |
+| 9 | Every pin against its action's own repository, once | exit 0, `No findings to report. Good job! (6 ignored, 22 suppressed)`, no audit skipped. The same check bites: in a copy with one checkout pinned to `setup-node`'s commit, it reported `error[impostor-commit]` and `warning[ref-version-mismatch]` and exited 14 | `GH_TOKEN=$(gh auth token) zizmor --config .github/zizmor.yml .github` (online audits, read-only API calls), run by hand on 2026-10-14 |
 
 ## Rejected alternatives
 
@@ -103,9 +104,9 @@ All on 2026-10-14. The branch is `w69/pin-actions`, cut from `b604c69`.
   and `uv sync --locked` already runs in the job.
 - **zizmor's online audits** (`impostor-commit`: a commit that exists only in a fork of the
   action's repository; `ref-version-mismatch`: a version comment that does not match the
-  commit). They need the network and a token in the audit step. The commits here were
-  checked once against their tags (measurement 2); a later pin change gets the same check by
-  hand until this is revisited.
+  commit). They need the network and a token in the audit step, so CI runs zizmor offline.
+  They were run once by hand on this branch (measurement 9); a later pin change gets the same
+  check by hand until this is revisited.
 - **Treat the in-file refusal of a non-`main` dispatch as the boundary.** It is not one: a
   manual dispatch runs the picked ref's own `deploy.yml` and `deploy_gate.py` (Decision 3).
   A boundary that holds is a deployment environment, which needs a repository setting.
@@ -135,10 +136,16 @@ All on 2026-10-14. The branch is `w69/pin-actions`, cut from `b604c69`.
   no protection rules, and no workflow uses it), add a deployment-branch rule to it that
   allows only `main`, attach `environment: production` to the `deploy` job, then delete the
   repository-level `FLY_API_TOKEN`. This session did not do it, because repository settings
-  were not approved. The last step is the one that protects: GitHub's documentation says that when a
-  secret of the same name exists at several levels, the environment's copy takes precedence.
-  That implies the repository's copy stays visible to a job that names an environment, and so
-  to a branch whose `deploy.yml` drops `environment:`, while it exists (not tested here).
+  were not approved. The last step is the one that protects. GitHub's documentation says that
+  when a secret of the same name exists at several levels, the lowest level takes precedence, so
+  both copies can exist at once; a job that names no environment can only receive the
+  repository's copy, so a branch whose `deploy.yml` drops `environment:` still gets the token
+  while the repository copy exists (not tested here).
+- **Owner action, not done here.** Turn on the repository's Actions setting that requires every
+  action to be pinned to a full commit (`gh api repos/imrohitagrawal/quorum-ai/actions/permissions`
+  reads `"sha_pinning_required":false` on 2026-10-14). The tests and the audit here run only when
+  CI runs; that setting would refuse an unpinned action on every branch. With all 50 outside
+  actions pinned, it should refuse nothing here (not tested: it is a repository setting).
 - Rolling back does not go through `deploy.yml`. It redeploys an earlier image:
   `fly releases --image -a quorum-ai` lists each release's image, and
   `fly deploy --image <that image> -a quorum-ai` deploys it (`DEPLOY.md`). Both flags exist in
@@ -153,9 +160,9 @@ All on 2026-10-14. The branch is `w69/pin-actions`, cut from `b604c69`.
   - two Dockerfile bases are tags, not digests: `ghcr.io/astral-sh/uv:python3.12-bookworm-slim`
     (`Dockerfile:3`) and `python:3.12-slim` (`Dockerfile:39`, the runtime image);
   - a pin to a wrong commit, used the same way everywhere with a plausible version comment,
-    passes every offline check here; zizmor's online `impostor-commit` (a commit only in a
-    fork) and `ref-version-mismatch` (a comment that does not match the commit) audits would
-    catch those two cases (not used; see Rejected alternatives);
+    passes every offline check in CI; zizmor's online `impostor-commit` (a commit only in a
+    fork) and `ref-version-mismatch` (a comment that does not match the commit) audits catch
+    those two cases, and were run once by hand (measurement 9), not in CI;
   - `setup-uv` at `d4b2f3b` checks the uv download only against its built-in checksum list,
     which has no entry for 0.13.0 (its newest is 0.6.14), so the uv binary's bytes are not
     checked; a `checksum:` input on each step would check them;
@@ -167,8 +174,9 @@ All on 2026-10-14. The branch is `w69/pin-actions`, cut from `b604c69`.
   - zizmor's default persona hides some findings and counts them only as "suppressed". An
     explicit `persist-credentials: true` on a checkout is reported only with
     `--persona auditor`, and so are the 4 workflow-wide write permissions
-    (`excessive-permissions`), though zizmor marks both "audit confidence → High". On this
-    tree, `--persona auditor` exits 14 with 28 findings;
+    (`excessive-permissions`, which zizmor marks "audit confidence → High"; the explicit
+    `persist-credentials: true` is marked Low unless the job also uploads its checkout). On
+    this tree, `--persona auditor` exits 14 with 28 findings;
   - a workflow file that zizmor's schema rejects is skipped with a warning, and the audit still
     exits 0. `--strict-collection` fails on such a file (exit 1, measured on a planted one), and
     the real `.github` passes with it (exit 0).
