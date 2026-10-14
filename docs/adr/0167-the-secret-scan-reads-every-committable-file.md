@@ -53,13 +53,22 @@ The same plant showed three more gaps the review's agents had reported:
        `$ < > { }`, which covers `${{ secrets.X }}`, `$(...)` and `<...>`;
      - values with a space;
      - lower-case word phrases such as `race-test-token`;
-     - an unquoted value that starts with `#` (a comment);
-     - in code files, an unquoted value (a variable handed on, such as `settings.x_token`);
-     - a name inside a string whose closing quote follows its `:` or `=`
-       (`"client_secret:"`, a label in the bundled API page).
-   - **Which characters.** A quoted value may hold any printable character but a space, so a
-     password such as `"Tr0ub4dor&3xyzQ"` counts. An unquoted value may hold letters, digits,
-     `_-+/=.:@` and the password punctuation `!#%&*?^~`; any other character ends it.
+     - Windows `%NAME%` references; and Python `%(name)s` templates, which hold `(`;
+     - an unquoted value that starts with `#` after a space (YAML `KEY: #note`, `KEY= #x`),
+       which is a comment. Directly after `=`, a `#` is part of the value: shell
+       `KEY=#abc` assigns `#abc`;
+     - in code files, an unquoted value (a variable handed on, such as `settings.x_token`).
+   - **Which characters.** Quoted and unquoted values share ONE set, ASCII only: letters,
+     digits, `_-+/=.:@` and the password punctuation `!#%&*?^~`. A value holding any other
+     character is not a secret value, so a password such as `"Tr0ub4dor&3xyzQ"` counts, and
+     `"Optional[str]"`, a translation such as `"Bestätigungskennwort"` and the text between
+     two strings in bundled JavaScript do not. An unquoted value ends at whitespace, a quote,
+     a backtick, or one of `, ; ( ) ] }`.
+   - **How much is read.** At most 512 characters after the `=` or `:`. A longer value is
+     judged on those 512. Reading to the end of the line for every name took time growing
+     with the square of the line's length: 8.96 s for 200 KB of `A_TOKEN=`, measured by
+     review; after the change no line check took over 0.3 s on any of 19 adversarial 1 MB
+     lines (the session's timing script, on the owner's Mac).
    - **Exceptions:** the name `confirmation_token`, an expiring cost-confirmation value that is
      not a credential; and files under `tests/`, for this rule only. That is the same
      exemption the old named rule had.
@@ -68,13 +77,18 @@ The same plant showed three more gaps the review's agents had reported:
    and a Tavily key (`tvly-`). A Fly token uses the prefixes flyctl v0.4.113 itself matches
    (`fo1_`, `fm1a_`, `fm1r_`, `fm2_`): after `FlyV1` (any case, one or more spaces) with 20 or
    more characters, or bare with 40 or more.
-5. **`home_directory_path`**, with no exemption (CHG-045): `/Users/<name>` or `/home/<name>`,
-   with or without a `/` after the name (a path that ends at the name counts). `/Users/.../`,
-   `/Users/<you>/` and the bare `/Users/` and `/home/` are placeholders and pass, and so does
-   `/Users/Shared`, the macOS system folder, which names no person. Of the 48 existing lines,
-   the 38 in docs became `~/...`; the 9 in `tests/unit/test_claude_settings_portability.py` now
-   build the path at run time; and the 1 in the `scripts/validate_claude_settings.py`
-   docstring now reads `/Users/<you>/`.
+5. **`home_directory_path`**, with no exemption (CHG-045): `/Users/<name>/` or
+   `/home/<name>/`, the form the question to the owner named, with the `/` after the name.
+   The first `/` must start a path: it may not follow a letter, digit, `.`, `/`, `-` or `_`.
+   So a folder called `Users` or `home` inside another path, a URL's path, and a host
+   called `home` pass. A drive letter's `:` does start a path (`C:` then `/Users/<name>/`
+   is named). A name with no `/` after it is not named: that form also matched
+   `WORKDIR /home/app` and `fetch("/home/feed")`, so it is a known limit below.
+   `/Users/.../`, `/Users/<you>/` and the bare `/Users/` and `/home/` are placeholders and
+   pass, and so does `/Users/Shared/`, the macOS system folder, which names no person.
+   Of the 48 existing lines, the 38 in docs became `~/...`; the 9 in
+   `tests/unit/test_claude_settings_portability.py` now build the path at run time; and the
+   1 in the `scripts/validate_claude_settings.py` docstring now reads `/Users/<you>/`.
    `scripts/session_hygiene.py` now prints a worktree under the home folder as `~/...`, so
    `make handoff` stops writing one into `docs/session-handoff.md`.
 
@@ -120,7 +134,25 @@ All on 2026-10-14.
     backticks or commas, which are not joined;
   - Python item assignment (`env["X_TOKEN"] = "..."`) and the Dockerfile space form
     (`ENV X_TOKEN value`), which are not named assignments;
+  - a home folder written without a `/` after the name (`cd /Users/<name>` at the end of a
+    line), one after another `/` (`file:///Users/<name>/`), and one inside a longer path;
+  - for named secrets: a Python string prefix (`f"…"`, `r"…"`, `b"…"`), a value in
+    parentheses, a JavaScript template literal (backticks), a `"NAME=value"` string inside
+    a code file (`["-e", "DB_PASSWORD=…"]` in `.py`, `.js` or `.ts`), a name and its value
+    in two joined fragments (`"DB_PASSWORD=" "…"`), and a password holding a character
+    outside the set (`|`, `[`, `\`, a space, a letter outside ASCII);
+  - a type annotation with a space anywhere but around `|` (`dict[str, str]`) hides the
+    value after it;
+  - a false positive: a `vault:` or KeyVault-style reference of 12 or more set characters
+    under a secret name may be named;
   - git history: the rewritten paths remain in earlier commits of this public repository.
+- Advisory, not built: the independent listing in
+  `tests/unit/test_security_scan_w70.py::test_the_real_tree_is_read_exactly_as_git_would_commit_it`
+  keeps a path only when it is a regular file, following links, while the scan reads every
+  symbolic link as its link text. The repository has no tracked links today
+  (`git ls-files -s | grep -c ^120000` prints 0). A committed link that dangles or points to
+  a folder would turn that test red on a correct scan, and its helper would then need to
+  keep links too.
 - The `tests/` exemption is narrow, and a test pins it: the same named secret under
   `e2e/tests/`, `.github/workflows/`, `src/`, `docs/`, `scripts/` or `tests_extra/` is named
   (`tests/unit/test_security_scan_w70_round1.py`).

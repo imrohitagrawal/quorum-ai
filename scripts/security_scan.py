@@ -355,8 +355,10 @@ _QUOTED_FRAGMENT = re.compile(r"\"([^\"]*)\"|'([^']*)'")
 
 #: What may sit BETWEEN two fragments for them to count as one string:
 #: whitespace (incl. tabs) and at most one ``+``. A comma is not on the list,
-#: so ``["a", "b"]`` is two strings, not one.
-_FRAGMENT_GAP = re.compile(r"\s*\+?\s*")
+#: so ``["a", "b"]`` is two strings, not one. Written so no two parts can both
+#: take the same space: ``\s*\+?\s*`` took time growing with the SQUARE of a
+#: long run of spaces (1.85 s for 32,000 spaces, measured 2026-10-14).
+_FRAGMENT_GAP = re.compile(r"\s*(?:\+\s*)?")
 
 
 def _joined_fragments(line: str) -> list[str]:
@@ -456,34 +458,54 @@ _NOT_A_CREDENTIAL_NAMES = {"confirmation_token"}
 #: ``*_SECRET``.
 _SECRET_NAME = r"[A-Za-z][A-Za-z0-9_]*_(?:API_KEY|TOKEN|SECRET|DSN|PASSWORD)"
 
+#: A type annotation: words with no space inside (``str``, ``Optional[str]``),
+#: joined by ``|`` with or without spaces (``str | None``). No two neighbouring
+#: parts can both take a space; the earlier form, a lazy class holding a space
+#: next to ``\s*``, took time growing with the SQUARE of a run of spaces (2.97 s
+#: for 32,000 spaces after ``X_TOKEN: str``, measured 2026-10-14).
+_ANNOTATION = r"[A-Za-z_][A-Za-z0-9_.\[\],]*(?:\s*\|\s*[A-Za-z_][A-Za-z0-9_.\[\],]*)*"
+
 #: ``NAME=v``, ``export NAME=v``, ``NAME = "v"``, ``const NAME = 'v'``,
 #: ``NAME: str = "v"``, make's ``NAME := v`` / ``?=`` / ``+=``, YAML's
 #: ``NAME: v`` and JSON's ``"NAME": "v"``.
 _NAMED_ASSIGNMENT = re.compile(
     r"(?i)(?<![A-Za-z0-9_$])(?P<name>" + _SECRET_NAME + r")(?![A-Za-z0-9_])"
     r"(?:"
-    r"(?:\s*:\s*[A-Za-z_][A-Za-z0-9_.\[\], |]*?)?\s*(?::=|\?=|\+=|=)(?!=)"
+    r"(?:\s*:\s*" + _ANNOTATION + r")?\s*(?::=|\?=|\+=|=)(?!=)"
     r"|['\"]?\s*:(?![:=])"
     r")"
 )
 
+#: How much of the line after a name's ``=`` or ``:`` is read for its value.
+#: Reading to the end of the line for every name made a line of many names
+#: take time growing with the SQUARE of its length (8.96 s for 200 KB of
+#: ``A_TOKEN=``, measured by review 2026-10-14). A longer value is judged on
+#: its first 512 characters only.
+_VALUE_WINDOW = 512
+
 #: An unquoted value runs to the first of these. ``#`` is not one: inside a
-#: shell or YAML word it is a character (``Hunter2#x``), and a value that
-#: STARTS with it is a comment, which ``_assigned_value`` treats as empty.
+#: shell or YAML word it is a character (``Hunter2#x``), and so it is directly
+#: after ``=`` (shell ``X=#abc`` assigns ``#abc``). Only a ``#`` with a space
+#: before it starts a comment (YAML ``X: #note``), which ``_assigned_value``
+#: treats as an empty value.
 _UNQUOTED_VALUE = re.compile(r"[^\s'\"`,;)\]}(]*")
 
 #: An unquoted value that is really the NEXT assignment's name, so the value
 #: here was empty: ``SENTRY_DSN= UV_CACHE_DIR=/tmp/x`` (make / shell).
 _NEXT_ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
 
-#: Characters an UNQUOTED secret value is made of: hex, base64, base64url,
-#: URL-ish, and the punctuation people put in passwords (``!#%&*?@^~``).
-#: Anything else (``(``, ``[``, a space) means code or prose, not a secret.
+#: Characters a secret value is made of, quoted or not, ASCII only: hex,
+#: base64, base64url, URL-ish, and the punctuation people put in passwords
+#: (``!#%&*?@^~``). Anything else (``(``, ``[``, ``;``, ``|``, a space, a
+#: letter outside ASCII) means code, a type, prose or a translation, not a
+#: secret. A quoted value once took any printable character, and that named
+#: ``"Optional[str]"``, ``"Bestätigungskennwort"`` and the text between two
+#: strings in bundled JavaScript (reproduced 2026-10-14).
 _SECRET_VALUE = re.compile(r"[A-Za-z0-9_\-+/=.:@!#%&*?^~]+")
 
-#: A QUOTED value may hold any printable character but a space: inside quotes
-#: a password's punctuation is just text (``"Tr0ub4dor&3xyzQ"``).
-_QUOTED_SECRET_VALUE = re.compile(r"\S+")
+#: A Windows ``%NAME%`` variable reference anywhere in a value: a stand-in,
+#: as ``$NAME`` is.
+_PERCENT_VARIABLE = re.compile(r"%[A-Za-z_][A-Za-z0-9_]*%")
 
 #: Words that mark a value as a stand-in, matched case-insensitively anywhere
 #: in the VALUE (never the name or the rest of the line, so a real secret on a
@@ -517,11 +539,13 @@ _NAMED_SECRET_MIN_LENGTH = 12
 _WORD_PHRASE = re.compile(r"[a-z]+(?:[-_][a-z]+)+")
 
 
-def _assigned_value(rest: str) -> tuple[str, bool]:
+def _assigned_value(rest: str, *, spaced: bool = False) -> tuple[str, bool]:
     """The value at the start of *rest* (text after ``=`` / ``:``), and whether quoted.
 
-    A quoted value followed by adjacent quoted fragments (``"GOCSPX-" "<rest>"``)
-    is returned joined, as ``_joined_fragments`` joins them.
+    *spaced* says whether whitespace stood between the ``=`` / ``:`` and *rest*;
+    only then does a leading ``#`` start a comment. A quoted value followed by
+    adjacent quoted fragments (``"GOCSPX-" "<rest>"``) is returned joined, as
+    ``_joined_fragments`` joins them.
     """
     if rest[:1] in {'"', "'"}:
         first = _QUOTED_FRAGMENT.match(rest)
@@ -536,7 +560,7 @@ def _assigned_value(rest: str) -> tuple[str, bool]:
         return "".join(parts), True
     unquoted = _UNQUOTED_VALUE.match(rest)
     value = unquoted.group(0) if unquoted else ""
-    if value.startswith("#") or _NEXT_ASSIGNMENT.match(value):
+    if (spaced and value.startswith("#")) or _NEXT_ASSIGNMENT.match(value):
         return "", False
     return value, False
 
@@ -547,7 +571,7 @@ def _is_placeholder(value: str) -> bool:
         return True
     # A variable, command substitution or template: ``$X``, ``${X}``,
     # ``$(openssl rand -hex 32)``, ``${{ secrets.X }}``, ``<token>``, ``{{ x }}``.
-    if any(ch in value for ch in "$<>{}"):
+    if any(ch in value for ch in "$<>{}") or _PERCENT_VARIABLE.search(value):
         return True
     # One character repeated (``0000000000000``), or a readable phrase.
     return len(set(value)) == 1 or _WORD_PHRASE.fullmatch(value) is not None
@@ -556,32 +580,28 @@ def _is_placeholder(value: str) -> bool:
 def _contains_named_secret_assignment(line: str, *, is_code: bool = False) -> bool:
     """A secret-named variable given a real-looking value.
 
-    Not flagged: an empty value (including make/shell ``NAME= NEXT=...``), a
-    value under 12 characters, a placeholder (``_PLACEHOLDER_WORDS``, ``$``
-    variables and substitutions, ``<...>``, a repeated character, a lower-case
-    word phrase), a value with a space (``"REAFFIRM live-execution"`` is a
-    sentence), an unquoted value with a character no secret has (``(``, ``[``),
-    in code files an unquoted value (a variable or attribute such as
+    Not flagged: an empty value (including make/shell ``NAME= NEXT=...`` and a
+    ``#`` comment after a space), a value under 12 characters, a placeholder
+    (``_PLACEHOLDER_WORDS``, ``$`` and ``%NAME%`` variables and substitutions,
+    ``<...>``, a repeated character, a lower-case word phrase), a value with
+    any character outside ``_SECRET_VALUE`` (a space: ``"REAFFIRM
+    live-execution"`` is a sentence; ``(``, ``[``, ``;``, a letter outside
+    ASCII), in code files an unquoted value (a variable or attribute such as
     ``X_TOKEN = settings.x_token``), and a name in ``_NOT_A_CREDENTIAL_NAMES``.
-    A quoted value split into adjacent fragments is joined first.
+    A quoted value split into adjacent fragments is joined first. Only the
+    first ``_VALUE_WINDOW`` characters after the ``=`` / ``:`` are read.
     """
     for match in _NAMED_ASSIGNMENT.finditer(line):
         if match.group("name").casefold() in _NOT_A_CREDENTIAL_NAMES:
             continue
-        rest = line[match.end() :].lstrip()
-        opened = line[match.start() - 1 : match.start()]
-        if opened in {'"', "'"} and opened not in match.group(0) and rest.startswith(opened):
-            # The name and its ``:`` or ``=`` are text INSIDE a string
-            # (``"client_secret:"`` in a bundled UI): the quote after them
-            # closes that string, it does not open a value.
-            continue
-        value, quoted = _assigned_value(rest)
+        window = line[match.end() : match.end() + _VALUE_WINDOW]
+        rest = window.lstrip()
+        value, quoted = _assigned_value(rest, spaced=len(rest) != len(window))
         if not quoted and is_code:
             continue
         if len(value) < _NAMED_SECRET_MIN_LENGTH:
             continue
-        shape = _QUOTED_SECRET_VALUE if quoted else _SECRET_VALUE
-        if not shape.fullmatch(value) or not value.isprintable() or _is_placeholder(value):
+        if not _SECRET_VALUE.fullmatch(value) or _is_placeholder(value):
             continue
         return True
     return False
@@ -638,19 +658,28 @@ _HOME_ROOTS = ("Users", "home")
 #: Linux account is expected to be called that.
 _NOT_A_PERSON = "Shared"
 
-#: A name's characters. The name ends at the first other character (``/``, a
-#: space, a quote, ``:``, ``)``, ``,``) or at the end of the line.
+#: A name's characters.
 _NAME_CHAR = r"[A-Za-z0-9._-]"
 
-#: ``/<root>/<name>`` where the name is a real folder name: not empty (the bare
-#: root, or ``<you>``, whose angle brackets fall outside the name's
-#: characters), not all dots (``...`` is the repository's own placeholder), and
-#: not the macOS ``Shared`` folder.
+#: ``/<root>/<name>/``, the form owner decision CHG-045 was asked about, where:
+#:
+#: - the ``/`` before the root STARTS a path: it does not follow a letter,
+#:   digit, ``.``, ``/``, ``-`` or ``_``, so ``docs/Users/x/``,
+#:   ``example.com/home/x/``, ``../Users/x/`` and ``http://home/x/`` are not
+#:   home folders. A drive letter's ``:`` does start one (``C:`` then
+#:   ``/Users/<name>/``).
+#: - the name is a real folder name: not empty (the bare root, or ``<you>``,
+#:   whose angle brackets fall outside the name's characters), not all dots
+#:   (``...`` is the repository's own placeholder), and not the macOS
+#:   ``Shared`` folder;
+#: - a ``/`` follows the name. Without it, ``WORKDIR /home/app`` and
+#:   ``fetch("/home/feed")`` were named (reproduced 2026-10-14), so a home
+#:   folder written with no trailing ``/`` is a known limit.
 _HOME_DIRECTORY_PATH = re.compile(
-    "/(?:"
+    r"(?<![A-Za-z0-9./_-])/(?:"
     + "|".join(_HOME_ROOTS)
     + ")/"
-    + rf"(?!(?:\.+|{_NOT_A_PERSON})(?!{_NAME_CHAR})){_NAME_CHAR}+"
+    + rf"(?!(?:\.+|{_NOT_A_PERSON})/){_NAME_CHAR}+/"
 )
 
 

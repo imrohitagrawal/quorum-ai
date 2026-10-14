@@ -10,8 +10,9 @@ What is pinned here:
   for EVERY value check, not only the OpenRouter one, and reported once per
   check;
 - a password with punctuation (``!&#@``) is a named secret;
-- a home-folder path with no trailing ``/`` is a home-folder path, and the
-  macOS ``Shared`` folder is not;
+- a home-folder path is ``/Users/<name>/`` or ``/home/<name>/`` WITH its
+  trailing ``/``, starting a path, and the macOS ``Shared`` folder is not one
+  (review round 2 reversed round 1's "no trailing slash" form);
 - a symbolic link is read as its link text, never followed;
 - the ``tests/`` exemption of ``named_secret_assignment`` is that one folder;
 - the JSON and make assignment forms the ADR names;
@@ -176,18 +177,20 @@ def test_split_shapes_and_split_named_values_are_joined_and_reported_once_per_ch
 def test_a_password_with_punctuation_is_a_named_secret(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Quoted values take any printable character but a space; unquoted, ``!#%&*?@^~``.
+    """Quoted or not, a value may hold the password punctuation ``!#%&*?@^~``.
 
     Lines 1 to 3 of ``.env.example`` and line 2 of ``mail.yml`` are the four
-    reproduced misses; line 3 of ``mail.yml`` holds characters only a quoted
-    value may have. Lines 4 to 9 of ``.env.example`` are partners that keep
+    reproduced misses. Lines 4 to 9 of ``.env.example`` are partners that keep
     the old guards: a space, a ``$`` reference, an angle placeholder, a word
-    phrase, a value that starts with ``#`` (a comment), and a ``(`` that ends an
-    unquoted value at 7 characters.
+    phrase, a ``#`` comment after a space, and a ``(`` that ends an unquoted
+    value at 7 characters. Line 3 of ``mail.yml`` holds ``|``, ``[`` and ``;``:
+    review round 2 put quoted values back on the one character set, so it is
+    a partner now (a known limit, not a finding).
 
-    Red when: the value classes exclude password punctuation again (lines 1-3
-    or a YAML line unnamed), OR a quoted value is held to the unquoted class,
-    OR one of the old guards is dropped (a later line named).
+    Red when: the value class excludes password punctuation again (lines 1-3
+    or ``mail.yml`` line 2 unnamed), OR a quoted value takes any printable
+    character again (``mail.yml`` line 3 named), OR one of the old guards is
+    dropped (a later line named).
     """
     zebra = "".join(["Z3bra", "!Cac", "tus42"])
     troub = "".join(["Tr0ub", "4dor&", "3xyzQ"])
@@ -201,17 +204,17 @@ def test_a_password_with_punctuation_is_a_named_secret(
         _PASSWORD_NAME + "=" + _q("Hunter2!" + "$" + "XYZ_VALUE"),  # 5 reference
         _PASSWORD_NAME + "=" + _q("<your password!>"),  # 6 placeholder
         _PASSWORD_NAME + "=" + _q("correct-horse-battery"),  # 7 word phrase
-        _PASSWORD_NAME + "=#" + hunter,  # 8 comment
+        _PASSWORD_NAME + "= #" + hunter,  # 8 comment after a space
         _PASSWORD_NAME + "=Hunter2(" + hunter,  # 9 code
     ]
-    # Line 3 holds characters only a QUOTED value may have (``|``, ``[``, ``;``).
+    # Line 3 holds characters outside the value set (``|``, ``[``, ``;``).
     odd = "".join(["Kx9|vQ", "2[w]7", ";zP"])
     smtp_name = "".join(["SMTP", "_PASSWORD"])
     yml = ["smtp:", "  " + smtp_name + ": " + _q(smtp), "  " + smtp_name + ": " + _q(odd)]
     findings = _scan_repo(tmp_path, monkeypatch, {".env.example": env, "mail.yml": yml})
 
     assert _lines(findings, ".env.example", "named_secret_assignment") == {1, 2, 3}
-    assert _lines(findings, "mail.yml", "named_secret_assignment") == {2, 3}
+    assert _lines(findings, "mail.yml", "named_secret_assignment") == {2}
 
 
 def test_a_name_inside_a_string_does_not_take_the_next_string_as_its_value(
@@ -222,12 +225,14 @@ def test_a_name_inside_a_string_does_not_take_the_next_string_as_its_value(
     Measured 2026-10-14 on ``src/product_app/static/vendor/swagger-ui-bundle.js``
     once quoted values took any printable character: the quote after the colon
     CLOSES the label's string, and the text up to the next quote,
-    ``),fe?Pe.createElement(``, was read as the value. Line 2 is the partner: a
-    real JSON-style ``"client_secret": "<value>"`` in the same file is named.
+    ``),fe?Pe.createElement(``, was read as the value. Review round 2 removed
+    the round-1 guard for this and put quoted values back on the one character
+    set, where ``(``, ``)`` and ``,`` are not secret characters. Line 2 is the
+    partner: a real JSON-style ``"client_secret": "<value>"`` in the same file
+    is named.
 
-    Red when: the scan stops checking that the quote after the name closes the
-    string the name sits in (line 1 named), OR a quoted name is no longer
-    checked at all (line 2 unnamed).
+    Red when: a quoted value takes ``(``, ``)`` or ``,`` again (line 1 named),
+    OR a quoted name is no longer checked at all (line 2 unnamed).
     """
     label = "client" + "_secret:"
     lines = [
@@ -240,43 +245,52 @@ def test_a_name_inside_a_string_does_not_take_the_next_string_as_its_value(
 
 
 # --------------------------------------------------------------------------
-# Item 4: a home folder with no trailing slash
+# Item 4 (as narrowed by review round 2): the trailing slash, and a path start
 # --------------------------------------------------------------------------
 
 
-def test_a_home_folder_with_no_trailing_slash_is_named_and_shared_is_not(
+def test_a_home_folder_needs_its_trailing_slash_and_must_start_a_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A path that ends at the name names a person as much as one that goes on.
+    """``/Users/<name>/`` and ``/home/<name>/`` with the ``/``, starting a path.
 
-    Lines 1 to 7: a name ending the line, or followed by a space, a quote,
-    ``:``, ``)`` or ``,``, and a longer name that merely starts with
-    ``Shared``. Lines 8 to 14 are partners: the macOS ``Shared`` folder (alone
-    and with a path), the placeholders, and the bare roots.
+    Round 1 named a folder with no trailing ``/``, and anywhere in a path;
+    that named ``WORKDIR /home/app``, ``fetch("/home/feed")``, a URL's
+    ``/home/index.html`` and a ``Users`` folder inside ``docs`` (reproduced in review
+    round 2). Lines 1 to 6 are named: after a space, a quote, ``=``, ``(``,
+    ``:`` (a drive letter, ``C:``) and at the start of a line, and a longer
+    name that merely starts with ``Shared``. Lines 7 to 17 are partners: no
+    trailing ``/``, mid-path, in a URL, after ``..``, a host called ``home``,
+    the macOS ``Shared`` folder, the placeholders and the bare roots.
 
-    Red when: the rule still needs a ``/`` after the name (lines 1-6 unnamed),
-    OR ``Shared`` is not excused (line 8 or 9 named), OR the excuse is a prefix
-    match (line 7 unnamed), OR a placeholder or bare root is named.
+    Red when: the trailing ``/`` is optional again (line 7, 8 or 9 named), OR
+    the path-start check is dropped (line 10, 11, 12 or 13 named), OR a drive
+    letter's ``:`` no longer starts a path (line 5 unnamed), OR ``Shared`` is
+    not excused or the excuse is a prefix match (line 14 named, or line 6
+    unnamed), OR a placeholder or bare root is named.
     """
     lines = [
-        "cd " + _USERS + "alice",  # 1
-        "cd " + _HOME + "bob and then",  # 2
-        "path = " + _q(_USERS + "alice"),  # 3
-        "PATH=" + _HOME + "bob:/usr/bin",  # 4
-        "(see " + _USERS + "alice)",  # 5
-        "one " + _HOME + "bob, two",  # 6
-        "cd " + _USERS + "Shared2",  # 7
-        "cd " + _USERS + "Shared",  # 8 the system folder
-        "open " + _USERS + "Shared/Build",  # 9 the system folder
-        "cd " + _USERS + "...",  # 10
-        "cd " + _USERS + "<you>",  # 11
-        "the " + _USERS + " folder",  # 12
-        "the " + _HOME + " folder",  # 13
-        "cd " + _HOME + "...",  # 14
+        "cd " + _USERS + "alice/",  # 1
+        "path = " + _q(_USERS + "alice/x"),  # 2
+        "PATH=" + _HOME + "bob/bin:/usr/bin",  # 3
+        "(see " + _HOME + "bob/x)",  # 4
+        "C:" + _USERS + "carol/x",  # 5 drive letter
+        _USERS + "Shared2/x",  # 6 start of line; not the system folder
+        "WORKDIR " + _HOME + "app",  # 7 no trailing slash
+        "fetch(" + _q(_HOME + "feed") + ")",  # 8 no trailing slash
+        "cd " + _USERS + "alice",  # 9 no trailing slash
+        "docs" + _USERS + "x/guide",  # 10 mid-path
+        "https://example.com" + _HOME + "x/index",  # 11 URL path
+        "ls .." + _USERS + "alice/x",  # 12 after ..
+        "http:/" + _HOME + "page/",  # 13 a host called home
+        "open " + _USERS + "Shared/Build/",  # 14 the system folder
+        "cd " + _USERS + ".../x",  # 15
+        "cd " + _USERS + "<you>/x",  # 16
+        "the " + _USERS + " and " + _HOME + " folders",  # 17
     ]
     findings = _scan_repo(tmp_path, monkeypatch, {"notes.md": lines})
 
-    assert _lines(findings, "notes.md", "home_directory_path") == {1, 2, 3, 4, 5, 6, 7}
+    assert _lines(findings, "notes.md", "home_directory_path") == {1, 2, 3, 4, 5, 6}
 
 
 # --------------------------------------------------------------------------
@@ -290,8 +304,9 @@ def test_a_symlink_is_read_as_its_link_text_and_never_followed(
     """Git commits a link as the path it points to, so that path is what is read.
 
     ``home-link`` dangles, to a home path: it must be named. ``dir-link`` points
-    to a folder that exists, through a path holding a home folder: it must be
-    named. ``out-link`` points to a file OUTSIDE the repository holding a key:
+    to a folder that exists, through a path holding a home folder (after a
+    folder whose name ends in a space, so the home folder starts a path): it
+    must be named. ``out-link`` points to a file OUTSIDE the repository holding a key:
     its contents are never committed, so nothing may be reported for it. The
     count is the partner: all three links are read.
 
@@ -301,10 +316,10 @@ def test_a_symlink_is_read_as_its_link_text_and_never_followed(
     """
     outside = tmp_path / "outside"
     _write(outside, "secret.txt", "ref = " + _q(_OPENROUTER_PREFIX + _HEX32 * 2) + "\n")
-    (tmp_path / "Users" / "alice").mkdir(parents=True)
+    (tmp_path / "x " / "Users" / "alice").mkdir(parents=True)
     repo = _init_repo(tmp_path / "repo")
     os.symlink(_USERS + "alice" + "/gone", repo / "home-link")
-    os.symlink(".." + _USERS + "alice", repo / "dir-link")
+    os.symlink("../x " + _USERS + "alice/", repo / "dir-link")
     os.symlink("../outside/secret.txt", repo / "out-link")
     _commit_all(repo)
 
@@ -331,10 +346,10 @@ def test_the_walk_reads_links_too_and_never_follows_them(
     """
     outside = tmp_path / "outside"
     _write(outside, "secret.txt", "ref = " + _q(_OPENROUTER_PREFIX + _HEX32 * 2) + "\n")
-    (tmp_path / "Users" / "alice").mkdir(parents=True)
+    (tmp_path / "x " / "Users" / "alice").mkdir(parents=True)
     root = tmp_path / "copy"
     root.mkdir()
-    os.symlink(".." + _USERS + "alice", root / "dir-link")
+    os.symlink("../x " + _USERS + "alice/", root / "dir-link")
     os.symlink("../outside/secret.txt", root / "out-link")
 
     findings, scanned = _scan(root, monkeypatch)
@@ -354,27 +369,36 @@ def test_the_named_secret_exemption_covers_tests_and_nothing_else(
 ) -> None:
     """The same named secret in seven places; only ``tests/`` is exempt.
 
-    ``tests/fixture.py`` is the partner proving the exemption exists; the other
+    The ``tests/`` fixture is the partner proving the exemption exists; the other
     six, including a folder whose name merely starts with ``tests``, must each
     be named.
 
     Red when: the exemption is widened (to ``e2e/``, ``.github/``, ``src/``,
     ``docs/``, ``scripts/``, or any path starting with ``tests``), OR removed
-    (``tests/fixture.py`` named).
+    (the ``tests/`` fixture named).
     """
+    # Paths are joined at run time: these files exist only in the temporary
+    # repository, and written whole they read as citations of repository files
+    # (``tests/unit/test_cited_paths_resolve.py``).
+    exempt = "/".join(["tests", "fixture.py"])
     files = {
-        "e2e/tests/fixture.ts": ["const " + _TOKEN_NAME + " = " + _q(_GENERIC) + ";"],
-        ".github/workflows/ci.yml": ["env:", "  " + _TOKEN_NAME + ": " + _GENERIC],
-        "src/app/config.py": [_TOKEN_NAME + " = " + _q(_GENERIC)],
-        "docs/setup.md": [_TOKEN_NAME + "=" + _GENERIC],
-        "scripts/run.sh": ["export " + _TOKEN_NAME + "=" + _GENERIC],
-        "tests_extra/fixture.py": [_TOKEN_NAME + " = " + _q(_GENERIC)],
-        "tests/fixture.py": [_TOKEN_NAME + " = " + _q(_GENERIC)],
+        "/".join(["e2e", "tests", "fixture.ts"]): [
+            "const " + _TOKEN_NAME + " = " + _q(_GENERIC) + ";"
+        ],
+        "/".join([".github", "workflows", "ci.yml"]): [
+            "env:",
+            "  " + _TOKEN_NAME + ": " + _GENERIC,
+        ],
+        "/".join(["src", "app", "config.py"]): [_TOKEN_NAME + " = " + _q(_GENERIC)],
+        "/".join(["docs", "setup.md"]): [_TOKEN_NAME + "=" + _GENERIC],
+        "/".join(["scripts", "run.sh"]): ["export " + _TOKEN_NAME + "=" + _GENERIC],
+        "/".join(["tests_extra", "fixture.py"]): [_TOKEN_NAME + " = " + _q(_GENERIC)],
+        exempt: [_TOKEN_NAME + " = " + _q(_GENERIC)],
     }
     findings = _scan_repo(tmp_path, monkeypatch, files)
 
     named = {f.path for f in findings if f.check_id == "named_secret_assignment"}
-    assert named == set(files) - {"tests/fixture.py"}, sorted(named)
+    assert named == set(files) - {exempt}, sorted(named)
 
 
 # --------------------------------------------------------------------------
