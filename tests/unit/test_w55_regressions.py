@@ -10,9 +10,18 @@ pins what review round 1 showed it missed:
 * a malformed payload with no column key, in a cost row or a mint row, must
   not stop a pass (the existing malformed test's row has a column key, so an
   ``OR`` could skip the JSON call and hide an unguarded one);
-* each write-path trigger fires exactly once after the interval, and the mint
-  trigger, like the charge one, never runs with the store lock held;
+* each write-path trigger starts a pass after the interval (red if the trigger
+  is removed, or if a second pass runs inside the hour without the throttle),
+  and the mint trigger, like the charge one, never runs with the store lock
+  held;
 * the 48-hour cut is exact for whole-second stamps and a whole-second cut.
+
+Section 4 pins what review round 2 showed: a cost or ``session_minted`` row
+past the cut whose payload is not valid JSON kept its key or address for ever
+(the UPDATE left the text, and a mint row or a cost row with no column key was
+never due). Its payload is now replaced with a fixed marker. Section 5 pins two
+things the round-2 falsification lens showed no test held: ``secure_delete`` is
+the open's first statement, and the ``julianday`` branch of the cut is strict.
 """
 
 from __future__ import annotations
@@ -23,7 +32,7 @@ import os
 import sqlite3
 from collections.abc import Callable, Iterator
 from dataclasses import asdict
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -41,6 +50,11 @@ _VACUUM_MARKER = "w55_vacuum_after_secure_delete"
 # A distinctive key for the free-space test: no other byte run in the file
 # can match it by accident.
 STALE_KEY = "57a1e000-0000-4000-8000-00000000d001"
+
+# What an unreadable payload past the cut becomes (review round 2). Written
+# out here, not read from ``feedback_store``, so changing the marker there is
+# a visible test change (rule 7a).
+UNREADABLE_MARKER = '{"payload_unreadable_wiped": true}'
 
 
 class _MonoClock:
@@ -531,12 +545,14 @@ def test_a_malformed_cost_payload_with_no_column_key_does_not_stop_the_pass(
     result = store.wipe_expired_identifiers(now=now)
 
     after = _rows(db)
-    assert (result.cost_keys_wiped, result.session_addresses_wiped) == (2, 1)
-    assert result.malformed_payloads == 0  # it held no key, so it was not due
+    # Since review round 2 an unreadable payload past the cut is due and is
+    # replaced with the fixed marker (pinned in section 4 below).
+    assert (result.cost_keys_wiped, result.session_addresses_wiped) == (3, 1)
+    assert result.malformed_payloads == 1
     assert not _has_cost_key(after[good_a])
     assert not _has_cost_key(after[good_b])
     assert "ip" not in json.loads(after[mint]["payload"])
-    assert after[bad]["payload"] == bad_text
+    assert after[bad]["payload"] == UNREADABLE_MARKER
 
 
 def test_a_malformed_mint_payload_does_not_stop_the_pass(
@@ -566,15 +582,17 @@ def test_a_malformed_mint_payload_does_not_stop_the_pass(
     result = store.wipe_expired_identifiers(now=now)
 
     after = _rows(db)
-    assert (result.cost_keys_wiped, result.session_addresses_wiped) == (1, 2)
+    # Since review round 2 the unreadable mint row is due too (section 4).
+    assert (result.cost_keys_wiped, result.session_addresses_wiped) == (1, 3)
+    assert result.malformed_payloads == 1
     for rid in (mint_a, mint_b):
         assert "ip" not in json.loads(after[rid]["payload"])
     assert not _has_cost_key(after[cost])
-    assert after[bad]["payload"] == bad_text
+    assert after[bad]["payload"] == UNREADABLE_MARKER
 
 
 # ---------------------------------------------------------------------------
-# 3c/3d. Each write-path trigger fires exactly once, outside the lock
+# 3c/3d. Each write-path trigger starts one pass, outside the lock
 # ---------------------------------------------------------------------------
 
 
@@ -595,10 +613,12 @@ def wipe_calls(monkeypatch: pytest.MonkeyPatch) -> list[bool]:
 def test_a_recorded_charge_starts_exactly_one_wipe_outside_the_lock(
     tmp_path: Path, opened: Callable[..., FeedbackStore], wipe_calls: list[bool]
 ) -> None:
-    """After the interval, one recorded charge starts exactly one pass, lock not held.
+    """After the interval, one recorded charge starts one pass, lock not held.
 
-    Red when: the trigger after a ``RECORDED`` charge is removed (no call), it
-    fires twice, or it runs inside the charge's lock hold.
+    Red when: the trigger after a ``RECORDED`` charge is removed (no call), a
+    second pass runs inside the hour without the throttle (two spy calls), or
+    it runs inside the charge's lock hold. NOT red when the throttled trigger
+    is merely called twice: the throttle swallows the second call.
     """
     clock = _MonoClock()
     store = opened(tmp_path / "f.sqlite3", clock)
@@ -613,11 +633,16 @@ def test_a_recorded_charge_starts_exactly_one_wipe_outside_the_lock(
 def test_a_recorded_mint_starts_exactly_one_wipe_outside_the_lock(
     tmp_path: Path, opened: Callable[..., FeedbackStore], wipe_calls: list[bool]
 ) -> None:
-    """After the interval, one recorded mint starts exactly one pass, lock not held.
+    """After the interval, one mint that passes its limit starts one pass, lock not held.
 
-    Red when: the trigger after a recorded mint is removed (no call), it fires
-    twice, or it is moved inside the mint's ``with self._lock`` block (the spy
-    sees ``True``).
+    The trigger runs after ``try_record_session_mint``'s insert attempt returns,
+    whether or not the row landed (the insert swallows a failure); a mint the
+    limit refuses returns before it. This test drives the landed case.
+
+    Red when: the trigger after the mint's insert is removed (no call), a
+    second pass runs inside the hour without the throttle (two spy calls), or
+    it is moved inside the mint's ``with self._lock`` block (the spy sees
+    ``True``). NOT red when the throttled trigger is merely called twice.
     """
     clock = _MonoClock()
     store = opened(tmp_path / "f.sqlite3", clock)
@@ -691,3 +716,197 @@ def test_the_cut_is_exact_for_whole_second_stamps_and_cuts(
     assert result.cost_keys_wiped == 1
     assert not _has_cost_key(after[wipe_half])
     assert _has_cost_key(after[keep_half])
+
+
+# ---------------------------------------------------------------------------
+# 4. An unreadable payload past the cut loses its identifier too (round 2)
+# ---------------------------------------------------------------------------
+
+# Distinctive identifiers for the raw-byte checks below: nothing else in the
+# file can match them by accident.
+UNREADABLE_KEY = "0bad0000-0000-4000-8000-00000000e001"
+UNREADABLE_IP = "203.0.113.199"
+
+
+def _spend_totals(store: FeedbackStore, key: UUID, now: datetime) -> tuple[Decimal, Decimal]:
+    return store.daily_spend_for(key, now=now), store.global_daily_spend(now=now)
+
+
+@pytest.mark.parametrize("column_key", [True, False], ids=["column-key", "no-column-key"])
+def test_an_unreadable_cost_payload_past_the_cut_loses_its_key(
+    tmp_path: Path, opened: Callable[..., FeedbackStore], column_key: bool
+) -> None:
+    """An old cost row whose payload is not valid JSON but holds the key text.
+
+    The pass replaces the payload with the fixed marker and clears the column,
+    so the key is gone from the row and from the file's bytes. A second pass
+    changes nothing, and the spend totals do not move.
+
+    Red when: an unreadable cost payload past the cut keeps its text (the
+    round-1 build: the UPDATE's ``CASE`` returned ``payload`` for it, and with
+    no column key the row was not even due), or the replaced row is not
+    counted in ``malformed_payloads``.
+    """
+    db = tmp_path / "f.sqlite3"
+    store = opened(db)
+    now = datetime.now(UTC)
+    payer = uuid4()
+    bad_text = '{"account_id": "' + UNREADABLE_KEY + '", "estimated_cost_usd": "0.10", oops'
+    (bad,) = _insert_raw(
+        db,
+        [
+            _cost_row(
+                now - timedelta(hours=49), UUID(UNREADABLE_KEY) if column_key else None, bad_text
+            )
+        ],
+    )
+    # A charge inside 24 hours, so the totals below are not a sum over nothing.
+    assert _public_charge(store, payer, now - timedelta(hours=1)) is ChargeOutcome.RECORDED
+    before_totals = _spend_totals(store, payer, now)
+    assert before_totals[0] > 0
+    _checkpoint(db)
+    # Partner: the key is in the file before the pass (column and text, or text).
+    assert _copies(db, UNREADABLE_KEY) >= (2 if column_key else 1)
+
+    result = store.wipe_expired_identifiers(now=now)
+    _checkpoint(db)
+
+    after = _rows(db)
+    assert (result.cost_keys_wiped, result.malformed_payloads) == (1, 1)
+    assert after[bad]["payload"] == UNREADABLE_MARKER
+    assert after[bad]["account_id"] is None
+    assert UNREADABLE_KEY not in json.dumps(after[bad])
+    assert _copies(db, UNREADABLE_KEY) == 0
+    # Amount-bearing columns are untouched.
+    assert after[bad]["event_type"] == COST_ACCEPTED_EVENT
+    assert _spend_totals(store, payer, now) == before_totals
+
+    second = store.wipe_expired_identifiers(now=now)
+    assert second == fs.WipeResult(0, 0, 0)
+    assert _rows(db) == after
+
+
+def test_an_unreadable_mint_payload_past_the_cut_loses_its_address(
+    tmp_path: Path, opened: Callable[..., FeedbackStore]
+) -> None:
+    """An old ``session_minted`` row whose payload is not valid JSON but holds an address.
+
+    Red when: an unreadable mint payload past the cut keeps its text (the
+    round-1 build: the mint "due" filter's ``CASE`` gave 0 for it, so no pass
+    ever touched it), or the replaced row is not counted in
+    ``malformed_payloads``.
+    """
+    db = tmp_path / "f.sqlite3"
+    store = opened(db)
+    now = datetime.now(UTC)
+    bad_text = '{"ip": "' + UNREADABLE_IP + '", oops'
+    (bad,) = _insert_raw(db, [_mint_row(now - timedelta(hours=49), bad_text)])
+    _checkpoint(db)
+    assert _copies(db, UNREADABLE_IP) == 1  # partner: the address is there to find
+    account_before = _rows(db)[bad]["account_id"]
+
+    result = store.wipe_expired_identifiers(now=now)
+    _checkpoint(db)
+
+    after = _rows(db)
+    assert (result.session_addresses_wiped, result.malformed_payloads) == (1, 1)
+    assert after[bad]["payload"] == UNREADABLE_MARKER
+    assert after[bad]["account_id"] == account_before  # its account id stays
+    assert _copies(db, UNREADABLE_IP) == 0
+
+    second = store.wipe_expired_identifiers(now=now)
+    assert second == fs.WipeResult(0, 0, 0)
+    assert _rows(db) == after
+
+
+def test_an_unreadable_payload_inside_48_hours_is_left_alone(
+    tmp_path: Path, opened: Callable[..., FeedbackStore]
+) -> None:
+    """Partner to the two above: the same rows at 30 hours are not touched.
+
+    30 hours, not 47, so the rows sit outside the 24-hour meters too (a
+    malformed charge inside 24 hours makes ``daily_spend_for`` raise
+    ``JSONDecodeError`` at its ``json.loads``, before and after W55 alike).
+
+    Red when: the unreadable-payload branch drops the 48-hour cut (both rows
+    would be replaced and the column key cleared).
+    """
+    db = tmp_path / "f.sqlite3"
+    store = opened(db)
+    now = datetime.now(UTC)
+    cost_text = '{"account_id": "' + UNREADABLE_KEY + '", oops'
+    mint_text = '{"ip": "' + UNREADABLE_IP + '", oops'
+    young = now - timedelta(hours=30)
+    cost, mint = _insert_raw(
+        db, [_cost_row(young, UUID(UNREADABLE_KEY), cost_text), _mint_row(young, mint_text)]
+    )
+    before = _rows(db)
+
+    result = store.wipe_expired_identifiers(now=now)
+
+    assert result == fs.WipeResult(0, 0, 0)
+    after = _rows(db)
+    assert after == before
+    assert after[cost]["payload"] == cost_text
+    assert after[cost]["account_id"] == UNREADABLE_KEY
+    assert after[mint]["payload"] == mint_text
+
+
+# ---------------------------------------------------------------------------
+# 5. Open order and the julianday branch's strict cut (round 2)
+# ---------------------------------------------------------------------------
+
+
+def test_secure_delete_is_the_first_statement_the_store_runs_at_open(
+    tmp_path: Path, statements: list[str]
+) -> None:
+    """``PRAGMA secure_delete = ON`` comes before the schema, the backfills and the wipe.
+
+    Anything the open writes before it (the schema, the F-01 relabel, the
+    cutover backfill, the open-time wipe) could leave old cell bytes in free
+    space that no later pass rewrites.
+
+    Red when: the PRAGMA is moved after any other statement at open, for
+    example after the schema or the backfills.
+    """
+    store = FeedbackStore(str(tmp_path / "f.sqlite3"), monotonic_provider=_MonoClock())
+    store.close()
+
+    # Partner: the trace sees the whole open, not just one statement.
+    assert any("CREATE TABLE IF NOT EXISTS events" in sql for sql in statements)
+    assert _vacuums(statements) == 1
+    assert statements[0].strip().upper() == "PRAGMA SECURE_DELETE = ON"
+
+
+def test_the_julianday_cut_is_strict_for_a_row_with_another_offset(
+    tmp_path: Path, opened: Callable[..., FeedbackStore]
+) -> None:
+    """A ``+05:30`` row exactly at the cut keeps its key; one second earlier loses it.
+
+    Rows not ending ``+00:00`` take the ``julianday`` branch of the cut, so the
+    strict ``<`` there needs its own boundary pin (the text branch's is pinned
+    by ``test_the_cut_is_exact_for_whole_second_stamps_and_cuts``).
+
+    Red when: the ``julianday`` comparison becomes ``<=`` (the row at exactly
+    the cut loses its key), or the boundary is otherwise moved.
+    """
+    db = tmp_path / "f.sqlite3"
+    store = opened(db)
+    ist = timezone(timedelta(hours=5, minutes=30))
+    at_cut = datetime(2026, 10, 12, 17, 30, 0, tzinfo=ist)  # 12:00:00Z
+    keep, wipe = _insert_raw(
+        db, [_cost_row(at_cut, uuid4()), _cost_row(at_cut - timedelta(seconds=1), uuid4())]
+    )
+    # Partner on the stamp shapes: these take the julianday branch.
+    stamps = {rid: row["recorded_at"] for rid, row in _rows(db).items()}
+    assert stamps[keep] == "2026-10-12T17:30:00+05:30"
+    assert stamps[wipe] == "2026-10-12T17:29:59+05:30"
+
+    result = store.wipe_expired_identifiers(
+        now=datetime(2026, 10, 12, 12, 0, 0, tzinfo=UTC) + fs.IDENTIFIER_KEEP
+    )
+
+    after = _rows(db)
+    assert result.cost_keys_wiped == 1
+    assert _has_cost_key(after[keep])
+    assert not _has_cost_key(after[wipe])

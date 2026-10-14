@@ -711,12 +711,17 @@ is evidence of a restart, never of a repair.
 
 Since W55 every cost row older than 48 hours loses its spend key, and every
 `session_minted` row older than 48 hours loses the visitor's address
-(`FeedbackStore.wipe_expired_identifiers`). A pass runs at every store open
-and, while the app runs, at the first write (a landed `record()`, a recorded
-charge or a recorded session mint) that comes at least an hour after the
-previous pass. So past its 48 hours a key can legitimately stay about an hour
-more with steady traffic, until the next write when there are none, and until
-the next start while the machine is stopped. Each pass that changed rows logs one
+(`FeedbackStore.wipe_expired_identifiers`). A cost or `session_minted` row
+past the cut whose payload is not valid JSON has the whole payload replaced
+with `{"payload_unreadable_wiped": true}` (its text may hold a key or an
+address that the JSON edit cannot reach). A pass runs at every store open
+and, while the app runs, at the first of these that comes at least an hour
+after the previous pass: a landed `record()`, a charge that returned
+`RECORDED`, or a session mint that passed its limit (whether or not the mint's
+own row landed; a cost reconciliation starts none). So past its 48 hours a key
+can legitimately stay about an hour more with steady traffic, until the next
+such event when there are none, and until the next start while the machine is
+stopped. Each pass that changed rows logs one
 line, `feedback_store: identifier wipe: cost_keys_wiped=... session_addresses_wiped=...
 malformed_payloads=...` (counts only); a failed pass logs `feedback_store:
 identifier wipe did not run: <SQLite reason>`. The Fly log ring is short, so
@@ -726,7 +731,12 @@ To check the volume itself, run this inside the machine. It opens the file
 read-only, runs one autocommit statement per count and prints counts only. Do
 not leave an interactive `sqlite3` shell open on the file instead: an open read
 transaction makes the next billed write wait 5 seconds and fail (failure-modes
-doc item 10).
+doc item 10), and a store opened while it is held (a deploy, a restart, a
+reconnect, a hand-run CLI) waits the busy timeout more than once: the round-2
+break-it reviewer measured 10.81 s on a small file and 21.74 s on 20,000 rows,
+against 0.00 s before W55. The HTTP check on `/ready` allows a 20 s grace
+(`fly.toml:186`). So: the one-shot script below, then exit; never a shell left
+open.
 
 ```python
 import sqlite3
@@ -754,9 +764,23 @@ rows and 70 session rows older than 48 hours on 2026-10-13). The cut is 50
 hours, not 48, to allow for the hourly throttle; run it soon after a deploy,
 whose start runs a pass, because on a machine with no writes for hours a row can
 legitimately be past 50 hours with its key until the next write. A non-zero
-`malformed_payloads` means rows whose payload is not valid JSON: the wipe
-clears their `account_id` column but cannot edit the text, which may still hold
-a key.
+`malformed_payloads` means rows whose payload is not valid JSON. Since W55
+review round 2 the wipe replaces such a cost or `session_minted` row's payload
+with a fixed marker once it is past 48 hours, so a non-zero count here means
+rows under 48 hours old, or session rows of another event type, which the wipe
+does not touch. No writer produces such a row, so any count above zero means
+damage worth a look; a malformed charge inside 24 hours also makes the spend
+meters raise `JSONDecodeError`.
+
+**If the wipe never lands** (the pass logs `identifier wipe did not run:
+database or disk is full` at every open while the keyed counts above stay
+non-zero): the first pass is one transaction and needs free room on the
+volume. The round-2 break-it reviewer measured a 13.8 MB, 20,000-row file:
+6.3 MB free and the wipe never ran; 11 MB free and the wipe ran but the
+one-shot `VACUUM` waited; 13 MB or more and both ran. Check with
+`fly ssh console -C "df -h /data"` and the file's size; extend the volume or
+free space, then restart. The production file's size and free space are
+UNVERIFIED as of W55.
 
 Since W55 the store's connection runs with `secure_delete` on, so space SQLite
 frees is zeroed, and the first open after W55 ships runs one `VACUUM` (recorded

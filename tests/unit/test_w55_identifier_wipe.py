@@ -24,7 +24,8 @@ wipe, so neither would leave the rows in place for the wipe under test.
 
 Counting reading used here (stated so a builder can disagree out loud):
 ``cost_keys_wiped`` counts every cost row whose key was removed from the column
-OR the payload, including a malformed-payload row whose column key was cleared.
+OR the payload, including a malformed-payload row (whose column is cleared and,
+since review round 2, whose payload is replaced with a fixed marker).
 """
 
 from __future__ import annotations
@@ -468,11 +469,14 @@ def test_other_recorders_and_other_session_events_are_untouched(
 def test_a_malformed_payload_does_not_stop_the_others(
     tmp_path: Path, opened: Callable[..., FeedbackStore]
 ) -> None:
-    """One bad payload: its column key is cleared, its text kept, the rest wiped.
+    """One bad payload: its column key is cleared, its text replaced, the rest wiped.
 
     Red when: the JSON edit is unguarded (one malformed row aborts the whole
     pass), the ``json_valid`` guard also guards the column (the malformed row
-    keeps its column key), or the malformed row is not counted.
+    keeps its column key), the malformed row is not counted, or its text
+    (which holds the key) is kept. Until review round 2 this test pinned the
+    text as KEPT; the fixed marker replaced that, and
+    ``tests/unit/test_w55_regressions.py`` section 4 pins it in full.
     """
     db, store = _new_db(tmp_path, opened)
     now = _now()
@@ -499,7 +503,7 @@ def test_a_malformed_payload_does_not_stop_the_others(
     assert result.malformed_payloads == 1
     assert result.cost_keys_wiped == 3
     assert after[bad]["account_id"] is None
-    assert after[bad]["payload"] == bad_text
+    assert after[bad]["payload"] == '{"payload_unreadable_wiped": true}'
     for rid in (good_a, good_b):
         assert not _has_cost_key(after[rid])
 
@@ -512,8 +516,8 @@ def test_wiped_key_bytes_do_not_stay_in_the_database_file(
     Red when: ``PRAGMA secure_delete`` is not on for the store's connection
     (SQLite leaves the old cell bytes in free space: on this exact seed, with no
     ``secure_delete`` on the store's connection, the wipe left 19 copies of the
-    key and 5 of the address, measured in W55 review round 1, three runs; with
-    it, 0 and 0).
+    key and 5 of the address; with it, 0 and 0. Measured by the round-1 fixer
+    (three runs, same counts) and re-measured by the round-2 prose auditor).
     """
     db, store = _new_db(tmp_path, opened)
     now = _now()

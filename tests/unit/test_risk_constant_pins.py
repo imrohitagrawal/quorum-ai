@@ -668,14 +668,27 @@ BUCKET_B_PIN_BEHAVIOUR = {
         "changes nothing -- tests/unit/test_w55_identifier_wipe.py::"
         "test_a_malformed_payload_does_not_stop_the_others, "
         "test_a_second_wipe_changes_nothing and "
-        "test_other_recorders_and_other_session_events_are_untouched"
+        "test_other_recorders_and_other_session_events_are_untouched; and an "
+        "old malformed payload with no column key is due too -- tests/unit/"
+        "test_w55_regressions.py::test_an_unreadable_cost_payload_past_the_cut_loses_its_key"
     ),
     "feedback_store.FeedbackStore._MINT_ADDRESS_DUE": (
         "assert old session_minted rows lose ip whatever its shape, a 47h row "
         "and non-mint session rows keep it, and the 24h mint count is unchanged "
         "-- tests/unit/test_w55_identifier_wipe.py::"
         "test_session_mint_rows_lose_the_address_whatever_its_shape and "
-        "test_the_mint_cap_still_counts_after_a_wipe"
+        "test_the_mint_cap_still_counts_after_a_wipe; and an old malformed "
+        "mint payload is due too -- tests/unit/test_w55_regressions.py::"
+        "test_an_unreadable_mint_payload_past_the_cut_loses_its_address"
+    ),
+    # W55 round 2 (ADR-0165): what an unreadable payload past the cut becomes.
+    "feedback_store.UNREADABLE_PAYLOAD_MARKER": (
+        "assert an old cost or session_minted row whose payload is not valid "
+        "JSON ends up with exactly this marker, with the key or address gone "
+        "from the row and the file's bytes, a second pass changes nothing (the "
+        "marker is valid JSON with no identifier), and a 30h row is untouched "
+        "-- tests/unit/test_w55_regressions.py section 4 (the test file writes "
+        "the marker out as a literal; the text may change, the behaviour may not)"
     ),
 }
 

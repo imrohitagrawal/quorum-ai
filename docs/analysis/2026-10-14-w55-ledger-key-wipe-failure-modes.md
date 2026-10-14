@@ -128,12 +128,17 @@ the check that would settle it).
     are never wiped and should be counted), or keep text and state the UTC assumption.
 16. **The boundary.** Use a strict `recorded_at < now - 48h`. A row at exactly 48 hours waits
     one more pass. That is harmless.
-17. **Clock steps do not add a metering error, if the wipe and the rails share one clock.**
-    A backward step makes rows look younger: they are wiped late (safe). A forward step of
-    more than 24 hours would wipe rows that are really inside the 24-hour window. But the
-    rails compute their window from the same wall clock, so after such a step they already
-    leave those rows out. The wipe is always 24 hours behind the rails' window, whatever the
-    clock reads. This holds only if the wipe uses the same clock as the rails. If the wipe
+17. **Clock steps add no metering error WHILE the clock is wrong, if the wipe and the rails
+    share one clock.** A backward step makes rows look younger: they are wiped late (safe). A
+    forward step of more than 24 hours would wipe rows that are really inside the 24-hour
+    window. But the rails compute their window from the same wall clock, so after such a step
+    they already leave those rows out. The wipe is always 24 hours behind the rails' window,
+    whatever the clock reads. **Narrowed in review round 2:** once such a step is CORRECTED,
+    those rows are back inside the per-account window without their key, so that account can
+    spend its daily cap once more. The round-2 break-it reviewer measured it (clock 48 hours
+    or more ahead at a wipe, then corrected: a cap of 0.30 spent, then 0.30 again; not re-run
+    by the fixer). The global rails still count the rows, so the deployment-wide ceiling
+    holds. Recorded in ADR-0165, "What it cannot see". This holds only if the wipe uses the same clock as the rails. If the wipe
     reads the wall clock while a test injects a fixed `now` into the rails, rows seeded at a
     fixed past date lose their key mid-test. How many tests seed old rows and then read them
     by key is UNVERIFIED. Check: run the suite once with the wipe in place, and grep for
@@ -197,7 +202,10 @@ the check that would settle it).
     docs, so `CASE WHEN json_valid(payload) THEN ... END` is the safer form). But in that
     single statement the two malformed rows kept their `account_id` column key. NULL the
     column in its own clause (or statement), and count the malformed rows instead of
-    skipping them silently.
+    skipping them silently. **Review round 2:** clearing the column was not enough. The text
+    of a malformed payload can itself hold the key (or, in a mint row, the address), and
+    `json_remove` cannot edit it, so the first build left it for ever. Such a payload past the
+    cut is now replaced whole with `{"payload_unreadable_wiped": true}` (ADR-0165).
 26. **Restrict to rows that still hold a key.** MEASURED: putting the guard in the `SET`
     (`CASE ... ELSE payload END`) "updated" 8 of 8 rows, including rows with no key. Without
     a "still holds a key" condition each pass rewrites every old row: honest counts are
@@ -307,7 +315,7 @@ the check that would settle it).
     which opens the store and wipes. So a 0 cannot tell "wiped at this start" from "wiped
     all along". With a write-path or timer trigger alone, nothing runs until traffic or the
     timer fires, and the check can read non-zero after a good deploy. Have each pass log one
-    INFO line with counts only (rows changed per table, malformed rows skipped), and read it
+    INFO line with counts only (rows changed per table, malformed rows counted), and read it
     in `fly logs` after the deploy. The Fly log ring holds about 100 lines (READ, `fly.toml`
     comment), so read it soon after the deploy.
 
@@ -380,7 +388,8 @@ Tests this needs, each with what turns it red:
   the wipe touches a row inside 24 hours.
 - A second pass changes 0 rows. Red if the "still holds a key" condition is removed.
 - One malformed payload does not stop the other rows being wiped, and its column key is
-  still NULLed. Red if `json_valid` guards the column too, or is removed.
+  still NULLed. Red if `json_valid` guards the column too, or is removed. (Since review
+  round 2 its text is replaced with a fixed marker too, in cost and mint rows alike.)
 - A read-only database still opens, and the wipe's failure changes no charge outcome. Red
   if the wipe's `try` is removed.
 - A wipe that raises inside the charge path never bumps `lost_billed_writes`. Red if the

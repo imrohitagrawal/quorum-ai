@@ -311,13 +311,23 @@ def _json_default(value: Any) -> Any:
 #: ``IDENTIFIER_WIPE_INTERVAL`` and ADR-0165 for how much later a key can go.
 IDENTIFIER_KEEP = timedelta(hours=48)
 
-#: At most how often a landed write (:meth:`FeedbackStore.record`, a recorded
-#: charge, a recorded session mint) starts a wipe pass, on the store's
-#: MONOTONIC clock. The store also wipes once at every open, unthrottled. So
-#: while the process runs and writes, a key outlives ``IDENTIFIER_KEEP`` by at
-#: most about this much plus the time to the next write; while the machine is
-#: stopped, until its next start.
+#: At most how often a write starts a wipe pass, on the store's MONOTONIC
+#: clock: a row landed by :meth:`FeedbackStore.record`, a charge that returned
+#: ``RECORDED``, or a session mint that passed its limit (whether or not that
+#: mint's row landed; a reconciliation starts none). The store also wipes once
+#: at every open, unthrottled. So while the process runs and writes, a key
+#: outlives ``IDENTIFIER_KEEP`` by at most about this much plus the time to the
+#: next such write; while the machine is stopped, until its next start.
 IDENTIFIER_WIPE_INTERVAL = timedelta(hours=1)
+
+#: What the payload of a cost or ``session_minted`` row past ``IDENTIFIER_KEEP``
+#: becomes when it is not valid JSON (W55 review round 2). ``json_remove``
+#: cannot edit such text, and it may still hold a key or an address, so the
+#: whole text is replaced. Nothing can read an amount from it anyway: the
+#: meters ``json.loads`` each payload they sum and raise on unreadable text,
+#: and they read only the last 24 hours. No writer produces such a row
+#: (every insert is ``json.dumps`` of a dict), so this reaches only damaged rows.
+UNREADABLE_PAYLOAD_MARKER = '{"payload_unreadable_wiped": true}'
 
 
 @dataclass(frozen=True)
@@ -325,12 +335,12 @@ class WipeResult:
     """What one :meth:`FeedbackStore.wipe_expired_identifiers` pass changed.
 
     ``cost_keys_wiped`` counts cost rows whose key was removed from the
-    ``account_id`` column OR the payload (a malformed-payload row whose column
-    key was cleared counts here too). ``session_addresses_wiped`` counts
-    ``session_minted`` rows that lost ``"ip"``. ``malformed_payloads`` counts
-    the cost rows among ``cost_keys_wiped`` whose payload was not valid JSON,
-    so only the column could be cleared. All three are zero when the pass
-    failed.
+    ``account_id`` column OR the payload. ``session_addresses_wiped`` counts
+    ``session_minted`` rows that lost ``"ip"``. A row whose payload was not
+    valid JSON is counted in its own kind's total, and ALSO in
+    ``malformed_payloads``: its payload was replaced whole with
+    ``UNREADABLE_PAYLOAD_MARKER`` (and a cost row's column cleared). All three
+    are zero when the pass failed.
     """
 
     cost_keys_wiped: int
@@ -811,9 +821,13 @@ class FeedbackStore:
         it is recorded in ``schema_migrations`` like the F-01 relabel and never
         runs again on that file.
 
-        Runs only from ``__init__``, after the open-time identifier wipe and
-        before the store is published, so no charge or mint can be holding the
-        lock; it takes the lock like every other statement.
+        Runs only from ``__init__``, before the store is published, so no
+        charge or mint can be holding the lock; it takes the lock like every
+        other statement. It runs after the open-time identifier wipe, but that
+        order is not load-bearing and no test pins it: ``secure_delete`` is on
+        for both, so the wipe zeroes the cells it rewrites whichever runs
+        first, and the ``VACUUM`` drops older copies either way. What IS pinned
+        is that ``secure_delete`` is the open's first statement.
 
         NEVER RAISES and never stops the store opening. A read-only file, a
         locked file (another connection holding a transaction, after the 5 s
@@ -1058,23 +1072,25 @@ class FeedbackStore:
     )
 
     #: Cost rows past the cut that still hold a spend key, in the column OR the
-    #: payload. ``json_type`` raises on malformed text even in a WHERE, so it
-    #: sits behind ``json_valid`` in a CASE (SQLite evaluates CASE branches
-    #: lazily; the order of an ``AND`` is not promised). The column half is NOT
-    #: behind that guard: a malformed payload must not keep its column key.
+    #: payload, or whose payload is not valid JSON (it may hold a key nothing
+    #: can find; the pass replaces it, review round 2). ``json_type`` raises on
+    #: malformed text even in a WHERE, so it sits behind ``json_valid`` in a
+    #: CASE (SQLite evaluates CASE branches lazily; the order of an ``AND`` is
+    #: not promised). The column half is NOT behind that guard.
     _COST_KEY_DUE = (
         "recorder = 'cost' AND " + _OLDER_THAN_CUT + " AND (account_id IS NOT NULL OR "
         "CASE WHEN json_valid(payload) "
-        "THEN json_type(payload, '$.account_id') IS NOT NULL ELSE 0 END)"
+        "THEN json_type(payload, '$.account_id') IS NOT NULL ELSE 1 END)"
     )
 
     #: ``session_minted`` rows past the cut whose payload still holds ``"ip"``
-    #: (an address, an IPv6 /64 or an ``invite:`` key; all are wiped).
+    #: (an address, an IPv6 /64 or an ``invite:`` key; all are wiped), or is
+    #: not valid JSON (replaced whole, like a cost row's).
     _MINT_ADDRESS_DUE = (
         "recorder = 'session' AND event_type = 'session_minted' AND "
         + _OLDER_THAN_CUT
         + " AND CASE WHEN json_valid(payload) "
-        "THEN json_type(payload, '$.ip') IS NOT NULL ELSE 0 END"
+        "THEN json_type(payload, '$.ip') IS NOT NULL ELSE 1 END"
     )
 
     def wipe_expired_identifiers(self, *, now: datetime | None = None) -> WipeResult:
@@ -1085,15 +1101,19 @@ class FeedbackStore:
 
         * a ``recorder = 'cost'`` row (every event type, anonymous and signed-in
           alike, CHG-044 (a)) gets ``account_id = NULL`` and loses the
-          ``"account_id"`` key from its payload, where the payload is valid
-          JSON. A malformed payload keeps its text, its column is still
-          cleared, and it is counted in ``malformed_payloads``;
+          ``"account_id"`` key from its payload;
         * a ``session_minted`` row loses the ``"ip"`` key from its payload
-          (CHG-044 (b)); it keeps its account id and time.
+          (CHG-044 (b)); it keeps its account id and time;
+        * either kind whose payload is not valid JSON has the whole payload
+          replaced with ``UNREADABLE_PAYLOAD_MARKER`` (a cost row's column is
+          cleared too) and is counted in ``malformed_payloads``. The text may
+          hold a key or an address that ``json_remove`` cannot reach.
 
         Nothing else changes: no row is deleted and no amount, time, event type
         or run id is touched, so the ledger's totals are the same before and
-        after. NULL, never a sentinel: the per-account rail filters
+        after. (An unreadable payload carried no amount any meter could read:
+        the meters ``json.loads`` it and raise, and only inside 24 hours.)
+        NULL, never a sentinel: the per-account rail filters
         ``account_id = ?`` and NULL equals nothing, while the global rails drop
         that predicate and still count the row. Both rails, and the session
         limit, read only the last 24 hours, which this never reaches.
@@ -1124,7 +1144,10 @@ class FeedbackStore:
         when = now or datetime.now(UTC)
         if when.tzinfo is None:
             when = when.replace(tzinfo=UTC)
-        cut = {"cut": (when - IDENTIFIER_KEEP).astimezone(UTC).isoformat()}
+        cut = {
+            "cut": (when - IDENTIFIER_KEEP).astimezone(UTC).isoformat(),
+            "marker": UNREADABLE_PAYLOAD_MARKER,
+        }
         try:
             with self._lock:
                 result = self._wipe_locked(cut)
@@ -1138,8 +1161,8 @@ class FeedbackStore:
             _log.warning(
                 "feedback_store: identifier wipe: cost_keys_wiped=%s "
                 "session_addresses_wiped=%s malformed_payloads=%s (the payload of "
-                "each malformed row was not valid JSON, so only its column key was "
-                "cleared)",
+                "each malformed row was not valid JSON, so it was replaced whole "
+                "with a fixed marker)",
                 result.cost_keys_wiped,
                 result.session_addresses_wiped,
                 result.malformed_payloads,
@@ -1167,20 +1190,21 @@ class FeedbackStore:
         self._conn.execute("BEGIN IMMEDIATE")
         try:
             malformed = self._conn.execute(
-                f"SELECT COUNT(*) FROM events WHERE {self._COST_KEY_DUE} "
-                "AND NOT json_valid(payload)",
+                f"SELECT COUNT(*) FROM events WHERE (({self._COST_KEY_DUE}) "
+                f"OR ({self._MINT_ADDRESS_DUE})) AND NOT json_valid(payload)",
                 cut,
             ).fetchone()[0]
             cost = self._conn.execute(
                 "UPDATE events SET account_id = NULL, payload = CASE "
-                "WHEN NOT json_valid(payload) THEN payload "
+                "WHEN NOT json_valid(payload) THEN :marker "
                 "WHEN json_type(payload, '$.account_id') IS NULL THEN payload "
                 "ELSE json_remove(payload, '$.account_id') END "
                 f"WHERE {self._COST_KEY_DUE}",
                 cut,
             ).rowcount
             mint = self._conn.execute(
-                "UPDATE events SET payload = json_remove(payload, '$.ip') "
+                "UPDATE events SET payload = CASE WHEN json_valid(payload) "
+                "THEN json_remove(payload, '$.ip') ELSE :marker END "
                 f"WHERE {self._MINT_ADDRESS_DUE}",
                 cut,
             ).rowcount
