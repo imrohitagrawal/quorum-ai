@@ -127,9 +127,11 @@ Good news: it **fails loud (exit 1)**, it does not silently score zero changed
 lines. Still, a red build for the wrong reason is noise, so the CI job requires
 both of:
 
-1. `actions/checkout@v4` with `fetch-depth: 0`;
-2. an explicit `git fetch origin ${{ github.base_ref }}:refs/remotes/origin/${{ github.base_ref }}`
-   step — `fetch-depth: 0` alone fetches the PR ref, not necessarily the base
+1. `actions/checkout` (pinned to a commit, ADR-0166) with `fetch-depth: 0`;
+2. an explicit "Fetch base branch" step,
+   `git fetch origin "${BASE_REF}:refs/remotes/origin/${BASE_REF}"`, with
+   `BASE_REF` set from `github.base_ref` through `env:` (W69: not pasted into
+   `run:`) — `fetch-depth: 0` alone fetches the PR ref, not necessarily the base
    branch under the `origin/<base>` name diff-cover expects.
 
 Applying (2) to the shallow clone fixed it (measured):

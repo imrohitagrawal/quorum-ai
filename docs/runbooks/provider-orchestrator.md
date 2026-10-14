@@ -32,7 +32,7 @@ For Tavily supplementation: add `TAVILY_API_KEY=...`.
 
 - Prod: `https://quorum.stackclimb.com` (Fly.io, `fly deploy`)
 - Secrets managed via `fly secrets set KEY=value` — **never** paste secrets into a doc or shell history.
-- Roll back: `fly releases rollback` (see `DEPLOY.md`)
+- Roll back: redeploy an earlier image with `fly deploy --image` (see `DEPLOY.md`)
 
 ### Health signals
 
@@ -248,7 +248,9 @@ A typical live query run emits four `provider_initial_answer_completed` events (
 
 ### Roll back
 
-1. `fly releases rollback --app quorum-ai`
+1. `fly releases --image --app quorum-ai` to find the earlier release's image, then
+   `fly deploy --image <that image> --app quorum-ai` (flyctl has no `releases rollback`;
+   not run against production — see `DEPLOY.md`)
 2. Verify: same three checks as deploy.
 
 ### Rotate keys

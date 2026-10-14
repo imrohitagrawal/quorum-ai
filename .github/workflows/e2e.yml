@@ -97,8 +97,9 @@ jobs:
       ANONYMOUS_SPEND_PER_SESSION_OVERRIDE: "true"
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
+          persist-credentials: false
           # Full history: the negative-assertion guard (#131) diffs the changed
           # spec files against the PR base, exactly as diff-cover and the
           # mutation gate do. On a shallow clone the base ref is absent, the
@@ -106,9 +107,9 @@ jobs:
           fetch-depth: 0
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
         with:
-          version: "latest"
+          version: "0.13.0"
           enable-cache: true
 
       - name: Set up Python
@@ -118,7 +119,7 @@ jobs:
         run: uv sync --locked --all-extras --dev
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "22"
           cache: "npm"
@@ -143,14 +144,20 @@ jobs:
       # which runs in the required `pytest (Python 3.12)` lane. Both are
       # tracked-only — `git ls-files` cannot see gitignored scratch specs.
       # Registered (and this step pinned) by the same test module.
+      # W69: the base branch name reaches the shell through env:, never as a
+      # ${{ }} pasted into run: (zizmor template-injection).
       - name: Fetch base branch for the changed-spec diff
         if: github.event_name == 'pull_request'
-        run: git fetch --no-tags origin "${{ github.base_ref }}"
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: git fetch --no-tags origin "${BASE_REF}"
 
       - name: Negative assertions have a positive partner (#131)
         if: github.event_name == 'pull_request'
         working-directory: e2e
-        run: node tools/check-negative-assertions.mjs --base "origin/${{ github.base_ref }}"
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: node tools/check-negative-assertions.mjs --base "origin/${BASE_REF}"
 
       - name: Bound apt's network waits (a stalled mirror hung 3 attempts, 2026-08-19)
         uses: ./.github/actions/bound-apt-waits
@@ -587,7 +594,7 @@ jobs:
 
       - name: Upload Playwright report
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: playwright-report
           path: |

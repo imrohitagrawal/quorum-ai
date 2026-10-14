@@ -4,8 +4,19 @@ name: Deploy to Fly.io
 # AFTER every required workflow — "CI" (ci.yml), "Tests" (test.yml), and
 # "E2E (axe + parity)" (e2e.yml) — has concluded SUCCESSFULLY for the SAME commit
 # on main. A red build in ANY of the three never reaches production (issues #21,
-# #37). ``workflow_dispatch`` remains as a manual escape hatch (deploys whatever
-# is on the default branch, ungated — operator's explicit choice).
+# #37). ``workflow_dispatch`` remains as a manual escape hatch meant for
+# ``main`` (W69): from main it deploys the commit main pointed at when the
+# dispatch was made, without waiting on the required workflows — the
+# operator's explicit choice. The "Run workflow" button lets the operator pick
+# ANY branch or tag, and GitHub then runs THIS FILE AS IT IS ON THAT REF, with
+# that ref's ``scripts/deploy_gate.py``. So the refusal below works only on a
+# branch or tag whose files already carry W69 (the mistaken-dropdown case):
+# there ``scripts/deploy_gate.py`` fails the `gate` job (a red run, not a quiet
+# skip), and the `deploy` job's own ``if:`` refuses it as well. It does NOT
+# stop a branch that carries an older or an edited copy of this file: such a
+# branch runs its own copy, with the same ``FLY_API_TOKEN``. A boundary
+# that stops that is a GitHub deployment environment restricted to ``main``
+# that holds the token — a repository setting, not yet made (ADR-0166).
 #
 # Mechanism: each of the three workflows completing on main fires this via
 # ``workflow_run``. The `gate` job (``scripts/deploy_gate.py``) then WAITS —
@@ -81,10 +92,18 @@ jobs:
     # defeats that (a fork PR run is ``pull_request`` on the fork).
     # ``scripts/deploy_gate.py`` re-applies the same filter per run.
     #
+    # A manual dispatch is admitted here from ANY ref on purpose (W69): the
+    # gate script must run so it can refuse a ref other than refs/heads/main
+    # with a red job. A ref condition on THIS ``if:`` would turn that refusal
+    # into a silent skip. The refusal holds only where the dispatched ref's
+    # own copy of this file and of the gate script carry W69 (see the header).
+    # Pinned by tests/unit/test_w69_manual_deploy_main_only.py.
+    #
     # NOTE the absence of a ``workflow_run.conclusion == 'success'`` term, and
     # do NOT restore it (issues #62, #245). It made this job SKIP whenever a
     # required workflow was red — that is, precisely when a merge can be
-    # stranded — so the stranding detection at ``deploy_gate.py:310-321`` sat
+    # stranded — so the stranding detection (the ``if stranded:`` branch of
+    # ``deploy_gate.py``'s ``main()``) sat
     # downstream of the very condition it exists to detect and has never once
     # run since it was written (238 Deploy runs since `d671c6f`, zero failed).
     #
@@ -139,14 +158,15 @@ jobs:
           echo "triggering_conclusion=${TRIGGER_CONCLUSION:-(none)}"
           echo "triggering_event=${TRIGGER_EVENT:-(none)}"
           echo "head_sha=${TRIGGER_SHA:-$DISPATCH_SHA}"
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
+          persist-credentials: false
           # Same pin as the deploy job's checkout: for a dispatch, github.sha
           # (event-time commit) rather than the branch ref, so the gate and
           # the deploy always run from the same tree.
           ref: ${{ github.event.workflow_run.head_sha || github.sha }}
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
       - name: Wait for all required workflows to be green for this SHA
@@ -177,11 +197,23 @@ jobs:
   deploy:
     name: Deploy to Fly.io
     needs: gate
-    if: needs.gate.outputs.proceed == 'true'
+    # W69: a second refusal of a manual dispatch from any ref but main. It is
+    # NOT independent of the gate in two ways. First, it lives in the same
+    # file, so a ref whose copy of this file is older or edited does not have
+    # it (see the header). Second, GitHub compares strings in expressions
+    # ignoring case, so ``refs/heads/MAIN`` passes this ``if:``; only
+    # ``deploy_gate.py``, which compares exactly, refuses that one.
+    # ``github.ref``, not ``github.ref_name``: a TAG named ``main`` has
+    # ref_name ``main`` too. The ref term applies only to a dispatch, so a
+    # workflow_run trigger is unaffected.
+    if: >-
+      needs.gate.outputs.proceed == 'true' &&
+      (github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
+          persist-credentials: false
           # For a workflow_run trigger, check out the EXACT commit that passed
           # CI (main's HEAD may have advanced since). For a manual dispatch,
           # pin to github.sha — the commit the dispatch event was created at —
@@ -222,21 +254,31 @@ jobs:
         if: steps.fresh.outputs.deploy == 'true'
         # Pinned to a commit SHA (was ``@master``) for a reproducible,
         # supply-chain-safe toolchain — this is the exact revision that ran
-        # green on the 2026-07-15 deploy.
-        uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1
+        # green on the 2026-07-15 deploy; the action's tag ``1.6`` points at
+        # the same commit. Pinning the action does not pin the flyctl it
+        # installs (its ``version`` input defaults to "latest"), so W69 also
+        # fixes flyctl to 0.4.117, the version the last successful deploy run
+        # before W69 acquired (run 38508871831).
+        uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # 1.6
+        with:
+          version: "0.4.117"
 
       - name: Deploy to Fly.io
         if: steps.fresh.outputs.deploy == 'true'
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          # Through env:, not a ${{ }} inside run: (W69, zizmor
+          # template-injection): the shell reads a variable, never
+          # expression text pasted into the script.
+          GIT_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
         # GIT_SHA: the exact commit being deployed (workflow_run's head SHA;
-        # for a manual dispatch, the dispatching ref's SHA). The Dockerfile
-        # bakes it into BUILD_SHA and /status serves it as ``build_sha`` —
-        # deploy verification is then one line:
+        # for a manual dispatch, the dispatching ref's SHA — main, since W69).
+        # The Dockerfile bakes it into BUILD_SHA and /status serves it as
+        # ``build_sha`` — deploy verification is then one line:
         #   curl -s https://quorum.stackclimb.com/status | jq -r .build_sha
         run: >-
           flyctl deploy --remote-only --strategy immediate
-          --build-arg GIT_SHA=${{ github.event.workflow_run.head_sha || github.sha }}
+          --build-arg "GIT_SHA=${GIT_SHA}"
 
       - name: Smoke test - GET /health
         if: steps.fresh.outputs.deploy == 'true'

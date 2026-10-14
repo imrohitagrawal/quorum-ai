@@ -48,7 +48,7 @@ As of 2026-06-21, the following have been completed:
 | Testing | `tests/` directory | 218 tests passing, 93% coverage | Live E2E in production deferred to post-launch |
 | Performance | `docs/55-performance-baseline.md` | Initial-answer 4× faster, synthesis 5× faster, catalog O(1) lookups | Load testing against production traffic deferred |
 | Observability | `docs/80-observability.md` | Sentry error tracking, `/ready` probe, `live_readiness` state exposed | Full metrics/tracing (OpenTelemetry, Prometheus) deferred to multi-instance phase |
-| Rollback | `docs/72-rollback-plan.md`, `fly releases rollback` | Manual rollback via Fly CLI; deploy.yml smoke tests catch bad deploys | Automated rollback on smoke test failure not yet implemented |
+| Rollback | `docs/72-rollback-plan.md`, `fly releases --image`, then `fly deploy --image <image>` (see DEPLOY.md) | Manual rollback via Fly CLI; deploy.yml smoke tests catch bad deploys | Automated rollback on smoke test failure not yet implemented |
 | Support | [DEPLOY.md](../DEPLOY.md) | Operational runbook covering common issues | On-call rotation not needed at single-instance scale |
 | Deployment | `fly.toml`, `Dockerfile`, `.github/workflows/deploy.yml` | Single-instance Fly.io deploy with smoke tests | Multi-region, multi-instance deferred |
 

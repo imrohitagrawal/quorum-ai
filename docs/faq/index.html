@@ -922,7 +922,7 @@ pre code {
           <li>Verify the deployed SHA matches the merged commit: <code>curl -s https://quorum.stackclimb.com/status | jq -r .build_sha</code> and compare to the merged commit SHA.</li>
         </ol>
         <p><strong>Do not trust <code>/health</code> 200 alone.</strong> A green health check only confirms the process is running, not that the latest code is deployed. Use the <code>/status</code> endpoint's <code>build_sha</code> field to verify the deployed version matches the expected commit. The deploy-drift watchdog runs on a schedule and alerts if <code>main</code> HEAD does not have a successful Deploy job.</p>
-        <p>Rollback: <code>fly releases rollback</code>. The rollback procedure is in <code>DEPLOY.md</code>. There is no automatic rollback on a failed smoke test — deliberate.</p>
+        <p>Rollback: redeploy an earlier image — <code>fly releases --image</code> lists them, <code>fly deploy --image &lt;image&gt;</code> deploys one (flyctl has no <code>releases rollback</code>). The rollback procedure is in <code>DEPLOY.md</code>. There is no automatic rollback on a failed smoke test — deliberate.</p>
         <span class="honesty built">● Built</span>
         <div class="example project">
           <div class="example-label">In your project</div>

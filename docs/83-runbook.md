@@ -19,4 +19,5 @@ Real runbooks live under **`docs/runbooks/`**:
 Generic triage order (the original stub's order, extended with the OD-2
 dashboard):
 `/ready` → `/ui/ops` → JSON logs (grep the `X-Request-ID`) → recent
-deploys → rollback per `DEPLOY.md` (`fly releases rollback`).
+deploys → rollback per `DEPLOY.md` (redeploy an earlier image with
+`fly deploy --image`; flyctl has no `releases rollback`).
