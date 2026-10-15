@@ -399,22 +399,112 @@ def _load_script(name: str) -> object:
     return mod
 
 
+def _hook_line(root: Path) -> str:
+    """Whether this checkout's untracked `.claude/settings.json` carries the
+    prompt write hook (ADR-0169). Never raises (ADR-0045)."""
+    try:
+        hook = _load_script("prompt_write_hook")
+        status = hook.install_status(root / ".claude" / "settings.json")  # type: ignore[attr-defined]
+    except Exception as exc:  # noqa: BLE001 — ADR-0045: degrade, never abort
+        return f"Prompt write hook: unavailable: {exc!r}\n"
+    if status == "installed":
+        return "Prompt write hook: installed in `.claude/settings.json`.\n"
+    if status == "not installed":
+        return (
+            "Prompt write hook: not installed in `.claude/settings.json`; run "
+            "`.venv/bin/python scripts/prompt_write_hook.py --install .`\n"
+        )
+    return f"Prompt write hook: {status}; run `uv sync --all-extras` in this checkout.\n"
+
+
 def _prompt_check_section(root: Path) -> str:
-    """The root prompt check (ADR-0160) as one value. Never raises (ADR-0045):
+    """The root prompt check (ADR-0160, ADR-0169) as one value, and whether
+    the prompt write hook is installed. Never raises (ADR-0045):
     `make prompt-check` is the gate; this only shows its result."""
+    hook = _hook_line(root)
     try:
         check = _load_script("check_root_prompts")
         found = check.problems(root, check.EXEMPT)  # type: ignore[attr-defined]
         counted = check.counts(root, check.EXEMPT)  # type: ignore[attr-defined]
     except Exception as exc:  # noqa: BLE001 — ADR-0045: degrade, never abort
-        return f"## Root prompt check\nunavailable: {exc!r}\n"
+        return f"## Root prompt check\nunavailable: {exc!r}\n{hook}"
     if not found:
         # "PASSED" is backticked: it is the gate's output quoted, and this file is
         # in the completion check's scope (ADR-0162), where a bare "passed" must
         # cite a commit. "FAILED" is not a completion word and stays bare.
-        return f"## Root prompt check\n`PASSED` ({counted}; `make prompt-check`)\n"
+        return f"## Root prompt check\n`PASSED` ({counted}; `make prompt-check`)\n{hook}"
     lines = "".join(f"- {m}\n" for m in found)
-    return f"## Root prompt check\nFAILED ({counted}) -- run `make prompt-check`\n{lines}"
+    return f"## Root prompt check\nFAILED ({counted}) -- run `make prompt-check`\n{lines}{hook}"
+
+
+def _parked_section() -> str:
+    """`make parked-check`'s report (ADR-0168) as one value. Never raises
+    (ADR-0045): `make parked-check` is the gate; this only shows its result,
+    a FAILED report included."""
+    head = "## Parked work and branches\n"
+    try:
+        parked = _load_script("check_parked_work")
+        text = parked.render(parked.report())  # type: ignore[attr-defined]
+    except Exception as exc:  # noqa: BLE001 — ADR-0045: degrade, never abort
+        return f"{head}unavailable: {exc!r}\n"
+    # A fenced block: this is the tool's report quoted (ADR-0162 reads a fence
+    # as quoted output, not as a claim).
+    return f"{head}From `make parked-check`:\n```text\n{text}```\n"
+
+
+_TEMPLATE = ".agents/skills/work-item-delivery/prompt-template.md"
+
+
+def _paste_lines(root: Path) -> list[str]:
+    """`check_root_prompts.paste_lines(root)`, or [] when it cannot run."""
+    try:
+        return list(_load_script("check_root_prompts").paste_lines(root))  # type: ignore[attr-defined]
+    except Exception as exc:  # noqa: BLE001 — ADR-0045: degrade, never abort
+        print(f"session_handoff: could not read the paste lines: {exc!r}", file=sys.stderr)
+        return []
+
+
+def _failing_prompt_lines(root: Path) -> list[str]:
+    """One line per root prompt named for the next session that fails the
+    check: it gets no paste line until it is fixed. [] when it cannot run."""
+    try:
+        check = _load_script("check_root_prompts")
+        names = list(check.failing_named_prompts(root))  # type: ignore[attr-defined]
+    except Exception as exc:  # noqa: BLE001 — ADR-0045: degrade, never abort
+        print(f"session_handoff: could not check the root prompts: {exc!r}", file=sys.stderr)
+        return []
+    return [
+        f"{name} fails `make prompt-check`; fix it first, then run `make handoff` again."
+        for name in names
+    ]
+
+
+def _next_session_section(root: Path) -> str:
+    """The line the owner pastes to start the next session (ADR-0169): one per
+    validly named root prompt that passes the check. Says so when there is
+    none, names a validly named prompt that fails, and, when more than one
+    prompt is validly named (passing or failing), says only one should be
+    left."""
+    head = "## Next session\n"
+    lines = _paste_lines(root)
+    failing_lines = _failing_prompt_lines(root)
+    failing = "".join(f"{line}\n" for line in failing_lines)
+    named = len(lines) + len(failing_lines)
+    if named > 1:
+        failing += (
+            f"There are {named} validly named root prompts; only one should be left for the "
+            "next session. Archive the others.\n"
+        )
+    if not lines:
+        return (
+            f"{head}{failing}There is no root prompt named `CONTINUE-<AREA>-<ROWS>-PROMPT.md` "
+            "that passes `make prompt-check`, so there is no line to paste. Write one by "
+            f"copying `{_TEMPLATE}`.\n"
+        )
+    block = "```text\n" + "".join(f"{line}\n" for line in lines) + "```\n"
+    if len(lines) == 1:
+        return f"{head}{failing}Paste this line to start the next session:\n{block}"
+    return f"{head}{failing}The lines of those that pass:\n{block}"
 
 
 def _readiness_section() -> str:
@@ -495,6 +585,8 @@ def main() -> int:
     readiness = _readiness_section()
     board_github = _board_github_section()
     prompt_check = _prompt_check_section(ROOT)
+    parked = _parked_section()
+    next_session = _next_session_section(ROOT)
     leftovers = _leftovers_section(_collect_leftovers())
     text = f"""# Session Handoff
 
@@ -522,6 +614,8 @@ what's next, the traps) lives in the dated doc it points to, not here.
 {readiness}
 {board_github}
 {prompt_check}
+{parked}
+{next_session}
 {leftovers}
 ## Current phase
 {r.get("label")}
@@ -612,6 +706,8 @@ Before editing, list the files you intend to modify.
 """
     (ROOT / "docs" / "session-handoff.md").write_text(text, encoding="utf-8")
     print("Updated docs/session-handoff.md")
+    for line in _failing_prompt_lines(ROOT) + _paste_lines(ROOT):
+        print(line)
     return 0
 
 

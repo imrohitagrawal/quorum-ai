@@ -58,7 +58,10 @@ The four points that used to disagree are settled here (CHG-040 (b)):
 - Codex, run against the pull request's worktree. Find the script with
   `find ~/.claude/plugins/cache/openai-codex -name codex-companion.mjs`, put `~/.local/bin` on
   `PATH`, then run `node <that script> adversarial-review --wait --cwd <worktree> --base origin/main --scope branch "<focus>"`.
-  Without `--cwd` it reviews the main checkout, which is an empty diff. The `codex:rescue` skill
+  Without `--cwd` it reviews the main checkout, which is an empty diff. For the plan review, run
+  `node <that script> task --background "<the plan's path and what to look for>"` from a
+  `git archive` copy, and read the answer with `node <that script> result <job>` from the same
+  folder. The `codex:rescue` skill
   also works, if it reviews the same worktree.
 - `make` targets, `gh` (read freely; write only as approved), free production endpoints:
   `/status`, `/ready`, `/metrics`, `/estimate`.
@@ -83,6 +86,9 @@ The four points that used to disagree are settled here (CHG-040 (b)):
 ## Procedure
 
 **0. Before starting.**
+- Run `make parked-check` first. Act on every item it lists before choosing new work: resume it,
+  re-park it with a new reason and resume-when, or close it (CHG-048, ADR-0168). An item parked
+  behind other work waits for its resume-when.
 - Check for other live sessions: transcript last-write times under
   `~/.claude/projects/<repo>/`, `ps`, and `git worktree list`. If another session owns what you
   need, stop and say so.
@@ -105,10 +111,13 @@ The four points that used to disagree are settled here (CHG-040 (b)):
 | Break-it reviewer | Runs the code and tries to make it give a wrong answer. This is also the correctness pass `AGENTS.md` asks for | Each round |
 | Prose auditor | For every number, superlative and causal claim in comments, commits, PR body and docs, names the command that produces it, or marks it UNVERIFIED. Checks attributions against the transcript's `type: user` records | Each round |
 | Falsification lens | Plants one false claim, or deletes one guard, and checks that something goes red | Each round |
-| Codex | An outside reviewer on the pull request's worktree | Each round |
+| Codex | Reviews the written plan before any code, then the pull request's worktree in each round | The plan, and each round |
 | Completeness critic | Asks which questions and which kinds of evidence went unused | Once, after round 2 |
 | Fixer | Applies only findings the orchestrator reproduced. One fixer at a time | After each round |
 
+- Write the plan down and have Codex review it before the test designer starts (ADR-0168,
+  decision 7). Apply
+  only the findings you reproduce, and have Codex re-check the revised plan.
 - Move any reference implementation the test designer wrote out of the builder's reach before the
   builder starts.
 - Check the builder left the tests alone:
@@ -148,7 +157,9 @@ The four points that used to disagree are settled here (CHG-040 (b)):
   `CRITICAL_BLOCKER`, `REQUIRED_CONTRACT`, `ADVISORY_DEBT`, `DUPLICATE` or `OUT_OF_SCOPE`. Only the
   first two block. Record the rest as advisory, on the board if they matter.
 - After round 2: one narrow re-check of each fix, then the completeness critic.
-- If two fixes in a row add defects, stop patching and re-plan from the root cause.
+- The stop rule (CHG-049, ADR-0168): after two failed fixes in a row (the fix did not work, or it
+  added a defect), revert to the last commit that review cleared, write the root cause and a
+  smaller plan, have Codex review it, and restart in a fresh session.
 - Closing a pull request instead of a third rework round is a legitimate outcome.
 
 **4. Gates.** Run every required gate yourself, one at a time (`AGENTS.md` rule 14). Read exit codes
@@ -170,7 +181,13 @@ mode, never a shell `&`, and give every wait a time limit.
 
 **6. Close out.**
 - Delete, by name, every scratch file, reviewer copy and container this work created. Remove the
-  merged worktree, then its branch, local and remote. Show `df -h .` before and after.
+  worktree, then its branch, local and remote. Show `df -h .` before and after.
+- Every branch ends one of two ways: squash-merged and deleted, or recorded in the board's Parked
+  table with a reason, an owner and a resume-when. A branch with no open pull request is deleted
+  only when every file it holds is in `main` or archived there, every citation points at the new
+  place, and the pull request that moved them is deployed (CHG-047, ADR-0168).
+- The pull request that lands a parked item deletes its line from the Parked table. Otherwise
+  `make parked-check` fails once the item's row reads DONE.
 - If context runs low, write a prompt for the remaining work (items, decisions, approvals, and the
   process line) and end cleanly.
 - Report status before the owner has to ask. End with the closing status block, and keep what you
@@ -186,23 +203,37 @@ mode, never a shell `&`, and give every wait a time limit.
 
 ## Validation
 
-- `make prompt-check`: every root prompt carries the process line.
+- `make prompt-check`: every root prompt carries the process line, the four sections and the name.
+- `make parked-check`: every open draft (named by its number or its head branch) and every
+  **STOP** or owner-waiting row has a Parked line; every Parked line has all five cells, a
+  resume-when that reads, and its own row on the board and not DONE, and appears once; every
+  board row's state can be derived; and it read branches, pull requests (fewer than 500) and
+  Parked lines.
 - `make skill-route DIFF=origin/main`: the roles used match the roles routed.
 - `make validate`, `make quality`, `make diff-cover DIFF_BASE=origin/main`, `make api-contract`,
   and e2e when a page changed.
 
 ## Handoff contract
 
-- `make handoff` writes `docs/session-handoff.md`, including the prompt check and the leftovers.
+- `make handoff` writes `docs/session-handoff.md`, including the prompt check, the parked work and
+  the leftovers, and prints the line the owner pastes into the next session. Run it last.
 - The narrative goes in `docs/analysis/<date>-session-handoff.md`: what shipped, what is open, the
   traps. Every "merged" or "in production" cites the pull request or commit.
-- The next prompt is short and names this skill on a `**Process:**` line.
+- The next prompt is copied from `prompt-template.md`, beside this file, and named
+  `CONTINUE-AREA-ROWS-PROMPT.md` in capitals, digits and dashes, with at least one board row
+  (ADR-0169). It keeps the template's four sections and is short. `make prompt-check` refuses one
+  that does not. The handoff pull request commits it at the root, so CI checks it; the session that
+  runs it moves it to `docs/archive/YYYY-MM/`.
+- The closing status block ends with the line `make handoff` printed, under "Next action":
+  `Read CONTINUE-AREA-ROWS-PROMPT.md in the repo root and follow it exactly.`
+- A session started inside a worktree runs
+  `.venv/bin/python scripts/prompt_write_hook.py --install .` first, so the prompt hook fires there too.
 
 ## Stop conditions
 
 - A false premise.
 - A step needs an owner decision that has not been given.
-- Two fixes in a row added defects.
+- Two failed fixes in a row: apply the stop rule in step 3.
 - The change grows past about twice its planned size.
 - Another live session owns what you need.
 - A reproduced blocker remains after round 2: stop and report it with the open findings.
