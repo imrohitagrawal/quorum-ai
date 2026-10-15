@@ -14,9 +14,12 @@ name: Deploy to Fly.io
 # there ``scripts/deploy_gate.py`` fails the `gate` job (a red run, not a quiet
 # skip), and the `deploy` job's own ``if:`` refuses it as well. It does NOT
 # stop a branch that carries an older or an edited copy of this file: such a
-# branch runs its own copy, with the same ``FLY_API_TOKEN``. A boundary
-# that stops that is a GitHub deployment environment restricted to ``main``
-# that holds the token — a repository setting, not yet made (ADR-0166).
+# branch runs its own copy. What stops that branch is where the token lives:
+# since 2026-10-15 ``FLY_API_TOKEN`` is a secret of the ``production``
+# deployment environment only, and its branch rule allows only ``main``
+# (CHG-046, ADR-0166). A job that does not name the environment gets no
+# token; GitHub matches the rule against the run's ref, which for this
+# file's ``workflow_run`` trigger is the default branch.
 #
 # Mechanism: each of the three workflows completing on main fires this via
 # ``workflow_run``. The `gate` job (``scripts/deploy_gate.py``) then WAITS —
@@ -209,6 +212,10 @@ jobs:
     if: >-
       needs.gate.outputs.proceed == 'true' &&
       (github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main')
+    # The only job that reads FLY_API_TOKEN, and the token exists only in this
+    # environment (see the header). Without this line every deploy runs with
+    # an empty token. tests/unit/test_deploy_job_uses_production_environment.py
+    environment: production
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0

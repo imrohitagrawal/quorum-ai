@@ -17,8 +17,10 @@ After W69, two checks in the files of the chosen ref refuse it:
    GitHub compares strings there ignoring case, so it is weaker than (1).
 
 GitHub runs the CHOSEN ref's own ``deploy.yml`` and ``deploy_gate.py``, so
-neither check stops a branch whose copies predate W69 or were edited. A
-deployment environment restricted to ``main`` would (ADR-0166, Consequences).
+neither check stops a branch whose copies predate W69 or were edited. Since
+2026-10-15 the token's home does: ``FLY_API_TOKEN`` is a secret of the
+``production`` environment only, which allows only ``main`` (CHG-046,
+ADR-0166 update; ``test_deploy_job_uses_production_environment.py``).
 
 The gate JOB's ``if:`` deliberately still admits a dispatch from any ref — it
 must run so the script can fail loudly.
