@@ -115,7 +115,8 @@ The four points that used to disagree are settled here (CHG-040 (b)):
 | Completeness critic | Asks which questions and which kinds of evidence went unused | Once, after round 2 |
 | Fixer | Applies only findings the orchestrator reproduced. One fixer at a time | After each round |
 
-- Write the plan down and have Codex review it before the test designer starts (CHG-049). Apply
+- Write the plan down and have Codex review it before the test designer starts (ADR-0168,
+  decision 7). Apply
   only the findings you reproduce, and have Codex re-check the revised plan.
 - Move any reference implementation the test designer wrote out of the builder's reach before the
   builder starts.

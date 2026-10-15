@@ -26,7 +26,7 @@ The closing note on PR #500, verbatim:
 > tolerance should move is an owner decision (a threshold), recorded in the session handoff, not taken
 > here.
 
-The note ends "Branch deleted."; the branch was in fact still on GitHub until this archive was made.
+The note ends "Branch deleted."; the branch is still on GitHub when this archive is made; it is deleted after the pull request that adds this file is deployed (ADR-0168).
 
 The patch, against its merge base `42cd965`:
 

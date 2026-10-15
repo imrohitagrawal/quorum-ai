@@ -3,8 +3,10 @@
 ## Status
 
 Accepted — 2026-10-16. The instructions are the owner's: CHG-047 (no branch deleted blindly),
-CHG-048 (parked work reviewed first), CHG-049 (the stop rule, and Codex reviewing each plan before
-code). The mechanism below is the session's design, reviewed by Codex before any code was written.
+CHG-048 (parked work reviewed first), CHG-049 (the stop rule, and Codex reviewing the new plan it
+calls for). Decision 7, Codex reviewing every item's plan, is the session's extension of CHG-049; the
+owner has not answered it. The mechanism below is the session's design. Codex reviewed the plan
+before the builder wrote any code.
 
 ## Context
 
@@ -13,7 +15,8 @@ five branches other than `main` existed. Three belonged to pull requests closed 
 (#500, #491, #523) and two to open drafts (#525, #567). No rule covered a branch whose pull request
 closed without merging: `AGENTS.md` rule 18a and the delivery skill both say to delete the `merged`
 branch. One closed branch still held the only copy of a script that measures an open decision
-(issue #268, row W13), and four records in `main` cite it.
+(issue #268, row W13). Nine files in `main` cite ADR-0119 or that script:
+`git grep -l 'ADR-0119\|search_context_band_sweep' origin/main -- . ':!docs/archive'` lists 9.
 
 W28 shows what goes wrong without a record. On 2026-09-29 the owner parked it until two other pieces
 of work were finished. Both finished, and nothing noticed, because the condition lived only in a
@@ -21,7 +24,8 @@ discussion log.
 
 The owner asked that parked work be reviewed first in the next session, except work knowingly parked
 behind other priorities (CHG-048). The owner also agreed to the stop rule the session proposed after
-research, and to Codex reviewing each plan before code (CHG-049).
+research, and to Codex reviewing the new plan that rule calls for (CHG-049). Having Codex review
+every item's plan is the session's extension (decision 7).
 
 ## Decision
 
@@ -35,8 +39,11 @@ research, and to Codex reviewing each plan before code (CHG-049).
    exits 1 when:
    - an open draft pull request has no Parked row;
    - a board row marked **STOP**, or waiting on the owner, has no Parked row;
-   - a Parked row has an empty cell, a resume-when that does not parse, or names a row that does not
-     exist;
+   - a Parked row has an empty cell, a resume-when that does not parse or that names the row's own
+     item, or names a row that does not exist or already reads DONE; or two Parked rows name the
+     same item;
+   - a board row's state cannot be derived from its evidence, so a resume-when naming it could never
+     come due;
    - it measured nothing: no remote branch read, `gh` unavailable, no Parked row, or the pull-request
      list reached its limit of 500 and may be cut short.
    A due item or a branch without a pull request is a list to act on, not a failure.
@@ -52,13 +59,15 @@ research, and to Codex reviewing each plan before code (CHG-049).
    revert to the last commit that review cleared, write the root cause and a smaller plan, have Codex
    review it, and restart in a fresh session.
 7. **Codex reviews each item's plan before any code**, as well as the code in each review round.
+   This is the session's decision. It extends the owner's agreement, which covered the new plan the
+   stop rule calls for (CHG-049); the owner has not answered the extension.
 
 ## The three closed branches (2026-10-16)
 
 | Branch | Files not in `main` | What needs them | Where they went |
 |---|---|---|---|
-| `proposal/268-web-search-context-tokens` (#491) | ADR-0119 (a proposal the owner never took up); `scripts/proofs/search_context_band_sweep.py`; its test; edits to the ADR index, the board and `tests/unit/test_live_posture_check.py` | Issue #268 (open, W13); ADR-0120, ADR-0121, ADR-0125; `src/product_app/costs.py`; `tests/unit/test_bound_search_context_is_decoupled.py`; CHG-015 | The script and its test into `main` under `scripts/proofs/`, docstring corrected for ADR-0125; ADR-0119 to `docs/archive/2026-10/`; every citation repointed. The index, board and posture-test edits only registered ADR-0119 in `docs/adr/` and are not carried |
-| `w29/judge-wiring-plan` (#523) | `docs/analysis/2026-09-29-w29-judge-wiring-plan.md` | Nothing in `main` cites it; the work it planned was built in #541 | `docs/archive/2026-10/` |
+| `proposal/268-web-search-context-tokens` (#491) | ADR-0119 (a proposal the owner never took up); `scripts/proofs/search_context_band_sweep.py`; its test; edits to the ADR index, the board and `tests/unit/test_live_posture_check.py` | Issue #268 (open, W13); ADR-0120, ADR-0121, ADR-0125; `src/product_app/costs.py`; `tests/unit/test_bound_search_context_is_decoupled.py`; CHG-015 | The script and its test into `main` under `scripts/proofs/`, docstring corrected for ADR-0125; ADR-0119 to `docs/archive/2026-10/`; every citation repointed. The index, board and posture-test edits only registered ADR-0119 in `docs/adr/` and are not carried. The board edit also asserted a measurement (*"every raise tried moves at least two mixes into `block`"*), false since ADR-0125 |
+| `w29/judge-wiring-plan` (#523) | The W29 plan, now `docs/archive/2026-10/2026-09-29-w29-judge-wiring-plan.md` | Nothing in `main` cites it; the work it planned was built in #541 | `docs/archive/2026-10/` |
 | `fix/e2e-visual-wait-for-fonts` (#500) | Edits to `e2e/fixtures/stabilize.ts` and `e2e/tests/invariants/trust-score-visual.spec.ts` | Nothing; review rejected the fix because its stated cause was false | Its patch and the reason, as a record in `docs/archive/2026-10/`; nothing is activated |
 
 ## Measurements
