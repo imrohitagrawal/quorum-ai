@@ -59,7 +59,7 @@ DIFF_BASE ?= origin/main
 # disagrees with the real pathspec is a lie waiting to be believed; the banner
 # now states the pathspec the code actually uses.
 
-.PHONY: docs-map-check check-python publishing-check skill-onboarding-check skill-discover handoff check-breaking apply-orbi-profile skill-route prompt-check start next capture-idea validate validate-strict fr-completeness openapi-export openapi-check adr-index-check open-work-check open-work-write completion-check board-github-check readiness quality format format-check lint type-check test evals test-report gate-min-collected gate-min-executed perf-gate api-contract mutation-baseline diff-cover security-scan close-guard ci-evidence run docker-build vuln-audit workflow-audit image-lock-check feedback-audit session-clean close-window
+.PHONY: docs-map-check check-python publishing-check skill-onboarding-check skill-discover handoff check-breaking apply-orbi-profile skill-route prompt-check parked-check start next capture-idea validate validate-strict fr-completeness openapi-export openapi-check adr-index-check open-work-check open-work-write completion-check board-github-check readiness quality format format-check lint type-check test evals test-report gate-min-collected gate-min-executed perf-gate api-contract mutation-baseline diff-cover security-scan close-guard ci-evidence run docker-build vuln-audit workflow-audit image-lock-check feedback-audit session-clean close-window
 
 check-python:
 	@if [ -z "$(PYTHON)" ]; then 		echo "ERROR: Python 3 is required. Install python3, or set PYTHON=/path/to/python3."; 		exit 127; 	fi
@@ -1201,6 +1201,13 @@ endif
 # an untracked prompt would turn the suite red on one machine and green in CI.
 prompt-check: check-python
 	UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python scripts/check_root_prompts.py
+
+# The board's Parked table against GitHub (ADR-0168): lists remote branches
+# with no open pull request and parked items now due; fails on an unparked
+# draft pull request or STOP/owner row, a malformed Parked line, or empty
+# input. Reads the network (git ls-remote, gh), so it is NOT inside `validate`.
+parked-check: check-python
+	UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python scripts/check_parked_work.py
 
 apply-orbi-profile: check-python
 	$(PYTHON) scripts/apply_profile.py orbi
