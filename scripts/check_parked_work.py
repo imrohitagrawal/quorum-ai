@@ -109,6 +109,9 @@ class Report:
     due: list[str]
     problems: list[str]
     counts: dict[str, int]
+    #: False when the open pull requests could not be read: the branch list and
+    #: the pull-request count are then unknown, not empty.
+    prs_known: bool = True
 
 
 def _cells(line: str) -> list[str]:
@@ -301,7 +304,11 @@ def build_report(
             problems.append(f"board row {row_id} waits on the owner but has no Parked line")
 
     pr_heads = {str(pr.get("headRefName")) for pr in prs}
-    without_pr = sorted(b for b in branches if b != "main" and b not in pr_heads)
+    without_pr = (
+        sorted(b for b in branches if b != "main" and b not in pr_heads)
+        if open_prs is not None
+        else []
+    )
     return Report(
         branches_without_pr=without_pr,
         due=due,
@@ -313,22 +320,29 @@ def build_report(
             "branches_without_pr": len(without_pr),
             "due": len(due),
         },
+        prs_known=open_prs is not None,
     )
 
 
 def render(report: Report) -> str:
     """The report as text; the last line is PASSED or FAILED."""
     c = report.counts
+    known = report.prs_known
+    prs = f"{c.get('open_prs', 0)}" if known else "unknown"
+    without = f"{c.get('branches_without_pr', 0)}" if known else "unknown"
     out = [
         "Parked work check: "
         f"{c.get('remote_branches', 0)} remote branches, "
-        f"{c.get('open_prs', 0)} open pull requests, "
+        f"{prs} open pull requests, "
         f"{c.get('entries', 0)} Parked lines, "
-        f"{c.get('branches_without_pr', 0)} branches with no open pull request, "
+        f"{without} branches with no open pull request, "
         f"{c.get('due', 0)} Parked items due",
         "Remote branches with no open pull request (merge, park or delete each):",
     ]
-    out += [f"  - {b}" for b in report.branches_without_pr] or ["  - none"]
+    if known:
+        out += [f"  - {b}" for b in report.branches_without_pr] or ["  - none"]
+    else:
+        out.append("  - unknown: the open pull requests could not be read")
     out.append("Parked items whose resume-when has come (resume, re-park or close each):")
     out += [f"  - {item}" for item in report.due] or ["  - none"]
     if report.problems:

@@ -98,6 +98,14 @@ every item's plan is the session's extension (decision 7).
 
 - A new open draft, or a new row waiting on the owner, fails `make parked-check` until it has a Parked
   row.
-- The check needs `gh` and the network; offline it fails, saying what it could not read.
+- The check needs `gh` and the network; offline it fails, saying what it could not read. When `gh`
+  cannot be read, the pull-request count and the list of branches with no pull request read
+  "unknown", not zero.
+- **It is not in CI yet, so it does not block a merge.** It runs at step 0 of every session and in
+  `make handoff`. It becomes blocking when a CI job runs `make parked-check` with `GH_TOKEN` set to the
+  job's token, as a required status check. Nothing here adds that job: a required check is a
+  repository setting, which needs the owner.
+- Nothing enforces step 0 itself; a session can skip it. `make handoff` shows the same report at the
+  end, so the next session sees it.
 - The resume-when dates are the session's choices unless a CHG row gives them; each Parked row says
   which.

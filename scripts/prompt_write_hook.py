@@ -165,9 +165,15 @@ def _read_state(state_path: Path, sources: dict[str, str]) -> tuple[dict[str, st
         return None, True
 
 
-def _ignored(message: str) -> bool:
-    """Messages the hook does not block on (see the module docstring)."""
-    return message.startswith(_NO_PROMPT) or _EXEMPT_GONE in message
+def _ignored(message: str, root: Path, exempt: dict[str, str]) -> bool:
+    """Messages the hook does not block on (see the module docstring): the
+    exact floor message for ``root``, and the exact message for an exempt name
+    whose file this root lacks. Exact, not a substring: a prompt's file name
+    appears inside the check's messages, so a name holding these words must
+    not hide its own failures."""
+    if message == f"{_NO_PROMPT} in {root}; the check measured nothing":
+        return True
+    return any(message == f"{name} {_EXEMPT_GONE}; remove it from EXEMPT" for name in exempt)
 
 
 def _in_root(path: str, root: Path) -> bool:
@@ -192,7 +198,7 @@ def run_hook(roots: list[Path], state_path: Path) -> str | None:
             if now == before:
                 continue
         found = check.problems(root, check.EXEMPT)
-        failures += [f"{root}: {m}" for m in found if not _ignored(m)]
+        failures += [f"{root}: {m}" for m in found if not _ignored(m, root, check.EXEMPT)]
     try:
         state_path.parent.mkdir(parents=True, exist_ok=True)
         state_path.write_text(

@@ -89,7 +89,12 @@ Four facts shaped the design:
     through the check.
 - The hook saves the digest of `scripts/check_root_prompts.py` and of itself, and re-checks every
   root after either changes, so a prompt an older check let through is checked again. It does not
-  block on "is exempt but does not exist" (another checkout's tree); `make prompt-check` still
-  reports it.
+  block on the exact "is exempt but does not exist" message for an exempt name (another checkout's
+  tree), nor on the exact "no root prompt file found" message; a prompt whose file name holds those
+  words is still reported. `make prompt-check` reports both messages.
+- The hook reads only the checkouts that hold the process skill (`.agents/skills/work-item-delivery/
+  SKILL.md`). A worktree of an older branch without it is skipped, so its root prompts are not checked
+  by the hook (on 2026-10-16, the worktrees of `proposal/268-web-search-context-tokens` and
+  `w28/byok-pr1-plan`).
 - Prompts named in the old free style (`NEXT-SESSION-PROMPT.md`, `CONTINUE-X-PROMPT.md`) are refused at
   the root. Archived prompts are not checked.
