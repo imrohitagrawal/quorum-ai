@@ -75,6 +75,25 @@ def _token_uses(node: Any) -> int:
     return 0
 
 
+def _is_whole_token_binding(value: Any) -> bool:
+    """True when ``value`` is one expression that is exactly the token.
+
+    Any equivalent spelling passes (dot or bracket form, any letter case,
+    spaces inside the braces); a longer name, a fallback such as
+    ``secrets.FLY_API_TOKEN || 'x'``, or text around the expression does not.
+    """
+    if not isinstance(value, str):
+        return False
+    expression = re.fullmatch(r"\$\{\{\s*(.*?)\s*\}\}", value, re.DOTALL)
+    if expression is None:
+        return False
+    reference = _SECRET_REFERENCE.fullmatch(expression.group(1))
+    if reference is None:
+        return False
+    name = next(name for name in reference.groups() if name is not None)
+    return name.upper() == TOKEN_NAME
+
+
 def test_the_deploy_job_names_the_production_environment() -> None:
     deploy = _jobs(DEPLOY_YML)["deploy"]
     assert _environment_name(deploy) == "production"
@@ -91,7 +110,7 @@ def test_the_deploy_step_hands_flyctl_the_token() -> None:
     steps = _jobs(DEPLOY_YML)["deploy"]["steps"]
     deploy_steps = [step for step in steps if step.get("name") == "Deploy to Fly.io"]
     assert len(deploy_steps) == 1
-    assert deploy_steps[0]["env"]["FLY_API_TOKEN"] == "${{ secrets.FLY_API_TOKEN }}"
+    assert _is_whole_token_binding(deploy_steps[0]["env"]["FLY_API_TOKEN"])
 
 
 def test_every_job_that_reads_the_token_names_the_production_environment() -> None:
