@@ -1,6 +1,7 @@
 > **Archived on 2026-10-16** from branch `proposal/268-web-search-context-tokens` (draft PR #491,
 > closed 2026-10-03), so the branch can be deleted without losing it (ADR-0168, CHG-047). This record
-> was a proposal the owner never took up, and it never sat in `docs/adr/`. Its premise, that a higher
+> was a proposal never accepted; the owner answered its first question with CHG-012 D5 ('pick b'),
+> which ADR-0125 built. It never sat in `docs/adr/`. Its premise, that a higher
 > `cost_web_search_context_tokens` moves the fail-safe bound and so moves mixes into `block`, was
 > removed by ADR-0125: the bound now prices web-search context from its own constant. Its sweep script
 > and the script's test now live in `main` at `scripts/proofs/search_context_band_sweep.py` and

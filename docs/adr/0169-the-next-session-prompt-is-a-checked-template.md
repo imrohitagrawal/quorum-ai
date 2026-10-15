@@ -27,7 +27,8 @@ Four facts shaped the design:
 ## Decision
 
 1. **A template**, `.agents/skills/work-item-delivery/prompt-template.md`, in the shape of
-   `CONTINUE-PARKED-WORK-W28-W70-PROMPT.md`: a title, "Written by", the Process line, and four level-2
+   the untracked prompt the session of 2026-10-16 ran (its handoff archives it in
+   `docs/archive/2026-10/`): a title, "Written by", the Process line, and four level-2
    sections, `Read first`, `The items, in order`, `Approvals`, `End of session`. The skill's handoff
    contract says to copy it.
 2. **`make prompt-check` also refuses** a non-exempt root prompt that lacks any of the four sections as
@@ -44,7 +45,7 @@ Four facts shaped the design:
    it returns a `block` decision, which shows the agent the problems; for a failure event, which has
    no block decision, it returns the same problems as context for the agent. The hook's logic is tracked and tested; the one settings entry
    that calls it lives in the untracked `.claude/settings.json`, as ADR-0043 requires, and
-   `python scripts/prompt_write_hook.py --install <checkout>` adds it under both events.
+   `.venv/bin/python scripts/prompt_write_hook.py --install <checkout>` adds it under both events.
    `--check-installed` also needs the checkout's `.venv/bin/python`, which the entry runs. `make handoff` says whether the
    checkout it runs in has it. W81's deny rules go in the same file as a separate entry.
 4. **The handoff pull request commits the next prompt at the root**, so CI's check of tracked prompts
@@ -81,5 +82,14 @@ Four facts shaped the design:
     block hides headings that the check still counts.
   - An unfilled copy of the template has the right name and sections, so it gets through the check.
     The check pins the shape, not the content.
+  - A self-closing tag that is not void, on its own line (`<span/>`, `<a name='x'/>`), is now read
+    as staying open, so the check can refuse a prompt a browser shows. This is the strict side; no
+    tracked file uses such a tag.
+  - Hiding through a browser's table or object parsing (`<div hidden><object></div>`) still gets
+    through the check.
+- The hook saves the digest of `scripts/check_root_prompts.py` and of itself, and re-checks every
+  root after either changes, so a prompt an older check let through is checked again. It does not
+  block on "is exempt but does not exist" (another checkout's tree); `make prompt-check` still
+  reports it.
 - Prompts named in the old free style (`NEXT-SESSION-PROMPT.md`, `CONTINUE-X-PROMPT.md`) are refused at
   the root. Archived prompts are not checked.

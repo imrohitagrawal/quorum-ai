@@ -37,11 +37,14 @@ every item's plan is the session's extension (decision 7).
 2. **`make parked-check`** (`scripts/check_parked_work.py`) lists every remote branch other than `main`
    with no open pull request, and every parked item whose resume-when has come, with counts. It
    exits 1 when:
-   - an open draft pull request has no Parked row;
+   - an open draft pull request has no Parked row. A Parked row covers a draft when its Where cell
+     names the draft's number (`#525`) or its exact head branch in backticks
+     (`` `w28/byok-pr1-plan` ``);
    - a board row marked **STOP**, or waiting on the owner, has no Parked row;
-   - a Parked row has an empty cell, a resume-when that does not parse or that names the row's own
-     item, or names a row that does not exist or already reads DONE; or two Parked rows name the
-     same item;
+   - a Parked row has an empty cell; its own row is not on the board, or reads DONE (the pull
+     request that lands the item deletes its Parked row); its resume-when does not parse, names
+     the row's own item, or names a row that is not on the board; or two Parked rows name the same
+     item. A resume-when naming a row that reads DONE is not a failure: it makes the item due;
    - a board row's state cannot be derived from its evidence, so a resume-when naming it could never
      come due;
    - it measured nothing: no remote branch read, `gh` unavailable, no Parked row, or the pull-request
@@ -66,7 +69,7 @@ every item's plan is the session's extension (decision 7).
 
 | Branch | Files not in `main` | What needs them | Where they went |
 |---|---|---|---|
-| `proposal/268-web-search-context-tokens` (#491) | ADR-0119 (a proposal the owner never took up); `scripts/proofs/search_context_band_sweep.py`; its test; edits to the ADR index, the board and `tests/unit/test_live_posture_check.py` | Issue #268 (open, W13); ADR-0120, ADR-0121, ADR-0125; `src/product_app/costs.py`; `tests/unit/test_bound_search_context_is_decoupled.py`; CHG-015 | The script and its test into `main` under `scripts/proofs/`, docstring corrected for ADR-0125; ADR-0119 to `docs/archive/2026-10/`; every citation repointed. The index, board and posture-test edits only registered ADR-0119 in `docs/adr/` and are not carried. The board edit also asserted a measurement (*"every raise tried moves at least two mixes into `block`"*), false since ADR-0125 |
+| `proposal/268-web-search-context-tokens` (#491) | ADR-0119 (a proposal never accepted; the owner answered its first question with CHG-012 D5 ('pick b'), which ADR-0125 built); `scripts/proofs/search_context_band_sweep.py`; its test; edits to the ADR index, the board and `tests/unit/test_live_posture_check.py` | Issue #268 (open, W13); ADR-0120, ADR-0121, ADR-0125; `src/product_app/costs.py`; `tests/unit/test_bound_search_context_is_decoupled.py`; CHG-015 | The script and its test into `main` under `scripts/proofs/`, docstring corrected for ADR-0125; ADR-0119 to `docs/archive/2026-10/`; every citation repointed. The index, board and posture-test edits only registered ADR-0119 in `docs/adr/` and are not carried. The board edit also asserted a measurement (*"every raise tried moves at least two mixes into `block`"*), false since ADR-0125 |
 | `w29/judge-wiring-plan` (#523) | The W29 plan, now `docs/archive/2026-10/2026-09-29-w29-judge-wiring-plan.md` | Nothing in `main` cites it; the work it planned was built in #541 | `docs/archive/2026-10/` |
 | `fix/e2e-visual-wait-for-fonts` (#500) | Edits to `e2e/fixtures/stabilize.ts` and `e2e/tests/invariants/trust-score-visual.spec.ts` | Nothing; review rejected the fix because its stated cause was false | Its patch and the reason, as a record in `docs/archive/2026-10/`; nothing is activated |
 

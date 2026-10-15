@@ -186,6 +186,8 @@ mode, never a shell `&`, and give every wait a time limit.
   table with a reason, an owner and a resume-when. A branch with no open pull request is deleted
   only when every file it holds is in `main` or archived there, every citation points at the new
   place, and the pull request that moved them is deployed (CHG-047, ADR-0168).
+- The pull request that lands a parked item deletes its line from the Parked table. Otherwise
+  `make parked-check` fails once the item's row reads DONE.
 - If context runs low, write a prompt for the remaining work (items, decisions, approvals, and the
   process line) and end cleanly.
 - Report status before the owner has to ask. End with the closing status block, and keep what you
@@ -202,7 +204,11 @@ mode, never a shell `&`, and give every wait a time limit.
 ## Validation
 
 - `make prompt-check`: every root prompt carries the process line, the four sections and the name.
-- `make parked-check`: every open draft and every row waiting on the owner has a Parked row.
+- `make parked-check`: every open draft (named by its number or its head branch) and every
+  **STOP** or owner-waiting row has a Parked line; every Parked line has all five cells, a
+  resume-when that reads, and its own row on the board and not DONE, and appears once; every
+  board row's state can be derived; and it read branches, pull requests (fewer than 500) and
+  Parked lines.
 - `make skill-route DIFF=origin/main`: the roles used match the roles routed.
 - `make validate`, `make quality`, `make diff-cover DIFF_BASE=origin/main`, `make api-contract`,
   and e2e when a page changed.
@@ -221,7 +227,7 @@ mode, never a shell `&`, and give every wait a time limit.
 - The closing status block ends with the line `make handoff` printed, under "Next action":
   `Read CONTINUE-AREA-ROWS-PROMPT.md in the repo root and follow it exactly.`
 - A session started inside a worktree runs
-  `python scripts/prompt_write_hook.py --install .` first, so the prompt hook fires there too.
+  `.venv/bin/python scripts/prompt_write_hook.py --install .` first, so the prompt hook fires there too.
 
 ## Stop conditions
 
