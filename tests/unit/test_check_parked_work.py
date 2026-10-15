@@ -436,9 +436,11 @@ def test_no_entries_is_refused() -> None:
     report = _report(mod, entries=[], rows=rows, open_prs=prs)
     assert len(report.problems) == 1, report.problems
     assert "Parked" in report.problems[0], report.problems
-    # Positive partner: the same input with one valid entry passes.
+    # Positive partner: the same input with one valid entry passes. The row is not DONE here:
+    # a Parked line for a DONE row is itself a problem (review round 1, F5).
     one = [_entry(mod, "W1", "#1", resume_when="on 2026-12-01")]
-    assert _report(mod, entries=one, rows=rows, open_prs=prs).problems == []
+    pending = {"W1": {**rows["W1"], "state": "PENDING"}}
+    assert _report(mod, entries=one, rows=pending, open_prs=prs).problems == []
 
 
 # --------------------------------------------------------------------------

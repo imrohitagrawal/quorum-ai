@@ -14,7 +14,10 @@ origin``) and the open pull requests (``gh pr list``), and:
 - FAILS (exit 1) on an open draft pull request no Parked line names; a board
   row that is not DONE and is marked **STOP** or waits on the owner, with no
   Parked line; a Parked line with an empty cell, a resume-when that does not
-  read, or a row that is not on the board.
+  read or that names the line's own row, a row that is not on the board or
+  already reads DONE, or a second line for the same row; and a board row whose
+  state cannot be derived from its evidence (a resume-when naming it could
+  never come due).
 
 It prints what it counted (remote branches, open pull requests, Parked lines,
 branches with no pull request, items due) and FAILS on empty input: when it
@@ -209,7 +212,8 @@ def build_report(
     today: datetime.date,
 ) -> Report:
     """Compare the Parked lines with the board rows and GitHub. ``rows`` maps
-    a row id to its ``state``, ``item`` and ``depends`` cells; a None gatherer
+    a row id to its ``state``, ``item`` and ``depends`` cells, and to a
+    ``failure`` message when its state could not be derived; a None gatherer
     result means that source could not be read."""
     problems: list[str] = []
     branches = list(remote_branches or [])
@@ -230,7 +234,17 @@ def build_report(
     if not entries:
         problems.append(f"found no line in the {_HEADING} table; the check measured nothing")
 
+    for row_id, row in rows.items():
+        if row.get("failure"):
+            problems.append(
+                f"board row {row_id}: its state cannot be derived ({row['failure']}); "
+                "a resume-when naming it could never come due"
+            )
+
     states = {row_id: str(row.get("state", "")) for row_id, row in rows.items()}
+    items = [entry.item for entry in entries]
+    for item in sorted({i for i in items if i and items.count(i) > 1}):
+        problems.append(f"Parked line {item} appears more than once; keep one line per item")
     due: list[str] = []
     for entry in entries:
         for column in _COLUMNS:
@@ -241,6 +255,8 @@ def build_report(
                 )
         if entry.item and entry.item not in rows:
             problems.append(f"Parked line {entry.item} names a row that is not on the board")
+        elif entry.item and states.get(entry.item) == "DONE":
+            problems.append(f"Parked line {entry.item}: the row reads DONE; remove its Parked line")
         if entry.resume_when.strip() in _EMPTY_CELLS:
             continue  # already reported as an empty cell
         rw = parse_resume_when(entry.resume_when)
@@ -251,7 +267,12 @@ def build_report(
             )
             continue
         for named in rw.rows:
-            if named not in rows:
+            if named == entry.item:
+                problems.append(
+                    f"Parked line {entry.item}: resume-when names its own row, so it could "
+                    "only come due once the parked work is done"
+                )
+            elif named not in rows:
                 problems.append(
                     f"Parked line {entry.item}: resume-when names {named}, "
                     "which is not on the board"
@@ -369,18 +390,22 @@ def open_pull_requests() -> list[dict[str, Any]] | None:
 
 def board_rows(board_text: str) -> dict[str, dict[str, str]]:
     """Each board row's derived state, item and "Depends on" cells, by row id.
-    A row whose state could not be derived reads as an empty state."""
+    A row whose state could not be derived reads as an empty state and carries
+    the reason as ``failure``, which ``build_report`` turns into a problem."""
     work = _load_open_work()
     board = work.parse_board(board_text)
-    states, _failures, _read = work.derive_states(board, ROOT)
-    return {
-        row.row_id: {
+    states, failures, _read = work.derive_states(board, ROOT)
+    rows: dict[str, dict[str, str]] = {}
+    for row in board.rows:
+        rows[row.row_id] = {
             "state": states.get(row.row_id, ""),
             "item": row.item,
             "depends": row.depends_on,
         }
-        for row in board.rows
-    }
+        mine = [f for f in failures if f.startswith(f"{row.row_id}: ")]
+        if mine:
+            rows[row.row_id]["failure"] = "; ".join(mine)
+    return rows
 
 
 def report(today: datetime.date | None = None) -> Report:

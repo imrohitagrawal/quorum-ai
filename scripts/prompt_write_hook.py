@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Run the root prompt check after every tool call that could write a prompt (ADR-0169).
 
-Claude Code runs this as a PostToolUse hook. It does NOT trust the tool's
+Claude Code runs this as a PostToolUse hook, and as a PostToolUseFailure hook
+for a tool call that failed: a shell command can write a prompt and then exit
+non-zero, and Claude Code then sends only the failure event. It does NOT trust the tool's
 input: a prompt written by a shell command carries no file path, so on every
 call the hook lists the root prompt files of each checkout of this repository
 (``git worktree list``), takes the SHA-256 digest of each file's bytes, and
@@ -9,12 +11,16 @@ compares them with the digests it saved last time in
 ``<project>/.claude/state/prompt-hook.json``. It runs
 ``scripts/check_root_prompts.py``'s check only on the checkouts whose prompts
 changed, were added or were removed, or on every checkout while the last
-result was a failure, so a bad prompt keeps being reported until it is fixed.
+result was a failure (and on its first run, with no saved state), so a bad
+prompt keeps being reported until it is fixed.
 
 On a failure it prints ``{"decision": "block", "reason": ...}``, which shows
-the agent what is wrong. A checkout with no root prompt at all is not a
-failure here. The hook always exits 0 and never raises: a broken hook must
-never break the session.
+the agent what is wrong; for a PostToolUseFailure event it prints the same
+reason as ``hookSpecificOutput.additionalContext``. A checkout with no root
+prompt at all is not a failure here. The hook always exits 0 and never
+raises: a broken hook must never break the session. That includes an
+interpreter without ``markdown_it``: the check is loaded inside ``main``'s
+error handler, not at import.
 
 Install it in a checkout's untracked ``.claude/settings.json`` (ADR-0043):
 
@@ -51,6 +57,11 @@ _ENTRY: dict[str, Any] = {
     "matcher": _MATCHER,
     "hooks": [{"type": "command", "command": HOOK_COMMAND, "timeout": 30}],
 }
+#: The events the entry is installed under. A tool call that fails, such as a
+#: shell command that writes a prompt and then exits non-zero, is sent as
+#: PostToolUseFailure and never as PostToolUse.
+_EVENTS = ("PostToolUse", "PostToolUseFailure")
+_PYTHON = Path(".venv") / "bin" / "python"
 
 
 def _load_check() -> ModuleType:
@@ -60,11 +71,29 @@ def _load_check() -> ModuleType:
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
     sys.modules[name] = module
-    spec.loader.exec_module(module)
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        del sys.modules[name]
+        raise
     return module
 
 
-check_root_prompts = _load_check()
+def _check() -> ModuleType:
+    """The check module, loaded on first use and kept as the module attribute
+    ``check_root_prompts`` (which tests may replace)."""
+    module: ModuleType | None = globals().get("check_root_prompts")
+    if module is None:
+        module = _load_check()
+        globals()["check_root_prompts"] = module
+    return module
+
+
+def __getattr__(name: str) -> ModuleType:
+    """``prompt_write_hook.check_root_prompts`` loads the check on first access."""
+    if name == "check_root_prompts":
+        return _check()
+    raise AttributeError(name)
 
 
 def checkout_roots(project_dir: Path) -> list[Path]:
@@ -98,7 +127,7 @@ def signatures(roots: list[Path]) -> dict[str, str]:
     of its bytes. Content, not size and time: an edit can keep both."""
     found: dict[str, str] = {}
     for root in roots:
-        for path in check_root_prompts.find_prompt_files(root):
+        for path in _check().find_prompt_files(root):
             found[str(path)] = hashlib.sha256(path.read_bytes()).hexdigest()
     return found
 
@@ -123,7 +152,9 @@ def _in_root(path: str, root: Path) -> bool:
 def run_hook(roots: list[Path], state_path: Path) -> str | None:
     """Check the roots whose prompts changed (all of them while the last
     result failed), save the new state, and return the reason to block, or
-    None when nothing failed."""
+    None when nothing failed. A state that cannot be saved is noted on stderr
+    and does not lose the reason: the next call then checks everything."""
+    check = _check()
     current = signatures(roots)
     saved, failing = _read_state(state_path)
     failures: list[str] = []
@@ -133,38 +164,60 @@ def run_hook(roots: list[Path], state_path: Path) -> str | None:
             before = {k: v for k, v in saved.items() if _in_root(k, root)}
             if now == before:
                 continue
-        found = check_root_prompts.problems(root, check_root_prompts.EXEMPT)
+        found = check.problems(root, check.EXEMPT)
         failures += [f"{root}: {m}" for m in found if not m.startswith(_NO_PROMPT)]
-    state_path.parent.mkdir(parents=True, exist_ok=True)
-    state_path.write_text(
-        json.dumps({"signatures": current, "failing": bool(failures)}, indent=2) + "\n",
-        encoding="utf-8",
-    )
+    try:
+        state_path.parent.mkdir(parents=True, exist_ok=True)
+        state_path.write_text(
+            json.dumps({"signatures": current, "failing": bool(failures)}, indent=2) + "\n",
+            encoding="utf-8",
+        )
+    except OSError as exc:
+        print(f"prompt_write_hook: could not save {state_path}: {exc!r}", file=sys.stderr)
     if not failures:
         return None
     lines = "\n".join(f"- {f}" for f in failures)
     return f"A root prompt file fails the root prompt check:\n{lines}\nRun make prompt-check."
 
 
-def is_installed(settings_path: Path) -> bool:
-    """True when the settings file carries this hook's PostToolUse entry."""
+def install_status(settings_path: Path) -> str:
+    """``installed`` when the settings file carries this hook's entry under
+    both events and the checkout (two levels above the file) has the
+    ``.venv/bin/python`` the command runs; otherwise ``not installed``, with
+    the missing interpreter named."""
     try:
         data = json.loads(settings_path.read_text(encoding="utf-8"))
-        return _ENTRY in data["hooks"]["PostToolUse"]
+        entries = all(_ENTRY in data["hooks"][event] for event in _EVENTS)
     except Exception:  # noqa: BLE001 — absent or unreadable means not installed
-        return False
+        entries = False
+    if not entries:
+        return "not installed"
+    if not (settings_path.parent.parent / _PYTHON).exists():
+        return "not installed: no .venv/bin/python"
+    return "installed"
+
+
+def is_installed(settings_path: Path) -> bool:
+    """True when ``install_status`` says ``installed``."""
+    return install_status(settings_path) == "installed"
 
 
 def install(settings_path: Path) -> bool:
-    """Add this hook's entry to the settings file, keeping everything else.
-    True when the file changed; False when the entry was already there."""
+    """Add this hook's entry under both events to the settings file, keeping
+    everything else. True when the file changed; False when both entries
+    were already there."""
     data: dict[str, Any] = {}
     if settings_path.is_file():
         data = json.loads(settings_path.read_text(encoding="utf-8"))
-    post = data.setdefault("hooks", {}).setdefault("PostToolUse", [])
-    if _ENTRY in post:
+    hooks = data.setdefault("hooks", {})
+    changed = False
+    for event in _EVENTS:
+        entries = hooks.setdefault(event, [])
+        if _ENTRY not in entries:
+            entries.append(json.loads(json.dumps(_ENTRY)))
+            changed = True
+    if not changed:
         return False
-    post.append(json.loads(json.dumps(_ENTRY)))
     settings_path.parent.mkdir(parents=True, exist_ok=True)
     settings_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
     return True
@@ -172,6 +225,25 @@ def install(settings_path: Path) -> bool:
 
 def _settings(checkout: Path) -> Path:
     return checkout / ".claude" / "settings.json"
+
+
+def _event_name(stdin: TextIO) -> str:
+    """The ``hook_event_name`` of the tool call's JSON on stdin. Only the event
+    is read; the tool's input is deliberately not trusted. Unreadable or
+    unparseable input reads as PostToolUse."""
+    with contextlib.suppress(Exception):
+        name = json.loads(stdin.read()).get("hook_event_name")
+        if isinstance(name, str):
+            return name
+    return "PostToolUse"
+
+
+def _output(event: str, reason: str) -> dict[str, Any]:
+    """What the hook prints for a failure. PostToolUseFailure has no block
+    decision, so the reason goes in as context for the agent."""
+    if event == "PostToolUseFailure":
+        return {"hookSpecificOutput": {"hookEventName": event, "additionalContext": reason}}
+    return {"decision": "block", "reason": reason}
 
 
 def main(
@@ -189,20 +261,17 @@ def main(
         print("installed" if changed else "already installed")
         return 0
     if args.check_installed is not None:
-        if is_installed(_settings(args.check_installed)):
-            print("installed")
-            return 0
-        print("not installed")
-        return 1
+        status = install_status(_settings(args.check_installed))
+        print(status)
+        return 0 if status == "installed" else 1
     try:
-        with contextlib.suppress(Exception):  # an unreadable stdin changes nothing
-            stdin.read()  # the tool call's JSON; deliberately not trusted
+        event = _event_name(stdin)
         project = Path(env.get("CLAUDE_PROJECT_DIR") or os.getcwd())
         reason = run_hook(
             checkout_roots(project), project / ".claude" / "state" / "prompt-hook.json"
         )
         if reason is not None:
-            print(json.dumps({"decision": "block", "reason": reason}))
+            print(json.dumps(_output(event, reason)))
     except Exception as exc:  # noqa: BLE001 — a broken hook must never break the session
         print(f"prompt_write_hook: skipped, {exc!r}", file=sys.stderr)
     return 0

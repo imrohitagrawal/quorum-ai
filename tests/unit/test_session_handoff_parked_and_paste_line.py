@@ -170,6 +170,9 @@ def test_prompt_check_section_says_whether_the_hook_is_installed(tmp_path: Path)
 
     hook = _load("prompt_write_hook_for_handoff_test", _SCRIPTS / "prompt_write_hook.py")
     assert hook.install(root / ".claude" / "settings.json") is True
+    # The command runs the checkout's .venv/bin/python (review round 1, C6).
+    (root / ".venv" / "bin").mkdir(parents=True)
+    (root / ".venv" / "bin" / "python").write_text("", encoding="utf-8")
     with_hook = _handoff()._prompt_check_section(root)
     assert "hook: installed" in with_hook, with_hook
     assert "hook: not installed" not in with_hook, with_hook

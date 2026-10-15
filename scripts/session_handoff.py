@@ -404,15 +404,17 @@ def _hook_line(root: Path) -> str:
     prompt write hook (ADR-0169). Never raises (ADR-0045)."""
     try:
         hook = _load_script("prompt_write_hook")
-        installed = hook.is_installed(root / ".claude" / "settings.json")  # type: ignore[attr-defined]
+        status = hook.install_status(root / ".claude" / "settings.json")  # type: ignore[attr-defined]
     except Exception as exc:  # noqa: BLE001 — ADR-0045: degrade, never abort
         return f"Prompt write hook: unavailable: {exc!r}\n"
-    if installed:
+    if status == "installed":
         return "Prompt write hook: installed in `.claude/settings.json`.\n"
-    return (
-        "Prompt write hook: not installed in `.claude/settings.json`; run "
-        "`.venv/bin/python scripts/prompt_write_hook.py --install .`\n"
-    )
+    if status == "not installed":
+        return (
+            "Prompt write hook: not installed in `.claude/settings.json`; run "
+            "`.venv/bin/python scripts/prompt_write_hook.py --install .`\n"
+        )
+    return f"Prompt write hook: {status}; run `uv sync --all-extras` in this checkout.\n"
 
 
 def _prompt_check_section(root: Path) -> str:
@@ -462,21 +464,39 @@ def _paste_lines(root: Path) -> list[str]:
         return []
 
 
+def _failing_prompt_lines(root: Path) -> list[str]:
+    """One line per root prompt named for the next session that fails the
+    check: it gets no paste line until it is fixed. [] when it cannot run."""
+    try:
+        check = _load_script("check_root_prompts")
+        names = list(check.failing_named_prompts(root))  # type: ignore[attr-defined]
+    except Exception as exc:  # noqa: BLE001 — ADR-0045: degrade, never abort
+        print(f"session_handoff: could not check the root prompts: {exc!r}", file=sys.stderr)
+        return []
+    return [
+        f"{name} fails `make prompt-check`; fix it first, then run `make handoff` again."
+        for name in names
+    ]
+
+
 def _next_session_section(root: Path) -> str:
     """The line the owner pastes to start the next session (ADR-0169): one per
-    validly named root prompt. Says so when there is none, or more than one."""
+    validly named root prompt that passes the check. Says so when there is
+    none, or more than one, and names a validly named prompt that fails."""
     head = "## Next session\n"
     lines = _paste_lines(root)
+    failing = "".join(f"{line}\n" for line in _failing_prompt_lines(root))
     if not lines:
         return (
-            f"{head}There is no root prompt named `CONTINUE-<AREA>-<ROWS>-PROMPT.md`, so "
-            f"there is no line to paste. Write one by copying `{_TEMPLATE}`.\n"
+            f"{head}{failing}There is no root prompt named `CONTINUE-<AREA>-<ROWS>-PROMPT.md` "
+            "that passes `make prompt-check`, so there is no line to paste. Write one by "
+            f"copying `{_TEMPLATE}`.\n"
         )
     block = "```text\n" + "".join(f"{line}\n" for line in lines) + "```\n"
     if len(lines) == 1:
-        return f"{head}Paste this line to start the next session:\n{block}"
+        return f"{head}{failing}Paste this line to start the next session:\n{block}"
     return (
-        f"{head}There are {len(lines)} validly named root prompts; only one should be "
+        f"{head}{failing}There are {len(lines)} validly named root prompts; only one should be "
         f"left for the next session. Archive the others. Their lines:\n{block}"
     )
 
@@ -680,7 +700,7 @@ Before editing, list the files you intend to modify.
 """
     (ROOT / "docs" / "session-handoff.md").write_text(text, encoding="utf-8")
     print("Updated docs/session-handoff.md")
-    for line in _paste_lines(ROOT):
+    for line in _failing_prompt_lines(ROOT) + _paste_lines(ROOT):
         print(line)
     return 0
 

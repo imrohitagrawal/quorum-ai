@@ -25,8 +25,8 @@ code block, a comment, a block quote, a list or a raw ``<div>`` does not.
 
 The check reads the directory itself, so it sees untracked files too. It
 exits 1 on any problem, and also when it finds no prompt file at all.
-``paste_lines`` gives, for each validly named prompt, the one line the owner
-pastes to start the next session; ``make handoff`` prints it.
+``paste_lines`` gives, for each validly named prompt that passes, the one
+line the owner pastes to start the next session; ``make handoff`` prints it.
 """
 
 from __future__ import annotations
@@ -75,6 +75,27 @@ def find_prompt_files(root: Path) -> list[Path]:
     )
 
 
+#: Elements that never hold content (the HTML void elements), so they are never
+#: left open. Any other tag written self-closing, such as ``<div hidden />``,
+#: stays open in a browser: the slash is ignored, and what follows is inside it.
+_VOID = frozenset(
+    {
+        "area",
+        "base",
+        "br",
+        "col",
+        "embed",
+        "hr",
+        "img",
+        "input",
+        "link",
+        "meta",
+        "source",
+        "track",
+        "wbr",
+    }
+)
+
 #: Block elements a Markdown paragraph may sit inside (block quote, list).
 _CONTAINERS = frozenset({"blockquote", "ul", "ol", "li"})
 #: Inline elements Markdown makes inside a paragraph; text in them is visible.
@@ -105,8 +126,10 @@ class _ProcessParagraphs(HTMLParser):
     list. Its text is the data directly in it or in plain ``strong``, ``em``,
     ``code`` or ``a``; a nested list item's text is its own. Comments are
     never data. Markdown writes ``<br />``, ``<hr />`` and ``<img ... />``,
-    which the parser opens and closes at once; a raw ``<br>`` without the
-    slash stays open and refuses what follows it, the strict side."""
+    void elements, which are opened and closed at once; a raw ``<br>``
+    without the slash stays open and refuses what follows it, the strict side.
+    A self-closing tag that is not void (``<div hidden />``) stays open, as in
+    a browser."""
 
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
@@ -133,6 +156,11 @@ class _ProcessParagraphs(HTMLParser):
             and all(t in _CONTAINERS and plain for t, plain, _ in self._open)
         )
         self._open.append((tag, _plain(tag, attrs), _Paragraph() if starts else None))
+
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        self.handle_starttag(tag, attrs)
+        if tag in _VOID:
+            self.handle_endtag(tag)
 
     def handle_endtag(self, tag: str) -> None:
         _, para = self._innermost()
@@ -184,12 +212,6 @@ def has_process_line(text: str) -> bool:
     return walker.found
 
 
-#: Elements that never hold content, so they are never left open.
-_VOID = frozenset(
-    {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "wbr"}
-)
-
-
 class _TopLevelHeadings(HTMLParser):
     """Walks rendered HTML and collects the text of every level-2 heading a
     reader sees at the top level of the page: an ``<h2>`` with no attribute
@@ -214,8 +236,8 @@ class _TopLevelHeadings(HTMLParser):
         self._open.append((tag, _plain(tag, attrs)))
 
     def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        if self._text is not None and not (tag in _INLINE and _plain(tag, attrs)):
-            self._spoiled = True
+        # A self-closing tag that is not void stays open, as in a browser.
+        self.handle_starttag(tag, attrs)
 
     def handle_endtag(self, tag: str) -> None:
         if all(t != tag for t, _ in self._open):
@@ -258,31 +280,49 @@ def problems(root: Path, exempt: dict[str, str]) -> list[str]:
         if not (root / name).is_file():
             found.append(f"{name} is exempt but does not exist; remove it from EXEMPT")
     for path in files:
-        if path.name in exempt:
-            continue
-        if not NAME_PATTERN.fullmatch(path.name):
-            found.append(
-                f"{path.name} is not named {_NAME_FORM} "
-                "(for example CONTINUE-PARKED-WORK-W28-W70-PROMPT.md)"
-            )
-        text = path.read_text(encoding="utf-8", errors="replace")
-        if not has_process_line(text):
-            found.append(
-                f"{path.name} has no '**Process:** ... "
-                ".agents/skills/work-item-delivery/SKILL.md' line outside a code block"
-            )
-        for section in missing_sections(text):
-            found.append(f"{path.name} has no visible top-level '## {section}' heading")
+        if path.name not in exempt:
+            found += file_problems(path)
+    return found
+
+
+def file_problems(path: Path) -> list[str]:
+    """The problems of one root prompt file: its name, its Process line and
+    its four sections. An empty list means the file passes."""
+    found: list[str] = []
+    if not NAME_PATTERN.fullmatch(path.name):
+        found.append(
+            f"{path.name} is not named {_NAME_FORM} "
+            "(for example CONTINUE-PARKED-WORK-W28-W70-PROMPT.md)"
+        )
+    text = path.read_text(encoding="utf-8", errors="replace")
+    if not has_process_line(text):
+        found.append(
+            f"{path.name} has no '**Process:** ... "
+            ".agents/skills/work-item-delivery/SKILL.md' line outside a code block"
+        )
+    for section in missing_sections(text):
+        found.append(f"{path.name} has no visible top-level '## {section}' heading")
     return found
 
 
 def paste_lines(root: Path) -> list[str]:
     """The line the owner pastes to start the next session, one per root
-    prompt whose name matches ``NAME_PATTERN``, sorted by name."""
+    prompt whose name matches ``NAME_PATTERN`` and that passes the check,
+    sorted by name. A prompt that fails is in ``failing_named_prompts``."""
     return [
         f"Read {path.name} in the repo root and follow it exactly."
         for path in find_prompt_files(root)
-        if NAME_PATTERN.fullmatch(path.name)
+        if NAME_PATTERN.fullmatch(path.name) and not file_problems(path)
+    ]
+
+
+def failing_named_prompts(root: Path) -> list[str]:
+    """The names of root prompts named for the next session that fail the
+    check, sorted. No paste line is offered for these."""
+    return [
+        path.name
+        for path in find_prompt_files(root)
+        if NAME_PATTERN.fullmatch(path.name) and file_problems(path)
     ]
 
 

@@ -410,6 +410,9 @@ def test_install_into_a_checkout_with_no_settings_creates_one_entry(
     # matcher, command or timeout, or --check-installed misreports either state.
     hook = _hook(monkeypatch)
     checkout = _checkout(tmp_path / "co")
+    # The command runs the checkout's .venv/bin/python (review round 1, C6).
+    (checkout / ".venv" / "bin").mkdir(parents=True)
+    (checkout / ".venv" / "bin" / "python").write_text("", encoding="utf-8")
     settings = checkout / ".claude" / "settings.json"
     capsys.readouterr()
     assert hook.main(["--check-installed", str(checkout)], stdin=io.StringIO(""), env={}) == 1
@@ -456,11 +459,17 @@ def test_is_installed_is_false_for_other_hooks_only(
 ) -> None:
     # Red when: is_installed() reports True because SOME PostToolUse hook exists, not ours.
     hook = _hook(monkeypatch)
-    settings = tmp_path / "settings.json"
+    # In a checkout with .venv/bin/python, which the command runs (review round 1, C6).
+    settings = tmp_path / "co" / ".claude" / "settings.json"
+    settings.parent.mkdir(parents=True)
+    (tmp_path / "co" / ".venv" / "bin").mkdir(parents=True)
+    (tmp_path / "co" / ".venv" / "bin" / "python").write_text("", encoding="utf-8")
     settings.write_text(json.dumps(_EXISTING), encoding="utf-8")
     assert hook.is_installed(settings) is False
-    # Positive partner: the same file with our entry added reads as installed.
+    # Positive partner: the same file with our entry added, under PostToolUse and
+    # PostToolUseFailure (review round 1, C1), reads as installed.
     with_ours = json.loads(json.dumps(_EXISTING))
     with_ours["hooks"]["PostToolUse"].append(_ours(hook))
+    with_ours["hooks"]["PostToolUseFailure"] = [_ours(hook)]
     settings.write_text(json.dumps(with_ours), encoding="utf-8")
     assert hook.is_installed(settings) is True
