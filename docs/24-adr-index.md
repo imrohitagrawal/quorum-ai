@@ -169,6 +169,8 @@ ways, so the record shows what was believed on a date and what replaced it.
 | [ADR-0164](adr/0164-production-builds-from-the-lock-and-ci-audits-it.md) | Production builds from the lock, and CI audits it | Architecture | Accepted — 2026-10-13 |
 | [ADR-0165](adr/0165-ledger-keys-and-session-addresses-are-wiped-after-48-hours.md) | Ledger keys and session addresses are wiped after 48 hours | Architecture | Accepted — 2026-10-14 |
 | [ADR-0166](adr/0166-ci-actions-are-pinned-to-commits-and-audited.md) | CI actions are pinned to commits, and the workflows are audited | Architecture | Accepted — 2026-10-14 |
+| [ADR-0168](adr/0168-parked-work-carries-a-reason-an-owner-and-a-resume-when.md) | Parked work carries a reason, an owner and a resume-when; a branch is deleted only when nothing in it is lost | Architecture | Accepted — 2026-10-16 |
+| [ADR-0169](adr/0169-the-next-session-prompt-is-a-checked-template.md) | The next-session prompt is copied from a template, checked by name and sections, committed, and its paste line printed | Architecture | Accepted — 2026-10-16, building CHG-052 (the owner's "rule, not a habit") |
 
 **This index was itself stale** until 2026-07-30: ADR-0002 had existed since
 2026-07-19 and was never listed here. A hand-maintained index is a derived fact

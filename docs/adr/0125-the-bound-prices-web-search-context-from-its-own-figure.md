@@ -15,8 +15,8 @@ setting; it is written below as PROPOSED — AWAITING OWNER.
 
 Issue #268: the web-search context OpenRouter's `:online` suffix injects is
 priced at 2000 tokens per searching slot, and 48 telemetry readings put it
-higher (median 2438, max 3160; ADR-0119, which lives only on the unmerged
-branch of draft PR #491). Both the point estimate and the fail-safe bound
+higher (median 2438, max 3160; ADR-0119, archived on 2026-10-16 at
+`docs/archive/2026-10/adr-0119-the-web-search-context-constant-is-measured-low-and-raising-it-blocks-mixes.md`). Both the point estimate and the fail-safe bound
 read that one setting, and the bands key off the bound, so a truer setting
 raises every searching mix's bound and tips mixes near a band edge.
 
@@ -70,7 +70,8 @@ This ADR's first draft made exactly that mistake and claimed the old
 structure moved no band with peer critique off; ADR-0119's short query
 showed otherwise.
 
-**Live prices, 59-character query** (ADR-0119's sweep script, run against a
+**Live prices, 59-character query** (ADR-0119's sweep script, now
+`scripts/proofs/search_context_band_sweep.py`, run against a
 `git archive` copy of `main` and against this branch):
 
 | peer critique | old: change / new `BLOCK` at 2500, 2900, 3200 | this |
@@ -136,7 +137,9 @@ accepting it on refused mixes. Nothing here is changed until then.
   which is the coupling D5 removes.
 - **Folding ADR-0119's branch in.** It records measurements and questions,
   not a restructure. This change starts fresh from `main`; ADR-0119 and
-  draft PR #491 are left as they are, and #491 stays open.
+  draft PR #491 are left as they are, and #491 stays open. (Update, 2026-10-16: #491 closed on
+  2026-10-03; ADR-0119 is archived at `docs/archive/2026-10/adr-0119-the-web-search-context-constant-is-measured-low-and-raising-it-blocks-mixes.md`
+  and its script is `scripts/proofs/search_context_band_sweep.py`, ADR-0168.)
 
 ## Consequences
 

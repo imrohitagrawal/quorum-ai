@@ -181,7 +181,13 @@ is the rule only.
       or largely wrong (§4).
     Roughly half of what a handoff asserts does not survive contact with the tree.
 12. **Cap review at TWO rounds**, then STOP and escalate with open findings
-    listed. If two fixes in a row add defects, change the approach.
+    listed. **Codex reviews each item's plan before any code** (CHG-049).
+    **The stop rule:** after two failed fixes in a row (the fix did not work, or
+    it added a defect), revert to the last commit that review cleared, write the
+    root cause and a smaller plan, have Codex review it, and restart in a fresh
+    session (ADR-0168). **Every branch ends squash-merged and deleted, or
+    recorded in the board's Parked table**; a branch with no open pull request is
+    deleted only when nothing in it is lost (CHG-047).
     **Expect your own fix to introduce a defect — budget a round for it.**
 11a. **Tell every reviewer to audit the diff's PROSE, not only its code.**
     Verbatim, in the prompt: *"for every number, superlative, and causal claim

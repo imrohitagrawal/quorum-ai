@@ -26,7 +26,8 @@ it "a live debt today" describes the tree before that date. Nothing else
 here changes: the record stays PROPOSED — AWAITING OWNER.
 
 ADR-0119 is reserved by draft PR #491 (#268); ADR-0120 is the panel-size
-record. This takes 0121.
+record. This takes 0121. (Update, 2026-10-16: ADR-0119 is archived at
+`docs/archive/2026-10/adr-0119-the-web-search-context-constant-is-measured-low-and-raising-it-blocks-mixes.md`, ADR-0168.)
 
 ## Context
 

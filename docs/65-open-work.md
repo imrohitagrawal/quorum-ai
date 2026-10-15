@@ -6,7 +6,7 @@ original, because a gate and an offline agent can read it and cannot read `gh`.
 
 Verified at: `4ba35cec0ce40f9dd48b9c1bf0b9aefeb862a28c`
 
-The board holds **80** rows, **35** of them unpinned.
+The board holds **81** rows, **36** of them unpinned.
 
 `scripts/check_open_work.py --check` reads every row's evidence off disk and
 refuses if a claim is false. It runs inside `make validate`, and
@@ -122,7 +122,7 @@ caught by any automated check and 10 of 16 by adversarial review
 | W25 | A truncated mutation run with no survivor passes, so the gate gets greener as it measures less | DONE | `ABSENT Makefile :: print("INCONCLUSIVE: no survivor` | #464 | ADR-0118 |
 | W26 | The citation gate reports `.tsx`, `.mdx` and `.pyi` citations under a truncated path nobody wrote | DONE | `ABSENT tests/unit/test_cited_paths_resolve.py :: def test_a_longer_extension_is_not_truncated_to_a_listed_shorter_one` | #469 | — |
 | W27 | 35 mutants of `_tavily_search` survive: the request's shape, its socket timeout and both of its log events are unasserted | DONE | `ABSENT src/product_app/providers.py :: _CONTENT_TYPE_HEADER: Final = "Content-Type"` | #465 | W25 |
-| W28 | BYOK: two postures, the party paying chooses — PLANNED by the owner 2026-09-23 (CHG-011 D8), delivery not decided (ADR-0121 PROPOSED; failure modes in `docs/analysis/2026-09-23-byok-failure-modes.md`) | PENDING | `PRESENT src/product_app/query_run_orchestration.py :: credential_source = ProviderCredentialSource.APP_OWNED` | — | owner decision; the token binding (CHG-011 D9) landed 2026-09-24 (ADR-0123) |
+| W28 | BYOK: two postures, the party paying chooses — PLANNED by the owner 2026-09-23 (CHG-011 D8), delivery not decided (ADR-0121 PROPOSED; failure modes in `docs/analysis/2026-09-23-byok-failure-modes.md`) | PENDING | `PRESENT src/product_app/query_run_orchestration.py :: credential_source = ProviderCredentialSource.APP_OWNED` | — | owner decision; then W71 to W81 (CHG-051); the token binding (CHG-011 D9) landed 2026-09-24 (ADR-0123) |
 | W29 | The judge reads the cited pages (#447, Route B): the fetcher is built behind a default-off setting (ADR-0124); the judge wiring — page text in the judge's evidence, the input reserve, the receipt row, the posture-keyed copy — is built with fetching still off (ADR-0148); switching it on is W54 | DONE | `ABSENT src/product_app/evaluation.py :: source_pages` | #447 | W54 |
 | W30 | The per-network session limits count every visitor as the app's ingress address (CHG-022): take the visitor's address from what Fly's proxy forwards, measured first; the cap value stays 2 | DONE | `ABSENT src/product_app/auth.py :: def client_ip_of(` | — | — |
 | W31 | An allow-list of named, dated addresses or ranges (at most /24 IPv4, /48 IPv6) exempt from the per-network session limits only, never the spend limits (CHG-022) | DONE | `ABSENT src/product_app/config.py :: session_cap_exempt_networks` | — | W30 |
@@ -176,6 +176,7 @@ caught by any automated check and 10 of 16 by adversarial review
 | W79 | No disclosure route or key-replacement steps: add `SECURITY.md` and `security.txt`, and a key-rotation section to `docs/84-incident-response.md` (it says "rotat" 0 times) (finding S12 in `docs/analysis/2026-10-13-security-review.md`). The two repository settings W69 added here (ADR-0166) were done by the owner on 2026-10-15 (CHG-046): `FLY_API_TOKEN` lives only in the `production` environment, which allows only `main`, and actions must be pinned to a full commit | UNPINNED | `—` | — | — |
 | W80 | Two sign-in gaps found by reading: `/feedback/audit` accepts any anonymous session, and the sign-in callback discards the pending sign-in before checking `state`, so a cross-site link can cancel a sign-in (finding S10 in `docs/analysis/2026-10-13-security-review.md`) | UNPINNED | `—` | — | — |
 | W81 | Nothing stops an agent session reading `.env`: no Claude settings file has a `deny` rule; add deny rules and a hook (finding S12 in `docs/analysis/2026-10-13-security-review.md`) | UNPINNED | `—` | — | — |
+| W82 | The security baseline, ranked first among the security rows (W70 to W81) by the owner's direction that the security session first analyses what is in place (CHG-051): list every security measure in place with the command that proves it runs, replacing `docs/41-security-controls.md`; check OWASP ASVS 5.0 Level 2 item by item; turn each gap, and the gaps in section 9 of `docs/analysis/2026-10-13-security-review.md`, into a board row ranked with W71 to W81, and have Codex review that ranking before any code | UNPINNED | `—` | — | — |
 
 **STOP** marks a row that cannot be finished without a human decision — a money,
 cost or safety guardrail value that only real measurement could justify. Do not
@@ -809,6 +810,24 @@ sign-out lockout is the bug the owner hit again on 2026-09-30 (M23), and
 W35 depends on it.
 
 **W68–W81 — the security review of 2026-10-13, added 2026-10-13**, with W56 widened by the owner's decision CHG-042 (a). Each row names its finding in `docs/analysis/2026-10-13-security-review.md`, which keeps what the session ran apart from what agents reported; a row resting on an agent's report is reproduced before it is built. Added unpinned, like W33–W56: each pull request pins its row with a needle its change adds or deletes. The order is CHG-042 (b): W56, W68, W55, W69, W70; the review recommends W71–W73 before live answers are switched back on and W75–W76 before W28.
+
+## Parked
+
+Work that started and stopped, or that waits on the owner, and when it resumes (ADR-0168). The first
+cell is in backticks so the board's row reader never takes these for board rows.
+`make parked-check` lists every item here whose resume-when has come, and every remote branch with no
+open pull request. It fails when an open draft pull request, or a board row marked **STOP** or waiting
+on the owner, has no line here. A resume-when is `after W71, W72` (every named row reads DONE),
+`on YYYY-MM-DD`, or both joined by `or`. A resume point a session chose, not the owner, says so in
+the Reason cell.
+
+| Item | Where | Reason | Owner | Resume when |
+|---|---|---|---|---|
+| `W13` | issue #268; `scripts/proofs/search_context_band_sweep.py` | **STOP**: raising `cost_web_search_context_tokens` is a money decision only the owner can make (CHG-015); since ADR-0125 the sweep shows it moves the estimate and no band. Resume date: the session's, to ask the owner again | product owner | on 2026-11-16 |
+| `W28` | draft #525, `w28/byok-pr1-plan` | The owner's six decisions are open; the owner put W28 after the security rows (CHG-051), and the research on the six decisions comes first, with no decision recorded | product owner | after W71, W72, W73, W74, W75, W76, W77, W78, W79, W80, W81 |
+| `W70` | draft #567, `w70/secret-scan` | Stopped by the stop rule on 2026-10-14 with required finding D1 open; its bounded plan is in `docs/analysis/2026-10-14-session-handoff-2.md`. Resume date: the session's, the third item of the session of 2026-10-16 | engineering session | on 2026-10-16 |
+| `W74` | the board row | The attack suite makes paid calls and needs the owner's approval of its spend. Resume point: the session's, to ask once the baseline ranks the security rows | product owner | after W82 |
+| `W78` | the board row | Re-checking a row's first needle, or allowing a rewrite, is the owner's decision. Resume point: the session's, to ask once the baseline ranks the security rows | product owner | after W82 |
 
 ## What is deliberately NOT on this board
 

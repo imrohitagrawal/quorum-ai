@@ -4,7 +4,8 @@ from its own figure (``BOUND_WEB_SEARCH_CONTEXT_TOKENS``), not the setting.
 
 Swept over every four-model mix of the pinned fallback catalog (C(13,4) =
 715), at three query lengths, in BOTH peer-critique postures, at the
-candidate values ADR-0119 swept (its readings: median 2438, max 3160).
+candidate values ADR-0119 swept (its readings: median 2438, max 3160; ADR-0119 is archived in
+docs/archive/2026-10/ and its sweep is scripts/proofs/search_context_band_sweep.py).
 """
 
 from __future__ import annotations
