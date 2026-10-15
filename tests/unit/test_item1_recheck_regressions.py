@@ -12,13 +12,14 @@ from __future__ import annotations
 import importlib.util
 import sys
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 
 _ROOT = Path(__file__).resolve().parents[2]
 
 
-def _hook(monkeypatch: pytest.MonkeyPatch):
+def _hook(monkeypatch: pytest.MonkeyPatch) -> ModuleType:
     name = "prompt_write_hook_recheck_under_test"
     spec = importlib.util.spec_from_file_location(name, _ROOT / "scripts" / "prompt_write_hook.py")
     assert spec is not None and spec.loader is not None
@@ -74,7 +75,7 @@ def test_the_exact_ignored_messages_are_still_ignored(
     assert hook.run_hook([good], tmp_path / "s2.json") is None
 
 
-def _parked(monkeypatch: pytest.MonkeyPatch):
+def _parked(monkeypatch: pytest.MonkeyPatch) -> ModuleType:
     name = "check_parked_work_recheck_under_test"
     spec = importlib.util.spec_from_file_location(name, _ROOT / "scripts" / "check_parked_work.py")
     assert spec is not None and spec.loader is not None
