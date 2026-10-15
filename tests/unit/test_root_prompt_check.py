@@ -22,20 +22,30 @@ from tests.repo_root import find_repo_root
 _ROOT = find_repo_root(Path(__file__))
 _SCRIPT = _ROOT / "scripts" / "check_root_prompts.py"
 
+# The four sections every root prompt must carry (item 1, ADR-0169). They are in
+# every fixture below, good and bad, so each bad fixture lacks ONLY the Process
+# line and the one-problem assertions keep testing what they always tested.
+_SECTIONS = (
+    "## Read first\n\nx\n\n## The items, in order\n\nx\n\n"
+    "## Approvals\n\nx\n\n## End of session\n\nx\n"
+)
+_NAME = "CONTINUE-X-W1-PROMPT.md"
+
 _GOOD = (
     "# Continue the backlog\n\n"
     "**Process:** every item is built by `.agents/skills/work-item-delivery/SKILL.md`.\n\n"
-    "Items: W55.\n"
+    "Items: W55.\n\n" + _SECTIONS
 )
-_NO_LINE = "# Continue the backlog\n\nItems: W55.\n"
+_NO_LINE = "# Continue the backlog\n\nItems: W55.\n\n" + _SECTIONS
 _PROSE_ONLY = (
-    "# Continue the backlog\n\nDo not use .agents/skills/work-item-delivery/SKILL.md here.\n"
+    "# Continue the backlog\n\nDo not use .agents/skills/work-item-delivery/SKILL.md here.\n\n"
+    + _SECTIONS
 )
 _FENCED_ONLY = (
     "# Continue the backlog\n\n"
     "```text\n"
     "**Process:** every item is built by `.agents/skills/work-item-delivery/SKILL.md`.\n"
-    "```\n"
+    "```\n\n" + _SECTIONS
 )
 
 
@@ -62,13 +72,13 @@ def _root(tmp_path: Path, files: dict[str, str]) -> Path:
 def test_a_prompt_without_the_line_is_one_problem_and_with_it_none(tmp_path: Path) -> None:
     # Red when: problems() passes a prompt with no **Process:** line, reports more than one
     # problem for it, does not name the file, or refuses a prompt that carries the line.
-    bad = _root(tmp_path / "a", {"CONTINUE-X-PROMPT.md": _NO_LINE})
+    bad = _root(tmp_path / "a", {_NAME: _NO_LINE})
     found = _check().problems(bad, {})
     assert len(found) == 1, found
-    assert "CONTINUE-X-PROMPT.md" in found[0], found
+    assert _NAME in found[0], found
 
     # Positive partner: the same file with the line passes.
-    good = _root(tmp_path / "b", {"CONTINUE-X-PROMPT.md": _GOOD})
+    good = _root(tmp_path / "b", {_NAME: _GOOD})
     assert _check().problems(good, {}) == []
 
 
@@ -82,34 +92,38 @@ def test_the_path_in_prose_or_in_a_code_block_is_refused(
 ) -> None:
     # Red when: the check becomes a substring search for the skill path (passes "do not use
     # ..."), or stops skipping fenced code blocks (passes the line quoted inside ```).
-    root = _root(tmp_path, {"CONTINUE-X-PROMPT.md": text})
+    root = _root(tmp_path, {_NAME: text})
     found = _check().problems(root, {})
     assert len(found) == 1, (label, found)
-    assert "CONTINUE-X-PROMPT.md" in found[0], (label, found)
+    assert _NAME in found[0], (label, found)
 
 
 def test_a_lower_case_prompt_name_is_found_and_a_plain_note_is_not(tmp_path: Path) -> None:
     # Red when: find_prompt_files() matches only upper-case "PROMPT" (misses x-prompt.md) or
-    # picks up a root .md whose name does not contain "prompt".
+    # picks up a root .md whose name does not contain "prompt", or problems() stops reading a
+    # lower-case prompt's body (its missing Process line goes unreported).
     root = _root(tmp_path, {"x-prompt.md": _NO_LINE, "notes.md": _NO_LINE})
     names = sorted(p.name for p in _check().find_prompt_files(root))
     assert names == ["x-prompt.md"], names
     found = _check().problems(root, {})
-    assert len(found) == 1 and "x-prompt.md" in found[0], found
+    # Two problems since item 1: the name is not CONTINUE-<AREA>-<ROWS>-PROMPT.md, and the
+    # body has no Process line. Both name the file.
+    assert len(found) == 2 and all("x-prompt.md" in m for m in found), found
+    assert sum("**Process:**" in m for m in found) == 1, found
     assert not any("notes.md" in m for m in found), found
 
 
 def test_an_exemption_must_name_a_file_that_exists(tmp_path: Path) -> None:
     # Red when: an exempt name that is not in the root is silently accepted (P4), or an exempt
     # file that IS present is still refused for lacking the line.
-    root = _root(tmp_path / "a", {"CONTINUE-X-PROMPT.md": _GOOD})
+    root = _root(tmp_path / "a", {_NAME: _GOOD})
     found = _check().problems(root, {"GONE-PROMPT.md": "archived"})
     assert len(found) == 1 and "GONE-PROMPT.md" in found[0], found
 
     # Positive partner: a present exempt file without the line is not a problem.
     root = _root(
         tmp_path / "b",
-        {"CONTINUE-X-PROMPT.md": _GOOD, "R2-S2-S4-ULTRACODE-PROMPT.md": _NO_LINE},
+        {_NAME: _GOOD, "R2-S2-S4-ULTRACODE-PROMPT.md": _NO_LINE},
     )
     assert _check().problems(root, {"R2-S2-S4-ULTRACODE-PROMPT.md": "pinned"}) == []
 
@@ -128,7 +142,7 @@ def test_an_empty_root_fails_and_a_passing_root_reports_its_count(
     assert check.problems(empty, {}) != []
     assert check.main(["--root", str(empty)]) == 1
 
-    good = _root(tmp_path / "good", {"CONTINUE-X-PROMPT.md": _GOOD, "notes.md": _NO_LINE})
+    good = _root(tmp_path / "good", {_NAME: _GOOD, "notes.md": _NO_LINE})
     capsys.readouterr()
     assert check.main(["--root", str(good)]) == 0
     assert "checked 1" in capsys.readouterr().out
