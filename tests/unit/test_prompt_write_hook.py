@@ -2,7 +2,7 @@
 
 A PostToolUse hook that does NOT trust the tool's input: on every call it lists
 the root prompt files of each checkout of this repository, compares their
-size and mtime with a saved state, and runs the root prompt check only on
+SHA-256 of its content with a saved state, and runs the root prompt check only on
 roots whose prompts changed (or on every root while the last result failed).
 A failure prints ``{"decision": "block", "reason": ...}``; the hook always
 exits 0 and never raises.
@@ -13,6 +13,7 @@ through git, and no test touches the network.
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import io
 import json
@@ -136,8 +137,8 @@ def test_a_root_with_no_prompt_files_is_not_a_problem_for_the_hook(
 def test_nothing_changed_and_last_result_passing_skips_the_check(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Red when: run_hook() re-runs the check on every tool call although no prompt's size or
-    # mtime changed since a passing result.
+    # Red when: run_hook() re-runs the check on every tool call although no prompt's content
+    # changed since a passing result.
     hook = _hook(monkeypatch)
     root = _checkout(tmp_path / "co", {_NAME: _GOOD})
     state = tmp_path / "state.json"
@@ -220,7 +221,8 @@ def test_signatures_cover_root_prompt_files_only(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # Red when: signatures() skips a lower-case prompt name, includes a non-prompt file, a
-    # non-.md file or a prompt in a subdirectory, or records anything but [size, mtime_ns].
+    # non-.md file or a prompt in a subdirectory, or records anything but the SHA-256 hex
+    # digest of the file's bytes (Codex, plan re-check: size and mtime can be kept by an edit).
     hook = _hook(monkeypatch)
     root = _checkout(
         tmp_path / "co",
@@ -231,9 +233,29 @@ def test_signatures_cover_root_prompt_files_only(
     found = hook.signatures([root])
     expected = {}
     for name in (_NAME, "x-prompt.md"):
-        st = os.stat(root / name)
-        expected[str(root / name)] = [st.st_size, st.st_mtime_ns]
+        expected[str(root / name)] = hashlib.sha256((root / name).read_bytes()).hexdigest()
     assert found == expected
+
+
+def test_an_edit_that_keeps_size_and_mtime_is_still_checked(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Red when: run_hook() compares size and mtime instead of content, so a shell edit that
+    # swaps in a bad prompt of the same length and puts the old mtime back goes unchecked.
+    hook = _hook(monkeypatch)
+    root = _checkout(tmp_path / "co", {_NAME: _GOOD})
+    path = root / _NAME
+    state = tmp_path / "state.json"
+    assert hook.run_hook([root], state) is None
+    before = os.stat(path)
+    bad = _GOOD.replace("**Process:**", "**Pr0cess:**")
+    assert len(bad.encode()) == len(_GOOD.encode()) and bad != _GOOD
+    path.write_text(bad, encoding="utf-8")
+    os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
+    after = os.stat(path)
+    assert (after.st_size, after.st_mtime_ns) == (before.st_size, before.st_mtime_ns)
+    reason = hook.run_hook([root], state)
+    assert reason is not None and _NAME in reason, reason
 
 
 # --------------------------------------------------------------------------
