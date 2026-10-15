@@ -65,8 +65,7 @@ def _token_uses(node: Any) -> int:
         return sum(
             1
             for match in _SECRET_REFERENCE.finditer(node)
-            if next(name for name in match.groups() if name is not None).upper()
-            == TOKEN_NAME
+            if next(name for name in match.groups() if name is not None).upper() == TOKEN_NAME
         )
     if isinstance(node, dict):
         return sum(_token_uses(value) for value in node.values())
