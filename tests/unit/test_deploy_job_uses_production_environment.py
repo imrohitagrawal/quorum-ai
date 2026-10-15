@@ -15,12 +15,14 @@ The workflow is parsed as YAML and read by structure, not matched as text
 
 WHAT TURNS THIS FILE RED: delete ``environment: production`` from the
 ``deploy`` job, or name another environment; move a ``FLY_API_TOKEN`` use into
-a job that names no environment (the ``gate`` job, say); or drop every use of
-the token from the ``deploy`` job.
+a job that names no environment (the ``gate`` job, say), in either expression
+form or any letter case; drop every use of the token from the ``deploy`` job,
+or rename it there to a longer or different secret name.
 """
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -30,7 +32,11 @@ from tests.repo_root import find_repo_root
 ROOT = find_repo_root(Path(__file__))
 WORKFLOWS = ROOT / ".github" / "workflows"
 DEPLOY_YML = WORKFLOWS / "deploy.yml"
-TOKEN_EXPRESSION = "secrets.FLY_API_TOKEN"
+TOKEN_NAME = "FLY_API_TOKEN"
+_SECRET_REFERENCE = re.compile(
+    r"\bsecrets\s*(?:\.\s*([A-Za-z0-9_]+)|\[\s*'([^']*)'\s*\]|\[\s*\"([^\"]*)\"\s*\])",
+    re.IGNORECASE,
+)
 
 
 def _jobs(path: Path) -> dict[str, Any]:
@@ -48,9 +54,20 @@ def _environment_name(job: dict[str, Any]) -> str | None:
 
 
 def _token_uses(node: Any) -> int:
-    """Count the string values anywhere under ``node`` that read the token."""
+    """Count the references to the token anywhere under ``node``.
+
+    A reference is a whole secret name, in either expression form
+    (``secrets.NAME`` or ``secrets['NAME']``), compared ignoring case as GitHub
+    compares secret names. A longer name such as ``FLY_API_TOKEN_MISSING`` is
+    a different secret, which GitHub reads as an empty string.
+    """
     if isinstance(node, str):
-        return node.count(TOKEN_EXPRESSION)
+        return sum(
+            1
+            for match in _SECRET_REFERENCE.finditer(node)
+            if next(name for name in match.groups() if name is not None).upper()
+            == TOKEN_NAME
+        )
     if isinstance(node, dict):
         return sum(_token_uses(value) for value in node.values())
     if isinstance(node, list):
@@ -68,6 +85,13 @@ def test_the_deploy_job_reads_the_token() -> None:
     # the deploy step and the two smoke tests, so "every use sits in a job
     # that names production" is not true over nothing.
     assert _token_uses(_jobs(DEPLOY_YML)["deploy"]) == 3
+
+
+def test_the_deploy_step_hands_flyctl_the_token() -> None:
+    steps = _jobs(DEPLOY_YML)["deploy"]["steps"]
+    deploy_steps = [step for step in steps if step.get("name") == "Deploy to Fly.io"]
+    assert len(deploy_steps) == 1
+    assert deploy_steps[0]["env"]["FLY_API_TOKEN"] == "${{ secrets.FLY_API_TOKEN }}"
 
 
 def test_every_job_that_reads_the_token_names_the_production_environment() -> None:

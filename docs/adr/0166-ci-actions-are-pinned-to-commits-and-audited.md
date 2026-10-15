@@ -199,7 +199,9 @@ file's `workflow_run` trigger, `GITHUB_REF` is the default branch; for `workflow
 the branch or tag the operator chose. So a manual dispatch from a branch with an older or edited
 `deploy.yml` gets no token: a job naming no environment has no repository copy to read, and a
 job naming `production` from a ref other than `main` does not match the branch rule. What
-GitHub shows for that refused job was not tested here.
+GitHub shows for that refused job was not tested here. The environment reads
+`"can_admins_bypass":true`; whether an administrator can override the branch rule, and not only
+a pending review, was not tested either (the environment has no reviewers or wait timer).
 
 `tests/unit/test_deploy_job_uses_production_environment.py` requires the `deploy` job to name
 `production`, and every workflow job that reads `FLY_API_TOKEN` to name it too; today that is
