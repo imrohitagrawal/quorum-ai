@@ -39,9 +39,10 @@ Decision rules (fail-safe — never deploy what we cannot positively verify):
   This refusal runs only where the dispatched ref's own copy of this script
   carries it: GitHub runs ``deploy.yml`` and this file as they are on the ref
   the operator picked. It catches a mistaken pick of a branch or tag cut after
-  W69; it cannot stop a branch with an older or an edited copy. A GitHub
-  deployment environment restricted to ``main``, holding ``FLY_API_TOKEN``,
-  would (a repository setting, not made yet; ADR-0166).
+  W69; it cannot stop a branch with an older or an edited copy. Where the
+  token lives does: since 2026-10-15 ``FLY_API_TOKEN`` is a secret of the
+  ``production`` deployment environment only, which allows only ``main``
+  (CHG-046, ADR-0166).
 
 The core :func:`evaluate_gate` takes injectable ``fetch_conclusion`` / ``sleep``
 / ``monotonic`` collaborators so it is unit-tested with zero network and zero
