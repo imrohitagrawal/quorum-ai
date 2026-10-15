@@ -12,7 +12,15 @@ compares them with the digests it saved last time in
 ``scripts/check_root_prompts.py``'s check only on the checkouts whose prompts
 changed, were added or were removed, or on every checkout while the last
 result was a failure (and on its first run, with no saved state), so a bad
-prompt keeps being reported until it is fixed.
+prompt keeps being reported until it is fixed. The state also holds the
+digest of ``check_root_prompts.py`` and of this file, each read as bytes from
+beside this file; when either differs from the saved one, or none was saved,
+every checkout is checked again, so a prompt an older check passed is not
+trusted after the check changes.
+
+The message "is exempt but does not exist" is ignored here for every
+checkout, as is "no root prompt file found": another checkout's tree is not
+this session's to fix. ``make prompt-check`` still reports both.
 
 On a failure it prints ``{"decision": "block", "reason": ...}``, which shows
 the agent what is wrong; for a PostToolUseFailure event it prints the same
@@ -46,6 +54,7 @@ from typing import Any, TextIO
 _SCRIPTS = Path(__file__).resolve().parent
 _SKILL = Path(".agents") / "skills" / "work-item-delivery" / "SKILL.md"
 _NO_PROMPT = "no root prompt file found"
+_EXEMPT_GONE = "is exempt but does not exist"
 
 #: The command the settings entry runs. Resolved from the project directory,
 #: so it works from any checkout and whatever the session's working directory.
@@ -132,17 +141,33 @@ def signatures(roots: list[Path]) -> dict[str, str]:
     return found
 
 
-def _read_state(state_path: Path) -> tuple[dict[str, str] | None, bool]:
+def source_digests() -> dict[str, str]:
+    """The SHA-256 hex digest of the check's source and of this hook's
+    source, read as bytes from beside this file."""
+    return {
+        "checker": hashlib.sha256((_SCRIPTS / "check_root_prompts.py").read_bytes()).hexdigest(),
+        "hook": hashlib.sha256(Path(__file__).resolve().read_bytes()).hexdigest(),
+    }
+
+
+def _read_state(state_path: Path, sources: dict[str, str]) -> tuple[dict[str, str] | None, bool]:
     """The saved digests and whether the last result failed. Missing or
-    unreadable state reads as (None, True): everything counts as changed."""
+    unreadable state, or a state whose source digests differ from
+    ``sources`` or are absent, reads as (None, True): everything counts as
+    changed."""
     try:
         data = json.loads(state_path.read_text(encoding="utf-8"))
         saved = data["signatures"]
-        if not isinstance(saved, dict):
+        if not isinstance(saved, dict) or data.get("sources") != sources:
             return None, True
         return {str(k): str(v) for k, v in saved.items()}, bool(data["failing"])
     except Exception:  # noqa: BLE001 — any unreadable state means "check everything"
         return None, True
+
+
+def _ignored(message: str) -> bool:
+    """Messages the hook does not block on (see the module docstring)."""
+    return message.startswith(_NO_PROMPT) or _EXEMPT_GONE in message
 
 
 def _in_root(path: str, root: Path) -> bool:
@@ -151,12 +176,14 @@ def _in_root(path: str, root: Path) -> bool:
 
 def run_hook(roots: list[Path], state_path: Path) -> str | None:
     """Check the roots whose prompts changed (all of them while the last
-    result failed), save the new state, and return the reason to block, or
-    None when nothing failed. A state that cannot be saved is noted on stderr
-    and does not lose the reason: the next call then checks everything."""
+    result failed, or after the check or this hook changed), save the new
+    state, and return the reason to block, or None when nothing failed. A
+    state that cannot be saved is noted on stderr and does not lose the
+    reason: the next call then checks everything."""
     check = _check()
     current = signatures(roots)
-    saved, failing = _read_state(state_path)
+    sources = source_digests()
+    saved, failing = _read_state(state_path, sources)
     failures: list[str] = []
     for root in roots:
         if saved is not None and not failing:
@@ -165,11 +192,14 @@ def run_hook(roots: list[Path], state_path: Path) -> str | None:
             if now == before:
                 continue
         found = check.problems(root, check.EXEMPT)
-        failures += [f"{root}: {m}" for m in found if not m.startswith(_NO_PROMPT)]
+        failures += [f"{root}: {m}" for m in found if not _ignored(m)]
     try:
         state_path.parent.mkdir(parents=True, exist_ok=True)
         state_path.write_text(
-            json.dumps({"signatures": current, "failing": bool(failures)}, indent=2) + "\n",
+            json.dumps(
+                {"signatures": current, "failing": bool(failures), "sources": sources}, indent=2
+            )
+            + "\n",
             encoding="utf-8",
         )
     except OSError as exc:
@@ -202,13 +232,27 @@ def is_installed(settings_path: Path) -> bool:
     return install_status(settings_path) == "installed"
 
 
+class SettingsShapeError(ValueError):
+    """The settings file is not a JSON object whose ``hooks`` is an object
+    of lists; ``install`` refuses it and writes nothing."""
+
+
 def install(settings_path: Path) -> bool:
     """Add this hook's entry under both events to the settings file, keeping
     everything else. True when the file changed; False when both entries
-    were already there."""
-    data: dict[str, Any] = {}
+    were already there. Raises ``SettingsShapeError``, writing nothing, when
+    the file does not read as JSON of the expected shape."""
+    data: Any = {}
     if settings_path.is_file():
-        data = json.loads(settings_path.read_text(encoding="utf-8"))
+        try:
+            data = json.loads(settings_path.read_text(encoding="utf-8"))
+        except ValueError as exc:
+            raise SettingsShapeError(str(settings_path)) from exc
+    shaped = isinstance(data, dict) and isinstance(data.get("hooks", {}), dict)
+    if shaped:
+        shaped = all(isinstance(data.get("hooks", {}).get(e, []), list) for e in _EVENTS)
+    if not shaped:
+        raise SettingsShapeError(str(settings_path))
     hooks = data.setdefault("hooks", {})
     changed = False
     for event in _EVENTS:
@@ -257,7 +301,11 @@ def main(
     group.add_argument("--check-installed", type=Path, metavar="CHECKOUT")
     args = parser.parse_args(argv)
     if args.install is not None:
-        changed = install(_settings(args.install))
+        try:
+            changed = install(_settings(args.install))
+        except SettingsShapeError:
+            print(f"cannot install: {_settings(args.install)} is not the expected shape")
+            return 1
         print("installed" if changed else "already installed")
         return 0
     if args.check_installed is not None:

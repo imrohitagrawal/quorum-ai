@@ -308,7 +308,8 @@ def test_c8_the_ci_filter_sees_an_upper_case_md_suffix(
     listed = [_NAME]
 
     def ls_files(*a: Any, **k: Any) -> subprocess.CompletedProcess[str]:
-        return subprocess.CompletedProcess(a[0], 0, stdout="\n".join(listed) + "\n", stderr="")
+        # NUL-separated, as `git ls-files -z` prints (review round 2, D4).
+        return subprocess.CompletedProcess(a[0], 0, stdout="\0".join(listed) + "\0", stderr="")
 
     monkeypatch.setattr(ci, "_ROOT", fake)
     monkeypatch.setattr(ci.subprocess, "run", ls_files)

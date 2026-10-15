@@ -482,10 +482,19 @@ def _failing_prompt_lines(root: Path) -> list[str]:
 def _next_session_section(root: Path) -> str:
     """The line the owner pastes to start the next session (ADR-0169): one per
     validly named root prompt that passes the check. Says so when there is
-    none, or more than one, and names a validly named prompt that fails."""
+    none, names a validly named prompt that fails, and, when more than one
+    prompt is validly named (passing or failing), says only one should be
+    left."""
     head = "## Next session\n"
     lines = _paste_lines(root)
-    failing = "".join(f"{line}\n" for line in _failing_prompt_lines(root))
+    failing_lines = _failing_prompt_lines(root)
+    failing = "".join(f"{line}\n" for line in failing_lines)
+    named = len(lines) + len(failing_lines)
+    if named > 1:
+        failing += (
+            f"There are {named} validly named root prompts; only one should be left for the "
+            "next session. Archive the others.\n"
+        )
     if not lines:
         return (
             f"{head}{failing}There is no root prompt named `CONTINUE-<AREA>-<ROWS>-PROMPT.md` "
@@ -495,10 +504,7 @@ def _next_session_section(root: Path) -> str:
     block = "```text\n" + "".join(f"{line}\n" for line in lines) + "```\n"
     if len(lines) == 1:
         return f"{head}{failing}Paste this line to start the next session:\n{block}"
-    return (
-        f"{head}{failing}There are {len(lines)} validly named root prompts; only one should be "
-        f"left for the next session. Archive the others. Their lines:\n{block}"
-    )
+    return f"{head}{failing}The lines of those that pass:\n{block}"
 
 
 def _readiness_section() -> str:

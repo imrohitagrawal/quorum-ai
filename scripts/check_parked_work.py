@@ -11,7 +11,8 @@ origin``) and the open pull requests (``gh pr list``), and:
 - LISTS every remote branch other than ``main`` that no open pull request
   uses, and every parked item whose resume-when has come. These are things to
   act on, not failures.
-- FAILS (exit 1) on an open draft pull request no Parked line names; a board
+- FAILS (exit 1) on an open draft pull request no Parked line names (by its
+  number, ``#525``, or its exact head branch in backticks); a board
   row that is not DONE and is marked **STOP** or waits on the owner, with no
   Parked line; a Parked line with an empty cell, a resume-when that does not
   read or that names the line's own row, a row that is not on the board or
@@ -281,8 +282,10 @@ def build_report(
             due.append(entry.item)
 
     parked_prs = {n for entry in entries for n in pr_numbers(entry.where)}
+    parked_branches = {b for entry in entries for b in branch_names(entry.where)}
     for pr in prs:
-        if pr.get("isDraft") and pr.get("number") not in parked_prs:
+        named = pr.get("number") in parked_prs or pr.get("headRefName") in parked_branches
+        if pr.get("isDraft") and not named:
             problems.append(
                 f"draft pull request #{pr.get('number')} ({pr.get('headRefName')}) has no "
                 f"line in the {_HEADING} table"

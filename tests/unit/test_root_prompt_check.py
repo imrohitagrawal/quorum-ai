@@ -152,9 +152,10 @@ def test_every_tracked_root_prompt_carries_the_line_or_is_exempt(tmp_path: Path)
     # Red when: a TRACKED root prompt file lacks the **Process:** line and is not named in
     # check_root_prompts.EXEMPT (a tracked prompt without the line must not merge).
     check = _check()
+    # -z: names end in NUL and are not quoted, so a non-ASCII name keeps its ".md".
     listed = subprocess.run(
-        ["git", "ls-files"], cwd=_ROOT, capture_output=True, text=True, check=True
-    ).stdout.splitlines()
+        ["git", "ls-files", "-z"], cwd=_ROOT, capture_output=True, text=True, check=True
+    ).stdout.split("\0")
     # Case-insensitive, as find_prompt_files() is: a committed NEXT-PROMPT.MD must not escape.
     tracked = [
         n for n in listed if "/" not in n and n.lower().endswith(".md") and "prompt" in n.lower()
