@@ -757,3 +757,42 @@ def test_recheck_f2_does_not_name_a_file_url_glued_to_a_word_or_a_path(template:
     """Partner: ``file:`` and ``git+file:`` inside a word or another URL's path stay unnamed."""
     # Red when: the row's own comment above holds (each row names its change).
     assert not _home(template), _fill(template)
+
+
+# --------------------------------------------------------------------------
+# A file URL at the start of a unified diff's added or removed line
+# --------------------------------------------------------------------------
+
+_DIFF_LINE_NAMED = [
+    # Red when: a `+` at the line's start may not stand before `file:` (a diff's added line).
+    "+file://<U>/alice/notes.md",
+    # Red when: a `-` at the line's start may not stand before `file:` (a diff's removed line).
+    "-file://<U>/alice/old",
+    # Red when: a `-` at the line's start may not stand before a `<scheme>+file:`.
+    "-git+file://<U>/alice/old",
+    # Red when: a `+` at the line's start may not stand before a `<scheme>+file:`.
+    "+git+file://<U>/alice/pkg",
+    # Red when: a `+` at the line's start may not stand before `file://localhost`.
+    "+file://localhost<U>/alice/x",
+]
+
+_DIFF_LINE_NOT_NAMED = [
+    # Red when: a scheme chain inside another URL's path (`/a+b+file:`) starts a path.
+    "https://example.org/a+b+file://<U>/alice/x",
+    # Red when: a combining mark before `file:` does not end a word (`x` + U+0301 is one letter).
+    "x́file://<U>/alice/x",
+]
+
+
+@pytest.mark.parametrize("template", _DIFF_LINE_NAMED)
+def test_a_file_url_at_the_start_of_a_diff_line_is_named(template: str) -> None:
+    """``+`` or ``-`` first on the line, then a file URL: a diff line's home folder."""
+    # Red when: the row's own comment above holds (each row names its change).
+    assert _home(template), _fill(template)
+
+
+@pytest.mark.parametrize("template", _DIFF_LINE_NOT_NAMED)
+def test_a_file_url_inside_a_url_path_or_after_a_mark_is_not_named(template: str) -> None:
+    """Partner: a ``+file:`` chain inside another URL's path, or glued to a marked letter."""
+    # Red when: the row's own comment above holds (each row names its change).
+    assert not _home(template), _fill(template)
