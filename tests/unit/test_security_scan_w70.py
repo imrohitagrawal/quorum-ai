@@ -19,10 +19,11 @@ What these tests pin, in the order of the W70 work item:
    KNOWN LIMIT, deliberately not tested: a key split across two LINES is not
    caught. The scan reads line by line, and joining across lines would need a
    parser per language.
-3. Named secrets (``*_API_KEY``, ``*_TOKEN``, ``*_SECRET``, ``*_CLIENT_SECRET``,
-   ``*_DSN``, ``*_PASSWORD``) with a real-looking value, and known value shapes
-   whatever the name. Placeholders are not flagged.
-4. Home-folder paths (owner decision CHG-045: "Rewrite them to ~").
+3. Known value shapes, whatever the name they are given. (Named secret
+   assignments, ``*_API_KEY`` and the rest, moved out of W70 to board row W83
+   in the W70 split of 2026-10-16; their tests left with them.)
+4. Home-folder paths (owner decision CHG-045: "Rewrite them to ~"), including
+   the dash-encoded form of the lines committed before W70.
 6. Partners: clean files produce nothing, the real tree passes, and one planted
    key gives exactly one finding.
 
@@ -39,14 +40,15 @@ Interface assumed (shared with the builder): module attributes ``ROOT``,
 ``(findings, files_read)``; ``_iter_text_files()`` returning absolute paths;
 ``main()`` returning the exit code; findings with ``check_id``, ``path``
 (relative, forward slashes) and ``line``. Check ids assumed:
-``named_secret_assignment``, ``known_secret_shape``, ``home_directory_path``,
-and ``raw_openrouter_key_pattern`` for a joined key.
+``known_secret_shape``, ``home_directory_path``, and
+``raw_openrouter_key_pattern`` for a joined key.
 """
 
 from __future__ import annotations
 
 import importlib.util
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -85,8 +87,6 @@ _ALNUM = "Q7mT2vX9kL4pW8nZ3sBa1Cb2Dc3Ed4Fe5Gf6Hg7Ih8Ji9Kj0LkMlNmOnPoQpRqSrTs"
 _OPENROUTER_PREFIX = "sk-or-" + "v1-"
 #: 64 hex characters after the prefix: the shape of a real OpenRouter key.
 _KEY = _OPENROUTER_PREFIX + _HEX32 * 2
-#: A 20-character value with no placeholder word in it.
-_GENERIC = "".join(["Qm7t", "R2vX", "9kL4", "pW8n", "Z3sB"])
 _USERS = "/".join(["", "Users", ""])
 _HOME = "/".join(["", "home", ""])
 
@@ -469,87 +469,8 @@ def test_a_key_split_into_adjacent_quoted_fragments_on_one_line_is_named(
 
 
 # --------------------------------------------------------------------------
-# 3. Named secrets and known value shapes
+# 3. Known value shapes
 # --------------------------------------------------------------------------
-
-#: Values that look like an assignment but hold no secret. Each must stay
-#: unnamed on the same name and in the same form as a flagged real value.
-_PLACEHOLDERS = [
-    "<fly-api-token-here>",
-    "${SOME_SERVICE_VALUE}",
-    "$SOME_SERVICE_VALUE",
-    "...",
-    "xxxxxxxxxxxxxxxx",
-    "changeme-changeme",
-    "placeholder-value-1234",
-    "your-token-goes-here",
-    "your_token_goes_here",
-    "example-value-123456",
-    "",
-    "${{ " + "secrets.SOME_SERVICE_VALUE }}",
-]
-
-#: (file, line template, name). Every form W70 names, each on a different name
-#: suffix, plus a lower-case name for case-insensitivity.
-_NAMED_FORMS = [
-    (".env.example", "{name}={value}", "FLY_API_TOKEN"),
-    ("deploy.sh", "export {name}={value}", "OPENROUTER_API_KEY"),
-    ("fly.yml", "  {name}: {value}", "GOOGLE_CLIENT_SECRET"),
-    ("config.toml", '{name} = "{value}"', "TAVILY_API_KEY"),
-    ("settings.py", '{name} = "{value}"', "DATABASE_PASSWORD"),
-    ("app.yaml", '{name}: "{value}"', "SESSION_SECRET"),
-    ("client.js", "const {name} = '{value}';", "GITHUB_TOKEN"),
-    ("client.ts", '{name} = "{value}";', "SENTRY_DSN"),
-    ("lower.yml", "{name}: {value}", "fly_api_token"),
-]
-
-
-@pytest.mark.parametrize(("rel", "template", "name"), _NAMED_FORMS)
-def test_a_named_secret_is_flagged_and_its_placeholders_are_not(
-    rel: str, template: str, name: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Line 1 holds a real-looking value; every later line, a placeholder.
-
-    Same name, same form, same file: the only difference is the value, so the
-    named line 1 is the positive partner for every unnamed placeholder line.
-
-    Red when: this assignment form or name suffix is not recognised (line 1
-    unnamed), OR a placeholder kind is flagged (any later line named).
-    """
-    lines = [template.format(name=name, value=_GENERIC)]
-    lines += [template.format(name=name, value=p) for p in _PLACEHOLDERS]
-    repo = _init_repo(tmp_path / "repo")
-    _write(repo, rel, "\n".join(lines) + "\n")
-    _commit_all(repo)
-
-    findings, _ = _scan(repo, monkeypatch)
-
-    named = _lines_named_in(findings, rel)
-    assert named == {1}, (
-        f"expected only line 1 named in {rel}; got {sorted(named)} for lines {lines}"
-    )
-
-
-def test_a_named_secret_needs_twelve_characters(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The length boundary, pinned with literals on both sides (rule 8b).
-
-    Red when: the minimum is not 12 (an 11-character value flagged, or a
-    12-character one missed).
-    """
-    name = "STRIPE" + "_API_KEY"
-    lines = [
-        name + "=" + _GENERIC[:11],  # 1: 11 characters, not named
-        name + "=" + _GENERIC[:12],  # 2: 12 characters, named
-    ]
-    repo = _init_repo(tmp_path / "repo")
-    _write(repo, ".env.example", "\n".join(lines) + "\n")
-    _commit_all(repo)
-
-    findings, _ = _scan(repo, monkeypatch)
-
-    assert _lines_named_in(findings, ".env.example") == {2}
 
 
 def _fly(n: int) -> str:
@@ -657,6 +578,84 @@ def test_a_home_folder_path_is_named_and_placeholders_are_not(
     assert _lines_named_in(findings, "tool.sh") == {1}
 
 
+#: The committed lines that held a dash-encoded home folder (the form in a
+#: Claude project folder's name) when the W70 split was planned. Measured
+#: 2026-10-16 at 70080f3 with ``git grep -c -E -- '-Users-[A-Za-z0-9._]+-'``:
+#: 8 lines in these 4 files, and none for the ``-home-`` form. Paths are joined
+#: at run time so this table is not read as a citation by the cited-paths gate.
+_DASH_ENCODED_LINES = {
+    "/".join(["docs", "analysis", "2026-08-26-b1-provider-billing-failure-modes.md"]): [27],
+    "/".join(["docs", "analysis", "2026-09-22-decision-register.md"]): [25],
+    "/".join(["docs", "analysis", "2026-09-29", "NEW-PRODUCT-STARTER-PROMPT.md"]): [16],
+    "/".join(["docs", "analysis", "2026-09-29", "owner-bugs-root-causes.md"]): [
+        105,
+        114,
+        322,
+        395,
+        411,
+    ],
+}
+
+
+def _dash_encoded_home_lines() -> list[tuple[str, int, str]]:
+    """Every committed line holding ``-Users-<name>-`` or ``-home-<name>-``.
+
+    Found by ``git grep`` with a needle built at run time, so no line of this
+    file matches it, then kept only where the leading ``-`` does not follow a
+    letter, digit, ``_`` or ``-`` (plan S3, final: ``nav-home-icon-large`` is
+    CSS, not a home folder).
+    """
+    needle = "-" + "(" + "Users" + "|" + "home" + ")" + "-[A-Za-z0-9._]+-"
+    run = subprocess.run(
+        ["git", "grep", "-n", "-I", "-E", "-e", needle],
+        cwd=REPO,
+        env=_git_env(),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert run.returncode in {0, 1}, run.stderr  # 1 is "no match", not an error
+    boundary = re.compile(r"(?<![A-Za-z0-9_-])" + needle)
+    out = []
+    for hit in run.stdout.splitlines():
+        rel, number, line = hit.split(":", 2)
+        if boundary.search(line):
+            out.append((rel, int(number), line))
+    return out
+
+
+def test_every_committed_dash_encoded_home_folder_is_named() -> None:
+    """Plan S3 on the real tree: the 8 lines committed before W70 are named.
+
+    Each of the 8 pinned lines is either still dash-encoded, and then the scan
+    must name it, or rewritten per CHG-045 (``~``, or ``<user>`` for the name),
+    and then it is no longer found. After the rewrite this test reads zero
+    encoded lines; its positive partner is then the S3 cases in
+    ``tests/unit/test_security_scan_w70_split.py``, and it still names any new
+    dash-encoded line committed anywhere.
+    """
+    # Red when: _contains_home_directory_path does not name `-Users-<name>-` (plan S3 not built).
+    found = _dash_encoded_home_lines()
+    found_at = {(rel, n) for rel, n, _ in found}
+    still_encoded = set()
+    for rel, numbers in _DASH_ENCODED_LINES.items():
+        text = (REPO / rel).read_text(encoding="utf-8").splitlines()
+        assert len(text) >= max(numbers), f"{rel} has only {len(text)} lines"
+        for n in numbers:
+            # Read directly, so a broken git grep cannot make this test vacuous.
+            if "-" + "Users" + "-" in text[n - 1] and "<user>" not in text[n - 1]:
+                still_encoded.add((rel, n))
+    assert sum(len(numbers) for numbers in _DASH_ENCODED_LINES.values()) == 8
+    assert still_encoded <= found_at, f"git grep missed pinned lines: {still_encoded - found_at}"
+    missed = sorted(
+        (rel, n) for rel, n, line in found if not scanner._contains_home_directory_path(line)
+    )
+    assert not missed, (
+        f"{len(missed)} of {len(found)} dash-encoded home-folder lines are not named "
+        f"({len(still_encoded)} of the 8 pinned ones still encoded): {missed}"
+    )
+
+
 # --------------------------------------------------------------------------
 # Check ids (the builder matches these; the tests above assert path and line).
 # --------------------------------------------------------------------------
@@ -668,12 +667,13 @@ def test_each_new_rule_reports_under_its_own_check_id(
     """One plant per rule, each on its own line, each named under the assumed id.
 
     Red when: a rule reports under a different id than the one documented for
-    it, or does not report at all.
+    it, or does not report at all. (The W70 split removed the named-secret
+    line that stood first here; that rule is row W83's.)
     """
     head = _OPENROUTER_PREFIX + _HEX32[:20]
     tail = (_HEX32 * 2)[20:]
     lines = [
-        "SOME_SERVICE" + "_API_KEY" + "=" + _GENERIC,  # 1
+        "first line, no plant",  # 1
         "value: " + _google(_GOOGLE_28),  # 2
         "cd " + _USERS + "alice/x",  # 3
         "x = " + _q(head) + " " + _q(tail),  # 4
@@ -687,7 +687,6 @@ def test_each_new_rule_reports_under_its_own_check_id(
     for f in findings:
         ids_by_line.setdefault(f.line, set()).add(f.check_id)
 
-    assert "named_secret_assignment" in ids_by_line.get(1, set()), ids_by_line
     assert "known_secret_shape" in ids_by_line.get(2, set()), ids_by_line
     assert "home_directory_path" in ids_by_line.get(3, set()), ids_by_line
     assert "raw_openrouter_key_pattern" in ids_by_line.get(4, set()), ids_by_line

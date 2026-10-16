@@ -6,16 +6,13 @@ reads the real repository, so none needs the ``repo_introspection`` marker.
 
 What is pinned here:
 
-- a key shape or a named secret split into adjacent quoted fragments is joined
-  for EVERY value check, not only the OpenRouter one, and reported once per
-  check;
-- a password with punctuation (``!&#@``) is a named secret;
-- a home-folder path is ``/Users/<name>/`` or ``/home/<name>/`` WITH its
-  trailing ``/``, starting a path, and the macOS ``Shared`` folder is not one
-  (review round 2 reversed round 1's "no trailing slash" form);
+- a key shape split into adjacent quoted fragments is joined for EVERY value
+  check, not only the OpenRouter one, and reported once per check;
+- a home-folder path is ``/home/<name>/`` WITH its trailing ``/``, starting a
+  path, and the macOS ``Shared`` folder is not one (review round 2 reversed
+  round 1's "no trailing slash" form); ``/Users/<name>`` at the end of a line
+  needs no trailing ``/`` (plan S4 of the W70 split, 2026-10-16);
 - a symbolic link is read as its link text, never followed;
-- the ``tests/`` exemption of ``named_secret_assignment`` is that one folder;
-- the JSON and make assignment forms the ADR names;
 - the walk skips ``.hypothesis``;
 - the Fly token prefixes flyctl itself recognises.
 
@@ -58,11 +55,8 @@ _ALNUM = "".join(["Q7mT2vX9kL4pW8nZ3sBa", "1Cb2Dc3Ed4Fe5Gf6Hg7I", "h8Ji9Kj0LkMlN
 _OPENROUTER_PREFIX = "".join(["sk-", "or-", "v1-"])
 _GOOGLE_PREFIX = "".join(["GOC", "SPX-"])
 _GOOGLE_28 = _ALNUM[:13] + "-" + _ALNUM[13:20] + "_" + _ALNUM[20:27]
-_GENERIC = "".join(["Qm7t", "R2vX", "9kL4", "pW8n", "Z3sB"])
 _USERS = "/".join(["", "Users", ""])
 _HOME = "/".join(["", "home", ""])
-_TOKEN_NAME = "".join(["SOME_SERVICE", "_TOKEN"])
-_PASSWORD_NAME = "".join(["DB", "_PASSWORD"])
 
 
 def _q(text: str) -> str:
@@ -138,110 +132,28 @@ def _lines(findings: list[Any], rel: str, check_id: str | None = None) -> set[in
 # --------------------------------------------------------------------------
 
 
-def test_split_shapes_and_split_named_values_are_joined_and_reported_once_per_check(
+def test_a_split_shape_is_joined_and_reported_once(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A Google secret or a named value split over adjacent quoted fragments.
+    """A Google secret split over adjacent quoted fragments.
 
-    Line 1 is a split Google secret under a secret name: one ``known_secret_shape``
-    AND one ``named_secret_assignment``, each exactly once. Line 2 is a split
-    generic value under a secret name. Lines 3 and 4 are the partners: the same
-    splits one character short of each rule (27 after the prefix; 11 in all).
+    Line 1 is a split Google secret: exactly one ``known_secret_shape``. Line 2
+    is the partner: the same split one character short (27 after the prefix).
+    The W70 split removed this test's named-secret lines (row W83), and line 1's
+    name is now ``value``, so that rule's return cannot change this count.
 
     Red when: ``_contains_known_secret_shape`` tests only the raw line (line 1
-    has no shape finding), OR ``_assigned_value`` keeps only the first fragment
-    (line 2 has no named finding), OR a check reports a line twice.
+    has no shape finding), OR a check reports a line twice, OR the shape's
+    length floor drops below 28 (line 2 named).
     """
-    google_name = "".join(["GOOGLE_CLIENT", "_SECRET"])
     lines = [
-        google_name + " = " + _q(_GOOGLE_PREFIX) + " " + _q(_GOOGLE_28),  # 1
-        _TOKEN_NAME + " = " + _q(_GENERIC[:6]) + " + " + _q(_GENERIC[6:]),  # 2
-        "value = " + _q(_GOOGLE_PREFIX) + " " + _q(_GOOGLE_28[:27]),  # 3 short
-        _TOKEN_NAME + " = " + _q(_GENERIC[:5]) + " " + _q(_GENERIC[5:11]),  # 4 short
+        "value = " + _q(_GOOGLE_PREFIX) + " " + _q(_GOOGLE_28),  # 1
+        "value = " + _q(_GOOGLE_PREFIX) + " " + _q(_GOOGLE_28[:27]),  # 2 short
     ]
     findings = _scan_repo(tmp_path, monkeypatch, {"settings.toml": lines})
 
     got = sorted((f.line, f.check_id) for f in findings)
-    assert got == [
-        (1, "known_secret_shape"),
-        (1, "named_secret_assignment"),
-        (2, "named_secret_assignment"),
-    ], got
-
-
-# --------------------------------------------------------------------------
-# Item 3: passwords with punctuation
-# --------------------------------------------------------------------------
-
-
-def test_a_password_with_punctuation_is_a_named_secret(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Quoted or not, a value may hold the password punctuation ``!#%&*?@^~``.
-
-    Lines 1 to 3 of ``.env.example`` and line 2 of ``mail.yml`` are the four
-    reproduced misses. Lines 4 to 9 of ``.env.example`` are partners that keep
-    the old guards: a space, a ``$`` reference, an angle placeholder, a word
-    phrase, a ``#`` comment after a space, and a ``(`` that ends an unquoted
-    value at 7 characters. Line 3 of ``mail.yml`` holds ``|``, ``[`` and ``;``:
-    review round 2 put quoted values back on the one character set, so it is
-    a partner now (a known limit, not a finding).
-
-    Red when: the value class excludes password punctuation again (lines 1-3
-    or ``mail.yml`` line 2 unnamed), OR a quoted value takes any printable
-    character again (``mail.yml`` line 3 named), OR one of the old guards is
-    dropped (a later line named).
-    """
-    zebra = "".join(["Z3bra", "!Cac", "tus42"])
-    troub = "".join(["Tr0ub", "4dor&", "3xyzQ"])
-    hunter = "".join(["Hunter2", "!xYz", "9abc"])
-    smtp = "".join(["p@ssW0", "rd#20", "26x"])
-    env = [
-        _PASSWORD_NAME + "=" + _q(zebra),  # 1
-        _PASSWORD_NAME + "=" + _q(troub),  # 2
-        _PASSWORD_NAME + "=" + hunter,  # 3
-        _PASSWORD_NAME + "=" + _q("Z3bra! Cactus42"),  # 4 space
-        _PASSWORD_NAME + "=" + _q("Hunter2!" + "$" + "XYZ_VALUE"),  # 5 reference
-        _PASSWORD_NAME + "=" + _q("<your password!>"),  # 6 placeholder
-        _PASSWORD_NAME + "=" + _q("correct-horse-battery"),  # 7 word phrase
-        _PASSWORD_NAME + "= #" + hunter,  # 8 comment after a space
-        _PASSWORD_NAME + "=Hunter2(" + hunter,  # 9 code
-    ]
-    # Line 3 holds characters outside the value set (``|``, ``[``, ``;``).
-    odd = "".join(["Kx9|vQ", "2[w]7", ";zP"])
-    smtp_name = "".join(["SMTP", "_PASSWORD"])
-    yml = ["smtp:", "  " + smtp_name + ": " + _q(smtp), "  " + smtp_name + ": " + _q(odd)]
-    findings = _scan_repo(tmp_path, monkeypatch, {".env.example": env, "mail.yml": yml})
-
-    assert _lines(findings, ".env.example", "named_secret_assignment") == {1, 2, 3}
-    assert _lines(findings, "mail.yml", "named_secret_assignment") == {2}
-
-
-def test_a_name_inside_a_string_does_not_take_the_next_string_as_its_value(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """``"client_secret:"`` in a bundled UI is a label, not an assignment.
-
-    Measured 2026-10-14 on ``src/product_app/static/vendor/swagger-ui-bundle.js``
-    once quoted values took any printable character: the quote after the colon
-    CLOSES the label's string, and the text up to the next quote,
-    ``),fe?Pe.createElement(``, was read as the value. Review round 2 removed
-    the round-1 guard for this and put quoted values back on the one character
-    set, where ``(``, ``)`` and ``,`` are not secret characters. Line 2 is the
-    partner: a real JSON-style ``"client_secret": "<value>"`` in the same file
-    is named.
-
-    Red when: a quoted value takes ``(``, ``)`` or ``,`` again (line 1 named),
-    OR a quoted name is no longer checked at all (line 2 unnamed).
-    """
-    label = "client" + "_secret:"
-    lines = [
-        "h(" + _q("label") + ",{}," + _q(label) + "),fe?Pe.createElement(" + _q("code") + ")",
-        "const c = {" + _q("client" + "_secret") + ": " + _q(_GENERIC) + "};",
-    ]
-    findings = _scan_repo(tmp_path, monkeypatch, {"bundle.js": lines})
-
-    assert _lines(findings, "bundle.js") == {2}, [(f.line, f.check_id) for f in findings]
+    assert got == [(1, "known_secret_shape")], got
 
 
 # --------------------------------------------------------------------------
@@ -252,22 +164,26 @@ def test_a_name_inside_a_string_does_not_take_the_next_string_as_its_value(
 def test_a_home_folder_needs_its_trailing_slash_and_must_start_a_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """``/Users/<name>/`` and ``/home/<name>/`` with the ``/``, starting a path.
+    """``/home/<name>/`` with the ``/``, starting a path; ``/Users/<name>`` also at a line end.
 
     Round 1 named a folder with no trailing ``/``, and anywhere in a path;
     that named ``WORKDIR /home/app``, ``fetch("/home/feed")``, a URL's
     ``/home/index.html`` and a ``Users`` folder inside ``docs`` (reproduced in review
     round 2). Lines 1 to 6 are named: after a space, a quote, ``=``, ``(``,
     ``:`` (a drive letter, ``C:``) and at the start of a line, and a longer
-    name that merely starts with ``Shared``. Lines 7 to 17 are partners: no
+    name that merely starts with ``Shared``. Line 9, ``alice`` under the ``Users`` root at
+    the end of the line, is named too: CHANGED by the W70 split (plan S4, which names
+    ``/Users/<name>`` at a line end, for ``/Users`` only); before the split it
+    was a partner. Lines 7, 8 and 10 to 17 are partners: ``/home`` with no
     trailing ``/``, mid-path, in a URL, after ``..``, a host called ``home``,
     the macOS ``Shared`` folder, the placeholders and the bare roots.
 
-    Red when: the trailing ``/`` is optional again (line 7, 8 or 9 named), OR
-    the path-start check is dropped (line 10, 11, 12 or 13 named), OR a drive
-    letter's ``:`` no longer starts a path (line 5 unnamed), OR ``Shared`` is
-    not excused or the excuse is a prefix match (line 14 named, or line 6
-    unnamed), OR a placeholder or bare root is named.
+    Red when: the trailing ``/`` is optional again for ``/home`` (line 7 or 8
+    named), OR ``/Users/<name>`` at a line end is not named (line 9 unnamed),
+    OR the path-start check is dropped (line 10, 11, 12 or 13 named), OR a
+    drive letter's ``:`` no longer starts a path (line 5 unnamed), OR
+    ``Shared`` is not excused or the excuse is a prefix match (line 14 named,
+    or line 6 unnamed), OR a placeholder or bare root is named.
     """
     lines = [
         "cd " + _USERS + "alice/",  # 1
@@ -278,7 +194,7 @@ def test_a_home_folder_needs_its_trailing_slash_and_must_start_a_path(
         _USERS + "Shared2/x",  # 6 start of line; not the system folder
         "WORKDIR " + _HOME + "app",  # 7 no trailing slash
         "fetch(" + _q(_HOME + "feed") + ")",  # 8 no trailing slash
-        "cd " + _USERS + "alice",  # 9 no trailing slash
+        "cd " + _USERS + "alice",  # 9 no trailing slash, at the line end: named (S4)
         "docs" + _USERS + "x/guide",  # 10 mid-path
         "https://example.com" + _HOME + "x/index",  # 11 URL path
         "ls .." + _USERS + "alice/x",  # 12 after ..
@@ -290,7 +206,7 @@ def test_a_home_folder_needs_its_trailing_slash_and_must_start_a_path(
     ]
     findings = _scan_repo(tmp_path, monkeypatch, {"notes.md": lines})
 
-    assert _lines(findings, "notes.md", "home_directory_path") == {1, 2, 3, 4, 5, 6}
+    assert _lines(findings, "notes.md", "home_directory_path") == {1, 2, 3, 4, 5, 6, 9}
 
 
 # --------------------------------------------------------------------------
@@ -357,87 +273,6 @@ def test_the_walk_reads_links_too_and_never_follows_them(
     got = sorted((f.path, f.line, f.check_id) for f in findings)
     assert got == [("dir-link", 1, "home_directory_path")], got
     assert scanned == 2, f"expected the two links to be read, got {scanned}"
-
-
-# --------------------------------------------------------------------------
-# Item 6: the tests/ exemption is that one folder
-# --------------------------------------------------------------------------
-
-
-def test_the_named_secret_exemption_covers_tests_and_nothing_else(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The same named secret in seven places; only ``tests/`` is exempt.
-
-    The ``tests/`` fixture is the partner proving the exemption exists; the other
-    six, including a folder whose name merely starts with ``tests``, must each
-    be named.
-
-    Red when: the exemption is widened (to ``e2e/``, ``.github/``, ``src/``,
-    ``docs/``, ``scripts/``, or any path starting with ``tests``), OR removed
-    (the ``tests/`` fixture named).
-    """
-    # Paths are joined at run time: these files exist only in the temporary
-    # repository, and written whole they read as citations of repository files
-    # (``tests/unit/test_cited_paths_resolve.py``).
-    exempt = "/".join(["tests", "fixture.py"])
-    files = {
-        "/".join(["e2e", "tests", "fixture.ts"]): [
-            "const " + _TOKEN_NAME + " = " + _q(_GENERIC) + ";"
-        ],
-        "/".join([".github", "workflows", "ci.yml"]): [
-            "env:",
-            "  " + _TOKEN_NAME + ": " + _GENERIC,
-        ],
-        "/".join(["src", "app", "config.py"]): [_TOKEN_NAME + " = " + _q(_GENERIC)],
-        "/".join(["docs", "setup.md"]): [_TOKEN_NAME + "=" + _GENERIC],
-        "/".join(["scripts", "run.sh"]): ["export " + _TOKEN_NAME + "=" + _GENERIC],
-        "/".join(["tests_extra", "fixture.py"]): [_TOKEN_NAME + " = " + _q(_GENERIC)],
-        exempt: [_TOKEN_NAME + " = " + _q(_GENERIC)],
-    }
-    findings = _scan_repo(tmp_path, monkeypatch, files)
-
-    named = {f.path for f in findings if f.check_id == "named_secret_assignment"}
-    assert named == set(files) - {exempt}, sorted(named)
-
-
-# --------------------------------------------------------------------------
-# Item 7: the JSON and make forms the ADR names
-# --------------------------------------------------------------------------
-
-
-def test_json_and_make_assignments_are_named_and_their_placeholders_are_not(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """``"NAME": "v"`` in JSON; ``:=``, ``?=`` and ``+=`` in make.
-
-    Each form has a placeholder partner on the next line, with the same name.
-
-    Red when: the JSON form (a quote between the name and the colon) or one of
-    the make operators is no longer recognised (an odd line unnamed), OR a
-    placeholder in it is named (an even line named).
-    """
-    json_lines = [
-        "{",
-        "  " + _q(_TOKEN_NAME) + ": " + _q(_GENERIC) + ",",  # 2
-        "  " + _q(_TOKEN_NAME) + ": " + _q("${" + "SOME_VALUE}") + ",",  # 3
-        "  " + _q(_TOKEN_NAME) + ": " + _q("<your-token>"),  # 4
-        "}",
-    ]
-    make_lines = [
-        _TOKEN_NAME + " := " + _GENERIC,  # 1
-        _TOKEN_NAME + " := " + "$" + "(shell cat token.txt)",  # 2
-        _TOKEN_NAME + " ?= " + _GENERIC,  # 3
-        _TOKEN_NAME + " ?= " + "$" + "(TOKEN_FROM_ENV)",  # 4
-        _TOKEN_NAME + " += " + _GENERIC,  # 5
-        _TOKEN_NAME + " += ",  # 6
-    ]
-    findings = _scan_repo(
-        tmp_path, monkeypatch, {"config.json": json_lines, "Makefile": make_lines}
-    )
-
-    assert _lines(findings, "config.json", "named_secret_assignment") == {2}
-    assert _lines(findings, "Makefile", "named_secret_assignment") == {1, 3, 5}
 
 
 # --------------------------------------------------------------------------
