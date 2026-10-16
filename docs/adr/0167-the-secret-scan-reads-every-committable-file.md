@@ -20,6 +20,10 @@ is fixed, test first. Only a miss with no fix is written down, with its reason.
 - The split's second review round found more misses and false positives in the home-folder
   rule. The owner chose to fix them before shipping and to record three limits (CHG-053). The
   eight that needed a change are F1 to F8 below.
+- The stop rule (CHG-049) then fired on the `file:` part of the home-folder rule: the builds at
+  `f4f994a` and `04c5202` each failed review, and `90af4f4` checked clean with Codex. The owner
+  chose to finish in the same session with no further detection changes (CHG-054). W70 ships
+  the rules of `90af4f4`; any new finding goes to a board row.
 
 The home-folder rule's final tests are in `tests/unit/test_security_scan_w70_split.py`. The
 other tests of the kept rules are in `tests/unit/test_security_scan.py`,
@@ -199,9 +203,9 @@ Rows 1 to 5 on 2026-10-14; rows 6 to 15 on 2026-10-16, on the owner's Mac.
 | 10 | What the new lines outside the tree are | the 300 new Python-package lines are all `path+file://` URLs to the CI runner account's home folder under the macOS root, in 8 packages' CycloneDX files under `.dist-info`; they need the file-URL start. Of the 13 new JavaScript-package lines, 10 are `file://` URLs to a `user` folder under the Linux root, in code comments of one package (5 lines in each of two builds of one file), and 3 are a package author's own folder under the macOS root, in example output; they need the no-`/` form. Each is a home folder; none is prose. They stay named after round 2 (row 13) | the same read, each new line run again with one of the new forms turned off |
 | 11 | The whole tree | 1712 files scanned, 0 findings | `uv run python scripts/security_scan.py` |
 | 12 | Each part bites | with one part turned off at a time, this many tests in `tests/unit/test_security_scan_w70_split.py` turn red, of 127 passing before each change: the escaped space 10, the dash form 18, a `-` allowed before `-Users-` 2, the no-`/` form 11, the port-colon rule 5, the file-URL start 21, the NFC step 2, all combining marks in a name 1, combining marks in the boundary 2; F1 1, F2 off 5, F2's deny rule put back to the allow-list 9, F3 1, F4 off 6, F4's host end at `?` and `#` removed 2, F5 3, F6 7, F7 5, F8 2. Measured at commit `04c5202`. At the next commit, with 134 passing: removing the optional leading `+` or `-` turns 5 red, and removing the combining marks from the file-URL look-behind turns 1 red | the scanner copied aside, one part put back to its earlier form, the test file run, the copy put back and compared with `diff -q` |
-| 13 | Round 2 and its re-check (F1 to F8), before and after, by lines named | the tree: 1712 files read, 0 new lines, 0 lost. The installed Python packages: 5477 files read, 0 new, 0 lost. The e2e suite's JavaScript packages: 2049 files read, 4 new, 0 lost: a `file:///C:` URL to a `foo` folder under the macOS root in one package's code comments (2 lines in each of two builds of one file), named by F4. Against the scanner of commit `f4f994a` (the allow-list build of F2), this commit's names 0 new and 0 lost lines in all three. The first build of F2 lost the 300 `path+file://` lines of row 10; they are named again Against commit `04c5202`, this commit's names 0 new and 0 lost: 0, 334 and 49 lines named in the three folders | the read of row 9, with the scanners of commits `710bf43`, `f4f994a` and `04c5202` and then this commit's |
-| 15 | The F2 rule stays linear | five adversarial lines built from `a+`, `+a-`, `-+`, `file:` and `+file:/`: 0.20 s to 0.37 s at 1 MB and 0.39 s to 0.70 s at 2 MB, each about twice its 1 MB time. The absolute times depend on the machine's load; the doubling is the measure | `_contains_home_directory_path` of this commit timed directly on those lines |
+| 13 | Round 2 and its re-check (F1 to F8), before and after, by lines named | the tree: 1712 files read, 0 new lines, 0 lost. The installed Python packages: 5477 files read, 0 new, 0 lost. The e2e suite's JavaScript packages: 2049 files read, 4 new, 0 lost: a `file:///C:` URL to a `foo` folder under the macOS root in one package's code comments (2 lines in each of two builds of one file), named by F4. Against the scanner of commit `f4f994a` (the allow-list build of F2), this commit's names 0 new and 0 lost lines in all three. The first build of F2 lost the 300 `path+file://` lines of row 10; they are named again. Against commit `04c5202`, this commit's names 0 new and 0 lost: 0, 334 and 49 lines named in the three folders | the read of row 9, with the scanners of commits `710bf43`, `f4f994a` and `04c5202` and then this commit's |
 | 14 | Long runs of combining marks | before F3, 0.014 s, 0.055 s and 0.22 s for one run of 8,000, 16,000 and 32,000 marks of two combining classes, time growing with the square of the run. After: under 2 s on each 1 MB line of mark runs | `_contains_home_directory_path` of commit `710bf43` timed directly; `tests/unit/test_security_scan_w70_split.py::test_f3_a_1mb_line_of_combining_mark_runs_finishes_quickly` |
+| 15 | The F2 rule stays linear | five adversarial lines built from `a+`, `+a-`, `-+`, `file:` and `+file:/`: 0.20 s to 0.37 s at 1 MB and 0.39 s to 0.70 s at 2 MB, each about twice its 1 MB time. The absolute times depend on the machine's load; the doubling is the measure | `_contains_home_directory_path` of this commit timed directly on those lines |
 
 ## Rejected alternatives
 
@@ -259,15 +263,15 @@ Rows 1 to 5 on 2026-10-14; rows 6 to 15 on 2026-10-16, on the owner's Mac.
   - git history: the rewritten paths remain in earlier commits of this public repository,
     and removing them means rewriting published history with a force-push, which the
     work-item process forbids.
-- Advisory, not built: a `scheme:` inside another URL's path, directly before a root
+- Advisory, not built, scheduled in board row W84: a `scheme:` inside another URL's path, directly before a root
   (`https://example.org/file:/Users/<name>/x`), is named, since the root follows a `:` that is
   outside the URL's host. No committed line and no installed package line has the form (rows 9
   and 13).
-- Advisory, not built: a Ruby-style interpolation as a URL's host, then `:` and a root
+- Advisory, not built, scheduled in board row W84: a Ruby-style interpolation as a URL's host, then `:` and a root
   (`http://#{host}:/Users/<name>/x`), is named: `#` ends the host, so the `:` is read as a
   drive letter's or a `PATH` list's. No line in the tree or the two package folders has the
   form (row 13's read).
-- Advisory, not built: the independent listing in
+- Advisory, not built, scheduled in board row W84: the independent listing in
   `tests/unit/test_security_scan_w70.py::test_the_real_tree_is_read_exactly_as_git_would_commit_it`
   keeps a path only when it is a regular file, following links, while the scan reads every
   symbolic link as its link text. The repository has no tracked links today
