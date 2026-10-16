@@ -118,9 +118,12 @@ without review. W84 is scheduled work, not a known limit, so CHG-050 binds it.
    - **`/home/<name>/`.** Under the Linux root the `/` after the name is still needed. Without
      it, `WORKDIR /home/app` and `fetch("/home/feed")` were named.
    - **`-Users-<name>-` and `-home-<name>-`.** The dash form a Claude project folder's name
-     uses. Its leading `-` may not follow a letter, digit, `_`, combining mark or another `-`,
-     so the CSS class `nav-home-icon-large` and the option `--home-dir-path` are not home
-     folders. A `-` ends the name.
+     uses. Its leading `-` may not follow a letter, digit, `_` or combining mark, so the CSS
+     class `nav-home-icon-large` is not a home folder. Before `home` it may not follow another
+     `-` either, so the option `--home-dir-path` is not one: command-line options are lower
+     case. Before `Users`, with its capital `U`, it may: a Claude folder made under another
+     folder holds `-private-tmp--Users-<name>-`, one `-` for the `/` that ends the parent
+     folder and one for the `/` that starts the root. A `-` ends the name.
 
    **Where a slash form starts.** The `/` before the root must start a path. It may not follow
    a word character of any script (a letter, digit or `_`), a combining mark, `.`, `/`, `-` or

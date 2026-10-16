@@ -173,7 +173,7 @@ _S3_NOT_NAMED = [
 #: before the root as ``-`` and the ``/`` before that as another ``-``.
 _S3_NESTED_NAMED = [
     "x/projects/-private-tmp-<DU>alice-Projects-q",  # the builder's probe
-    "-<DU>alice-x",  # `--Users-alice-x`
+    "-<DU>alice-x",  # a `-` straight before the dash-encoded Users folder
 ]
 
 

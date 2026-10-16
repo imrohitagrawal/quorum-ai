@@ -543,10 +543,16 @@ _FILE_URL = r"(?<=file://)|(?<=file://localhost)"
 
 #: The dash-encoded form, ``-<root>-<name>-``: a Claude project folder's name,
 #: which writes each ``/`` and ``.`` of a folder as ``-``. The leading ``-``
-#: does not follow a word character, a combining mark or another ``-``, so
-#: ``nav-<root>-icon`` (CSS) and ``--<root>-dir`` (an option) are not home
-#: folders. The name uses the slash form's characters, and a ``-`` ends it.
-_DASH_START = rf"(?<![\w{_COMBINING_MARKS}-])"
+#: does not follow a word character or a combining mark, so
+#: ``nav-<root>-icon`` (CSS) is not a home folder. Before the Linux root it
+#: does not follow another ``-`` either, so the option ``--<root>-dir`` is not
+#: one: command-line options are lower case. Before the macOS root, written
+#: with a capital ``U``, it may: a Claude folder made under another folder
+#: holds ``-<parent>--<root>-<name>-``, from the ``/`` that ends the parent
+#: and the ``/`` that starts the root (reproduced 2026-10-16). The name uses
+#: the slash form's characters, and a ``-`` ends it.
+_DASH_START = rf"(?<![\w{_COMBINING_MARKS}])"
+_LINUX_DASH_START = rf"(?<![\w{_COMBINING_MARKS}-])"
 
 #: A home folder, in one of three forms (owner decision CHG-045):
 #:
@@ -560,7 +566,7 @@ _DASH_START = rf"(?<![\w{_COMBINING_MARKS}-])"
 #:   needed. Without it ``WORKDIR <root>/app`` and ``fetch("<root>/feed")``
 #:   were named (reproduced 2026-10-14), so a Linux home folder with no
 #:   ``/`` after it is a known limit.
-#: - ``-<root>-<name>-`` (``_DASH_START``).
+#: - ``-<root>-<name>-`` (``_DASH_START``, ``_LINUX_DASH_START``).
 #:
 #: In the two slash forms, the ``/`` before the root starts a path
 #: (``_PATH_START``), follows a flag (``_FLAG_START``) or a file URL
@@ -573,7 +579,8 @@ _HOME_DIRECTORY_PATH = re.compile(
     rf"{_MAC_ROOT}/(?!{_NOT_A_NAME}){_NAME}"
     rf"|{_LINUX_ROOT}/(?!{_NOT_A_NAME}){_NAME}/"
     rf")"
-    rf"|{_DASH_START}-(?:{_MAC_ROOT}|{_LINUX_ROOT})-(?!(?:\.+|{_NOT_A_PERSON})-)"
+    rf"|(?:{_DASH_START}-{_MAC_ROOT}|{_LINUX_DASH_START}-{_LINUX_ROOT})"
+    rf"-(?!(?:\.+|{_NOT_A_PERSON})-)"
     rf"{_NAME_FIRST}{_NAME_CHAR}*-"
 )
 
