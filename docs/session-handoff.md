@@ -1,7 +1,7 @@
 # Session Handoff
 
 ## Date/time
-2026-10-16T15:53:15+05:30
+2026-10-16T19:41:01+05:30
 
 ## Open work
 `docs/65-open-work.md` — the source of truth for what is open, what blocks what,
@@ -11,23 +11,23 @@ line further down this file is the factory router's view of the lifecycle, not a
 work status.
 
 ## Latest narrative handoff
-`docs/analysis/2026-10-14-session-handoff-2.md` — read this for full context before editing. **(2 days old** — if a newer session ran since then and its narrative handoff was archived without a replacement being written, this may be stale; check `docs/archive/` for a newer one.)
+`docs/analysis/2026-10-16-session-handoff.md` — read this for full context before editing. (today)
 
 This file is a mechanical snapshot (branch/git-status/skill-route/live state) —
 regenerated fresh every `make handoff`. The narrative above (what happened,
 what's next, the traps) lives in the dated doc it points to, not here.
 
 ## Current branch/worktree
-w70/secret-scan
+docs/handoff-2026-10-16
 
 ## Live state (measured fresh by this run, not hand-carried)
 Run `make handoff` again for current numbers instead of trusting this file
 once it ages -- every value below is read from git/gh/`/status` at
 generation time, per #134.
 
-- **`origin/main` tip:** `467ae9f0a079`
+- **`origin/main` tip:** `3825a128aa19`
 - **Last commit touching `src/`:** `ad959d2c1341`
-- **Production vs. last `src/` commit:** production build_sha 467ae9f is in sync: it is `origin/main`'s tip, which holds the last src/ commit ad959d2
+- **Production vs. last `src/` commit:** production build_sha 3825a12 is in sync: it is `origin/main`'s tip, which holds the last src/ commit ad959d2
 - **pytest collected (no execution):** 7326
 - **e2e lane spec counts:** invariants: 26, ops: 2, degraded: 1
 - **Open issues:** 2
@@ -36,8 +36,8 @@ generation time, per #134.
   concurrently (AGENTS.md rule 15), so this file does not run it. Run
   `make quality && make diff-cover DIFF_BASE=origin/main` for a current number.
 - **Remote branches not merged into `origin/main`:**
+- `docs/handoff-2026-10-16`
 - `w28/byok-pr1-plan`
-- `w70/secret-scan`
 
 ## Product readiness
 `docs/product-readiness.md`, regenerated from production's `/status` and `/ready` by this run (`make readiness`):
@@ -49,7 +49,7 @@ board vs GitHub: 83 board rows, 2 open issues
   the board and GitHub agree
 
 ## Root prompt check
-`PASSED` (checked 0, exempt 1; `make prompt-check`)
+`PASSED` (checked 1, exempt 1; `make prompt-check`)
 Prompt write hook: not installed in `.claude/settings.json`; run `.venv/bin/python scripts/prompt_write_hook.py --install .`
 
 ## Parked work and branches
@@ -60,13 +60,14 @@ Remote branches with no open pull request (merge, park or delete each):
   - none
 Parked items whose resume-when has come (resume, re-park or close each):
   - none
-Problems:
-  - draft pull request #567 (w70/secret-scan) has no line in the ## Parked table
-FAILED
+PASSED
 ```
 
 ## Next session
-There is no root prompt named `CONTINUE-<AREA>-<ROWS>-PROMPT.md` that passes `make prompt-check`, so there is no line to paste. Write one by copying `.agents/skills/work-item-delivery/prompt-template.md`.
+Paste this line to start the next session:
+```text
+Read CONTINUE-SECURITY-W82-W71-W81-PROMPT.md in the repo root and follow it exactly.
+```
 
 ## Leftovers
 From `make session-clean`, which reports and never deletes.
@@ -76,7 +77,7 @@ Poisoned local state:
 
 Feature branches and worktrees:
 - `worktree ~/Projects/quorum-ai-wt-byok` — remove with 'git worktree remove' once its branch is merged
-- `worktree ~/Projects/quorum-ai-wt-w70` — remove with 'git worktree remove' once its branch is merged
+- `worktree ~/Projects/quorum-ai-wt-handoff` — remove with 'git worktree remove' once its branch is merged
 ```
 
 ## Current phase
