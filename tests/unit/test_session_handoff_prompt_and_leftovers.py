@@ -19,8 +19,17 @@ from tests.repo_root import find_repo_root
 
 _ROOT = find_repo_root(Path(__file__))
 
-_GOOD = "# P\n\n**Process:** every item is built by `.agents/skills/work-item-delivery/SKILL.md`.\n"
-_NO_LINE = "# P\n\nItems: W55.\n"
+# The four sections every root prompt must carry (item 1, ADR-0169), in good and bad
+# fixtures alike, so the bad one lacks ONLY the Process line.
+_SECTIONS = (
+    "\n## Read first\n\nx\n\n## The items, in order\n\nx\n\n"
+    "## Approvals\n\nx\n\n## End of session\n\nx\n"
+)
+_GOOD = (
+    "# P\n\n**Process:** every item is built by `.agents/skills/work-item-delivery/SKILL.md`.\n"
+    + _SECTIONS
+)
+_NO_LINE = "# P\n\nItems: W55.\n" + _SECTIONS
 
 
 def _load(name: str, path: Path) -> ModuleType:
@@ -58,7 +67,7 @@ def _exempt_names() -> tuple[str, ...]:
 def _prompt_root(tmp_path: Path, prompt_text: str) -> Path:
     root = tmp_path / "root"
     root.mkdir(parents=True)
-    (root / "CONTINUE-X-PROMPT.md").write_text(prompt_text, encoding="utf-8")
+    (root / "CONTINUE-X-W1-PROMPT.md").write_text(prompt_text, encoding="utf-8")
     for name in _exempt_names():
         (root / name).write_text(_NO_LINE, encoding="utf-8")
     return root
@@ -70,7 +79,7 @@ def test_prompt_check_section_says_failed_and_names_the_file(tmp_path: Path) -> 
     section = _handoff()._prompt_check_section(_prompt_root(tmp_path / "bad", _NO_LINE))
     assert "## Root prompt check" in section, section
     assert "FAILED" in section, section
-    assert "CONTINUE-X-PROMPT.md" in section, section
+    assert "CONTINUE-X-W1-PROMPT.md" in section, section
     assert "PASSED" not in section, section
 
     # Positive partner: a good root says PASSED.
@@ -153,7 +162,7 @@ def test_main_still_writes_the_handoff_when_the_prompt_check_fails(
         handoff,
         "_prompt_check_section",
         lambda *a, **k: (
-            "## Root prompt check\nFAILED -- CONTINUE-X-PROMPT.md has no **Process:** line\n"
+            "## Root prompt check\nFAILED -- CONTINUE-X-W1-PROMPT.md has no **Process:** line\n"
         ),
     )
     monkeypatch.setattr(handoff, "_gather_live_state", lambda *a, **k: dict(_LIVE_STATE_STUB))
@@ -165,6 +174,14 @@ def test_main_still_writes_the_handoff_when_the_prompt_check_fails(
     real_leftovers = handoff._leftovers_section
     monkeypatch.setattr(handoff, "_leftovers_section", lambda *a, **k: real_leftovers([]))
     monkeypatch.setattr(handoff, "_collect_leftovers", lambda *a, **k: [], raising=False)
+    # The parked-work section (item 1) reads git and gh; stubbed so no test reaches the
+    # network. raising=False: the stub is harmless where main() has no such helper.
+    monkeypatch.setattr(
+        handoff,
+        "_parked_section",
+        lambda *a, **k: "## Parked work and branches\nstub\n",
+        raising=False,
+    )
 
     assert handoff.main() == 0
     written = tmp_path / "docs" / "session-handoff.md"

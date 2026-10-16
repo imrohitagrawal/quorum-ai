@@ -43,7 +43,7 @@ final report has the Deploy job ids: #496 run 35913928780, #497 run 35917924555,
   before any per-run toggle: the confirmation token binds the slot list and
   the shape (CHG-011 D9; it bound neither when this was written; landed
   later the same day, ADR-0123).
-- **#268** stays parked on `../quorum-ai-wt-268` (draft PR #491, ADR-0119).
+- **#268** stays parked on `../quorum-ai-wt-268` (draft PR #491, ADR-0119, now at `docs/archive/2026-10/adr-0119-the-web-search-context-constant-is-measured-low-and-raising-it-blocks-mixes.md`).
   **#458, #459, #447** stay gated on owner decisions not taken.
 
 ## 3. Advisory debt recorded, not fixed

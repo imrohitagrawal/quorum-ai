@@ -329,14 +329,20 @@ def test_a_tests_path_no_class_names_is_listed_as_unclassified() -> None:
 # Findings 7, 8, 9: the handoff's degrade guards, reasons and counts.
 # --------------------------------------------------------------------------
 
-_GOOD = f"# P\n\n{_LINE}\n"
-_NO_LINE = "# P\n\nItems: W55.\n"
+# The four sections every root prompt must carry (item 1, ADR-0169), in good and bad
+# fixtures alike, so the bad one lacks ONLY the Process line.
+_SECTIONS = (
+    "\n## Read first\n\nx\n\n## The items, in order\n\nx\n\n"
+    "## Approvals\n\nx\n\n## End of session\n\nx\n"
+)
+_GOOD = f"# P\n\n{_LINE}\n" + _SECTIONS
+_NO_LINE = "# P\n\nItems: W55.\n" + _SECTIONS
 
 
 def _prompt_root(tmp_path: Path, prompt_text: str) -> Path:
     root = tmp_path / "root"
     root.mkdir(parents=True)
-    (root / "CONTINUE-X-PROMPT.md").write_text(prompt_text, encoding="utf-8")
+    (root / "CONTINUE-X-W1-PROMPT.md").write_text(prompt_text, encoding="utf-8")
     # The real exemptions are written so they do not fail as "exempt file missing".
     for name in _check().EXEMPT:
         (root / name).write_text(_NO_LINE, encoding="utf-8")
@@ -414,6 +420,14 @@ def _stubbed_handoff(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> ModuleT
     monkeypatch.setattr(handoff, "_gather_live_state", lambda *a, **k: dict(_LIVE_STATE_STUB))
     monkeypatch.setattr(handoff, "load_route", lambda *a, **k: dict(_ROUTE_STUB))
     monkeypatch.setattr(handoff, "run", lambda *a, **k: "")
+    # The parked-work section (item 1) reads git and gh; stubbed so no test reaches the
+    # network. raising=False: the stub is harmless where main() has no such helper.
+    monkeypatch.setattr(
+        handoff,
+        "_parked_section",
+        lambda *a, **k: "## Parked work and branches\nstub\n",
+        raising=False,
+    )
     return handoff
 
 
@@ -458,5 +472,9 @@ def test_the_real_exempt_prompt_fails_without_its_exemption(tmp_path: Path) -> N
     root.mkdir()
     shutil.copy2(_ROOT / name, root / name)
     found = _check().problems(root, {})
-    assert len(found) == 1, found
-    assert name in found[0], found
+    # Since item 1 the file's name (not CONTINUE-<AREA>-<ROWS>-PROMPT.md) and its missing
+    # sections are refused too; exactly one message is about the Process line, and every
+    # message names the file.
+    process = [m for m in found if "**Process:**" in m]
+    assert len(process) == 1, found
+    assert all(name in m for m in found), found

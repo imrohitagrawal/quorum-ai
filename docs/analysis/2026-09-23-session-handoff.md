@@ -38,7 +38,7 @@ it. `landing-cta-reachable.spec.ts` pins the landing copy — check it before
 editing.
 
 W5 (N=1 quick-answer mode) stays after W4. #268's input half is still parked
-on `../quorum-ai-wt-268` (draft PR #491, ADR-0119 PROPOSED).
+on `../quorum-ai-wt-268` (draft PR #491, ADR-0119 PROPOSED; ADR-0119 is now at `docs/archive/2026-10/adr-0119-the-web-search-context-constant-is-measured-low-and-raising-it-blocks-mixes.md`).
 
 ## 3. Advisory debt recorded in #494, not fixed
 

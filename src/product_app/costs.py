@@ -371,7 +371,7 @@ _JUDGE_PAGES_SECTION_OVERHEAD_CHARS = Decimal(40)
 #: per-call band (the per-account spend rails add the typical estimate and do
 #: see it). The bound was never a ceiling on this term: nothing bounds the context
 #: OpenRouter's ``:online`` suffix injects (48 readings: median 2438,
-#: max 3160 — ADR-0119, on the unmerged branch of draft PR #491).
+#: max 3160 — ADR-0119, archived in docs/archive/2026-10/ by ADR-0168).
 BOUND_WEB_SEARCH_CONTEXT_TOKENS = 2000
 CONFIRMATION_TOKEN_TTL = timedelta(minutes=5)
 

@@ -22,7 +22,8 @@ with peer critique, 757.75 → 758 without, and neither reaches a served
 
 ADR-0119 is reserved by draft PR #491 (#268); this record takes 0120 so the
 two branches cannot collide on a number (ADR-0119 exists on branch
-`proposal/268-web-search-context-tokens`).
+`proposal/268-web-search-context-tokens`). Update, 2026-10-16: ADR-0119 never joined `docs/adr/`;
+it is archived at `docs/archive/2026-10/adr-0119-the-web-search-context-constant-is-measured-low-and-raising-it-blocks-mixes.md` (ADR-0168).
 
 **Amendment, 2026-09-23 (CHG-011) — the third pull request, the copy outside
 the run path.** The product owner decided the wording in session, and the

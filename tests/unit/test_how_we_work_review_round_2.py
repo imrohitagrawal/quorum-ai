@@ -331,15 +331,21 @@ def test_make_skill_route_refuses_item_and_diff_together() -> None:
     assert "Work item route" not in proc.stdout, proc.stdout
 
 
-_GOOD = f"# P\n\n{_LINE}\n"
-_NO_LINE = "# P\n\nItems: W55.\n"
+# The four sections every root prompt must carry (item 1, ADR-0169), in good and bad
+# fixtures alike, so the bad one lacks ONLY the Process line.
+_SECTIONS = (
+    "\n## Read first\n\nx\n\n## The items, in order\n\nx\n\n"
+    "## Approvals\n\nx\n\n## End of session\n\nx\n"
+)
+_GOOD = f"# P\n\n{_LINE}\n" + _SECTIONS
+_NO_LINE = "# P\n\nItems: W55.\n" + _SECTIONS
 _EXEMPT = {"EX-PROMPT.md": "an example"}
 
 
 def _root(tmp_path: Path, prompt_text: str) -> Path:
     root = tmp_path / "root"
     root.mkdir(parents=True)
-    (root / "CONTINUE-X-PROMPT.md").write_text(prompt_text, encoding="utf-8")
+    (root / "CONTINUE-X-W1-PROMPT.md").write_text(prompt_text, encoding="utf-8")
     (root / "EX-PROMPT.md").write_text(_NO_LINE, encoding="utf-8")
     return root
 
@@ -369,7 +375,7 @@ def test_a_failed_handoff_section_shows_the_counts(
     status = section.splitlines()[1]
     assert status.startswith("FAILED"), section
     assert "checked 1, exempt 1" in status, section
-    assert "CONTINUE-X-PROMPT.md" in section, section
+    assert "CONTINUE-X-W1-PROMPT.md" in section, section
 
 
 def _untracked_route(tmp_path: Path, name: str, data: bytes) -> list[str]:

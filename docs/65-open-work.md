@@ -6,7 +6,7 @@ original, because a gate and an offline agent can read it and cannot read `gh`.
 
 Verified at: `4ba35cec0ce40f9dd48b9c1bf0b9aefeb862a28c`
 
-The board holds **80** rows, **34** of them unpinned.
+The board holds **81** rows, **35** of them unpinned.
 
 `scripts/check_open_work.py --check` reads every row's evidence off disk and
 refuses if a claim is false. It runs inside `make validate`, and
@@ -173,9 +173,10 @@ caught by any automated check and 10 of 16 by adversarial review
 | W76 | Key-safety gaps to close before W28: Sentry breadcrumbs keep a key, the key pattern misses glued, encoded and prefix-less keys, the 422 handler echoes validator messages, and `model_dump_json` prints the app key (section 2 in `docs/analysis/2026-10-13-security-review.md`; agents' reports, to reproduce first) | UNPINNED | `—` | — | W56 |
 | W77 | Add a security reviewer to every review round except docs-only (per-item routing, `make skill-route ITEM=`, names security skills only for sign-in and AI-output changes), replace the generic security skills under `.agents/skills/` with one written for this app, and correct `docs/41-security-controls.md` and `docs/45-control-mapping.md` (sections 1 and 2 in `docs/analysis/2026-10-13-security-review.md`) | UNPINNED | `—` | — | — |
 | W78 | The board's I3 limit: flipping a row's needle word and typing DONE passes (`tests/test_planted_false_claims.py` row I3 expects 0); re-check the row's first committed needle when it turns DONE, unless an owner CHG row approves the rewrite; also refuse a NEW row that is born DONE (both in section 6 and finding S12 of `docs/analysis/2026-10-13-security-review.md`) | UNPINNED | `—` | — | owner decision |
-| W79 | No disclosure route or key-replacement steps: add `SECURITY.md` and `security.txt`, and a key-rotation section to `docs/84-incident-response.md` (it says "rotat" 0 times) (finding S12 in `docs/analysis/2026-10-13-security-review.md`). Added by W69 (ADR-0166), two repository settings for the owner: move `FLY_API_TOKEN` into the `production` environment with a branch rule allowing only `main` and delete the repository copy, so an older or edited branch cannot deploy; and turn on the Actions setting that requires every action to be pinned to a full commit | UNPINNED | `—` | — | — |
+| W79 | No disclosure route or key-replacement steps: add `SECURITY.md` and `security.txt`, and a key-rotation section to `docs/84-incident-response.md` (it says "rotat" 0 times) (finding S12 in `docs/analysis/2026-10-13-security-review.md`). The two repository settings W69 added here (ADR-0166) were done by the owner on 2026-10-15 (CHG-046): `FLY_API_TOKEN` lives only in the `production` environment, which allows only `main`, and actions must be pinned to a full commit | UNPINNED | `—` | — | — |
 | W80 | Two sign-in gaps found by reading: `/feedback/audit` accepts any anonymous session, and the sign-in callback discards the pending sign-in before checking `state`, so a cross-site link can cancel a sign-in (finding S10 in `docs/analysis/2026-10-13-security-review.md`) | UNPINNED | `—` | — | — |
 | W81 | Nothing stops an agent session reading `.env`: no Claude settings file has a `deny` rule; add deny rules and a hook (finding S12 in `docs/analysis/2026-10-13-security-review.md`) | UNPINNED | `—` | — | — |
+| W82 | The security baseline, ranked first among the security rows (W71 to W81) by the owner's direction that the security session first analyses the measures in place, the gaps, and how to close them (CHG-051). The rest is as the session proposed, not the owner's decision: list every security measure in place with the command that proves it runs, replacing `docs/41-security-controls.md`; check OWASP ASVS 5.0 Level 2 item by item; turn each gap, and the gaps in section 9 of `docs/analysis/2026-10-13-security-review.md`, into a board row ranked with W71 to W81, and have Codex review that ranking before any code | UNPINNED | `—` | — | — |
 
 **STOP** marks a row that cannot be finished without a human decision — a money,
 cost or safety guardrail value that only real measurement could justify. Do not
@@ -809,6 +810,23 @@ sign-out lockout is the bug the owner hit again on 2026-09-30 (M23), and
 W35 depends on it.
 
 **W68–W81 — the security review of 2026-10-13, added 2026-10-13**, with W56 widened by the owner's decision CHG-042 (a). Each row names its finding in `docs/analysis/2026-10-13-security-review.md`, which keeps what the session ran apart from what agents reported; a row resting on an agent's report is reproduced before it is built. Added unpinned, like W33–W56: each pull request pins its row with a needle its change adds or deletes. The order is CHG-042 (b): W56, W68, W55, W69, W70; the review recommends W71–W73 before live answers are switched back on and W75–W76 before W28.
+
+## Parked
+
+Work that started and stopped, or that waits on the owner, and when it resumes (ADR-0168). The first
+cell is in backticks so the board's row reader never takes these for board rows.
+`make parked-check` lists every item here whose resume-when has come, and every remote branch with no
+open pull request. It fails when an open draft pull request, or a board row marked **STOP** or waiting
+on the owner, has no line here. A resume-when is `after W71, W72` (every named row reads DONE),
+`on YYYY-MM-DD`, or both joined by `or`. A resume point a session chose, not the owner, says so in
+the Reason cell.
+
+| Item | Where | Reason | Owner | Resume when |
+|---|---|---|---|---|
+| `W13` | issue #268; `scripts/proofs/search_context_band_sweep.py` | **STOP**: raising `cost_web_search_context_tokens` is a money decision only the owner can make (CHG-015); since ADR-0125 the sweep shows it moves the estimate and no band. Resume date: the session's, to ask the owner again | product owner | on 2026-11-16 |
+| `W28` | draft #525, `w28/byok-pr1-plan` | The owner's six decisions are open; the owner put W28 after the security rows (CHG-051), and the research on the six decisions comes first, with no decision recorded | product owner | after W71, W72, W73, W74, W75, W76, W77, W78, W79, W80, W81 |
+| `W74` | the board row | The attack suite makes paid calls and needs the owner's approval of its spend. Resume point: the session's, to ask once the baseline ranks the security rows | product owner | after W82 |
+| `W78` | the board row | Re-checking a row's first needle, or allowing a rewrite, is the owner's decision. Resume point: the session's, to ask once the baseline ranks the security rows | product owner | after W82 |
 
 ## What is deliberately NOT on this board
 

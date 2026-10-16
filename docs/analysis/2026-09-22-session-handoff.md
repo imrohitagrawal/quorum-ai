@@ -45,12 +45,12 @@ derived `DONE`.
 
 **#268's input half, `cost_web_search_context_tokens`** — DRAFT PR #491,
 branch `proposal/268-web-search-context-tokens`, worktree
-`../quorum-ai-wt-268` left in place. ADR-0119 is `PROPOSED — AWAITING
+`../quorum-ai-wt-268` left in place. ADR-0119 (now at `docs/archive/2026-10/adr-0119-the-web-search-context-constant-is-measured-low-and-raising-it-blocks-mixes.md`) is `PROPOSED — AWAITING
 OWNER`; the constant is still 2000. Measured: 43 of 48 readings above 2000;
 every raise tried (2100 upward) moves at least two mixes into `block`, so the
 rule the owner's prompt proposed for autonomous merging ("no mix moves into
 block") fails for every candidate.
-The two questions the owner owes are in ADR-0119 §"The decision owed".
+The two questions the owner owes are in ADR-0119 §"The decision owed" (now at `docs/archive/2026-10/adr-0119-the-web-search-context-constant-is-measured-low-and-raising-it-blocks-mixes.md`).
 
 ## 3. Owner decisions still open (asked in the session's first message)
 

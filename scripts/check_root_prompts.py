@@ -1,24 +1,38 @@
 #!/usr/bin/env python3
-"""Check that every root prompt file names the process skill (ADR-0160).
+"""Check that every root prompt file is a valid next-session prompt.
 
 A root prompt is any ``.md`` file at the repository root whose name contains
-"prompt", in any case. Each one must carry a visible paragraph of this form:
+"prompt", in any case. Unless it is exempt, each one must (ADR-0160, ADR-0169):
 
-    **Process:** ... .agents/skills/work-item-delivery/SKILL.md ...
+- carry a visible paragraph of this form:
+
+      **Process:** ... .agents/skills/work-item-delivery/SKILL.md ...
+
+- be named ``CONTINUE-<AREA>-<ROWS>-PROMPT.md``, where AREA is one or more
+  upper-case words joined by hyphens and ROWS is one or more board rows
+  (``W28`` or ``W28-W70``), see ``NAME_PATTERN``;
+- show each of the four sections in ``REQUIRED_SECTIONS`` as a level-2
+  heading at the top level of the page, in any order.
 
 Visibility is decided by a CommonMark parser (markdown-it-py, which ADR-0029
 chose after hand-rolled block rules failed), not by line rules: two rounds of
 hand-written rules each let a code example or a comment through. The check
 walks the RENDERED HTML, not the parser's tokens, because raw HTML passes
 through the tokens unread: a comment it left open hid a paragraph from a
-reader while a token-based check still accepted it. The check
-reads the directory itself, so it sees untracked files too. It exits 1 on any
-problem, and also when it finds no prompt file at all.
+reader while a token-based check still accepted it. A heading counts only as
+an ``<h2>`` with no attribute and no enclosing element, so a heading inside a
+code block, a comment, a block quote, a list or a raw ``<div>`` does not.
+
+The check reads the directory itself, so it sees untracked files too. It
+exits 1 on any problem, and also when it finds no prompt file at all.
+``paste_lines`` gives, for each validly named prompt that passes, the one
+line the owner pastes to start the next session; ``make handoff`` prints it.
 """
 
 from __future__ import annotations
 
 import argparse
+import re
 from html.parser import HTMLParser
 from pathlib import Path
 
@@ -37,6 +51,20 @@ EXEMPT: dict[str, str] = {
 
 _SKILL_PATH = ".agents/skills/work-item-delivery/SKILL.md"
 
+#: The only accepted name of a root prompt: CONTINUE-, an upper-case area of
+#: one or more hyphen-joined words, one or more board rows, then -PROMPT.md.
+NAME_PATTERN = re.compile(r"^CONTINUE-[A-Z0-9]+(?:-[A-Z0-9]+)*-W[0-9]+(?:-W[0-9]+)*-PROMPT\.md$")
+
+#: The level-2 headings every root prompt must show (order is not checked).
+REQUIRED_SECTIONS: tuple[str, ...] = (
+    "Read first",
+    "The items, in order",
+    "Approvals",
+    "End of session",
+)
+
+_NAME_FORM = "CONTINUE-<AREA>-<ROWS>-PROMPT.md"
+
 
 def find_prompt_files(root: Path) -> list[Path]:
     """Every root ``.md`` file whose name contains "prompt", in any case."""
@@ -46,6 +74,27 @@ def find_prompt_files(root: Path) -> list[Path]:
         if p.is_file() and p.name.lower().endswith(".md") and "prompt" in p.name.lower()
     )
 
+
+#: Elements that never hold content (the HTML void elements), so they are never
+#: left open. Any other tag written self-closing, such as ``<div hidden />``,
+#: stays open in a browser: the slash is ignored, and what follows is inside it.
+_VOID = frozenset(
+    {
+        "area",
+        "base",
+        "br",
+        "col",
+        "embed",
+        "hr",
+        "img",
+        "input",
+        "link",
+        "meta",
+        "source",
+        "track",
+        "wbr",
+    }
+)
 
 #: Block elements a Markdown paragraph may sit inside (block quote, list).
 _CONTAINERS = frozenset({"blockquote", "ul", "ol", "li"})
@@ -77,8 +126,10 @@ class _ProcessParagraphs(HTMLParser):
     list. Its text is the data directly in it or in plain ``strong``, ``em``,
     ``code`` or ``a``; a nested list item's text is its own. Comments are
     never data. Markdown writes ``<br />``, ``<hr />`` and ``<img ... />``,
-    which the parser opens and closes at once; a raw ``<br>`` without the
-    slash stays open and refuses what follows it, the strict side."""
+    void elements, which are opened and closed at once; a raw ``<br>``
+    without the slash stays open and refuses what follows it, the strict side.
+    A self-closing tag that is not void (``<div hidden />``) stays open, as in
+    a browser."""
 
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
@@ -105,6 +156,11 @@ class _ProcessParagraphs(HTMLParser):
             and all(t in _CONTAINERS and plain for t, plain, _ in self._open)
         )
         self._open.append((tag, _plain(tag, attrs), _Paragraph() if starts else None))
+
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        self.handle_starttag(tag, attrs)
+        if tag in _VOID:
+            self.handle_endtag(tag)
 
     def handle_endtag(self, tag: str) -> None:
         _, para = self._innermost()
@@ -156,6 +212,62 @@ def has_process_line(text: str) -> bool:
     return walker.found
 
 
+class _TopLevelHeadings(HTMLParser):
+    """Walks rendered HTML and collects the text of every level-2 heading a
+    reader sees at the top level of the page: an ``<h2>`` with no attribute
+    and no enclosing element. Its text is the data directly in it or in plain
+    ``strong``, ``em``, ``code`` or ``a``; any other element inside it spoils
+    the heading. Comments are never data."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.headings: list[str] = []
+        self._open: list[tuple[str, bool]] = []
+        self._text: str | None = None  # the open top-level heading's text
+        self._spoiled = False
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if self._text is not None and not (tag in _INLINE and _plain(tag, attrs)):
+            self._spoiled = True
+        if tag in _VOID:
+            return
+        if tag == "h2" and not attrs and not self._open:
+            self._text, self._spoiled = "", False
+        self._open.append((tag, _plain(tag, attrs)))
+
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        # A self-closing tag that is not void stays open, as in a browser.
+        self.handle_starttag(tag, attrs)
+
+    def handle_endtag(self, tag: str) -> None:
+        if all(t != tag for t, _ in self._open):
+            return
+        while self._open:
+            closed, _ = self._open.pop()
+            if not self._open and self._text is not None:
+                if not self._spoiled:
+                    self.headings.append(self._text.strip())
+                self._text = None
+            if closed == tag:
+                return
+
+    def handle_data(self, data: str) -> None:
+        if self._text is not None:
+            self._text += data
+
+
+def missing_sections(text: str) -> list[str]:
+    """The sections of ``REQUIRED_SECTIONS`` the RENDERED page does not show
+    as a top-level level-2 heading whose text, stripped, equals the section.
+    In ``REQUIRED_SECTIONS`` order; an empty list means none is missing."""
+    walker = _TopLevelHeadings()
+    # As in has_process_line: an unclosed "<!--" hides the rest of the page.
+    walker.feed(MarkdownIt("commonmark").render(text) + "-->")
+    walker.close()
+    shown = set(walker.headings)
+    return [section for section in REQUIRED_SECTIONS if section not in shown]
+
+
 def problems(root: Path, exempt: dict[str, str]) -> list[str]:
     """One message per problem. An empty list means the root passes."""
     if not root.is_dir():
@@ -168,14 +280,50 @@ def problems(root: Path, exempt: dict[str, str]) -> list[str]:
         if not (root / name).is_file():
             found.append(f"{name} is exempt but does not exist; remove it from EXEMPT")
     for path in files:
-        if path.name in exempt:
-            continue
-        if not has_process_line(path.read_text(encoding="utf-8", errors="replace")):
-            found.append(
-                f"{path.name} has no '**Process:** ... "
-                ".agents/skills/work-item-delivery/SKILL.md' line outside a code block"
-            )
+        if path.name not in exempt:
+            found += file_problems(path)
     return found
+
+
+def file_problems(path: Path) -> list[str]:
+    """The problems of one root prompt file: its name, its Process line and
+    its four sections. An empty list means the file passes."""
+    found: list[str] = []
+    if not NAME_PATTERN.fullmatch(path.name):
+        found.append(
+            f"{path.name} is not named {_NAME_FORM} "
+            "(for example CONTINUE-PARKED-WORK-W28-W70-PROMPT.md)"
+        )
+    text = path.read_text(encoding="utf-8", errors="replace")
+    if not has_process_line(text):
+        found.append(
+            f"{path.name} has no '**Process:** ... "
+            ".agents/skills/work-item-delivery/SKILL.md' line outside a code block"
+        )
+    for section in missing_sections(text):
+        found.append(f"{path.name} has no visible top-level '## {section}' heading")
+    return found
+
+
+def paste_lines(root: Path) -> list[str]:
+    """The line the owner pastes to start the next session, one per root
+    prompt whose name matches ``NAME_PATTERN`` and that passes the check,
+    sorted by name. A prompt that fails is in ``failing_named_prompts``."""
+    return [
+        f"Read {path.name} in the repo root and follow it exactly."
+        for path in find_prompt_files(root)
+        if NAME_PATTERN.fullmatch(path.name) and not file_problems(path)
+    ]
+
+
+def failing_named_prompts(root: Path) -> list[str]:
+    """The names of root prompts named for the next session that fail the
+    check, sorted. No paste line is offered for these."""
+    return [
+        path.name
+        for path in find_prompt_files(root)
+        if NAME_PATTERN.fullmatch(path.name) and file_problems(path)
+    ]
 
 
 def counts(root: Path, exempt: dict[str, str]) -> str:
