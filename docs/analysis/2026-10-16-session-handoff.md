@@ -50,6 +50,8 @@ URL, a web path under `/Users` with no `/` after the name, and Windows backslash
   It also recommends OpenRouter's OAuth sign-in (PKCE) with a credit limit and expiry, if a free
   trial run shows OpenRouter enforces them. No decision is recorded. W28's resume-when in the
   Parked table names W71 to W81 only, so W82, W83 and W84 do not hold it back.
+- **New rows from W82** join the queue with W71 to W81, under the next prompt's approvals: the
+  owner chose this on 2026-10-16 (CHG-055).
 - **W74** needs the owner's approval of its spend, and **W78** an owner decision. Both are parked
   until W82 has ranked the security rows.
 

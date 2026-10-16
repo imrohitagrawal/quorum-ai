@@ -23,10 +23,11 @@ with `make skill-route ITEM=<row>`.
 1. **W82: the security baseline, first (the owner's direction, CHG-051).** As the board row says,
    the rest is the session's proposal, not the owner's decision: its output is the ranking of W71
    to W81 and any new rows it adds, and Codex reviews that ranking before any code (CHG-049).
-   New rows W82 adds are not approved by this prompt: put them on the board, ranked, and leave
-   them for a later prompt.
-2. **W71 to W81, in the order W82 ranks them.** W74 and W78 are parked on the owner (the Parked
+   New rows W82 adds join the same queue (CHG-055).
+2. **W71 to W81 and the rows W82 adds, in the order W82 ranks them** (CHG-055); a serious new
+   row can go first. W74 and W78 are parked on the owner (the Parked
    table): ask the owner once W82 has ranked them. This prompt does not approve W74's spend.
+   A new row that needs a paid call or an owner decision is parked for the owner the same way.
 3. **W83 and W84**, the secret-scan rows W70 moved out (#567), if the session has room after
    W71 to W81.
 
@@ -36,8 +37,8 @@ research is `docs/analysis/2026-10-16-w28-decision-research.md`.
 
 ## Approvals
 
-Sending this prompt approves the following for one pull request per item above, and the
-end-of-session handoff (docs only).
+Sending this prompt approves the following for one pull request per item above, including each
+row W82 adds (CHG-055), and the end-of-session handoff (docs only).
 - Push and open the pull request.
 - Squash-merge through `make close-guard`, with `EXPECT_CLOSE=""` (or the issues it closes).
 - Deploy.
