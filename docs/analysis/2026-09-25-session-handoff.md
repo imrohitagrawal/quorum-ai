@@ -14,7 +14,7 @@ record exists, with its UTC time. Everything else is the session's wording.
 ## 0. Preconditions
 
 ```bash
-cd /Users/rohitagrawal/Projects/quorum-ai
+cd ~/Projects/quorum-ai
 git status --porcelain   # expect only the CONTINUE-*.md prompts (untracked)
 git worktree list        # expect quorum-ai (main) and quorum-ai-wt-268 (parked)
 curl -s https://quorum.stackclimb.com/status | jq '{build_sha,live_execution,peer_critique_enabled,sign_in_enabled}'

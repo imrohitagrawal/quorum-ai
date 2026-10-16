@@ -137,7 +137,8 @@ The four points that used to disagree are settled here (CHG-040 (b)):
   restore from the copy, and check with `diff -q`. Without the cache delete, a mutation made in the
   same second can reuse stale bytecode and look like a survivor.
 - Before committing a file that was never tracked, replace home-directory paths and user names,
-  and run `scripts/security_scan.py`. This repository is public, and no gate catches a home path.
+  and run `scripts/security_scan.py`. This repository is public. The scan now refuses a
+  home-directory path (ADR-0167), but not a user name written on its own.
 - For a page change: render the golden messy fixture (`e2e/fixtures/golden-run.ts`), and run e2e
   exactly as `AGENTS.md` rule 13 says. Delete `.data/feedback_events.sqlite3` first if local runs
   start answering 429.

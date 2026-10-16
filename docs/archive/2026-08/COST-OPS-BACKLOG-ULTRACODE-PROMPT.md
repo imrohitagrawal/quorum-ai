@@ -34,7 +34,7 @@ gh issue list --state open --limit 30
 | **NOT YOURS — another session owns these** | **#111–#120** (UI stream) and the branch `feat/ui-pr1-quickfixes` |
 
 `feat/ui-pr1-quickfixes` was live at 3 ahead / 41 behind `main`. **Never check it out, never run a
-git write command in `/Users/rohitagrawal/Projects/quorum-ai`.** Work only in your own worktrees.
+git write command in `~/Projects/quorum-ai`.** Work only in your own worktrees.
 If an issue in your scope turns out to need a file that stream owns (`static/app.js`, `app.css`,
 `templates/workspace.html`, `e2e/`), STOP and escalate rather than editing it.
 

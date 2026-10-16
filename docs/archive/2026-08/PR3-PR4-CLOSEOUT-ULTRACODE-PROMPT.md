@@ -66,7 +66,7 @@ Verify: `grep -rn "deepseek" e2e/tests/` should return zero matches after edits.
 ### Step 4 — Run e2e invariants
 
 ```bash
-cd /Users/rohitagrawal/Projects/quorum-ai
+cd ~/Projects/quorum-ai
 PYTHONPATH=src .venv/bin/python -m e2e/run_invariants.py
 ```
 

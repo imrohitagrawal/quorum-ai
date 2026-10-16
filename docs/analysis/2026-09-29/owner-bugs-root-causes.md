@@ -102,7 +102,7 @@ Nothing happens. The rows are an `<li>` with spans (`main.py:885-896`), no link 
 - On the result view, "Start fresh" calls `clearSessionTrail()` (`app.js:9661-9664`). That clears the in-page "This session" trail, which fits the owner's item 1.
 - The page has two separate histories: the top bar "History" (server-built, stale) and the in-page "This session" trail (live, cleared by Start fresh). The trail is the only one visible on the result view.
 
-Probe files and screenshots are in `/private/tmp/claude-501/-Users-rohitagrawal-Projects-quorum-ai/e25d3396-0a5c-412b-aabf-e12be1095139/scratchpad/inv-nav/probe/`: `nav_history.py`, `reopen.py`, `result-top.png`, `composer-history-stale.png`, `history-after-reload.png`. Nothing was written under `/Users/rohitagrawal/Projects`.
+Probe files and screenshots are in `/private/tmp/claude-501/-Users-<user>-Projects-quorum-ai/e25d3396-0a5c-412b-aabf-e12be1095139/scratchpad/inv-nav/probe/`: `nav_history.py`, `reopen.py`, `result-top.png`, `composer-history-stale.png`, `history-after-reload.png`. Nothing was written under `~/Projects`.
 
 
 =================================================
@@ -111,10 +111,10 @@ All three reports reproduce in a real browser, both signed in and anonymous. Non
 
 Tree is build 7c74b4f. All code references are `src/product_app/static/app.js` unless another file is named.
 
-**How the probes were run** (probe files and screenshots are in `/private/tmp/claude-501/-Users-rohitagrawal-Projects-quorum-ai/e25d3396-0a5c-412b-aabf-e12be1095139/scratchpad/inv-trail/probe/`):
+**How the probes were run** (probe files and screenshots are in `/private/tmp/claude-501/-Users-<user>-Projects-quorum-ai/e25d3396-0a5c-412b-aabf-e12be1095139/scratchpad/inv-trail/probe/`):
 
 ```
-cd …/scratchpad/inv-trail && ROOT=$PWD PORT=18411 PYTHONDONTWRITEBYTECODE=1 /Users/rohitagrawal/Projects/quorum-ai/.venv/bin/python probe/p1_trail.py      # signed in
+cd …/scratchpad/inv-trail && ROOT=$PWD PORT=18411 PYTHONDONTWRITEBYTECODE=1 ~/Projects/quorum-ai/.venv/bin/python probe/p1_trail.py      # signed in
 SIGNED=0 … PORT=18412 … probe/p1_trail.py                                                                                                          # anonymous
 ```
 
@@ -199,7 +199,7 @@ sessionStorage keys: []  localStorage keys: ['quorum.workspaceSeen']
   - A signed-in run could be linked: `GET /v1/query-runs/{id}` returned 200 after sign-out and sign-in again (`probe/p4_resign.py`). How long a run stays readable in production is UNVERIFIED.
 - **Prior reports.** I searched 26 local session transcripts, the docs and the GitHub issues for earlier reports of items 2 and 9. The only earlier reports found are triage row 10 and issue #126, which was the trail being capped at one entry.
 
-Residue in the throwaway copy: the harness left `harness-18411..18415.sqlite3` files in the scratchpad copy's root. Nothing under `/Users/rohitagrawal/Projects` was written.
+Residue in the throwaway copy: the harness left `harness-18411..18415.sqlite3` files in the scratchpad copy's root. Nothing under `~/Projects` was written.
 
 
 =================================================
@@ -319,14 +319,14 @@ Earlier reports:
   - Is nuclear power safer than wind and solar per unit of energy produced?
   - Why did the Western Roman Empire fall, and where do historians disagree?
 
-Files are in `/private/tmp/claude-501/-Users-rohitagrawal-Projects-quorum-ai/e25d3396-0a5c-412b-aabf-e12be1095139/scratchpad/inv-starters/probe/`:
+Files are in `/private/tmp/claude-501/-Users-<user>-Projects-quorum-ai/e25d3396-0a5c-412b-aabf-e12be1095139/scratchpad/inv-starters/probe/`:
 - `chips.py`
 - `hs.py`
 - `openai.txt` (the paper's extracted text)
 - `pdftext.swift` (the extractor)
 - `composer-chips.png`
 
-Nothing was written under `/Users/rohitagrawal/Projects`.
+Nothing was written under `~/Projects`.
 
 
 =================================================
@@ -392,13 +392,13 @@ Every mutation proof targets server functions. Every review lens was privacy, co
 - **Block message:** choose the sentence by which limit fired, and assert the text using an estimate under $0.50.
 
 ## Files
-All in `/private/tmp/claude-501/-Users-rohitagrawal-Projects-quorum-ai/e25d3396-0a5c-412b-aabf-e12be1095139/scratchpad/inv-process/`:
+All in `/private/tmp/claude-501/-Users-<user>-Projects-quorum-ai/e25d3396-0a5c-412b-aabf-e12be1095139/scratchpad/inv-process/`:
 - `probe/flows.py`
 - `probe/resultnav.py`
 - `probe/result_view_signed_in.png`
 - `harness-18451.sqlite3` (the test database the harness created; delete it by name when done)
 
-Nothing was written under `/Users/rohitagrawal/Projects`, and there were no production calls.
+Nothing was written under `~/Projects`, and there were no production calls.
 
 
 =================================================
@@ -408,7 +408,7 @@ Nothing was written under `/Users/rohitagrawal/Projects`, and there were no prod
 **Short answer.** Reproduced. Every block the owner can hit with the default models is the $0.40 daily account cap, not the $0.50 per-run cap. The page labels every block "Over the hard cap" all the same. It has done this since the first UI in PR #7 (2026-07-11). This was never fixed and then broken again. It was always wrong, and no test reads the text on the block card.
 
 ### (a) Reproduced
-Probes `probe/cap.py`, `probe/resign.py` and `probe/rails.py` are in `/private/tmp/claude-501/-Users-rohitagrawal-Projects-quorum-ai/e25d3396-0a5c-412b-aabf-e12be1095139/scratchpad/inv-cost/probe/`. They run against the real routes on port 18421, with live execution off and a signed-in account.
+Probes `probe/cap.py`, `probe/resign.py` and `probe/rails.py` are in `/private/tmp/claude-501/-Users-<user>-Projects-quorum-ai/e25d3396-0a5c-412b-aabf-e12be1095139/scratchpad/inv-cost/probe/`. They run against the real routes on port 18421, with live execution off and a signed-in account.
 
 Three simulated runs, then the fourth estimate:
 ```
@@ -500,7 +500,7 @@ The owner's line "session history becomes zero" belongs to another lens. I did n
    - A positive partner test: a mocked `per_run_cap` block with a worst case of $0.60 still shows the hard-cap headline.
    - Replace the impossible 0.300 block fixture in the three spec files.
 
-Nothing was written under `/Users/rohitagrawal/Projects`. `git status` shows the same 6 untracked files as at the start. The probe server on port 18421 is stopped. Probe files stay in the scratchpad `probe/` folder.
+Nothing was written under `~/Projects`. `git status` shows the same 6 untracked files as at the start. The probe server on port 18421 is stopped. Probe files stay in the scratchpad `probe/` folder.
 
 
 =================================================
@@ -561,4 +561,4 @@ Nothing was written under `/Users/rohitagrawal/Projects`. `git status` shows the
 
 ## Cleanup
 
-I deleted my residue by name: `inv-trail/harness-18471.sqlite3`, `harness-18472.sqlite3`, `probe/critic_p1.log`, `probe/critic_cap.log`. Ports 18471 and 18472 are free: `lsof` returned nothing. The main checkout's `git status` shows only the same 6 untracked files as at the start. Nothing was written under `/Users/rohitagrawal/Projects`, and production got only the one free `/status` GET.
+I deleted my residue by name: `inv-trail/harness-18471.sqlite3`, `harness-18472.sqlite3`, `probe/critic_p1.log`, `probe/critic_cap.log`. Ports 18471 and 18472 are free: `lsof` returned nothing. The main checkout's `git status` shows only the same 6 untracked files as at the start. Nothing was written under `~/Projects`, and production got only the one free `/status` GET.

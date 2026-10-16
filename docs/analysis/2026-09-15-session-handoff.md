@@ -12,7 +12,7 @@ Read `AGENTS.md` first. Then this. Do not start from the code.
 ## 0. Preconditions for the next session
 
 ```bash
-cd /Users/rohitagrawal/Projects/quorum-ai
+cd ~/Projects/quorum-ai
 git status --porcelain            # expect only CONTINUE-105-BACKLOG-ULTRACODE-PROMPT.md (untracked)
 git rev-parse --short origin/main # expect e05950b or later
 curl -s https://quorum.stackclimb.com/status | jq '{build_sha,live_execution,peer_critique_enabled}'

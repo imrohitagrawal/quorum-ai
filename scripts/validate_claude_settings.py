@@ -6,7 +6,7 @@
 machine-specific permission surface rather than a tracked product artifact.
 That decision creates a durability gap the file itself already demonstrated:
 `permissions.allow` on one real machine hardcoded
-`/Users/rohitagrawal/Documents/Projects/quorum-ai/...`, an absolute path that
+`/Users/<you>/Documents/Projects/quorum-ai/...`, an absolute path that
 was already wrong (the repo does not live under `Documents/Projects`) because
 nothing ever re-derives a path baked into an untracked file.
 

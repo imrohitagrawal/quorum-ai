@@ -1,7 +1,7 @@
 # Session Handoff
 
 ## Date/time
-2026-10-14T16:31:57+05:30
+2026-10-16T15:53:15+05:30
 
 ## Open work
 `docs/65-open-work.md` — the source of truth for what is open, what blocks what,
@@ -11,24 +11,24 @@ line further down this file is the factory router's view of the lifecycle, not a
 work status.
 
 ## Latest narrative handoff
-`docs/analysis/2026-10-14-session-handoff-2.md` — read this for full context before editing. (today)
+`docs/analysis/2026-10-14-session-handoff-2.md` — read this for full context before editing. **(2 days old** — if a newer session ran since then and its narrative handoff was archived without a replacement being written, this may be stale; check `docs/archive/` for a newer one.)
 
 This file is a mechanical snapshot (branch/git-status/skill-route/live state) —
 regenerated fresh every `make handoff`. The narrative above (what happened,
 what's next, the traps) lives in the dated doc it points to, not here.
 
 ## Current branch/worktree
-docs/handoff-2026-10-14-2
+w70/secret-scan
 
 ## Live state (measured fresh by this run, not hand-carried)
 Run `make handoff` again for current numbers instead of trusting this file
 once it ages -- every value below is read from git/gh/`/status` at
 generation time, per #134.
 
-- **`origin/main` tip:** `c56dd8eca237`
-- **Last commit touching `src/`:** `895372536b59`
-- **Production vs. last `src/` commit:** production build_sha c56dd8e is in sync: it is `origin/main`'s tip, which holds the last src/ commit 8953725
-- **pytest collected (no execution):** 6966
+- **`origin/main` tip:** `467ae9f0a079`
+- **Last commit touching `src/`:** `ad959d2c1341`
+- **Production vs. last `src/` commit:** production build_sha 467ae9f is in sync: it is `origin/main`'s tip, which holds the last src/ commit ad959d2
+- **pytest collected (no execution):** 7326
 - **e2e lane spec counts:** invariants: 26, ops: 2, degraded: 1
 - **Open issues:** 2
 - **Changed-lines coverage:** not computed here -- `make diff-cover` shares
@@ -36,11 +36,7 @@ generation time, per #134.
   concurrently (AGENTS.md rule 15), so this file does not run it. Run
   `make quality && make diff-cover DIFF_BASE=origin/main` for a current number.
 - **Remote branches not merged into `origin/main`:**
-- `docs/w5-parked-2026-09-24`
-- `fix/e2e-visual-wait-for-fonts`
-- `proposal/268-web-search-context-tokens`
 - `w28/byok-pr1-plan`
-- `w29/judge-wiring-plan`
 - `w70/secret-scan`
 
 ## Product readiness
@@ -49,20 +45,38 @@ product readiness: verdict Not ready, written to docs/product-readiness.md
 
 ## Board and GitHub
 From `make board-github-check`: DONE rows whose issue is still open, and open issues no row cites.
-board vs GitHub: 80 board rows, 2 open issues
+board vs GitHub: 83 board rows, 2 open issues
   the board and GitHub agree
 
 ## Root prompt check
 `PASSED` (checked 0, exempt 1; `make prompt-check`)
+Prompt write hook: not installed in `.claude/settings.json`; run `.venv/bin/python scripts/prompt_write_hook.py --install .`
+
+## Parked work and branches
+From `make parked-check`:
+```text
+Parked work check: 3 remote branches, 2 open pull requests, 4 Parked lines, 0 branches with no open pull request, 0 Parked items due
+Remote branches with no open pull request (merge, park or delete each):
+  - none
+Parked items whose resume-when has come (resume, re-park or close each):
+  - none
+Problems:
+  - draft pull request #567 (w70/secret-scan) has no line in the ## Parked table
+FAILED
+```
+
+## Next session
+There is no root prompt named `CONTINUE-<AREA>-<ROWS>-PROMPT.md` that passes `make prompt-check`, so there is no line to paste. Write one by copying `.agents/skills/work-item-delivery/prompt-template.md`.
 
 ## Leftovers
 From `make session-clean`, which reports and never deletes.
 ```text
+Poisoned local state:
+- `.data/feedback_events.sqlite3` — poisoned local state -- a stale mint cap makes the UI answer 429 and ~12 specs fail. The same events table also holds locally seeded audit and spend-rail events; production keeps its own database elsewhere
+
 Feature branches and worktrees:
-- `worktree /Users/rohitagrawal/Projects/quorum-ai-wt-268` — remove with 'git worktree remove' once its branch is merged
-- `worktree /Users/rohitagrawal/Projects/quorum-ai-wt-byok` — remove with 'git worktree remove' once its branch is merged
-- `worktree /Users/rohitagrawal/Projects/quorum-ai-wt-handoff2` — remove with 'git worktree remove' once its branch is merged
-- `worktree /Users/rohitagrawal/Projects/quorum-ai-wt-w70` — remove with 'git worktree remove' once its branch is merged
+- `worktree ~/Projects/quorum-ai-wt-byok` — remove with 'git worktree remove' once its branch is merged
+- `worktree ~/Projects/quorum-ai-wt-w70` — remove with 'git worktree remove' once its branch is merged
 ```
 
 ## Current phase
@@ -120,8 +134,7 @@ Operate, learn, and improve
 
 ## Git status
 ```text
-?? docs/analysis/2026-10-14-session-handoff-2.md
-?? docs/archive/2026-10/CONTINUE-SECURITY-W69-W70-PROMPT.md
+clean
 ```
 
 ## Diff stat

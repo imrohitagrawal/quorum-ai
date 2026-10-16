@@ -13,7 +13,7 @@ starter goes red on planted defects and green once they are fixed.
 - `~/Projects/quorum-ai/AGENTS.md` (791 lines, 51 rules)
 - `~/Projects/quorum-ai/docs/DAY-ONE-PROMPT.md` (822 lines, the current day-one prompt)
 - `~/Projects/quorum-ai/docs/103-incident-learnings.md`
-- `~/.claude/projects/-Users-rohitagrawal-Projects-quorum-ai/memory/` (index: `MEMORY.md`)
+- `~/.claude/projects/-Users-<user>-Projects-quorum-ai/memory/` (index: `MEMORY.md`)
 - `~/Projects/quorum-ai-evidence/2026-09-29/`: `ENGINEERING-REVIEW-2026-09-29.md`,
   `approach-research/synthesis.md`, `skills-tools-research/shortlist.md`, both `contest-*.md`
   files in each folder, and `NEXT-SESSION-PROMPT.md` ("Research conclusions" section)

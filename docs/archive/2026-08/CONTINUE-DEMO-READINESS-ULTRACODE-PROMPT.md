@@ -10,7 +10,7 @@
 Written 2026-08-26. **You are the MAIN ORCHESTRATOR. The human is asleep and will
 not answer.** Drive this to completion within the scope below, then hand off.
 
-The approved plan is `/Users/rohitagrawal/.claude/plans/i-think-you-did-quiet-stearns.md`.
+The approved plan is `~/.claude/plans/i-think-you-did-quiet-stearns.md`.
 **Read it first, in full.** It carries the settled decisions, their evidence, the
 critical files, and the verification for each item. This file is the operating
 procedure; that file is the content.

@@ -25,7 +25,7 @@ W70 (the secret scan) is on branch `w70/secret-scan`, pushed as a draft pull req
 The work-item process stops a work item when two fixes in a row add defects, or a required finding remains after round 2. Both happened:
 - Round 1's fixes widened rules and added false positives and slow inputs.
 - Round 2's fix narrowed them, then the narrow re-check of `688debf` found D1 to D4. The pull request body lists them.
-- D1 is `REQUIRED_CONTRACT`. A value containing `%letters%` anywhere counts as a placeholder (`_PERCENT_VARIABLE.search` in `_is_placeholder`), so `DB_PASSWORD=Kx9%vQ2%w7zPq` passes. Reproduced by the orchestrator; the same value with each `%` replaced by a letter (`Kx9xvQ2xw7zPq`) is named.
+- D1 is `REQUIRED_CONTRACT`. A value containing `%letters%` anywhere counts as a placeholder (`_PERCENT_VARIABLE.search` in `_is_placeholder`), so `DB_PASSWORD=` followed by `Kx9%vQ2%w7zPq` passes. Reproduced by the orchestrator; the same value with each `%` replaced by a letter (`Kx9xvQ2xw7zPq`) is named.
 
 Owner decision recorded on the branch, not on `main`: CHG-045 (home-directory paths: "Rewrite them to ~"). The CHG row reaches `main` with W70.
 

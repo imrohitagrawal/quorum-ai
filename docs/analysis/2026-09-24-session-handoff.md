@@ -10,7 +10,7 @@ late on 2026-09-23 and finishing on 2026-09-24.
 ## 0. Preconditions
 
 ```bash
-cd /Users/rohitagrawal/Projects/quorum-ai
+cd ~/Projects/quorum-ai
 git status --porcelain     # expect only the CONTINUE-*.md prompts (untracked)
 git worktree list          # expect quorum-ai (main) and quorum-ai-wt-268 (parked)
 curl -s https://quorum.stackclimb.com/status | jq '{build_sha,live_execution,peer_critique_enabled,peer_critique_in_effect}'

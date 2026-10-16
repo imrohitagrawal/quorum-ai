@@ -26,7 +26,7 @@ Both files were inspected directly rather than assumed:
   `grep -oiE "(sk-…|ghp_…|api[_-]?key|token|secret|password|Bearer )"`
   matched nothing.
 - One concrete durability defect found by inspection: `permissions.allow[3]`
-  hardcodes `Bash(node --check /Users/rohitagrawal/Documents/Projects/quorum-ai/src/product_app/static/app.js)`
+  hardcodes `Bash(node --check ~/Documents/Projects/quorum-ai/src/product_app/static/app.js)`
   — an absolute path under `Documents/Projects`, which is not where this repo
   lives on this machine (it lives at `~/Projects/quorum-ai`). The entry is
   already wrong on the machine that wrote it, which is itself evidence for

@@ -1383,7 +1383,7 @@ Failure-mode table (≈`:142`):
 ### 5.1 Per-PR local sequence (run in this order; stop on the first red)
 
 ```bash
-cd /Users/rohitagrawal/Projects/quorum-ai
+cd ~/Projects/quorum-ai
 
 # 1. Docs/traceability — cheap, stdlib-only, and the one that reds the whole chain.
 make fr-completeness                 # record the count BEFORE and AFTER PR-S3-3
@@ -1462,7 +1462,7 @@ PR-INFRA-B already built the job.
 ### 5.5 Manual drive-and-look — required by AGENTS.md, recorded in `docs/analysis/R2-S3-manual-verification.md`
 
 ```bash
-cd /Users/rohitagrawal/Projects/quorum-ai
+cd ~/Projects/quorum-ai
 UV_CACHE_DIR=.uv-cache PYTHONPATH=src SENTRY_DSN='' \
   OPENROUTER_LIVE_EXECUTION_ENABLED=false \
   uv run uvicorn product_app.main:app --host 127.0.0.1 --port 18085

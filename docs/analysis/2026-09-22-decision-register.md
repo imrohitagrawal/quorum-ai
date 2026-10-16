@@ -22,7 +22,7 @@ recorded in CHG-011.
 ## How each quote was checked
 
 Every quote below was found by searching a session transcript under
-`~/.claude/projects/-Users-rohitagrawal-Projects-quorum-ai/` and parsing the
+`~/.claude/projects/-Users-<user>-Projects-quorum-ai/` and parsing the
 matching record to confirm its `type` is `user`. The 2026-08-31 lines contain
 hard line breaks in the transcript, so a one-line `grep -F` finds only
 fragments of them; they are shown here with the breaks joined. Timestamps are

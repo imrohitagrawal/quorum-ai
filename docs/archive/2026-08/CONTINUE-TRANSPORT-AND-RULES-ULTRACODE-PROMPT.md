@@ -19,7 +19,7 @@ IGNORE IT.** It is untracked, predates this work, and is not mine to delete.
 ## The prompt to paste into a fresh session
 
 > Read the approved plan at
-> `/Users/rohitagrawal/.claude/plans/is-it-advisable-to-fuzzy-quilt.md` in full, then
+> `~/.claude/plans/is-it-advisable-to-fuzzy-quilt.md` in full, then
 > read `CONTINUE-TRANSPORT-AND-RULES-ULTRACODE-PROMPT.md` at the repo root and
 > implement what it says is pending, in the order it gives.
 >

@@ -8,7 +8,7 @@ them. The session ran unattended from the owner's prompt
 ## 0. Preconditions
 
 ```bash
-cd /Users/rohitagrawal/Projects/quorum-ai
+cd ~/Projects/quorum-ai
 git status --porcelain     # expect only the three CONTINUE-*.md files (untracked)
 git worktree list          # expect quorum-ai (main) and quorum-ai-wt-268 (parked, see §3)
 curl -s https://quorum.stackclimb.com/status | jq '{build_sha,live_execution,peer_critique_enabled,peer_critique_in_effect}'
