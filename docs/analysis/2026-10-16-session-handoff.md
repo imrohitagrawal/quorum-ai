@@ -58,8 +58,8 @@ URL, a web path under `/Users` with no `/` after the name, and Windows backslash
 - A Codex job started directly through `codex-companion.mjs` does not wake the session when it
   ends. This session sat idle for about 3.4 hours waiting on one. Use the `codex:codex-rescue`
   agent, whose end the harness reports.
-- In zsh, `$r:s` is a variable modifier, so `git show $r:scripts/x.py` breaks. Write
-  `${r}:scripts/x.py`.
+- In zsh, `$r:s` is a variable modifier, so `git show $r:scripts/security_scan.py` breaks. Write
+  `${r}:scripts/security_scan.py`.
 - Root prompts and `docs/adr/0*.md` are in the completion-claims check's scope, and
   `tests/unit/test_cited_paths_resolve.py` reads committed lines.
 - Since W70, a home-folder path written out in any committed text fails the scan: a test comment,
