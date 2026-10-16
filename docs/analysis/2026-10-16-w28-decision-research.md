@@ -11,7 +11,7 @@ itself waits until W71 to W81 are done (the board's Parked table, CHG-051).
 
 Repository claims are marked **MEASURED** (a command was run on `main` at
 `6872e46`; the command is named; the cited lines still match at `ad959d2`, where
-only `src/product_app/costs.py` changed in between) or **INHERITED** (read from a document; the
+only `src/product_app/costs.py` changed under `src/` in between) or **INHERITED** (read from a document; the
 document is named). No paid call was made and no key was sent anywhere. The
 OWASP ASVS 5.0 text and the LibreChat code were read raw from GitHub; the other
 web quotes came through a text-extracting fetch and were spot-checked against
@@ -165,7 +165,7 @@ nobody is using the site, so Fly stops the machine. At 11:00 she comes back.
   - Open WebUI Direct Connections
     (https://docs.openwebui.com/features/chat-conversations/direct-connections): keys
     are used *"without storing them on the Open WebUI server"* and *"keys are stored in
-    the browser's local storage*
+    the browser's local storage"*
   - Both work because those apps call the provider **from the browser**. Ours calls
     OpenRouter from the server, so a browser-held key would still have to travel to us
     on every run.
@@ -188,7 +188,7 @@ nobody is using the site, so Fly stops the machine. At 11:00 she comes back.
 
 **Recommendation (research's, not the owner's).** Start with **A, server memory
 only**, and revisit B or D only after the owner has used it. This matches the point the
-owner agreed to on 2026-09-29. **Deciding reason:** OWASP's first rule is not to store
+owner conditionally agreed to on 2026-09-29. **Deciding reason:** OWASP's first rule is not to store
 what you do not need, and our sessions already survive restarts, so the cost of A is a
 re-paste after an idle stop or a deploy. If the owner picks
 OpenRouter's OAuth flow (section at the end), that re-paste becomes one click, and
@@ -214,7 +214,8 @@ her phone.
 in memory only.** Where the key lives (decision 1) and whom it belongs to are separate
 questions: an account's key can also be held in memory only, keyed by the account id
 that sign-in already resolves (`session_store.py:908-962`, used at
-`google_signin.py:692-701`; MEASURED by reading; the app runs one machine, `fly.toml:6`).
+`google_signin.py:692-701`; MEASURED:
+`sed -n 908,962p src/product_app/session_store.py` and `sed -n 692,701p src/product_app/google_signin.py`; the app runs one machine, `fly.toml:6`).
 
 | Option | What could go wrong | Build cost here |
 |---|---|---|
@@ -237,8 +238,8 @@ that sign-in already resolves (`session_store.py:908-962`, used at
   *"Verify that access to secret assets adheres to the principle of least
   privilege."*
 
-**Recommendation (research's).** **A, per session**, as the owner agreed on
-2026-09-29. **Deciding reason:** it limits a stolen cookie to one session, not every
+**Recommendation (research's).** **A, per session**, the point the owner
+conditionally agreed to on 2026-09-29. **Deciding reason:** it limits a stolen cookie to one session, not every
 device of the account. C is the option to choose if typing the key once per device
 proves too much; B adds storage at rest for little gain over C.
 
@@ -274,8 +275,8 @@ proves too much; B adds storage at rest for little gain over C.
   item 3, a section titled as the session's recommendation). INHERITED, a session's
   view.
 
-**Recommendation (research's).** **A, signed-in only**, as the owner agreed on
-2026-09-29. **Deciding reason:** a key
+**Recommendation (research's).** **A, signed-in only**, the point the owner
+conditionally agreed to on 2026-09-29. **Deciding reason:** a key
 spends real money and exposes the questions sent with it to the key's owner; tying it
 to a Google identity makes every key traceable to one person and gives the existing
 clean-up paths (sign out everywhere, account deletion) something to act on.
@@ -361,8 +362,8 @@ The run must treat a 401 mid-run as "key revoked", never retry on the app's key.
   required or potentially compromised, you must securely revoke them to restrict
   access."*
 
-**Recommendation (research's).** **A, stop at the next stage**, as the owner agreed on
-2026-09-29, with the run bound to the key it started with. **Deciding reason:** a
+**Recommendation (research's).** **A, stop at the next stage**, the point the owner
+conditionally agreed to on 2026-09-29, with the run bound to the key it started with. **Deciding reason:** a
 user removes a key most often because they fear it leaked, and stopping is the only
 option that honours that; OpenRouter-side revocation forces the same behaviour anyway.
 
@@ -398,8 +399,8 @@ number."*; ASVS 14.2.1 *"…the URL and query string do not contain sensitive
 information, such as an API key or session token."* GitHub's Copilot app shows the
 practice: *"never read back by the UI"* (URL above).
 
-**Recommendation (research's).** **A**, which matches the owner's 2026-09-29
-agreement that FR-012 should say "Optional". **Deciding reason:** it is the posture the
+**Recommendation (research's).** **A**, which matches the owner's conditional
+2026-09-29 agreement that FR-012 should say "Optional". **Deciding reason:** it is the posture the
 owner already set in ADR-0121, and AC-026's existing promise ("no provider key is
 stored in the browser") is exactly what the standards require, so it should be kept
 and sharpened, not deleted.
@@ -424,8 +425,11 @@ useful to anyone but the app that started the flow.
 - **A spending limit is available in the API reference**
   (https://openrouter.ai/docs/api/api-reference/oauth/create-authorization-code,
   `POST /auth/keys/code`). That endpoint takes an `Authorization: Bearer` key, so it is
-  a different interface from the public sign-in redirect; whether the redirect flow
-  accepts and enforces these fields is **UNVERIFIED**: `limit`: *"Credit limit for the API key to be created"*;
+  a different interface from the public sign-in redirect. The guide's Markdown version
+  (the OAuth guide's address with `.md` added) lists only `key_label`, `workspace_id`,
+  `required_workspace_id` and `state` as optional parameters of the redirect, with no
+  `limit` and no `expires_at`; whether the redirect flow accepts and enforces a limit
+  is **UNVERIFIED**: `limit`: *"Credit limit for the API key to be created"*;
   `usage_limit_type`: *"Optional credit limit reset interval. When set, the credit
   limit resets on this interval."* (daily, weekly or monthly); `expires_at`:
   *"Optional ISO 8601 UTC expiration timestamp."* The page does not say whether the
@@ -494,7 +498,7 @@ securely"*.
 
 On 2026-10-16 a reviewer that did not write this file fetched every cited page:
 web pages with `curl` (HTML stripped, exact-string search), the OWASP ASVS 5.0 text and
-the LibreChat code raw with `gh api`. All 37 quotations from outside pages were found
+the LibreChat code raw with `gh api`. Every quotation from an outside page was found
 word for word, allowing only line wrapping, backticks and curly quotes, and every URL
 loaded. Three claims written next to the quotes were wrong and are corrected above
 (Cursor's page does not say where the key is kept; Open WebUI's users are signed in to
