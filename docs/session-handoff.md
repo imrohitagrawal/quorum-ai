@@ -1,7 +1,7 @@
 # Session Handoff
 
 ## Date/time
-2026-10-16T18:21:16+05:30
+2026-10-16T18:57:10+05:30
 
 ## Open work
 `docs/65-open-work.md` — the source of truth for what is open, what blocks what,
@@ -71,6 +71,9 @@ Read CONTINUE-SECURITY-W82-W71-W81-PROMPT.md in the repo root and follow it exac
 ## Leftovers
 From `make session-clean`, which reports and never deletes.
 ```text
+Poisoned local state:
+- `.data/feedback_events.sqlite3` — poisoned local state -- a stale mint cap makes the UI answer 429 and ~12 specs fail. The same events table also holds locally seeded audit and spend-rail events; production keeps its own database elsewhere
+
 Feature branches and worktrees:
 - `worktree ~/Projects/quorum-ai-wt-byok` — remove with 'git worktree remove' once its branch is merged
 - `worktree ~/Projects/quorum-ai-wt-handoff` — remove with 'git worktree remove' once its branch is merged
@@ -131,7 +134,7 @@ Operate, learn, and improve
 
 ## Git status
 ```text
-?? .venv
+clean
 ```
 
 ## Diff stat
