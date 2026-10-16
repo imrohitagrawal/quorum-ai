@@ -161,10 +161,27 @@ _S3_NOT_NAMED = [
     'parser.add_argument("-<DH>dir-path")',  # the plan's line: `-` follows `-`
     'class="nav<DH>icon-large"',  # Codex's line: `-` follows a letter
     "my<DH>dir-x",  # the plan's line
+    "-<DH>dir-path",  # fourth revision: an option, `-home-` after `-`, bare
     # The CHG-045 rewrite of the committed lines must not be named, or the
     # rewrite could never bring the scan back to 0:
     "`~/.claude/projects/<DU><user>-Projects-quorum-ai/memory/`",
 ]
+
+
+#: Fourth revision: before ``Users`` (capital U, as macOS writes it) the leading
+#: ``-`` may follow another ``-``. A nested Claude folder name writes the ``/``
+#: before the root as ``-`` and the ``/`` before that as another ``-``.
+_S3_NESTED_NAMED = [
+    "x/projects/-private-tmp-<DU>alice-Projects-q",  # the builder's probe
+    "-<DU>alice-x",  # `--Users-alice-x`
+]
+
+
+@pytest.mark.parametrize("template", _S3_NESTED_NAMED)
+def test_s3_a_dash_encoded_users_folder_after_another_dash_is_named(template: str) -> None:
+    """``-private-tmp--Users-<name>-``: the ``-`` before ``Users`` follows a ``-``."""
+    # Red when: `_DASH_START` refuses a `-` before `-Users-` (as it must still before `-home-`).
+    assert _home(template), _fill(template)
 
 
 @pytest.mark.parametrize("template", _S3_NAMED)
@@ -454,3 +471,26 @@ def test_s3_a_dash_encoded_line_is_reported_and_its_rewrite_is_not(
 
     assert scanned == 2
     assert got == [(1, "home_directory_path")], got
+
+
+def test_s7_a_hindi_name_under_the_linux_root_is_named() -> None:
+    """A Hindi name with a vowel sign under the ``home`` root, then ``/``: named.
+
+    Under the ``Users`` root one name character is enough (plan S4), so the
+    ``Users`` case above stays named even when the vowel sign is not a name
+    character. Under ``home`` the ``/`` after the whole name is needed.
+    """
+    # Red when: the name's marks are the five combining-diacritics blocks only (no U+093F).
+    assert _home("cd <H>/" + _HINDI_NAME + "/x")
+
+
+def test_s7_a_mark_nfc_cannot_compose_before_the_root_is_not_a_home_folder() -> None:
+    """``x`` + U+0301 has no composed form, so NFC leaves the mark before the root."""
+    # Red when: `_PATH_START`'s look-behind takes no combining mark.
+    assert not _home("x\u0301<U>/alice/x")
+
+
+def test_s7_the_same_mark_then_a_space_then_the_root_is_named() -> None:
+    """Partner: with a space after the mark, the home folder is named."""
+    # Red when: a mark before a space stops the path that follows from being named.
+    assert _home("x\u0301 <U>/alice/x")
