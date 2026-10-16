@@ -1,7 +1,7 @@
 # Session Handoff
 
 ## Date/time
-2026-10-16T19:21:34+05:30
+2026-10-16T19:41:01+05:30
 
 ## Open work
 `docs/65-open-work.md` — the source of truth for what is open, what blocks what,
@@ -36,6 +36,7 @@ generation time, per #134.
   concurrently (AGENTS.md rule 15), so this file does not run it. Run
   `make quality && make diff-cover DIFF_BASE=origin/main` for a current number.
 - **Remote branches not merged into `origin/main`:**
+- `docs/handoff-2026-10-16`
 - `w28/byok-pr1-plan`
 
 ## Product readiness
@@ -54,7 +55,7 @@ Prompt write hook: not installed in `.claude/settings.json`; run `.venv/bin/pyth
 ## Parked work and branches
 From `make parked-check`:
 ```text
-Parked work check: 2 remote branches, 1 open pull requests, 4 Parked lines, 0 branches with no open pull request, 0 Parked items due
+Parked work check: 3 remote branches, 2 open pull requests, 4 Parked lines, 0 branches with no open pull request, 0 Parked items due
 Remote branches with no open pull request (merge, park or delete each):
   - none
 Parked items whose resume-when has come (resume, re-park or close each):
