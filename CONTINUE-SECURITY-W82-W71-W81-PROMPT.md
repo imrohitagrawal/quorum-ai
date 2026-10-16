@@ -20,8 +20,11 @@ and follow it for roles, review rounds, gates, merging, production checks and cl
 Each is its own pull request, deployed and checked live before the next starts. Route each
 with `make skill-route ITEM=<row>`.
 
-1. **W82: the security baseline, first (CHG-051).** Its output is the ranking of W71 to W81 and
-   any new rows it adds. Codex reviews that ranking before any code.
+1. **W82: the security baseline, first (the owner's direction, CHG-051).** As the board row says,
+   the rest is the session's proposal, not the owner's decision: its output is the ranking of W71
+   to W81 and any new rows it adds, and Codex reviews that ranking before any code (CHG-049).
+   New rows W82 adds are not approved by this prompt: put them on the board, ranked, and leave
+   them for a later prompt.
 2. **W71 to W81, in the order W82 ranks them.** W74 and W78 are parked on the owner (the Parked
    table): ask the owner once W82 has ranked them. This prompt does not approve W74's spend.
 3. **W83 and W84**, the secret-scan rows W70 moved out (#567), if the session has room after

@@ -6,14 +6,14 @@ The source of truth is `git log` and the ADRs; this note says where things stand
 
 ## Shipped
 
-| Pull request | Merge commit | What | Decisions |
+| Pull request | Merge commit | What | Decisions it added or rests on |
 |---|---|---|---|
-| #570 | `ad959d2` | Item 1: owner messages recorded as CHG rows; the Parked table and `make parked-check`; the stop rule and Codex plan review in the skill and `AGENTS.md`; the next-session prompt as a template with a name and section check | CHG-047 to CHG-052, ADR-0168, ADR-0169 |
-| #571 | `467ae9f` | W28: research on the six bring-your-own-key decisions, `docs/analysis/2026-10-16-w28-decision-research.md`; no decision recorded | CHG-051 |
-| #567 | `3825a12` | W70: the secret scan reads every committable file, joins split keys, knows five key shapes and refuses home-folder paths | ADR-0167, CHG-045, CHG-050, CHG-053, CHG-054 |
+| #570 | `ad959d2` | Item 1: owner messages recorded as CHG rows; the Parked table and `make parked-check`; the stop rule and Codex plan review in the skill and `AGENTS.md`; the next-session prompt as a template with a name and section check | added CHG-047 to CHG-052, ADR-0168, ADR-0169 |
+| #571 | `467ae9f` | W28: research on the six bring-your-own-key decisions, `docs/analysis/2026-10-16-w28-decision-research.md`; no decision recorded | rests on CHG-051; added none |
+| #567 | `3825a12` | W70: the secret scan reads every committable file, joins split keys, knows the key shapes of five services and refuses home-folder paths | added ADR-0167, CHG-045, CHG-053, CHG-054; rests on CHG-049, CHG-050 |
 
-Each was checked in production by this session. The Deploy job concluded `success`, `/status`
-`build_sha` matched the merge commit, and `/ready` returned 200:
+This session checked each of #570, #571 and #567 in production. The Deploy job concluded
+`success`, `/status` `build_sha` matched the merge commit, and `/ready` returned 200:
 - #570: run 38827514235.
 - #571: run 38836258854.
 - #567: run 38903234762, after one re-run of the E2E job (see "Advisory left").
@@ -73,6 +73,10 @@ URL, a web path under `/Users` with no `/` after the name, and Windows backslash
 - W28's whole board row must stay as it was at commit `b66b107`:
   `tests/unit/test_one_status_review_round_1.py` compares it. Put W28 news in the Parked table.
 - A row turned DONE must lose its Parked line, or `make parked-check` fails.
+- Do not share a venv by linking `.venv` into a worktree. Since W70 the scan reads every file git
+  could commit; `.gitignore`'s `.venv/` matches only a directory, so the link is read and its
+  target is a home-folder path: `.venv:1: home_directory_path`, and 18 tests fail. Set
+  `UV_PROJECT_ENVIRONMENT` to the main checkout's `.venv` instead.
 - Run long gates in the background under `caffeinate -i sh -c`, logging to the scratchpad, or
   the Mac sleeps and the run stretches.
 
