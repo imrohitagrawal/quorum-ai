@@ -10,7 +10,8 @@ The six decisions are the ones listed in the plan of draft pull request #525
 itself waits until W71 to W81 are done (the board's Parked table, CHG-051).
 
 Repository claims are marked **MEASURED** (a command was run on `main` at
-`6872e46`; the command is named) or **INHERITED** (read from a document; the
+`6872e46`; the command is named; the cited lines still match at `ad959d2`, where
+only `src/product_app/costs.py` changed in between) or **INHERITED** (read from a document; the
 document is named). No paid call was made and no key was sent anywhere. The
 OWASP ASVS 5.0 text and the LibreChat code were read raw from GitHub; the other
 web quotes came through a text-extracting fetch and were spot-checked against
@@ -70,16 +71,28 @@ at the end).
 
 ### What the owner has actually said
 
-- 2026-09-29 (M03, point 5), verbatim: *"Do thorough research and analysis of how
+- **On 2026-09-29 the owner already agreed to a first answer to most of these
+  decisions, on condition that this research comes first.** The session's message of
+  09:31:37Z (transcript `e25d3396`, item 5) recommended: *"Keep the key in memory
+  only, never stored"*; *"Tie it to one browser session, for signed-in users only."*;
+  *"Drop it on sign-out."*; *"If the key is removed mid-run, stop the run at its next
+  step"*; and *"FR-012 should say "Optional bring-your-own key"."* The owner answered
+  (M03, point 5), verbatim: *"BYOK parked until W29 and item 1 are done. agree with
+  all other points just ensure that you Do thorough research and analysis of how
   other websites are securing this BYOK feature. We should ensure that we are not
   storing it in any logs, any web sessions, or anywhere the user or an attacker can
   web-inspect and see the keys, and that any other security threats are not there."*
-  INHERITED (`docs/analysis/2026-09-29/OWNER-DISCUSSION-LOG.md:111`; CHG-026 (f)).
-- The status table of that log says "key in server memory only" (line 23). That
-  column is the **session's** summary, not the owner's words. The owner's words do
-  not choose between memory and encrypted storage. **"Any web sessions" is
-  ambiguous**: it could mean the browser (cookies, local storage) or the server's
-  session records. The owner should say which; decision 1 turns on it.
+  INHERITED (`docs/analysis/2026-09-29/OWNER-DISCUSSION-LOG.md:111`; the session's
+  message read from its transcript; CHG-026 (f) records the owner's words but not the
+  points they agree to).
+- So decisions 1, 2, 3, 5 and 6 below re-test answers the owner has conditionally
+  agreed to; decision 4 (a key entered before sign-in) was not among those points.
+  Where this research differs from the agreed points, it says so. This file still
+  records no decision: the agreement waited on this research, and the owner confirms
+  or changes it.
+- **"Any web sessions" is ambiguous**: it could mean the browser (cookies, local
+  storage) or the server's session records. Decision 1 turns on it, and the agreed
+  "memory only, never stored" reads it the strict way.
 - ADR-0121 (PROPOSED) records the shape the owner accepted on 2026-09-23: the party
   paying chooses the flags; the party at risk sets the rails; $5 user budget window.
   INHERITED.
@@ -104,19 +117,23 @@ nobody is using the site, so Fly stops the machine. At 11:00 she comes back.
 - **B. Database, encrypted** (AES-256-GCM; master key a Fly secret; account id bound
   into each encryption).
 - **C. In the browser** (local storage, or a cookie holding the key).
+- **D. In the browser, encrypted by the server.** The server encrypts the key and puts
+  only the ciphertext in an `HttpOnly` cookie; the decryption key is a Fly secret.
+  Nothing sits on our disk, and the key survives a restart or a deploy.
 
 **Risks and build cost.**
 
 | Option | What could go wrong | Build cost here |
 |---|---|---|
 | A | Nothing on disk or in volume snapshots. But the user re-pastes after every idle stop and deploy, and **each paste crosses the browser**, where an injected script can read it while inline scripts are allowed (W75). Keep the key in its own dictionary, not on `_Session`, so it can never reach the SQLite mirror. | Smallest: an in-process store; three routes via `add_api_route`; the resolver at `query_run_orchestration.py:1248`; the judge key in `evaluation.py`; drop the key on sign-out, sign-out-everywhere, idle expiry, `revoke_account`, account deletion (`auth.py`, `google_signin.py`, `account_deletion.py`); UI in `static/app.js`, `templates/workspace.html`; `openapi.yaml`. W75 and W76 first. |
-| B | Whoever gets the database **and** the master key reads every key. Volume snapshots hold the database (security review §4 item 5). A binding bug could let one account decrypt another's key (LibreChat's weakness, below). Fewer pastes. | All of A, plus: a migrated table in `session_store.py`; first use of `cryptography` in `src/` (AES-GCM, random nonce, account id as associated data); a versioned master-key Fly secret; re-encryption on rotation; cross-account decrypt tests. Roughly double A. |
-| C | Any script on our origin reads it; OWASP and ASVS forbid it; fails the owner's "web-inspect" words and AC-026. | Small, but ruled out. |
+| B | Whoever gets the database **and** the master key reads every key. Volume snapshots hold the database (security review §4 item 5). If the account id is not bound into each encryption, one account's row can be decrypted as another's (LibreChat binds no account into its encryption, below). Fewer pastes. | All of A, plus: a migrated table in `session_store.py`; first use of `cryptography` in `src/` (AES-GCM, random nonce, account id as associated data); a versioned master-key Fly secret; re-encryption on rotation; cross-account decrypt tests. Roughly double A. |
+| C | Any script on our origin reads it; ASVS 14.3.3 forbids it; fails the owner's "web-inspect" words and AC-026. | Small, but ruled out. |
+| D | No script can read an `HttpOnly` cookie, but the browser sends the ciphertext on every request, so a stolen cookie carries the key with it (decryptable only with our secret). Whoever holds both the cookie and the secret reads the key. It stores the key in the browser in encrypted form, which the agreed "never stored" and the owner's "any web sessions" words seem to exclude. | Medium: authenticated encryption (`cryptography`, AES-GCM, first use in `src/`), the secret and its rotation, a cookie size check, and clearing the cookie on every way a session ends. |
 
 **How established products do it.**
 - **Stored at rest, encrypted (server side):**
   - OpenRouter, for the provider keys its own users bring
-    (https://openrouter.ai/docs/use-cases/byok): *"Your provider keys are securely
+    (https://openrouter.ai/docs/guides/overview/auth/byok): *"Your provider keys are securely
     encrypted and used for all requests routed through the specified provider."*
     No method is named.
   - Cloudflare AI Gateway
@@ -125,15 +142,16 @@ nobody is using the site, so Fly stops the machine. At 11:00 she comes back.
   - LibreChat, self-hosted chat app
     (https://www.librechat.ai/docs/configuration/dotenv): *"LibreChat uses `CREDS_KEY`
     and `CREDS_IV` to encrypt supported credentials stored in the database."* Its code,
-    read raw (`packages/data-schemas/src/methods/key.ts`): `const encryptedValue = await
-    encrypt(value);`, and `encrypt` in `packages/data-schemas/src/crypto/index.ts` is
+    read raw with `gh api` from the `danny-avila/LibreChat` repository (its
+    `data-schemas` package, files `key.ts` and `crypto/index.ts`): `const encryptedValue = await
+    encrypt(value);`, and `encrypt` is
     the `/** --- Legacy v1/v2 Setup: AES-CBC with fixed key and IV --- */` function.
     So LibreChat's user keys use one fixed IV for every row and no authentication tag.
     That breaks ASVS 11.3.2/11.3.3/11.3.4 (below). **A cautionary example, not a
     model.**
 - **Not stored by the service:** Cursor (https://cursor.com/docs/settings/api-keys):
   *"Your API key is not stored on our servers."* and *"It is sent to our backend with
-  every request"*. The desktop app holds it.
+  every request"*. The page does not say where the key is kept on the user's side.
 - **On the user's device:** Zed (https://zed.dev/docs/ai/use-api-access): *"Keys saved
   through Zed are stored in the system keychain, not in `settings.json`."*; GitHub
   Copilot app (https://github.blog/changelog/2026-06-23-github-copilot-app-support-for-byok):
@@ -147,7 +165,7 @@ nobody is using the site, so Fly stops the machine. At 11:00 she comes back.
   - Open WebUI Direct Connections
     (https://docs.openwebui.com/features/chat-conversations/direct-connections): keys
     are used *"without storing them on the Open WebUI server"* and *"keys are stored in
-    the browser's local storage."*
+    the browser's local storage*
   - Both work because those apps call the provider **from the browser**. Ours calls
     OpenRouter from the server, so a browser-held key would still have to travel to us
     on every run.
@@ -169,9 +187,10 @@ nobody is using the site, so Fly stops the machine. At 11:00 she comes back.
     sensitive data, with the exception of session tokens."*
 
 **Recommendation (research's, not the owner's).** Start with **A, server memory
-only**, and revisit B only after the owner has used it. **Deciding reason:** OWASP's
-first rule is not to store what you do not need, and our sessions already survive
-restarts, so the only cost of A is a re-paste after an idle stop. If the owner picks
+only**, and revisit B or D only after the owner has used it. This matches the point the
+owner agreed to on 2026-09-29. **Deciding reason:** OWASP's first rule is not to store
+what you do not need, and our sessions already survive restarts, so the cost of A is a
+re-paste after an idle stop or a deploy. If the owner picks
 OpenRouter's OAuth flow (section at the end), that re-paste becomes one click, and
 A's main drawback almost disappears. The security review's contrary
 recommendation (B) rested on the re-paste cost (`security-review.md` §5 item 2,
@@ -191,17 +210,22 @@ her phone.
 - Per account: the phone has the key at once. When she signs out on the laptop, the
   phone still holds it until she removes it.
 
-**Options.** **A. Per session.** **B. Per account.**
+**Options.** **A. Per session.** **B. Per account, stored at rest.** **C. Per account,
+in memory only.** Where the key lives (decision 1) and whom it belongs to are separate
+questions: an account's key can also be held in memory only, keyed by the account id
+that sign-in already resolves (`session_store.py:908-962`, used at
+`google_signin.py:692-701`; MEASURED by reading; the app runs one machine, `fly.toml:6`).
 
 | Option | What could go wrong | Build cost here |
 |---|---|---|
-| A | Smallest reach: a stolen session cookie spends the key only until that session ends (120 idle minutes signed in, 2 hours anonymous). Fits memory-only storage exactly. | Smallest: the store is keyed by session id; ending a session already exists in several paths, each must drop the key. |
-| B | A stolen cookie for **any** of her sessions can spend the key, and it outlives sign-out on one device; "sign out everywhere" (ADR-0137) and account deletion must remove it. | Only useful across devices with storage at rest, so it implies decision 1 = B. Keyed by `account_id`; status owner-scoped. |
+| A | Smallest reach: a stolen session cookie spends the key only through that one session. The session is not time-limited while it is used: the 120 idle minutes (signed in) and 2 hours (anonymous) restart on each use (`touch` sets `last_used_at`, `auth.py:430`), and there is no absolute session lifetime (`grep -n -i "absolute\|max_age" src/product_app/auth.py` finds only the cookie's `max_age`). So an attacker who keeps using a stolen cookie keeps the key until the user removes it, signs out, or the session is revoked. Fits memory-only storage exactly. | Smallest: the store is keyed by session id; ending a session already exists in several paths, each must drop the key. |
+| B | A stolen cookie for **any** of her sessions can spend the key, and it outlives sign-out on one device; "sign out everywhere" (ADR-0137) and account deletion must remove it. Adds every risk of decision 1, option B. | Implies decision 1 = B. Keyed by `account_id`; status owner-scoped. |
+| C | As B for a stolen cookie, but nothing on disk; the key is lost on every restart or deploy, for every device at once. | Small to medium: the store is keyed by `account_id`; "sign out everywhere", account deletion and an explicit "remove from all devices" must drop it. |
 
 **How established products do it.**
 - Per account / team (server side): LibreChat stores keys per user (`updateUserKey`
   upserts by `userId` and `name`, read raw from `key.ts`); Vercel AI Gateway
-  (*"scoped to be available throughout your Vercel team"*, URL above); GitHub Copilot
+  (https://vercel.com/docs/ai-gateway/authentication-and-byok/byok: *"scoped to be available throughout your Vercel team"*); GitHub Copilot
   enterprise BYOK (https://docs.github.com/en/copilot/concepts/models/bring-your-own-key):
   *"Enterprise BYOK is handled server-side and affects the models served to users by
   the Copilot API."*
@@ -213,9 +237,10 @@ her phone.
   *"Verify that access to secret assets adheres to the principle of least
   privilege."*
 
-**Recommendation (research's).** **A, per session.** **Deciding reason:** it bounds a
-stolen cookie to one session's life, and it is the only choice consistent with
-memory-only storage; per account only pays off once keys are stored at rest.
+**Recommendation (research's).** **A, per session**, as the owner agreed on
+2026-09-29. **Deciding reason:** it limits a stolen cookie to one session, not every
+device of the account. C is the option to choose if typing the key once per device
+proves too much; B adds storage at rest for little gain over C.
 
 ---
 
@@ -233,20 +258,24 @@ memory-only storage; per account only pays off once keys are stored at rest.
 
 | Option | What could go wrong | Build cost here |
 |---|---|---|
-| A | Ravi must sign in first (one Google step). Abuse with throwaway keys needs a Google account per attempt. | Small: one check on `SessionContext` (anonymous vs signed in) in the submit route; a test that an anonymous session can never hold or use a key (the security review's key-safety agent listed it, INHERITED). |
+| A | Ravi must sign in first (one Google step). Abuse with throwaway keys needs a Google account per attempt. | Small: one check in the submit route that the session belongs to a signed-in account. `SessionContext` (`auth.py:262-273`) has no signed-in field; the check is the existing lookup `signed_in_account(session.account_id)` (`google_signin.py:808`); a test that an anonymous session can never hold or use a key (the security review's key-safety agent listed it, INHERITED). |
 | B | **Planted-key spying.** If a victim's browser ends up on a session holding the **attacker's** key (a fixation bug, or a shared computer), the victim's questions run on that key, and its owner can read them: *"Navigate to your Observability settings and toggle Input & Output Logging to enable it."*; *"Once enabled, your prompts and completions are accessible from your Logs page."* (https://openrouter.ai/docs/guides/features/input-output-logging). Anonymous sessions are the cheapest to plant. Also, the owner rejected the 2-per-day mint cap for BYOK (ADR-0121), so anonymous BYOK needs the new limits first. | The check, plus the rails work for anonymous mints (ADR-0121 PR 2). |
 
 **How established products do it.**
 - LibreChat requires an account; keys are stored per `userId` (raw code above).
-- TypingMind and Open WebUI Direct Connections keep the key in the browser with no
-  server account, which is the anonymous case, but neither sends the key to their own
-  server (quotes in decision 1).
+- TypingMind keeps the key in the browser with no backend (*"TypingMind is a static
+  app — there is no backend"*, same FAQ page as in decision 1). Open WebUI Direct
+  Connections also keeps it in the browser, but for users signed in to their Open
+  WebUI server (*"Once enabled by the admin, users can configure their own
+  connections"*). Neither sends the key to its own server (quotes in decision 1).
 - **Not found:** a hosted service whose **server** holds a key for an anonymous
   visitor. Absence of evidence, not evidence of absence.
-- The security review's key-safety agent recommended "signed-in accounts only"
-  (`security-review.md` §5 item 3). INHERITED, an agent's view.
+- The security review recommended "signed-in accounts only" (`security-review.md` §5
+  item 3, a section titled as the session's recommendation). INHERITED, a session's
+  view.
 
-**Recommendation (research's).** **A, signed-in only.** **Deciding reason:** a key
+**Recommendation (research's).** **A, signed-in only**, as the owner agreed on
+2026-09-29. **Deciding reason:** a key
 spends real money and exposes the questions sent with it to the key's owner; tying it
 to a Google identity makes every key traceable to one person and gives the existing
 clean-up paths (sign out everywhere, account deletion) something to act on.
@@ -313,7 +342,7 @@ the receipt.**
 
 | Option | What could go wrong | Build cost here |
 |---|---|---|
-| A | A partial result she paid for. A bug that falls back to the **app's** key would move her run onto our money (see Vercel below); a test must rule it out. | Medium: each stage re-reads the key's presence, as the live flag already is (INHERITED, draft plan); a test asserting the exact call count (rule 6b). |
+| A | A partial result she paid for. A bug that falls back to the **app's** key would move her run onto our money (see Vercel below); a test must rule it out. Checking only that *a* key is present is not enough: if she removes the key and adds a new one between stages, a presence check passes and the run carries on, either on the removed key (the run copies the key at start, `query_run_orchestration.py:1247`, and passes that copy to debate and synthesis at lines 1510 and 1627) or silently on the new one. | Medium: each run is bound to the exact key it started with (a key generation number); removing a key ends that generation for good, for every stage including the judge; adding a key starts a new generation that no running run picks up. Tests: the exact call count (rule 6b), and remove-then-add mid-run stops the run. |
 | B | Spending continues after she said stop, which fails the usual reason to remove a key: "I think it leaked". | Small: keep copy-at-start; a receipt line and a test. |
 
 Whichever is chosen, the user can also **revoke the key on OpenRouter itself**. Then
@@ -324,7 +353,7 @@ The run must treat a 401 mid-run as "key revoked", never retry on the app's key.
 - **Not found:** any product page that defines what happens to an in-flight request
   when a user removes a key.
 - A cautionary example of the fallback risk: Vercel AI Gateway
-  (https://vercel.com/docs/ai-gateway/byok): *"If a query using your credentials
+  (https://vercel.com/docs/ai-gateway/authentication-and-byok/byok): *"If a query using your credentials
   fails, AI Gateway will retry the query with its system credentials to improve
   service availability."* Vercel bills that to the customer's credits; for us a
   fallback would bill the app.
@@ -332,7 +361,8 @@ The run must treat a 401 mid-run as "key revoked", never retry on the app's key.
   required or potentially compromised, you must securely revoke them to restrict
   access."*
 
-**Recommendation (research's).** **A, stop at the next stage.** **Deciding reason:** a
+**Recommendation (research's).** **A, stop at the next stage**, as the owner agreed on
+2026-09-29, with the run bound to the key it started with. **Deciding reason:** a
 user removes a key most often because they fear it leaked, and stopping is the only
 option that honours that; OpenRouter-side revocation forces the same behaviour anyway.
 
@@ -368,8 +398,9 @@ number."*; ASVS 14.2.1 *"…the URL and query string do not contain sensitive
 information, such as an API key or session token."* GitHub's Copilot app shows the
 practice: *"never read back by the UI"* (URL above).
 
-**Recommendation (research's).** **A.** **Deciding reason:** it is the posture the
-owner already accepted in ADR-0121, and AC-026's existing promise ("no provider key is
+**Recommendation (research's).** **A**, which matches the owner's 2026-09-29
+agreement that FR-012 should say "Optional". **Deciding reason:** it is the posture the
+owner already set in ADR-0121, and AC-026's existing promise ("no provider key is
 stored in the browser") is exactly what the standards require, so it should be kept
 and sharpened, not deleted.
 
@@ -382,7 +413,7 @@ for code exchange") is the variant that stops a stolen one-time code from being
 useful to anyone but the app that started the flow.
 
 **What OpenRouter offers.**
-- https://openrouter.ai/docs/use-cases/oauth-pkce: *"Users can connect to OpenRouter
+- https://openrouter.ai/docs/guides/overview/auth/oauth: *"Users can connect to OpenRouter
   in one click using Proof Key for Code Exchange (PKCE)."*; *"Your user will be
   prompted to log in to OpenRouter and authorize your app."*; the app sends the
   returned code to `https://openrouter.ai/api/v1/auth/keys` to *"exchange the code for
@@ -391,8 +422,10 @@ useful to anyone but the app that started the flow.
   database"*. That guide page mentions no spending limit, and its examples do the
   exchange in the browser; doing it on our server is our choice.
 - **A spending limit is available in the API reference**
-  (https://openrouter.ai/docs/api/api-reference/oauth/create-authorization-code.md,
-  `POST /auth/keys/code`): `limit`: *"Credit limit for the API key to be created"*;
+  (https://openrouter.ai/docs/api/api-reference/oauth/create-authorization-code,
+  `POST /auth/keys/code`). That endpoint takes an `Authorization: Bearer` key, so it is
+  a different interface from the public sign-in redirect; whether the redirect flow
+  accepts and enforces these fields is **UNVERIFIED**: `limit`: *"Credit limit for the API key to be created"*;
   `usage_limit_type`: *"Optional credit limit reset interval. When set, the credit
   limit resets on this interval."* (daily, weekly or monthly); `expires_at`:
   *"Optional ISO 8601 UTC expiration timestamp."* The page does not say whether the
@@ -404,8 +437,10 @@ useful to anyone but the app that started the flow.
 - The approval step is free and needs no key, but nobody has run it against this
   app. Before building, one manual run with a throwaway OpenRouter account should
   confirm: the approval screen, whether `limit` and `expires_at` are honoured, and
-  that the key appears in the user's OpenRouter key list where they can revoke it.
-  **UNVERIFIED** until then (AGENTS rule 8c).
+  that the key appears in the user's OpenRouter key list where they can revoke it, and
+  whether reconnecting mints a new key each time while the old one stays live (a credit
+  limit is per key, so many live keys add up, and a key we no longer hold we cannot
+  revoke). **UNVERIFIED** until then (AGENTS rule 8c).
 
 **What it changes for decisions 1 to 5.**
 - **The key never passes through the browser** if our server does the code exchange
@@ -426,11 +461,14 @@ useful to anyone but the app that started the flow.
   store modelled on the Google one, and a "Connect OpenRouter" control. W76 and the
   key-absence tests are still needed.
 
-**Recommendation (research's).** Offer OAuth PKCE as the main way in, with a credit
-limit and an expiry requested on every key, and keep "paste a key" out of the first
-pull request. **Deciding reason:** it is OpenRouter's own supported flow, it keeps the
-key out of the browser (the owner's "web-inspect" concern) and it caps the money at
-risk, which no storage choice can do on its own.
+**Recommendation (research's), conditional.** Run the free trial above first. If it
+shows that the sign-in flow can request a credit limit and an expiry, that OpenRouter
+enforces them, and how reconnecting treats old keys, offer OAuth PKCE as the main way
+in and keep "paste a key" out of the first pull request. If it does not, build the
+paste route from decisions 1 to 5 and treat OAuth as a later convenience. **Deciding
+reason:** OAuth is OpenRouter's own supported flow and keeps the key out of the
+browser (the owner's "web-inspect" concern); the money cap is its other benefit, and
+that part is unproven until the trial runs.
 
 ---
 
@@ -444,14 +482,27 @@ securely"*.
 
 | Decision | Options | Research's recommendation | The deciding reason |
 |---|---|---|---|
-| 1. Where the key lives | Server memory / encrypted database / browser | Server memory only | OWASP: do not store what you need not; sessions already survive restarts; OAuth makes reconnecting one click |
-| 2. Per session or per account | Session / account | Per session | Bounds a stolen cookie to one session's life; per account only pays off with storage at rest |
+| 1. Where the key lives | Server memory / encrypted database / browser / encrypted cookie | Server memory only | OWASP: do not store what you need not; the cost is a re-paste after a restart or deploy |
+| 2. Per session or per account | Session / account at rest / account in memory | Per session | A stolen cookie reaches one session, not every device; per account in memory is the fallback if re-typing per device is too much |
 | 3. Anonymous sessions | Signed-in only / anonymous allowed | Signed-in only | A key's owner can read the prompts sent with it; a Google identity makes every key traceable and cleanable |
 | 4. Carry over at sign-in | Drop / carry / carry after confirm | Drop | Only option that defeats a planted key; cost is one re-paste |
-| 5. Removal mid-run (EDGE-013) | Stop at next stage / finish and say so | Stop at next stage | Users remove keys because they fear a leak; OpenRouter-side revocation forces the same result anyway; never fall back to the app's key |
+| 5. Removal mid-run (EDGE-013) | Stop at next stage / finish and say so | Stop at next stage, the run bound to the key it started with | Users remove keys because they fear a leak; OpenRouter-side revocation forces the same result anyway; never fall back to the app's key |
 | 6. FR-012, AC-025, AC-026 | Optional two-posture / required / leave until BYOK ships | Optional, two postures; keep and sharpen AC-026's "nothing in the browser" | Matches ADR-0121, which the owner accepted; AC-026's promise is what ASVS 14.3.3 requires |
-| Key intake (cross-cutting) | Paste / OpenRouter OAuth PKCE | OAuth PKCE with a credit limit and expiry | Key never in the browser and money at risk is capped; reuses our Google PKCE pattern |
+| Key intake (cross-cutting) | Paste / OpenRouter OAuth PKCE | OAuth PKCE with a credit limit and expiry, if a free trial shows the limit and expiry hold | Key never in the browser; the money cap is unproven until the trial; reuses our Google PKCE pattern |
 
 ## How the sources were checked
 
-SOURCES_CHECK_PLACEHOLDER
+On 2026-10-16 a reviewer that did not write this file fetched every cited page:
+web pages with `curl` (HTML stripped, exact-string search), the OWASP ASVS 5.0 text and
+the LibreChat code raw with `gh api`. All 37 quotations from outside pages were found
+word for word, allowing only line wrapping, backticks and curly quotes, and every URL
+loaded. Three claims written next to the quotes were wrong and are corrected above
+(Cursor's page does not say where the key is kept; Open WebUI's users are signed in to
+their server; the Vercel link). Several quotes are cut short; where the cut part matters
+it is said (OWASP's GCM sentence goes on to allow CBC as a fallback; its "do not store
+keys next to the secrets" sentence goes on "except if those keys are encrypted
+themselves"). Three links redirect and are given here at their new addresses. The two
+quotes added in that correction were checked the same way. A second reviewer re-ran
+every MEASURED command in this file on the worktree and found the cited lines as stated;
+Codex reviewed the reasoning, which changed decisions 2 and 5 and made the OAuth
+recommendation conditional.
