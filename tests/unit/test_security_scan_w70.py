@@ -598,14 +598,18 @@ _DASH_ENCODED_LINES = {
 
 
 def _dash_encoded_home_lines() -> list[tuple[str, int, str]]:
-    """Every committed line holding ``-Users-<name>-`` or ``-home-<name>-``.
+    """Every committed line holding a dash-encoded home folder with an ASCII name.
 
     Found by ``git grep`` with a needle built at run time, so no line of this
-    file matches it, then kept only where the leading ``-`` does not follow a
-    letter, digit, ``_`` or ``-`` (plan S3, final: ``nav-home-icon-large`` is
-    CSS, not a home folder).
+    file matches it, then kept only where the scan's own boundaries hold: the
+    leading ``-`` does not follow a word character (``nav-home-icon-large`` is
+    CSS), before ``home`` not another ``-`` either (``--home-dir-path`` is an
+    option), and before ``Users`` it may (plan S3, fourth revision). The name
+    ends at ``-`` (and, once plan F6 is built, at ``/``, a quote, a backtick,
+    whitespace, ``)`` or the line's end); it does not start with ``.`` and is
+    not ``Shared``. Names outside ASCII are not looked for here.
     """
-    needle = "-" + "(" + "Users" + "|" + "home" + ")" + "-[A-Za-z0-9._]+-"
+    needle = "-" + "(" + "Users" + "|" + "home" + ")" + "-[A-Za-z0-9_]"
     run = subprocess.run(
         ["git", "grep", "-n", "-I", "-E", "-e", needle],
         cwd=REPO,
@@ -615,7 +619,10 @@ def _dash_encoded_home_lines() -> list[tuple[str, int, str]]:
         check=False,
     )
     assert run.returncode in {0, 1}, run.stderr  # 1 is "no match", not an error
-    boundary = re.compile(r"(?<![A-Za-z0-9_-])" + needle)
+    boundary = re.compile(
+        r"(?:(?<![\w-])-" + "home" + r"|(?<!\w)-" + "Users" + r")-"
+        r"(?!Shared(?![A-Za-z0-9._]))[A-Za-z0-9_][A-Za-z0-9._]*(?=[-/\"'`)\s]|$)"
+    )
     out = []
     for hit in run.stdout.splitlines():
         rel, number, line = hit.split(":", 2)
@@ -625,12 +632,14 @@ def _dash_encoded_home_lines() -> list[tuple[str, int, str]]:
 
 
 def test_every_committed_dash_encoded_home_folder_is_named() -> None:
-    """Plan S3 on the real tree: the 8 lines committed before W70 are named.
+    """Plan S3 on the real tree: the 8 lines committed before W70 were named until rewritten.
 
     Each of the 8 pinned lines is either still dash-encoded, and then the scan
-    must name it, or rewritten per CHG-045 (``~``, or ``<user>`` for the name),
-    and then it is no longer found. After the rewrite this test reads zero
-    encoded lines; its positive partner is then the S3 cases in
+    must name it, or rewritten, and then it is no longer found. CHG-045 says
+    "Rewrite them to ~"; for a name inside a folder name the W70 split plan
+    used ``<user>`` instead, a session choice, not the owner's words. After
+    the rewrite this test reads zero encoded lines; its positive partner is
+    then the S3 cases in
     ``tests/unit/test_security_scan_w70_split.py``, and it still names any new
     dash-encoded line committed anywhere.
     """

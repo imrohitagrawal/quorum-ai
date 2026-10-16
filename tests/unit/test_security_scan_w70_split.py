@@ -8,9 +8,12 @@ changes the home-folder rule. The plan's labels:
   untracked file (the proof S1 asks for);
 - S2, final: a space inside a name counts ONLY when written ``\\ ``; an
   unescaped space ends the name, so prose after a home root is not a name;
-- S3, final: the dash-encoded form ``-Users-<name>-`` / ``-home-<name>-`` (a
-  Claude project folder's name) is a home folder, when the leading ``-`` does
-  not follow a letter, digit, ``_`` or ``-``;
+- S3, final and fourth revision: the dash-encoded form ``-Users-<name>-`` /
+  ``-home-<name>-`` (a Claude project folder's name) is a home folder when the
+  leading ``-`` does not follow a word character (a letter, digit or ``_``) or
+  a combining mark; before ``home`` it may not follow another ``-`` either,
+  while before ``Users`` it may (``-<parent>--Users-<name>-``);
+- F1 to F9 (the plan's "Round-2 fixes"): see the section of that name below.
 - S4 + S5, third revision: ``/Users/<name>`` needs no trailing ``/`` and ends
   at any non-path character, a space included (``/home`` keeps its ``/``); a
   ``:`` directly before the root blocks it only when the same token (text
@@ -292,15 +295,15 @@ _CAFE_DECOMPOSED = "café"
 
 
 def test_s7_a_hindi_name_with_a_vowel_sign_is_named() -> None:
-    """A Hindi name under the ``Users`` root: its vowel sign is a name character."""
-    # Red when: the name's marks are the five combining-diacritics blocks only (no U+093F).
+    """A Hindi name under the ``Users`` root (one name character is enough there)."""
+    # Red when: a name's first character must be ASCII (then `म` starts no name).
     assert _home("cd <U>/" + _HINDI_NAME + "/x")
 
 
 @pytest.mark.parametrize("cafe", [_CAFE_COMPOSED, _CAFE_DECOMPOSED], ids=["composed", "decomposed"])
 def test_s7_a_word_glued_to_the_root_is_not_a_home_folder(cafe: str) -> None:
     """``café`` glued to the ``Users`` root, composed and decomposed: a path inside a word."""
-    # Red when: the boundary takes no combining mark (the decomposed row named).
+    # Red when: the boundary before the root holds ASCII word characters only (`é` then passes).
     assert not _home(cafe + "<U>/alice/x")
 
 
@@ -494,3 +497,201 @@ def test_s7_the_same_mark_then_a_space_then_the_root_is_named() -> None:
     """Partner: with a space after the mark, the home folder is named."""
     # Red when: a mark before a space stops the path that follows from being named.
     assert _home("x\u0301 <U>/alice/x")
+
+
+# --------------------------------------------------------------------------
+# Round-2 fixes (the plan's F1 to F9), tests first
+# --------------------------------------------------------------------------
+
+#: (fix, template). Each is named once its fix is built.
+_ROUND2_NAMED = [
+    # F1: the dash form's name takes an escaped space, as the slash form's does.
+    ("F1", "cat .claude/projects/<DU>Jane\\ Doe-Projects-q/n.md"),
+    # F2: `file:` starting the token, after a quote, `(`, `<`, `[`, `=` or a space.
+    ("F2", 'url = "file://localhost<U>/alice/x"'),
+    ("F2", "(file://<U>/alice/x)"),
+    ("F2", "<file://<U>/alice/x>"),
+    ("F2", "[file://<U>/alice/x]"),
+    ("F2", "href=file://<U>/alice/x"),
+    ("F2", "open file://localhost<U>/alice/x"),
+    # F4: a `:` after the URL's host (past its first `/`) is no port colon.
+    ("F4", "file:///C:<U>/alice/r.pdf"),
+    ("F4", "git+file:///C:<U>/alice/repo"),
+    ("F4", "vscode://file/c:<U>/alice/a.py:10"),
+    ("F4", "http://localhost:8080/open?file=C:<U>/alice/x.txt"),
+    # F5: the system prefixes that may stand directly before a root.
+    ("F5", "/System/Volumes/Data<U>/alice/x"),
+    ("F5", "/mnt/c<U>/alice/x"),
+    ("F5", "/var<H>/alice/x"),
+    # F6: a dash-form name may also end at `/`, a quote, a backtick, a space, `)` or the end.
+    ("F6", "~/.claude/projects/<DU>alice/memory/M.md"),
+    ("F6", "~/.claude/projects/<DU>alice"),
+    ("F6", "~/.claude/projects/<DH>alice/x"),
+    ("F6", '"~/.claude/projects/<DU>alice"'),
+    ("F6", "`~/.claude/projects/<DU>alice`"),
+    ("F6", "(~/.claude/projects/<DU>alice)"),
+    ("F6", "cd ~/.claude/projects/<DU>alice then"),
+    # F7: a flag glued to the root after a backtick, `(`, `[`, `,` or `{`.
+    ("F7", "see `-I<H>/alice/inc/` flag"),
+    ("F7", "args=[-I<H>/alice/inc/]"),
+    ("F7", "(-L<H>/alice/lib/)"),
+    ("F7", "f(a,-I<H>/alice/inc/)"),
+    ("F7", "cc {-I<H>/alice/inc/}"),
+]
+
+#: (fix, template). Not named, before and after its fix; each fix's named rows
+#: above are the positive partners.
+_ROUND2_NOT_NAMED = [
+    # F2: `file://` in the middle of another URL is that URL's path.
+    ("F2", "https://example.org/file://localhost<U>/alice/x"),
+    ("F2", "https://example.org/file://<U>/alice/x"),
+    # F4: a `:` inside a URL's host is still a port colon.
+    ("F4", "https://example.org:<U>/alice"),
+    ("F4", "http://host:<U>/alice/"),
+    # F5: other longer paths keep the path-start rule.
+    ("F5", "docs<U>/x/"),
+    ("F5", "example.com<H>/x/"),
+    ("F5", "/mnt/cdrom<U>/alice/x"),  # derived from `/mnt/<one letter>`
+    # F6: the macOS folder and an option stay unnamed in the shorter forms too.
+    ("F6", "~/.claude/projects/<DU>Shared"),  # derived from the slash form's Shared rule
+    ("F6", "parser.add_argument(-<DH>dir)"),
+    # F7: `-I` that does not start a token.
+    ("F7", "docs-I<H>/alice/include"),
+    # F8: a name may not start with `.`.
+    ("F8", "ls <U>/.localized"),
+    ("F8", "<U>/.localized/x"),
+    # F9: a combining mark before the dash form's `-` (NFC cannot compose `x` + U+0301).
+    ("F9", "x\u0301<DU>alice-x"),
+]
+
+#: Partners for F8 and F9, named today and after.
+_ROUND2_PARTNERS_NAMED = [
+    ("F8", "<U>/a.localized"),  # a `.` after the first character is still allowed
+    ("F8", "path <U>/first.last/"),
+    ("F9", "x <DU>alice-x"),
+]
+
+
+@pytest.mark.parametrize(
+    ("fix", "template"), _ROUND2_NAMED, ids=[f"{f}:{t}" for f, t in _ROUND2_NAMED]
+)
+def test_round2_each_fix_names_its_lines(fix: str, template: str) -> None:
+    """F1, F2, F4, F5, F6 and F7: lines a person's home folder is in, named."""
+    # Red when: that fix (the row's label) is not built, or a later change undoes it.
+    assert _home(template), (fix, _fill(template))
+
+
+@pytest.mark.parametrize(
+    ("fix", "template"), _ROUND2_NOT_NAMED, ids=[f"{f}:{t}" for f, t in _ROUND2_NOT_NAMED]
+)
+def test_round2_the_lines_each_fix_must_not_name(fix: str, template: str) -> None:
+    """Partner: what each fix must leave unnamed (another URL's path, a port, a dotfile)."""
+    # Red when: F2 lets `file://` follow any character, F4 widens past the host, F8 is not built.
+    assert not _home(template), (fix, _fill(template))
+
+
+@pytest.mark.parametrize(
+    ("fix", "template"),
+    _ROUND2_PARTNERS_NAMED,
+    ids=[f"{f}:{t}" for f, t in _ROUND2_PARTNERS_NAMED],
+)
+def test_round2_the_partners_of_f8_and_f9_are_named(fix: str, template: str) -> None:
+    """Partner: a ``.`` later in a name, and a dash form after a space, are named."""
+    # Red when: F8 bans `.` anywhere in a name, OR F9 blocks the dash form after a space.
+    assert _home(template), (fix, _fill(template))
+
+
+# F3: a long run of combining marks.
+
+_MARKS_40 = "\u0301" * 40
+
+
+def test_f3_a_cut_mark_run_still_judges_the_boundary() -> None:
+    """After cutting a run of 40 marks to 30, a mark before the root still blocks it."""
+    # Red when: the cut drops every mark (the glued row named) or the line (the spaced row not).
+    assert not _home("cafe" + _MARKS_40 + "<U>/alice/x")
+    assert _home("x" + _MARKS_40 + " <U>/alice/x")
+
+
+_F3_ADVERSARIAL = {
+    # One starter, then 1 MB of marks of two combining classes (230 and 220),
+    # which NFC must reorder: time growing with the square of the run's
+    # length before F3 (0.014 s for 8,000 marks, 0.054 s for 16,000, measured
+    # 2026-10-16 at 710bf43).
+    "one-mark-run": _repeat("\u0301\u0316", head="x", tail=" " + _fill("<U>/alice/x")),
+    # Many runs of 31 marks, each one past the 30 that F3 keeps.
+    "runs-of-31": _repeat("a" + "\u0301\u0316" * 15 + "\u0301", tail=" " + _fill("<U>/alice/x")),
+}
+
+_F3_CHILD = """
+import importlib.util, json, sys, time
+spec = importlib.util.spec_from_file_location("scan_child_f3", sys.argv[1])
+s = importlib.util.module_from_spec(spec)
+sys.modules["scan_child_f3"] = s
+spec.loader.exec_module(s)
+data = json.load(open(sys.argv[2], encoding="utf-8"))
+times, hits = {}, {}
+for label, line in data.items():
+    start = time.perf_counter()
+    hits[label] = bool(s._contains_home_directory_path(line))
+    times[label] = time.perf_counter() - start
+print(json.dumps({"times": times, "hits": hits}))
+"""
+
+
+def test_f3_a_1mb_line_of_combining_mark_runs_finishes_quickly(tmp_path: Path) -> None:
+    """Each 1 MB line of mark runs under 2 s, in a child process killed at 60 s.
+
+    The partner is in the same child: each line ends in a home folder after a
+    space, which must still be named, so a check made fast by reading nothing
+    is caught.
+    """
+    # Red when: runs of more than 30 marks reach NFC uncut (over 2 s, or killed at 60 s).
+    data = tmp_path / "lines.json"
+    data.write_text(json.dumps(_F3_ADVERSARIAL))
+    child = tmp_path / "child.py"
+    child.write_text(_F3_CHILD)
+    try:
+        run = subprocess.run(
+            [sys.executable, str(child), str(_SCANNER_PATH), str(data)],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=True,
+        )
+    except subprocess.TimeoutExpired:
+        pytest.fail("the home rule did not finish within 60 s on 1 MB lines of mark runs")
+    result = json.loads(run.stdout)
+
+    assert set(result["times"]) == set(_F3_ADVERSARIAL)
+    slow = {k: round(v, 2) for k, v in result["times"].items() if v >= 2}
+    assert not slow, f"home rule over 2 s on mark runs: {slow}"
+    assert result["hits"] == dict.fromkeys(_F3_ADVERSARIAL, True), result["hits"]
+
+
+# --------------------------------------------------------------------------
+# The three recorded limits (CHG-053)
+# --------------------------------------------------------------------------
+
+
+def test_limit_a_path_entry_that_is_a_url_with_an_empty_port_is_not_named() -> None:
+    """A PATH entry that is a URL with an empty port, then the ``home`` root: a URL's path."""
+    # A recorded limit (CHG-053); change this test deliberately when the limit is fixed.
+    assert not _home("PATH=/usr/bin:https://example.org:<H>/alice/bin")
+    # Partner: the same PATH list without the URL is named.
+    assert _home("export PATH=/usr/bin:<H>/bob/bin")
+
+
+def test_limit_a_web_path_under_the_users_root_is_named() -> None:
+    """``fetch`` of ``me`` under the ``Users`` root IS named: a folder ``me`` reads the same."""
+    # A recorded limit (CHG-053); change this test deliberately when the limit is fixed.
+    assert _home('fetch("<U>/me")')
+
+
+def test_limit_a_windows_backslash_home_folder_is_not_named() -> None:
+    """``C:\\Users\\<name>\\`` is not a form CHG-045 names."""
+    # A recorded limit (CHG-053); change this test deliberately when the limit is fixed.
+    backslash = "\\"
+    assert not _home("C:" + backslash + "Users" + backslash + "alice" + backslash + "x")
+    # Partner: the forward-slash form of the same folder is named.
+    assert _home("C:<U>/alice/x")
