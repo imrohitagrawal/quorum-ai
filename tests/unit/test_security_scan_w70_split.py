@@ -699,3 +699,61 @@ def test_limit_a_windows_backslash_home_folder_is_not_named() -> None:
     assert not _home("C:" + backslash + "Users" + backslash + "alice" + backslash + "x")
     # Partner: the forward-slash form of the same folder is named.
     assert _home("C:<U>/alice/x")
+
+
+# --------------------------------------------------------------------------
+# Re-check fixes: F2 (new approach, a deny rule before `file:`) and F4 (host end)
+# --------------------------------------------------------------------------
+
+#: Named: `file:` that does not follow a word character, `.`, `/` or `-`. The
+#: comment on each row says which change turns it red.
+_RECHECK_F2_NAMED = [
+    # Red when: a backtick may not stand before `file:` (27 committed lines use the form).
+    "`file://<U>/alice/notes.md`",
+    # Red when: a backtick after a space may not stand before `file:`.
+    "see `file://<H>/alice/x/` here",
+    # Red when: a backtick may not stand before `file://localhost`.
+    "`file://localhost<U>/alice/x`",
+    # Red when: `>` may not stand before `file:`.
+    "<code>file://<U>/alice/x</code>",
+    # Red when: `*` may not stand before `file:`.
+    "**file://<U>/alice/x**",
+    # Red when: `|` may not stand before `file:`.
+    "| a |file://<U>/alice/x|",
+    # Red when: a `:` may not stand before `file:`.
+    "url:file://<U>/alice/x",
+    # Red when: a `:` after a quote may not stand before `file:`.
+    '{"u":file://<U>/alice/x}',
+]
+
+#: Not named: `file:` (or its `<scheme>+`) glued to a word, `.` or `/`.
+_RECHECK_F2_NOT_NAMED = [
+    # Red when: the scheme before `+file:` may follow `/` (Codex: another URL's path).
+    "https://example.org/git+file://localhost<U>/alice/x",
+    # Red when: `file:` may follow a letter.
+    "afile://<U>/alice/x",
+    # Red when: `file:` may follow `.`.
+    "foo.file://<U>/alice/x",
+]
+
+#: Named: a `:` after the URL's host has ended at `?` or `#`.
+_RECHECK_F4_NAMED = [
+    # Red when: a URL's host does not end at `?` (the `C:` read as a port colon).
+    "https://example.org?file=C:<U>/alice/x",
+    # Red when: a URL's host does not end at `#`.
+    "https://example.org#C:<U>/alice/x",
+]
+
+
+@pytest.mark.parametrize("template", _RECHECK_F2_NAMED + _RECHECK_F4_NAMED)
+def test_recheck_f2_and_f4_name_these_lines(template: str) -> None:
+    """A file URL after any character but a word character, ``.``, ``/`` or ``-``; F4's host end."""
+    # Red when: the row's own comment above holds (each row names its change).
+    assert _home(template), _fill(template)
+
+
+@pytest.mark.parametrize("template", _RECHECK_F2_NOT_NAMED)
+def test_recheck_f2_does_not_name_a_file_url_glued_to_a_word_or_a_path(template: str) -> None:
+    """Partner: ``file:`` and ``git+file:`` inside a word or another URL's path stay unnamed."""
+    # Red when: the row's own comment above holds (each row names its change).
+    assert not _home(template), _fill(template)
