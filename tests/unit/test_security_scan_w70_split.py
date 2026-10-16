@@ -514,6 +514,10 @@ _ROUND2_NAMED = [
     ("F2", "[file://<U>/alice/x]"),
     ("F2", "href=file://<U>/alice/x"),
     ("F2", "open file://localhost<U>/alice/x"),
+    # Red when: `file:` after `+` (pip's `git+file://`, `path+file://`) does not start a token.
+    ("F2", "git+file://<U>/alice/repo"),
+    ("F2", "pip install git+file://<U>/alice/pkg"),
+    ("F2", "path+file://<U>/runner/work/x"),
     # F4: a `:` after the URL's host (past its first `/`) is no port colon.
     ("F4", "file:///C:<U>/alice/r.pdf"),
     ("F4", "git+file:///C:<U>/alice/repo"),
