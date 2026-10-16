@@ -543,13 +543,18 @@ _FLAG_START = r"(?<![^\s\"'=`(\[,{])-[A-Za-z]{1,12}"
 
 #: Or it follows a file URL's ``file://`` or ``file://localhost``: the one
 #: kind of URL whose path is a folder on this computer. No other host may.
-#: ``file:`` must start a token (the line's start, or after whitespace, a
-#: quote, ``(``, ``=``, ``<`` or ``[``), or follow the ``+`` of a scheme such
-#: as ``git+file:`` or ``path+file:`` (pip's and a CycloneDX file's forms), so
-#: a ``file://`` inside another URL's path (``https://example.org/file://...``)
-#: is that URL's path (F2).
-_FILE_SCHEME_START = r"(?<![^\s\"'(=<\[+])"
-_FILE_URL = rf"(?<={_FILE_SCHEME_START}file://)|(?<={_FILE_SCHEME_START}file://localhost)"
+#: ``file:`` does not count when it directly follows a word character, ``.``,
+#: ``/``, ``-`` or ``+`` (F2): then it is the end of a longer word, or a
+#: ``file:`` inside another URL's path (``https://example.org/file://...``).
+#: ``<scheme>+file:`` (``git+file:``, ``path+file:``) counts when the scheme
+#: does not directly follow a word character, ``.``, ``/`` or ``-``. A deny
+#: rule, not a list of the characters that may come before ``file:``: two
+#: such lists were built in a row, and each missed real lines, first
+#: ``git+file:`` and ``path+file:``, then a ``file://`` in backticks. The URL
+#: is matched, not looked behind, so the scheme's length may vary; a scheme
+#: is read from its own start only, as a position inside one follows a word
+#: character, so the work stays linear.
+_FILE_URL = r"(?:(?<![\w./+-])|(?<![\w./-])[A-Za-z][A-Za-z0-9.-]*\+)file://(?:localhost)?"
 
 #: Folders that may stand directly before the root (F5): macOS's data
 #: volume (``/System/Volumes/Data``, which holds the same ``Users`` folder),
@@ -606,9 +611,11 @@ _HOME_DIRECTORY_PATH = re.compile(
     rf"-(?!{_NOT_A_PERSON}{_DASH_NAME_END}){_NAME}{_DASH_NAME_END}"
 )
 
-#: A URL's host: the text after ``://`` up to the first ``/``, whitespace or
-#: quote (F4). ``[^/...]`` holds no ``/``, so two matches never overlap.
-_URL_HOST = re.compile(r"://([^/\s\"']*)")
+#: A URL's host: the text after ``://`` up to the first ``/``, ``?``, ``#``,
+#: whitespace or quote (F4), so ``https://example.org?file=C:`` then the root
+#: is a drive letter in the query, not a port. ``[^/...]`` holds no ``/``, so
+#: two matches never overlap.
+_URL_HOST = re.compile(r"://([^/?#\s\"']*)")
 
 #: The most combining marks kept in a row before NFC (F3). Unicode's
 #: stream-safe text format (UAX #15) allows no more than 30 non-starters in a
