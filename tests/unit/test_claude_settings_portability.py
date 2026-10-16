@@ -70,11 +70,10 @@ PORTABLE_SETTINGS: dict[str, object] = {
 # The real, measured defect from issue #242: an absolute path under
 # /Users/<name>/... that is also stale (Documents/Projects, not the repo's
 # actual location) — but staleness isn't what makes it invalid; the absolute
-# home path is.
-_STALE_STATIC_PATH = (
-    _MAC + "rohitagrawal/Documents/Projects/quorum-ai/src/product_app/static/app.js"
-)
-_STALE_REPO = _MAC + "rohitagrawal/Documents/Projects/quorum-ai"
+# home path is. The name is ``alice`` here: the issue's own path held the
+# owner's user name, which no test needs (CHG-045).
+_STALE_STATIC_PATH = _MAC + "alice/Documents/Projects/quorum-ai/src/product_app/static/app.js"
+_STALE_REPO = _MAC + "alice/Documents/Projects/quorum-ai"
 
 SETTINGS_WITH_MAC_HOME_PATH: dict[str, object] = {
     "permissions": {

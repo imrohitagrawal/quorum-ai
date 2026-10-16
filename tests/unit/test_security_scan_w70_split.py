@@ -796,3 +796,10 @@ def test_a_file_url_inside_a_url_path_or_after_a_mark_is_not_named(template: str
     """Partner: a ``+file:`` chain inside another URL's path, or glued to a marked letter."""
     # Red when: the row's own comment above holds (each row names its change).
     assert not _home(template), _fill(template)
+
+
+def test_f9_a_mark_before_the_linux_dash_form_blocks_it_and_a_space_does_not() -> None:
+    """A mark before the ``home`` root's dash form blocks it; a space (the partner) does not."""
+    # Red when: the combining marks are removed from `_LINUX_DASH_START`.
+    assert not _home("x" + chr(0x301) + "<DH>alice-x")
+    assert _home("x <DH>alice-x")
