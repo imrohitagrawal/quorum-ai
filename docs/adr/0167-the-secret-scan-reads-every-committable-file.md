@@ -151,8 +151,10 @@ decoder built then would have shipped without review. W84 is scheduled work, not
      with a scheme joined by `+` (`git+file:`, `path+file:`), and with one `+` or `-`, the
      sign that starts an added or removed line of a unified diff. It does not count when it
      directly follows a word character, a combining mark, `.`, `/`, `+` or `-`: then it ends a
-     longer word, or sits inside another URL's path, and so does a scheme chain there
-     (`https://example.org/a+b+file://...`). No other host counts. This is a deny rule, not a
+     longer word, or sits inside another URL's path. A chain of two or more schemes
+     (`a+b+file:`) does not count anywhere, inside a URL's path
+     (`https://example.org/a+b+file://...`) or not; no real scheme has that shape. No other
+     host counts. This is a deny rule, not a
      list of the characters allowed before `file:`. Two such lists were built in a row, and
      each missed a form. The first lost `git+file:` and `path+file:`: 300 lines named in the
      installed Python packages. The second named no fewer lines in the tree or the two package
