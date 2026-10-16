@@ -499,12 +499,15 @@ def _combining_mark_ranges() -> str:
 _COMBINING_MARKS = _combining_mark_ranges()
 
 #: A name's first character: a Unicode word character (a letter of any
-#: script, a digit or ``_``), ``.``, ``-`` or a combining mark. ASCII letters
-#: only missed a name such as ``José`` (reproduced 2026-10-16).
-_NAME_FIRST = rf"[\w.{_COMBINING_MARKS}-]"
+#: script, a digit or ``_``), ``-`` or a combining mark. ASCII letters only
+#: missed a name such as ``José`` (reproduced 2026-10-16). Not ``.`` (F8): a
+#: name that starts with one is a hidden file, such as the macOS
+#: ``<root>/.localized``, and ``...`` is this repository's own placeholder.
+_NAME_FIRST = rf"[\w{_COMBINING_MARKS}-]"
 
-#: Any later character: the same, plus ``$`` (a Windows-share style
-#: ``svc$``). Never first, so the placeholder ``/<root>/$USER/`` is not named.
+#: Any later character: the same, plus ``.`` and ``$`` (a Windows-share style
+#: ``svc$``). ``$`` never first, so the placeholder ``/<root>/$USER/`` is not
+#: named.
 _NAME_CHAR = rf"[\w.${_COMBINING_MARKS}-]"
 
 #: A name: name characters, and a space only when written ``\ `` (a shell
@@ -518,30 +521,41 @@ _NAME_CHAR = rf"[\w.${_COMBINING_MARKS}-]"
 #: the two parts never take the same character.
 _NAME = rf"{_NAME_FIRST}(?:{_NAME_CHAR}|\\ )*"
 
-#: The whole name is all dots (``...`` is the repository's own placeholder) or
-#: the macOS ``Shared`` folder: ``Shared`` then no further name character.
-_NOT_A_NAME = rf"(?:\.+|{_NOT_A_PERSON})(?!{_NAME_CHAR}|\\ )"
+#: The whole name is the macOS ``Shared`` folder: ``Shared`` then no further
+#: name character.
+_NOT_A_NAME = rf"{_NOT_A_PERSON}(?!{_NAME_CHAR}|\\ )"
 
 #: The ``/`` before the root STARTS a path: it does not follow a Unicode word
 #: character, a combining mark, ``.``, ``/``, ``-`` or ``]``. ``]`` ends an
 #: IPv6 host (``http://[::1]`` then the root), and a word character of any
 #: script ends a host such as ``例子``. The rule before round 3 named both: its
 #: boundary was ASCII only and did not hold ``]`` (reproduced 2026-10-16). A
-#: ``:`` may come before it (a drive letter, a ``PATH`` list), unless a URL
-#: holds it (``_url_tails``).
+#: ``:`` may come before it (a drive letter, a ``PATH`` list), unless it is a
+#: URL's port colon (``_url_hosts``).
 _PATH_START = rf"(?<![\w{_COMBINING_MARKS}./\]-])"
 
 #: Or the path is glued to a compiler flag (``-I``, ``-isystem``): ``-`` and 1
-#: to 12 ASCII letters, at a token start (the line's start, or after
-#: whitespace, a quote or ``=``), so ``docs-I`` and a 13-letter run are not
+#: to 12 ASCII letters, at a token start: the line's start, or after
+#: whitespace, a quote, ``=``, a backtick, ``(``, ``[``, ``,`` or ``{`` (F7,
+#: ``args=[-I<root>/<name>/inc/]``). So ``docs-I`` and a 13-letter run are not
 #: flags.
-_FLAG_START = r"(?<![^\s\"'=])-[A-Za-z]{1,12}"
+_FLAG_START = r"(?<![^\s\"'=`(\[,{])-[A-Za-z]{1,12}"
 
 #: Or it follows a file URL's ``file://`` or ``file://localhost``: the one
 #: kind of URL whose path is a folder on this computer. No other host may.
-_FILE_URL = r"(?<=file://)|(?<=file://localhost)"
+#: ``file:`` must start a token (the line's start, or after whitespace, a
+#: quote, ``(``, ``=``, ``<`` or ``[``), so a ``file://`` inside another URL's
+#: path (``https://example.org/file://...``) is that URL's path (F2).
+_FILE_SCHEME_START = r"(?<![^\s\"'(=<\[])"
+_FILE_URL = rf"(?<={_FILE_SCHEME_START}file://)|(?<={_FILE_SCHEME_START}file://localhost)"
 
-#: The dash-encoded form, ``-<root>-<name>-``: a Claude project folder's name,
+#: Folders that may stand directly before the root (F5): macOS's data
+#: volume (``/System/Volumes/Data``, which holds the same ``Users`` folder),
+#: a Windows drive mounted under WSL (``/mnt/c``), and ``/var`` (as in
+#: ``/var/<root>``). The prefix itself must start a path.
+_SYSTEM_PREFIX = r"(?:/System/Volumes/Data|/mnt/[A-Za-z]|/var)?"
+
+#: The dash-encoded form, ``-<root>-<name>``: a Claude project folder's name,
 #: which writes each ``/`` and ``.`` of a folder as ``-``. The leading ``-``
 #: does not follow a word character or a combining mark, so
 #: ``nav-<root>-icon`` (CSS) is not a home folder. Before the Linux root it
@@ -549,10 +563,15 @@ _FILE_URL = r"(?<=file://)|(?<=file://localhost)"
 #: one: command-line options are lower case. Before the macOS root, written
 #: with a capital ``U``, it may: a Claude folder made under another folder
 #: holds ``-<parent>--<root>-<name>-``, from the ``/`` that ends the parent
-#: and the ``/`` that starts the root (reproduced 2026-10-16). The name uses
-#: the slash form's characters, and a ``-`` ends it.
+#: and the ``/`` that starts the root (reproduced 2026-10-16).
 _DASH_START = rf"(?<![\w{_COMBINING_MARKS}])"
 _LINUX_DASH_START = rf"(?<![\w{_COMBINING_MARKS}-])"
+
+#: Where a dash-form name ends: at a ``-`` (the next folder), or (F6) at
+#: ``/``, a quote, a backtick, whitespace, ``)`` or the line's end, as in
+#: ``~/.claude/projects/-<root>-<name>/memory/``. The name is ``_NAME``, the
+#: slash form's, so ``\ `` counts in it too (F1).
+_DASH_NAME_END = r"(?=[-/\"'`\s)]|$)"
 
 #: A home folder, in one of three forms (owner decision CHG-045):
 #:
@@ -566,69 +585,75 @@ _LINUX_DASH_START = rf"(?<![\w{_COMBINING_MARKS}-])"
 #:   needed. Without it ``WORKDIR <root>/app`` and ``fetch("<root>/feed")``
 #:   were named (reproduced 2026-10-14), so a Linux home folder with no
 #:   ``/`` after it is a known limit.
-#: - ``-<root>-<name>-`` (``_DASH_START``, ``_LINUX_DASH_START``).
+#: - ``-<root>-<name>`` (``_DASH_START``, ``_LINUX_DASH_START``,
+#:   ``_DASH_NAME_END``).
 #:
-#: In the two slash forms, the ``/`` before the root starts a path
-#: (``_PATH_START``), follows a flag (``_FLAG_START``) or a file URL
-#: (``_FILE_URL``), so ``docs/Users/x/``, ``example.com/home/x/``,
-#: ``../Users/x/`` and ``http://home/x/`` are not home folders. In every form
+#: In the two slash forms, the path starts (``_PATH_START``), or follows a
+#: flag (``_FLAG_START``) or a file URL (``_FILE_URL``), at the root or at a
+#: ``_SYSTEM_PREFIX`` before it. So ``docs/Users/x/``, ``example.com/home/x/``,
+#: ``../Users/x/`` and ``http://home/x/`` are not home folders. The ``path``
+#: group is where the path starts, for the port-colon check. In every form
 #: the name is a real folder name: not empty (the bare root, or ``<you>``,
 #: whose angle brackets are not name characters), and not ``_NOT_A_NAME``.
 _HOME_DIRECTORY_PATH = re.compile(
-    rf"(?:{_PATH_START}|{_FLAG_START}|{_FILE_URL})(?P<root>/)(?:"
+    rf"(?:{_PATH_START}|{_FLAG_START}|{_FILE_URL})(?P<path>{_SYSTEM_PREFIX}/)(?:"
     rf"{_MAC_ROOT}/(?!{_NOT_A_NAME}){_NAME}"
     rf"|{_LINUX_ROOT}/(?!{_NOT_A_NAME}){_NAME}/"
     rf")"
     rf"|(?:{_DASH_START}-{_MAC_ROOT}|{_LINUX_DASH_START}-{_LINUX_ROOT})"
-    rf"-(?!(?:\.+|{_NOT_A_PERSON})-)"
-    rf"{_NAME_FIRST}{_NAME_CHAR}*-"
+    rf"-(?!{_NOT_A_PERSON}{_DASH_NAME_END}){_NAME}{_DASH_NAME_END}"
 )
 
-#: A token: text between whitespace and quotes.
-_TOKEN = re.compile(r"[^\s\"']+")
+#: A URL's host: the text after ``://`` up to the first ``/``, whitespace or
+#: quote (F4). ``[^/...]`` holds no ``/``, so two matches never overlap.
+_URL_HOST = re.compile(r"://([^/\s\"']*)")
+
+#: The most combining marks kept in a row before NFC (F3). Unicode's
+#: stream-safe text format (UAX #15) allows no more than 30 non-starters in a
+#: row. NFC reorders a run of marks, so its time grew with the square of the
+#: run's length: 0.014 s, 0.055 s and 0.22 s for 8,000, 16,000 and 32,000
+#: marks of two combining classes (measured 2026-10-16 at commit 710bf43).
+_STREAM_SAFE_MARKS = 30
+_MARK_RUN = re.compile(rf"([{_COMBINING_MARKS}]{{{_STREAM_SAFE_MARKS}}})[{_COMBINING_MARKS}]+")
 
 
-def _url_tails(line: str) -> list[tuple[int, int]]:
-    """Where each token holds ``://``: the span from after its first ``://`` to the token's end.
+def _url_hosts(line: str) -> list[tuple[int, int]]:
+    """The span of every URL host on *line*, in line order, read once.
 
-    A ``:`` in such a span is a URL's port colon (``https://example.org:``
-    then the root), not a drive letter or a ``PATH`` separator, so the root
-    after it is a path on that host. Spans are in line order and do not
-    overlap, and each token is read once.
+    A ``:`` inside a host is a port colon (``https://example.org:`` then the
+    root), so the root after it is a path on that host. A ``:`` after the
+    host is not (``file:///C:`` then the root, a drive letter in a URL's
+    path, or ``?file=C:``).
     """
-    tails: list[tuple[int, int]] = []
-    for token in _TOKEN.finditer(line):
-        mark = line.find("://", token.start(), token.end())
-        if mark != -1:
-            tails.append((mark + 3, token.end()))
-    return tails
+    return [match.span(1) for match in _URL_HOST.finditer(line)]
 
 
-def _in_url_tail(tails: list[tuple[int, int]], position: int) -> bool:
-    index = bisect.bisect_right(tails, (position, sys.maxsize)) - 1
-    return index >= 0 and tails[index][0] <= position < tails[index][1]
+def _in_span(spans: list[tuple[int, int]], position: int) -> bool:
+    index = bisect.bisect_right(spans, (position, sys.maxsize)) - 1
+    return index >= 0 and spans[index][0] <= position < spans[index][1]
 
 
 def _contains_home_directory_path(line: str) -> bool:
     """Whether *line* holds a home folder (``_HOME_DIRECTORY_PATH``).
 
-    The line is first normalised to NFC, so a character written as a base and
-    a combining mark is judged as the one character it composes: ``=`` and
-    U+0338 are ``≠``, which may stand before a path, and the Kelvin sign is
-    the letter ``K``, so ``-I`` and it are a flag. A match whose root follows a
-    URL's port colon is skipped, and the search goes on from the next
-    character.
+    A line that is not plain ASCII first has each run of more than
+    ``_STREAM_SAFE_MARKS`` combining marks cut to that many, then is
+    normalised to NFC, so a character written as a base and a combining mark
+    is judged as the one character it composes: ``=`` and U+0338 are ``≠``,
+    which may stand before a path, and the Kelvin sign is the letter ``K``, so
+    ``-I`` and it are a flag. A match whose path starts after a URL's port
+    colon is skipped, and the search goes on from the next character.
     """
     if not line.isascii():
-        line = unicodedata.normalize("NFC", line)
-    tails: list[tuple[int, int]] | None = None
+        line = unicodedata.normalize("NFC", _MARK_RUN.sub(r"\1", line))
+    hosts: list[tuple[int, int]] | None = None
     position = 0
     while (match := _HOME_DIRECTORY_PATH.search(line, position)) is not None:
-        root = match.start("root")
-        if root > 0 and line[root - 1] == ":":
-            if tails is None:
-                tails = _url_tails(line)
-            if _in_url_tail(tails, root - 1):
+        start = match.start("path")
+        if start > 0 and line[start - 1] == ":":
+            if hosts is None:
+                hosts = _url_hosts(line)
+            if _in_span(hosts, start - 1):
                 position = match.start() + 1
                 continue
         return True

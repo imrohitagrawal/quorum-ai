@@ -6,17 +6,20 @@ Accepted — 2026-10-14. The work is the owner's choice: CHG-042 (b) put the sec
 after W56, W68, W55 and CI pinning (board row W70). The rule for home-directory paths is the
 owner's decision CHG-045 ("Rewrite them to ~"). The rest of the design below is the session's.
 
-Revised 2026-10-16, twice, under the owner's decision CHG-050 (2026-10-15): a miss that has a fix
+Revised 2026-10-16, three times, under the owner's decision CHG-050 (2026-10-15): a miss that has a fix
 is fixed, test first. Only a miss with no fix is written down, with its reason.
 
-- Round 3 fixed four review findings in the named-secret rule (D1 to D4), one slow pattern in
+- Round 3 fixed four review findings in the named-secret rule, one slow pattern in
   `env_secret_assignment`, and four home-path misses. Its review then found new defects in the
   named-secret rule.
-- Round 3 was the second fix in a row on that rule to add defects, so the stop rule applied
+- Round 3 was the third fix in a row on that rule to add defects, so the stop rule applied
   (CHG-049): stop patching, write the root cause and a smaller plan, and have Codex review it.
   The plan split W70. This branch keeps the file selection, the joined key, the known shapes and
   the home-folder rule. It removes the named-secret rule, which moves to board row W83. Input
   the kept rules cannot read moves to board row W84.
+- The split's second review round found more misses and false positives in the home-folder
+  rule. The owner chose to fix them before shipping and to record three limits (CHG-053). The
+  eight that needed a change are F1 to F8 below.
 
 The home-folder rule's final tests are in `tests/unit/test_security_scan_w70_split.py`. The
 other tests of the kept rules are in `tests/unit/test_security_scan.py`,
@@ -51,7 +54,7 @@ Round 3's review found these, reproduced against the commits before and after ro
 (`a0ce4ca` and `70080f3`):
 - new misses: a secret in a Makefile comment; a continued make recipe line that starts with
   spaces; a value that starts with `+` after an earlier quoted word (`echo "a" DB_PASSWORD="+…"`);
-- new false positives: `%DB_HOST%:%DB_PORT%` (D1); help text inside code that shows the form
+- new false positives: `%DB_HOST%:%DB_PORT%`; help text inside code that shows the form
   of the setting; a Python annotation read as YAML; `SENTRY_DSN=` followed by a space and the
   next name; `process.env.DB_PASSWORD+""`;
 - old misses still open: a `"NAME=value"` string over 512 characters in code; `\n` written after
@@ -61,7 +64,7 @@ W83 carries these, and the items round 3 listed as having a likely fix: Python i
 (`env["X_TOKEN"] = …`), the Dockerfile form `ENV X_TOKEN value`, Python string prefixes
 (`f"…"`, `r"…"`, `b"…"`), values in parentheses, JavaScript template literals, a name and its
 value in two fragments with no `+` (`"DB_PASSWORD=" "…"`), a type annotation with a space
-(`dict[str, str]`), `vault:` references, the YAML reading of a Python annotation, and lines
+(`dict[str, str]`) and `vault:` references. The split added one item of its own: lines
 continued with a backslash.
 
 The plan for W83 has to choose one of: a reader per syntax, picked by file kind; a maintained
@@ -75,12 +78,12 @@ names above, at the start of a line, outside `tests/`.
 
 The kept rules read each line as it is written. Three kinds of input they cannot read:
 - a UTF-16 file, or any text with a NUL byte in its first 8192 bytes: it is skipped as binary;
-- an encoded key or shape: a JSON `-` or a URL's `%2D` for `-`, or base64;
+- an encoded key or shape: a JSON `\u002d` or a URL's `%2D` for `-`, or base64;
 - quoted fragments joined with backticks.
 
-Each needs a new decoder in front of every rule. This item has one review round left under the
-two-round cap in `.agents/skills/work-item-delivery/SKILL.md`, so a decoder built now would ship
-without review. W84 is scheduled work, not a known limit, so CHG-050 binds it.
+Each needs a new decoder in front of every rule. When the split was planned, this item had one
+review round left under the two-round cap in `.agents/skills/work-item-delivery/SKILL.md`, so a
+decoder built then would have shipped without review. W84 is scheduled work, not a known limit, so CHG-050 binds it.
 
 ## Decision
 
@@ -123,31 +126,41 @@ without review. W84 is scheduled work, not a known limit, so CHG-050 binds it.
      `-` either, so the option `--home-dir-path` is not one: command-line options are lower
      case. Before `Users`, with its capital `U`, it may: a Claude folder made under another
      folder holds `-private-tmp--Users-<name>-`, one `-` for the `/` that ends the parent
-     folder and one for the `/` that starts the root. A `-` ends the name.
+     folder and one for the `/` that starts the root. The name is the slash form's, so `\ `
+     counts in it too (F1). It ends at a `-`, or at `/`, a quote, a backtick, whitespace, `)` or
+     the end of the line, as in `~/.claude/projects/-Users-<name>/memory/` (F6).
 
    **Where a slash form starts.** The `/` before the root must start a path. It may not follow
    a word character of any script (a letter, digit or `_`), a combining mark, `.`, `/`, `-` or
    `]`. So a folder called `Users` or `home` inside another path, a URL's path, a host called
    `home`, an IPv6 host (`http://[::1]` then the root) and a host written in another script are
-   not home folders. Three more starts count:
+   not home folders. Four more starts count:
    - a `:` before the root (a drive letter `C:`, or a `PATH` list after `bin:`), unless it is a
-     URL's port colon: the same token (the text since the last space or quote) holds `://`
-     before that `:`. So `https://example.org:` then the root is not a home folder;
+     URL's port colon: a `:` inside a URL's host, the text from `://` to the next `/` (F4). So
+     `https://example.org:` then the root is not a home folder, while a drive letter after the
+     host, as in `file:///C:` or `?file=C:`, is;
    - a compiler flag glued to the path: `-` and 1 to 12 ASCII letters at a token start, that
-     is the line's start or after whitespace, a quote or `=` (`-I`, `-isystem`). `docs-I` and
-     a 13-letter run are not flags;
-   - a file URL: `file://` or `file://localhost` directly before the root. No other host.
+     is the line's start or after whitespace, a quote, `=`, a backtick, `(`, `[`, `,` or `{`
+     (`-I`, `-isystem`; F7). `docs-I` and a 13-letter run are not flags;
+   - a file URL: `file://` or `file://localhost` directly before the root, when `file:` starts
+     a token: the line's start, or after whitespace, a quote, `(`, `=`, `<` or `[` (F2). So a
+     `file://` inside another URL's path is that URL's path. No other host counts;
+   - a system folder directly before the root (F5): macOS's data volume
+     `/System/Volumes/Data`, a Windows drive under WSL (`/mnt/` and one letter), or `/var`. The
+     system folder must itself start a path.
 
-   **The name** may hold a word character of any script, `.`, `-`, any combining mark (an
-   accent or vowel sign written as its own character: all of Unicode's category M, read from
-   Python's Unicode tables at import), and `$` after its first character, so `/home/$USER/` is
-   still a placeholder. A space counts only when written `\ ` (a shell escape). The line is
-   first put into Unicode's composed form (NFC), so a base and a combining mark are judged as
+   **The name** may hold a word character of any script, `-`, any combining mark (an accent or
+   vowel sign written as its own character: all of Unicode's category M, read from Python's
+   Unicode tables at import), and, after its first character, `.` and `$`. So `/home/$USER/` is
+   still a placeholder, and a name that starts with `.` is a hidden file, not a person (F8). A
+   space counts only when written `\ ` (a shell escape). The line is first cut so no run of
+   combining marks is longer than 30 (Unicode's stream-safe text format, UAX #15, allows no more
+   than 30 in a row; F3), then put into Unicode's composed form (NFC), so a base and a combining mark are judged as
    the one character they compose: `=` followed by U+0338 is `≠`, which may stand before a
    path, and the Kelvin sign is the letter `K`, so `-I` and it make a flag.
 
    **Not names:** an empty name (the bare root), `<you>` and `<user>` (angle brackets are not
-   name characters), a name of only dots (`...` is this repository's placeholder), and
+   name characters), a name that starts with `.` (`...` is this repository's placeholder), and
    `Shared`, the macOS system folder, which names no person.
 
    **What was rewritten.** On 2026-10-14, of the 48 existing lines, the 38 in docs became
@@ -156,11 +169,12 @@ without review. W84 is scheduled work, not a known limit, so CHG-050 binds it.
    `/Users/<you>/`. `scripts/session_hygiene.py` prints a worktree under the home folder as
    `~/...`, so `make handoff` stops writing one into `docs/session-handoff.md`. On 2026-10-16
    the dash form named 8 more committed lines in 4 files under `docs/analysis/`. In each, the
-   owner's name became `<user>` (CHG-045), and the rest of the line is unchanged.
+   session replaced the owner's name with `<user>`, its reading of CHG-045 for a name inside a
+   folder name, and the rest of the line is unchanged.
 
 ## Measurements
 
-Rows 1 to 5 on 2026-10-14; rows 6 to 12 on 2026-10-16, on the owner's Mac.
+Rows 1 to 5 on 2026-10-14; rows 6 to 14 on 2026-10-16, on the owner's Mac.
 
 | # | Fact | Value | Command |
 |---|---|---|---|
@@ -172,10 +186,12 @@ Rows 1 to 5 on 2026-10-14; rows 6 to 12 on 2026-10-16, on the owner's Mac.
 | 6 | The Python pass-through pattern | before: 0.12 s, 0.49 s and 1.96 s for 4,000, 8,000 and 16,000 spaces after `token = <identifier>`, four times longer for each doubling. After: under 1 s on 1 MB lines | `_contains_env_secret_assignment(..., is_python=True)` timed directly; `tests/unit/test_security_scan_w70_round3.py::test_step6_the_passthrough_pattern_is_fast_on_a_1mb_run_of_spaces` |
 | 7 | The kept checks stay fast | under 2 s for each check on each adversarial 1 MB line, in a child process killed at 120 s, and each check still names its own planted line | `tests/unit/test_security_scan_w70_round2.py::test_every_line_check_finishes_quickly_on_a_1mb_adversarial_line`; for the split's new home forms, `tests/unit/test_security_scan_w70_split.py::test_the_home_rule_finishes_quickly_on_1mb_lines_of_its_new_forms` |
 | 8 | The dash form in the tree | 8 committed lines in 4 files, each a Claude project folder name holding the owner's name; 0 after the rewrite | `git grep -n -E -- '-Users-[A-Za-z0-9._]+-'`; `tests/unit/test_security_scan_w70.py::test_every_committed_dash_encoded_home_folder_is_named` |
-| 9 | The split's home rule, before and after, by lines named | the tree: 0, then 8 (row 8), then 0 after the rewrite (1745 files). The installed Python packages of the main checkout's virtual environment: 34, then 334 (8566 files). The e2e suite's installed JavaScript packages: 32, then 45 (2055 files). No line named before is lost | each line of every file under the folder, skipping a file with a NUL byte in its first 8192 bytes, given to `_contains_home_directory_path` of commit `3d42751` and then of this commit |
-| 10 | What the new lines outside the tree are | the 300 new Python-package lines are all `path+file://` URLs to the CI runner account's home folder under the macOS root, in 8 packages' CycloneDX files under `.dist-info`; they need the file-URL start. Of the 13 new JavaScript-package lines, 10 are `file://` URLs to a `user` folder under the Linux root, in code comments of one package (5 lines in each of two builds of one file), and 3 are a package author's own folder under the macOS root, in example output; they need the no-`/` form. Each is a home folder; none is prose | the same read, each new line run again with one of the new forms turned off |
+| 9 | The split's home rule, before and after, by lines named | the tree: 0, then 8 (row 8), then 0 after the rewrite. The installed Python packages of the main checkout's virtual environment: 34, then 334. The e2e suite's installed JavaScript packages: 32, then 45. No line named before is lost. The files read in each are counted in row 13 | each line of every file read under the folder (a file with a NUL byte in its first 8192 bytes is not read), given to `_contains_home_directory_path` of commit `3d42751` and then of `6f42052` |
+| 10 | What the new lines outside the tree are | the 300 new Python-package lines are all `path+file://` URLs to the CI runner account's home folder under the macOS root, in 8 packages' CycloneDX files under `.dist-info`; they need the file-URL start. Of the 13 new JavaScript-package lines, 10 are `file://` URLs to a `user` folder under the Linux root, in code comments of one package (5 lines in each of two builds of one file), and 3 are a package author's own folder under the macOS root, in example output; they need the no-`/` form. Each is a home folder; none is prose. Since round 2 (F2) the 300 are not named again (row 13) | the same read, each new line run again with one of the new forms turned off |
 | 11 | The whole tree | 1712 files scanned, 0 findings | `uv run python scripts/security_scan.py` |
-| 12 | Each new part bites | turning off the escaped space, the dash form, the no-`/` form, the port-colon rule, the file-URL start or the NFC step, one at a time, turns tests red in `tests/unit/test_security_scan_w70_split.py` (9, 7, 9, 2, 4 and 2 tests) | the scanner copied aside, one part reverted, the test file run, the copy put back and compared with `diff -q` |
+| 12 | Each part bites | with one part turned off at a time, this many tests in `tests/unit/test_security_scan_w70_split.py` turn red: the escaped space 10, the dash form 18, a `-` allowed before `-Users-` 2, the no-`/` form 11, the port-colon rule 5, the file-URL start 10, the NFC step 2, all combining marks in a name 1, combining marks in the boundary 2; F1 1, F2 2, F3 1, F4 4, F5 3, F6 7, F7 5, F8 2. Measured on this commit's scanner, 111 tests passing before each change | the scanner copied aside, one part put back to its earlier form, the test file run, the copy put back and compared with `diff -q` |
+| 13 | Round 2 (F1 to F8), before and after, by lines named | the tree: 1712 files read, 0 new lines, 0 lost. The installed Python packages: 5477 files read, 0 new, 300 lost: the 300 `path+file://` lines of row 10, where `file:` follows `+`, which F2 does not count as a token start. The e2e suite's JavaScript packages: 2049 files read, 4 new, 0 lost: a `file:///C:` URL to a `foo` folder under the macOS root in one package's code comments (2 lines in each of two builds of one file), named by F4 | the read of row 9, with the scanner of commit `710bf43` and then this commit's; each new line run again with one fix turned off |
+| 14 | Long runs of combining marks | before F3, 0.014 s, 0.055 s and 0.22 s for one run of 8,000, 16,000 and 32,000 marks of two combining classes, time growing with the square of the run. After: under 2 s on each 1 MB line of mark runs | `_contains_home_directory_path` of commit `710bf43` timed directly; `tests/unit/test_security_scan_w70_split.py::test_f3_a_1mb_line_of_combining_mark_runs_finishes_quickly` |
 
 ## Rejected alternatives
 
@@ -203,9 +219,11 @@ Rows 1 to 5 on 2026-10-14; rows 6 to 12 on 2026-10-16, on the owner's Mac.
   `tests/unit/test_security_scan_w70.py` is deselected from the mutant run
   (`tests/unit/test_mutation_test_set_integrity.py`). It tests `scripts/`, which mutmut does not
   mutate.
-- A secret under a name the scan does not know, with none of the known shapes, is not found
-  until W83 lands. That is scheduled work, not a limit.
+- A named secret, under a name ending in `_API_KEY`, `_TOKEN`, `_SECRET`, `_DSN` or
+  `_PASSWORD`, is not found until W83 lands. That is scheduled work, not a limit.
 - Known limits of the kept rules, each with no fix found and its reason (CHG-050):
+  - a secret under a name that does not end in one of the five suffixes, with none of the
+    known shapes: nothing on the line says it is a secret;
   - a key split across lines: joining lines needs a parser per language; a pasted key
     arrives on one line, and a split across lines is deliberate;
   - fragments joined with commas: `["a", "b"]` is two strings, and joining across commas
@@ -215,8 +233,19 @@ Rows 1 to 5 on 2026-10-14; rows 6 to 12 on 2026-10-16, on the owner's Mac.
   - a name with an unescaped space under the Linux root (`open "/home/Jane Doe/notes.txt"`):
     each of the three rules tried named prose (Rejected alternatives). Under the macOS root the
     folder before the space is still named;
-  - a home folder inside a longer path: a folder called `Users` or `home` inside another
-    path is not a home folder, and the two read the same;
+  - a home folder inside a longer path, other than after the system folders F5 allows: a
+    folder called `Users` or `home` inside another path is not a home folder, and the two read
+    the same;
+  - a `PATH` entry that is a URL with an empty port
+    (`PATH=/usr/bin:https://example.org:/home/alice/bin`): it reads the same as a URL whose
+    path is that home folder. Telling them apart needs the shell's `PATH` split, and the same
+    text in prose is a URL (CHG-053);
+  - a web path under the macOS root with no `/` after it, such as the current-user endpoint
+    `me` fetched by a web page, or a SCIM `/Users/<id>`: it is named, because a folder called
+    `me` reads the same (CHG-053);
+  - a Windows path written with backslashes (`C:\Users\<name>\`): CHG-045 names the
+    `/Users/<name>/` and `/home/<name>/` forms, and the owner's choice records this one as a
+    limit (CHG-053);
   - git history: the rewritten paths remain in earlier commits of this public repository,
     and removing them means rewriting published history with a force-push, which the
     work-item process forbids.
