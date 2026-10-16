@@ -543,18 +543,20 @@ _FLAG_START = r"(?<![^\s\"'=`(\[,{])-[A-Za-z]{1,12}"
 
 #: Or it follows a file URL's ``file://`` or ``file://localhost``: the one
 #: kind of URL whose path is a folder on this computer. No other host may.
-#: ``file:`` does not count when it directly follows a word character, ``.``,
-#: ``/``, ``-`` or ``+`` (F2): then it is the end of a longer word, or a
-#: ``file:`` inside another URL's path (``https://example.org/file://...``).
-#: ``<scheme>+file:`` (``git+file:``, ``path+file:``) counts when the scheme
-#: does not directly follow a word character, ``.``, ``/`` or ``-``. A deny
-#: rule, not a list of the characters that may come before ``file:``: two
-#: such lists were built in a row, and each missed real lines, first
-#: ``git+file:`` and ``path+file:``, then a ``file://`` in backticks. The URL
-#: is matched, not looked behind, so the scheme's length may vary; a scheme
-#: is read from its own start only, as a position inside one follows a word
-#: character, so the work stays linear.
-_FILE_URL = r"(?:(?<![\w./+-])|(?<![\w./-])[A-Za-z][A-Za-z0-9.-]*\+)file://(?:localhost)?"
+#: The URL does not count when it directly follows a word character, a
+#: combining mark, ``.``, ``/``, ``+`` or ``-`` (F2): then it ends a longer
+#: word, or sits inside another URL's path (``https://example.org/file://...``,
+#: ``.../a+b+file://...``). It may start with one ``+`` or ``-``, a unified
+#: diff's added or removed line, and with a scheme joined by ``+``
+#: (``git+file:``, ``path+file:``). A deny rule, not a list of the characters
+#: allowed before ``file:``: two such lists were built in a row, and each
+#: missed a form, first ``git+file:`` and ``path+file:``, then a ``file://``
+#: in backticks. The URL is matched, not looked behind, so its scheme's length
+#: may vary; a position inside a scheme follows a word character, ``.``, ``+``
+#: or ``-``, so each scheme is read once and the work stays linear.
+_FILE_URL = (
+    rf"(?<![\w{_COMBINING_MARKS}./+-])[+-]?(?:[A-Za-z][A-Za-z0-9.-]*\+)?file://(?:localhost)?"
+)
 
 #: Folders that may stand directly before the root (F5): macOS's data
 #: volume (``/System/Volumes/Data``, which holds the same ``Users`` folder),
