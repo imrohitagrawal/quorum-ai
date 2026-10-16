@@ -544,9 +544,11 @@ _FLAG_START = r"(?<![^\s\"'=`(\[,{])-[A-Za-z]{1,12}"
 #: Or it follows a file URL's ``file://`` or ``file://localhost``: the one
 #: kind of URL whose path is a folder on this computer. No other host may.
 #: ``file:`` must start a token (the line's start, or after whitespace, a
-#: quote, ``(``, ``=``, ``<`` or ``[``), so a ``file://`` inside another URL's
-#: path (``https://example.org/file://...``) is that URL's path (F2).
-_FILE_SCHEME_START = r"(?<![^\s\"'(=<\[])"
+#: quote, ``(``, ``=``, ``<`` or ``[``), or follow the ``+`` of a scheme such
+#: as ``git+file:`` or ``path+file:`` (pip's and a CycloneDX file's forms), so
+#: a ``file://`` inside another URL's path (``https://example.org/file://...``)
+#: is that URL's path (F2).
+_FILE_SCHEME_START = r"(?<![^\s\"'(=<\[+])"
 _FILE_URL = rf"(?<={_FILE_SCHEME_START}file://)|(?<={_FILE_SCHEME_START}file://localhost)"
 
 #: Folders that may stand directly before the root (F5): macOS's data
