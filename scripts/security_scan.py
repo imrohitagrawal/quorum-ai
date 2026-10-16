@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import bisect
 import json
 import os
 import re
@@ -92,7 +93,6 @@ CHECK_IDS = [
     "private_key_material",
     "env_secret_assignment",
     "browser_secret_terms",
-    "named_secret_assignment",
     "known_secret_shape",
     "home_directory_path",
 ]
@@ -171,8 +171,6 @@ def _run_checks() -> tuple[list[SecurityFinding], int]:
         scanned += 1
         relative = path.relative_to(root).as_posix()
         text = _read_text(path)
-        is_code = path.suffix in CODE_SUFFIXES
-        is_make = path.name in MAKE_FILE_NAMES or path.suffix == ".mk"
         for line_number, line in enumerate(text.splitlines(), start=1):
             # NO ``tests/`` exemption here, deliberately. It used to be exempt
             # alongside ``env_secret_assignment`` below, but the two need
@@ -210,16 +208,6 @@ def _run_checks() -> tuple[list[SecurityFinding], int]:
                     relative,
                     line_number,
                     "Potential non-placeholder secret assignment is present.",
-                )
-            if not relative.startswith(TEST_FIXTURE_PREFIXES) and _contains_named_secret_assignment(
-                line, is_code=is_code, is_make=is_make
-            ):
-                report(
-                    "named_secret_assignment",
-                    relative,
-                    line_number,
-                    "A *_API_KEY / *_TOKEN / *_SECRET / *_DSN / *_PASSWORD name is "
-                    "given a real-looking value.",
                 )
             # Known value shapes get NO path exemption: no test needs a value of
             # a real token's exact shape written whole on one line (build it at
@@ -433,348 +421,6 @@ def _contains_env_secret_assignment(line: str, *, is_python: bool = False) -> bo
 
 
 # --------------------------------------------------------------------------
-# Named secrets (W70)
-# --------------------------------------------------------------------------
-
-#: Files where an UNQUOTED right-hand side is code (a variable, an attribute,
-#: a call), never a literal: ``X_TOKEN = settings.x_token``. A secret written
-#: into these files is always a quoted string.
-CODE_SUFFIXES = {".py", ".pyi", ".js", ".mjs", ".cjs", ".jsx", ".ts", ".mts", ".cts", ".tsx"}
-
-#: Files GNU make reads by name; any ``*.mk`` file is a make file too. Their
-#: lines follow make's comment rule, not shell's (``_strip_make_comment``).
-MAKE_FILE_NAMES = {"Makefile", "GNUmakefile", "makefile"}
-
-#: Paths whose FAKE named secrets are test fixtures, exempt from
-#: ``named_secret_assignment`` ONLY (the precedent is the ``tests/`` exemption
-#: of ``env_secret_assignment``). Fixtures there give made-up values to real
-#: names on purpose, to test the code that reads them. Measured 2026-10-14,
-#: after the rule's other refinements: 7 lines in 3 files under ``tests/``
-#: (``tests/google_token_stub.py``'s stub OAuth client secret and two tokens,
-#: two fake Sentry DSNs, two fake CSRF values), and none under ``e2e/tests/``,
-#: which is therefore NOT exempt. Known secret SHAPES and home-folder paths get
-#: no exemption anywhere.
-TEST_FIXTURE_PREFIXES = ("tests/",)
-
-#: Names that end in ``_token`` but never hold a credential. Matched whole and
-#: case-insensitively; a longer name that merely contains one is still checked.
-#: - ``confirmation_token``: the cost-estimate confirmation the API hands a
-#:   caller to echo back (``src/product_app/costs.py``): minted per estimate,
-#:   expiring after ``CONFIRMATION_TOKEN_TTL``, and only a lookup key for a
-#:   server-side record. Measured 2026-10-14: 8 lines that no other
-#:   refinement excuses, 2 of them recorded API responses under
-#:   ``docs/validation/`` and 2 in ``e2e/fixtures/limit-responses.ts``.
-_NOT_A_CREDENTIAL_NAMES = {"confirmation_token"}
-
-#: A name ending in one of the secret suffixes, with at least one word before
-#: it (``FLY_API_TOKEN``, ``google_client_secret``). ``*_CLIENT_SECRET`` is a
-#: ``*_SECRET``.
-_SECRET_NAME = r"[A-Za-z][A-Za-z0-9_]*_(?:API_KEY|TOKEN|SECRET|DSN|PASSWORD)"
-
-#: A type annotation: words with no space inside (``str``, ``Optional[str]``),
-#: joined by ``|`` with or without spaces (``str | None``). No two neighbouring
-#: parts can both take a space; the earlier form, a lazy class holding a space
-#: next to ``\s*``, took time growing with the SQUARE of a run of spaces (2.97 s
-#: for 32,000 spaces after ``X_TOKEN: str``, measured 2026-10-14).
-_ANNOTATION = r"[A-Za-z_][A-Za-z0-9_.\[\],]*(?:\s*\|\s*[A-Za-z_][A-Za-z0-9_.\[\],]*)*"
-
-#: ``NAME=v``, ``export NAME=v``, ``NAME = "v"``, ``const NAME = 'v'``,
-#: ``NAME: str = "v"``, make's ``NAME := v`` / ``?=`` / ``+=``, YAML's
-#: ``NAME: v`` and JSON's ``"NAME": "v"``. The ``annotation`` group is the
-#: ``: <type>`` part; when it matched, the YAML reading (the value straight
-#: after the ``:``) is tried too, so ``NAME: <base64 ending in =>`` is not read
-#: only as a type followed by ``=`` and an empty value (reproduced 2026-10-16).
-_NAMED_ASSIGNMENT = re.compile(
-    r"(?i)(?<![A-Za-z0-9_$])(?P<name>" + _SECRET_NAME + r")(?![A-Za-z0-9_])"
-    r"(?:"
-    r"(?P<annotation>\s*:\s*" + _ANNOTATION + r")?\s*(?P<op>:=|\?=|\+=|=)(?!=)"
-    r"|['\"]?\s*:(?![:=])"
-    r")"
-)
-
-#: How much of the line after a name's ``=`` or ``:`` is read for its value.
-#: Reading to the end of the line for every name made a line of many names
-#: take time growing with the SQUARE of its length (8.96 s for 200 KB of
-#: ``A_TOKEN=``, measured by review 2026-10-14). A longer value is judged on
-#: its first 512 characters only.
-_VALUE_WINDOW = 512
-
-#: An unquoted value runs to the first of these. ``#`` is not one: inside a
-#: shell or YAML word it is a character (``Hunter2#x``), and so it is directly
-#: after ``=`` (shell ``X=#abc`` assigns ``#abc``). Only a ``#`` with a space
-#: before it starts a comment (YAML ``X: #note``), which ``_assigned_value``
-#: treats as an empty value.
-_UNQUOTED_VALUE = re.compile(r"[^\s'\"`,;)\]}(]*")
-
-#: An unquoted value that is really the NEXT assignment's name, so the value
-#: here was empty: ``SENTRY_DSN= UV_CACHE_DIR=/tmp/x`` (make / shell). Only
-#: when whitespace stood between the ``=`` and it: shell reads ``A=B=`` as
-#: ``A`` set to ``B=``, so an unspaced ``SECRET_TOKEN=<base64>=`` is a value.
-_NEXT_ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
-
-#: A spaced value that still is a value, not the next name: base64 with its
-#: ``=`` padding and nothing after it. ``_base64_shaped`` adds the length test
-#: (a multiple of 4, at least 12), which a name such as ``OTHER=`` fails.
-#: ``_`` is not in the set, so ``A_CACHE_DIR=`` stays a name.
-_BASE64_PADDED = re.compile(r"[A-Za-z0-9+/]+={1,2}")
-
-#: The end of a string literal straight after a name's ``=``:
-#: ``"DB_PASSWORD=" + x``, ``'X_TOKEN=',`` or the string ending the line. The
-#: quote, then spaces, then ``+`` (another operand follows), one of
-#: ``, ; ) ] }``, or the end. No two neighbouring parts take the same character.
-_STRING_CLOSE = re.compile(r"(?P<quote>['\"])[ \t]*(?:(?P<plus>\+)[ \t]*|[,;)\]}]|$)")
-
-#: The characters ``_quote_before_name`` may step over, looking back from a
-#: name for the quote that opens the string it sits in (``"set DB_PASSWORD="``).
-_STRING_PREFIX_CHAR = re.compile(r"[\w .-]")
-
-#: Quotes that close a string an unquoted value sits in (``"NAME=value"``).
-#: Not the backtick: reStructuredText code in a comment or docstring is
-#: written in double backticks, and with it this file's own
-#: ``X_TOKEN = settings.x_token`` example was named (reproduced 2026-10-16).
-_CLOSING_QUOTES = frozenset("\"'")
-
-#: Characters a secret value is made of, quoted or not, ASCII only: hex,
-#: base64, base64url, URL-ish, and the punctuation people put in passwords
-#: (``!#%&*?@^~``). Anything else (``(``, ``[``, ``;``, ``|``, a space, a
-#: letter outside ASCII) means code, a type, prose or a translation, not a
-#: secret. A quoted value once took any printable character, and that named
-#: ``"Optional[str]"``, ``"Bestätigungskennwort"`` and the text between two
-#: strings in bundled JavaScript (reproduced 2026-10-14). The set alone does
-#: not keep out all such text: ``+publicLabelText+`` holds only set characters
-#: and was named until ``_string_ends_at_equals`` (reproduced 2026-10-16).
-_SECRET_VALUE = re.compile(r"[A-Za-z0-9_\-+/=.:@!#%&*?^~]+")
-
-#: A Windows ``%NAME%`` variable reference that is the WHOLE value: a stand-in,
-#: as ``$NAME`` is. Not anywhere in the value: ``%`` signs inside a password
-#: (``Kx9%vQ2%w7``) or percent-encoded UTF-8 in a URL (``%C3%A9``) held a
-#: ``%NAME%`` look-alike, so those secrets went unnamed (reproduced 2026-10-16).
-_PERCENT_VARIABLE = re.compile(r"%[A-Za-z_][A-Za-z0-9_]*%")
-
-#: Words that mark a value as a stand-in, matched case-insensitively anywhere
-#: in the VALUE (never the name or the rest of the line, so a real secret on a
-#: line that mentions "example" is still caught).
-_PLACEHOLDER_WORDS = (
-    "placeholder",
-    "changeme",
-    "change-me",
-    "change_me",
-    "example",
-    "your-",
-    "your_",
-    "yourkey",
-    "xxxx",
-    "...",
-    "****",
-    "redacted",
-    "dummy",
-    "not-a-real",
-    "not_a_real",
-)
-
-#: Minimum value length for a named secret: 12 characters, as for
-#: ``env_secret_assignment``.
-_NAMED_SECRET_MIN_LENGTH = 12
-
-#: Lower-case words joined by ``-`` or ``_``, no digits and no capitals: a
-#: readable phrase (``mutation-baseline``, ``race-test-token``), which a
-#: generated secret is not. KNOWN LIMIT: a human-chosen passphrase of that
-#: form is not named by this rule.
-_WORD_PHRASE = re.compile(r"[a-z]+(?:[-_][a-z]+)+")
-
-
-def _assigned_value(rest: str, *, spaced: bool = False) -> tuple[str, bool]:
-    """The value at the start of *rest* (text after ``=`` / ``:``), and whether quoted.
-
-    *spaced* says whether whitespace stood between the ``=`` / ``:`` and *rest*;
-    only then does a leading ``#`` start a comment, and only then can the value
-    be the next assignment's name. A quoted value followed by adjacent quoted
-    fragments (``"GOCSPX-" "<rest>"``) is returned joined, as
-    ``_joined_fragments`` joins them.
-
-    A fragment with no closing quote, because the line ends inside it or the
-    ``_VALUE_WINDOW`` cut it, adds its characters up to the end and is the last.
-    The earlier form stopped at the fragments before it, so ``"abc" "def"`` and
-    then a 594-character fragment crossing the window gave the 6-character
-    value ``abcdef``, under the 12-character floor (reproduced 2026-10-16).
-    """
-    if rest[:1] in {'"', "'"}:
-        parts: list[str] = []
-        position = 0
-        while True:
-            match = _QUOTED_FRAGMENT.match(rest, position)
-            if match is None:
-                if rest[position : position + 1] in {'"', "'"}:  # no closing quote
-                    parts.append(rest[position + 1 :])
-                break
-            parts.append(match.group(1) if match.group(1) is not None else match.group(2))
-            gap = _FRAGMENT_GAP.match(rest, match.end())
-            position = gap.end() if gap else match.end()
-        return "".join(parts), True
-    unquoted = _UNQUOTED_VALUE.match(rest)
-    value = unquoted.group(0) if unquoted else ""
-    if spaced and (
-        value.startswith("#") or (_NEXT_ASSIGNMENT.match(value) and not _base64_shaped(value))
-    ):
-        return "", False
-    return value, False
-
-
-def _base64_shaped(value: str) -> bool:
-    """Base64 with ``=`` padding and nothing after it, as a spaced value may be.
-
-    ``SECRET_TOKEN= <base64>=`` is the value, not the next name. The length
-    test (a multiple of 4, at least ``_NAMED_SECRET_MIN_LENGTH``) keeps a name
-    such as ``OTHER=`` (6 characters) the next assignment.
-    """
-    return (
-        _BASE64_PADDED.fullmatch(value) is not None
-        and len(value) % 4 == 0
-        and len(value) >= _NAMED_SECRET_MIN_LENGTH
-    )
-
-
-def _strip_make_comment(line: str) -> str:
-    """What make reads of *line*: cut at its comment, with each ``\\#`` turned into ``#``.
-
-    Make's own rule: a ``#`` starts a comment anywhere, quotes or not, unless
-    an odd number of backslashes stands before it. Without it,
-    ``DB_PASSWORD=#ConfigureInDeployment`` in a Makefile was named as shell
-    reads it, with the comment as the value (reproduced 2026-10-16). A recipe
-    line, which starts with a tab, is run by the shell and returned as it is.
-    Each backslash run is counted once, from the ``#`` it stands before.
-    """
-    if line.startswith("\t"):
-        return line
-    position = line.find("#")
-    while position != -1:
-        backslashes = 0
-        while position - backslashes > 0 and line[position - backslashes - 1] == "\\":
-            backslashes += 1
-        if backslashes % 2 == 0:
-            line = line[:position]
-            break
-        position = line.find("#", position + 1)
-    return line.replace("\\#", "#")
-
-
-def _quote_before_name(line: str, start: int) -> str | None:
-    """The quote that opens a string the name at *start* sits in, or ``None``.
-
-    Looks back from the name over ``_STRING_PREFIX_CHAR`` characters only
-    (``"set DB_PASSWORD="``), and at most ``_VALUE_WINDOW`` of them, so no
-    quote is tracked across the line: a JSON key, a comment or a regular
-    expression literal earlier on the line is never read as an open string.
-    The look-back stops at the previous name's ``=`` or ``:``, which is not a
-    prefix character, so the line is read back at most once overall.
-    """
-    position = start - 1
-    floor = max(0, start - _VALUE_WINDOW)
-    while position >= floor and _STRING_PREFIX_CHAR.match(line, position):
-        position -= 1
-    if position >= 0 and line[position] in {'"', "'"}:
-        return line[position]
-    return None
-
-
-def _read_value(line: str, start: int) -> tuple[str, bool]:
-    """The value starting at *start* in *line*, and whether it counts as quoted.
-
-    An unquoted value directly followed by a quote closes a string
-    it sits in (``"export DB_PASSWORD=<value>"``), so it counts as quoted:
-    code files then still check it. Before, a code file skipped it as a
-    variable (reproduced 2026-10-16).
-    """
-    window = line[start : start + _VALUE_WINDOW]
-    rest = window.lstrip()
-    value, quoted = _assigned_value(rest, spaced=len(rest) != len(window))
-    if not quoted and value and rest[len(value) : len(value) + 1] in _CLOSING_QUOTES:
-        quoted = True
-    return value, quoted
-
-
-def _string_ends_at_equals(line: str, match: re.Match[str]) -> tuple[str, bool] | None:
-    """The value when the name's ``=`` is the last character of a string, else ``None``.
-
-    ``const label="DB_PASSWORD="+publicLabelText+";";``: the name sits in a
-    string (``_quote_before_name``), the ``=`` follows the name directly, and
-    the same quote closes the string straight after it (``_STRING_CLOSE``).
-    The text after that quote is not this name's value: it is the next
-    operand, and reading it named ``+publicLabelText+`` in bundled JavaScript
-    (reproduced 2026-10-16). The value is empty, unless ``+`` and a quoted
-    literal follow (``"DB_PASSWORD=" + "<value>"``): then it is that literal.
-    """
-    if match.group("op") != "=" or match.start("op") != match.end("name"):
-        return None
-    quote = _quote_before_name(line, match.start("name"))
-    if quote is None:
-        return None
-    end = match.end() + _VALUE_WINDOW
-    close = _STRING_CLOSE.match(line, match.end(), end)
-    if close is None or close.group("quote") != quote:
-        return None
-    operand = line[close.end() : end]
-    if close.group("plus") is None or operand[:1] not in {'"', "'"}:
-        return "", True
-    return _assigned_value(operand)
-
-
-def _is_secret_value(value: str, quoted: bool, *, is_code: bool) -> bool:
-    if not quoted and is_code:
-        return False
-    if len(value) < _NAMED_SECRET_MIN_LENGTH:
-        return False
-    return _SECRET_VALUE.fullmatch(value) is not None and not _is_placeholder(value)
-
-
-def _is_placeholder(value: str) -> bool:
-    folded = value.casefold()
-    if any(word in folded for word in _PLACEHOLDER_WORDS):
-        return True
-    # A variable, command substitution or template: ``$X``, ``${X}``,
-    # ``$(openssl rand -hex 32)``, ``${{ secrets.X }}``, ``<token>``, ``{{ x }}``.
-    if any(ch in value for ch in "$<>{}") or _PERCENT_VARIABLE.fullmatch(value):
-        return True
-    # One character repeated (``0000000000000``), or a readable phrase.
-    return len(set(value)) == 1 or _WORD_PHRASE.fullmatch(value) is not None
-
-
-def _contains_named_secret_assignment(
-    line: str, *, is_code: bool = False, is_make: bool = False
-) -> bool:
-    """A secret-named variable given a real-looking value.
-
-    Not flagged: an empty value (including make/shell ``NAME= NEXT=...`` and a
-    ``#`` comment after a space), a value under 12 characters, a placeholder
-    (``_PLACEHOLDER_WORDS``, ``$`` variables and substitutions, a whole-value
-    ``%NAME%``, ``<...>``, a repeated character, a lower-case word phrase), a
-    value with any character outside ``_SECRET_VALUE`` (a space: ``"REAFFIRM
-    live-execution"`` is a sentence; ``(``, ``[``, ``;``, a letter outside
-    ASCII), in code files an unquoted value (a variable or attribute such as
-    ``X_TOKEN = settings.x_token``) unless a quote closes it, a name whose
-    string ends at its ``=`` (``_string_ends_at_equals``), and a name in
-    ``_NOT_A_CREDENTIAL_NAMES``. A quoted value split into adjacent fragments
-    is joined first. Only the first ``_VALUE_WINDOW`` characters after the
-    ``=`` / ``:`` are read. In a make file (*is_make*) the line is first cut at
-    make's comment (``_strip_make_comment``). ``NAME: <text> =`` is read both
-    as a type annotation and as YAML ``NAME: <value>``; either reading names it.
-    """
-    if is_make:
-        line = _strip_make_comment(line)
-    for match in _NAMED_ASSIGNMENT.finditer(line):
-        if match.group("name").casefold() in _NOT_A_CREDENTIAL_NAMES:
-            continue
-        readings = [_string_ends_at_equals(line, match) or _read_value(line, match.end())]
-        annotation = match.group("annotation")
-        if annotation is not None:  # the YAML reading starts straight after the ``:``
-            colon = match.start("annotation") + annotation.index(":")
-            readings.append(_read_value(line, colon + 1))
-        if any(_is_secret_value(value, quoted, is_code=is_code) for value, quoted in readings):
-            return True
-    return False
-
-
-# --------------------------------------------------------------------------
 # Known secret shapes (W70): flagged whatever name they are given
 # --------------------------------------------------------------------------
 
@@ -819,6 +465,7 @@ def _contains_known_secret_shape(line: str) -> bool:
 #: The two home roots, macOS then Linux. Joined into the pattern at run time so
 #: this file never holds a literal home-folder path itself.
 _HOME_ROOTS = ("Users", "home")
+_MAC_ROOT, _LINUX_ROOT = _HOME_ROOTS
 
 #: The one named folder under a home root that is not a person: macOS's own
 #: ``Shared`` folder, which every Mac has. Excused under both roots, as no
@@ -831,12 +478,11 @@ def _combining_mark_ranges() -> str:
 
     A mark is an accent or vowel sign written as its own character, after the
     letter it sits on. ``re`` has no Unicode-category class and its ``\\w``
-    takes no mark, so the ranges are read from ``unicodedata`` once, at import
-    (0.11 s to list them, measured 2026-10-16 on Python 3.12). Listing only the
-    five combining-diacritics blocks held 256 of the 2450 marks and missed a
-    Hindi name written with a vowel sign (U+093F is one), a mark in
-    Devanagari's own block (reproduced 2026-10-16). No mark is ``-``, ``]``,
-    ``\\`` or ``^``, so none needs escaping inside a class.
+    takes no mark, so the ranges are read from ``unicodedata`` once, at import.
+    Listing only the five combining-diacritics blocks held 256 of the 2450
+    marks and missed a Hindi name written with a vowel sign (U+093F is one), a
+    mark in Devanagari's own block (reproduced 2026-10-16). No mark is ``-``,
+    ``]``, ``\\`` or ``^``, so none needs escaping inside a class.
     """
     ranges: list[str] = []
     start = -1
@@ -861,18 +507,28 @@ _NAME_FIRST = rf"[\w.{_COMBINING_MARKS}-]"
 #: ``svc$``). Never first, so the placeholder ``/<root>/$USER/`` is not named.
 _NAME_CHAR = rf"[\w.${_COMBINING_MARKS}-]"
 
-#: A name: runs of name characters joined by single spaces (``Jane Doe``).
-#: A run cannot start or end with a space, so prose such as ``/<root>/app and
-#: /usr/lib`` is not one name: a space and then a new path ends it. The space
-#: starts each joined run and is not a name character, so no two neighbouring
-#: parts can take the same character.
-_NAME = rf"{_NAME_FIRST}{_NAME_CHAR}*(?: {_NAME_CHAR}+)*"
+#: A name: name characters, and a space only when written ``\ `` (a shell
+#: escape, ``Jane\ Doe``). An unescaped space ends the name. Three rules that
+#: let a name take one were tried, and each named prose after a ``/home``
+#: path: a single space between two runs (``copy <root>/app to ../backup``), a
+#: space before a capital letter only (the same line with ``To``), and a space
+#: inside quotes only (``help_text = "<root>/app To ../backup"``). So a name
+#: with an unescaped space is a known limit under ``/home``: no rule found
+#: tells it from the prose after a path. ``\`` is not a name character, so
+#: the two parts never take the same character.
+_NAME = rf"{_NAME_FIRST}(?:{_NAME_CHAR}|\\ )*"
+
+#: The whole name is all dots (``...`` is the repository's own placeholder) or
+#: the macOS ``Shared`` folder: ``Shared`` then no further name character.
+_NOT_A_NAME = rf"(?:\.+|{_NOT_A_PERSON})(?!{_NAME_CHAR}|\\ )"
 
 #: The ``/`` before the root STARTS a path: it does not follow a Unicode word
 #: character, a combining mark, ``.``, ``/``, ``-`` or ``]``. ``]`` ends an
 #: IPv6 host (``http://[::1]`` then the root), and a word character of any
 #: script ends a host such as ``例子``. The rule before round 3 named both: its
-#: boundary was ASCII only and did not hold ``]`` (reproduced 2026-10-16).
+#: boundary was ASCII only and did not hold ``]`` (reproduced 2026-10-16). A
+#: ``:`` may come before it (a drive letter, a ``PATH`` list), unless a URL
+#: holds it (``_url_tails``).
 _PATH_START = rf"(?<![\w{_COMBINING_MARKS}./\]-])"
 
 #: Or the path is glued to a compiler flag (``-I``, ``-isystem``): ``-`` and 1
@@ -881,35 +537,95 @@ _PATH_START = rf"(?<![\w{_COMBINING_MARKS}./\]-])"
 #: flags.
 _FLAG_START = r"(?<![^\s\"'=])-[A-Za-z]{1,12}"
 
-#: ``/<root>/<name>/``, the form owner decision CHG-045 was asked about, where:
+#: Or it follows a file URL's ``file://`` or ``file://localhost``: the one
+#: kind of URL whose path is a folder on this computer. No other host may.
+_FILE_URL = r"(?<=file://)|(?<=file://localhost)"
+
+#: The dash-encoded form, ``-<root>-<name>-``: a Claude project folder's name,
+#: which writes each ``/`` and ``.`` of a folder as ``-``. The leading ``-``
+#: does not follow a word character, a combining mark or another ``-``, so
+#: ``nav-<root>-icon`` (CSS) and ``--<root>-dir`` (an option) are not home
+#: folders. The name uses the slash form's characters, and a ``-`` ends it.
+_DASH_START = rf"(?<![\w{_COMBINING_MARKS}-])"
+
+#: A home folder, in one of three forms (owner decision CHG-045):
 #:
-#: - the ``/`` before the root starts a path (``_PATH_START``) or follows a
-#:   flag (``_FLAG_START``), so ``docs/Users/x/``, ``example.com/home/x/``,
-#:   ``../Users/x/`` and ``http://home/x/`` are not home folders. A drive
-#:   letter's ``:`` does start one (``C:`` then ``/Users/<name>/``).
-#: - the name is a real folder name (``_NAME``): not empty (the bare root, or
-#:   ``<you>``, whose angle brackets fall outside the name's characters), not
-#:   all dots (``...`` is the repository's own placeholder), and not the macOS
-#:   ``Shared`` folder;
-#: - a ``/`` follows the name. Without it, ``WORKDIR /home/app`` and
-#:   ``fetch("/home/feed")`` were named (reproduced 2026-10-14), so a home
-#:   folder written with no trailing ``/`` is a known limit.
+#: - ``/Users/<name>``: a folder directly under the macOS root names a person
+#:   wherever its name ends: at ``/``, a space, a quote, ``)`` or the line's
+#:   end. Measured 2026-10-16, this form on its own named 0 more lines in the
+#:   tree and the installed Python packages, and 3 in the e2e suite's
+#:   JavaScript packages, each a package author's own folder (ADR-0167,
+#:   Measurements, row 10).
+#: - ``/home/<name>/``: under the Linux root the ``/`` after the name is
+#:   needed. Without it ``WORKDIR <root>/app`` and ``fetch("<root>/feed")``
+#:   were named (reproduced 2026-10-14), so a Linux home folder with no
+#:   ``/`` after it is a known limit.
+#: - ``-<root>-<name>-`` (``_DASH_START``).
 #:
-#: A decomposed name (a letter, then its accent as a separate mark) is named
-#: as its composed twin is, because ``_NAME`` takes every combining mark. So
-#: the line is NOT first normalised to NFC, which the plan named: with every
-#: mark allowed, turning that step off left every test green (mutation run
-#: 2026-10-16), so it decided nothing.
+#: In the two slash forms, the ``/`` before the root starts a path
+#: (``_PATH_START``), follows a flag (``_FLAG_START``) or a file URL
+#: (``_FILE_URL``), so ``docs/Users/x/``, ``example.com/home/x/``,
+#: ``../Users/x/`` and ``http://home/x/`` are not home folders. In every form
+#: the name is a real folder name: not empty (the bare root, or ``<you>``,
+#: whose angle brackets are not name characters), and not ``_NOT_A_NAME``.
 _HOME_DIRECTORY_PATH = re.compile(
-    rf"(?:{_PATH_START}|{_FLAG_START})/(?:"
-    + "|".join(_HOME_ROOTS)
-    + ")/"
-    + rf"(?!(?:\.+|{_NOT_A_PERSON})/){_NAME}/"
+    rf"(?:{_PATH_START}|{_FLAG_START}|{_FILE_URL})(?P<root>/)(?:"
+    rf"{_MAC_ROOT}/(?!{_NOT_A_NAME}){_NAME}"
+    rf"|{_LINUX_ROOT}/(?!{_NOT_A_NAME}){_NAME}/"
+    rf")"
+    rf"|{_DASH_START}-(?:{_MAC_ROOT}|{_LINUX_ROOT})-(?!(?:\.+|{_NOT_A_PERSON})-)"
+    rf"{_NAME_FIRST}{_NAME_CHAR}*-"
 )
+
+#: A token: text between whitespace and quotes.
+_TOKEN = re.compile(r"[^\s\"']+")
+
+
+def _url_tails(line: str) -> list[tuple[int, int]]:
+    """Where each token holds ``://``: the span from after its first ``://`` to the token's end.
+
+    A ``:`` in such a span is a URL's port colon (``https://example.org:``
+    then the root), not a drive letter or a ``PATH`` separator, so the root
+    after it is a path on that host. Spans are in line order and do not
+    overlap, and each token is read once.
+    """
+    tails: list[tuple[int, int]] = []
+    for token in _TOKEN.finditer(line):
+        mark = line.find("://", token.start(), token.end())
+        if mark != -1:
+            tails.append((mark + 3, token.end()))
+    return tails
+
+
+def _in_url_tail(tails: list[tuple[int, int]], position: int) -> bool:
+    index = bisect.bisect_right(tails, (position, sys.maxsize)) - 1
+    return index >= 0 and tails[index][0] <= position < tails[index][1]
 
 
 def _contains_home_directory_path(line: str) -> bool:
-    return _HOME_DIRECTORY_PATH.search(line) is not None
+    """Whether *line* holds a home folder (``_HOME_DIRECTORY_PATH``).
+
+    The line is first normalised to NFC, so a character written as a base and
+    a combining mark is judged as the one character it composes: ``=`` and
+    U+0338 are ``≠``, which may stand before a path, and the Kelvin sign is
+    the letter ``K``, so ``-I`` and it are a flag. A match whose root follows a
+    URL's port colon is skipped, and the search goes on from the next
+    character.
+    """
+    if not line.isascii():
+        line = unicodedata.normalize("NFC", line)
+    tails: list[tuple[int, int]] | None = None
+    position = 0
+    while (match := _HOME_DIRECTORY_PATH.search(line, position)) is not None:
+        root = match.start("root")
+        if root > 0 and line[root - 1] == ":":
+            if tails is None:
+                tails = _url_tails(line)
+            if _in_url_tail(tails, root - 1):
+                position = match.start() + 1
+                continue
+        return True
+    return False
 
 
 if __name__ == "__main__":
