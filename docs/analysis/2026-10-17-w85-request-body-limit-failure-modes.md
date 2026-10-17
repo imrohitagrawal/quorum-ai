@@ -97,7 +97,7 @@ Schemathesis (`tests/contract/test_api_contract_schemathesis.py`) generates vali
 - **Python tests and scripts:** an AST scan of 134 dict literals carrying `query_text` (49 files), 52 literal posts to `/estimate` and `/warnings`, and every subscript assignment in files that call query-runs found **no key outside the model**. No `scripts/` file or workflow calls `/v1/query-runs`. This is a static scan: helpers that build bodies indirectly, or path constants, could be missed. The check that would settle it is the full suite, run on a copy with forbid on. **UNVERIFIED by running.**
 
 ## D. ADRs
-- ADR-0120 decision 6 (docs/adr/0120-...md:99-103): the edge is not bounded, to keep the typed envelope. W85's list bounds change it (A9).
+- ADR-0120 decision 6 (`docs/adr/0120-a-panel-is-two-to-four-models-and-a-panel-of-two-is-described-honestly.md`, decision 6): the edge is not bounded, to keep the typed envelope. W85's list bounds change it (A9).
 - No ADR covers request size or a 413 envelope. A grep of `docs/adr` for 413, body size, too large, REQUEST_TOO_LARGE and extra=forbid found none. So the 1 MB limit, the failure posture and the envelope need a new ADR (rule 16d).
 - ADR-0163 (nothing private reaches Sentry) matters for A3 if the 500 reaches Sentry.
 
