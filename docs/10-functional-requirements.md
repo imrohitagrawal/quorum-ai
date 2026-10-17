@@ -194,21 +194,21 @@ These requirements cover Release 1 MVP for the public AI cross-validation workfl
 - Owner: Engineering lead.
 - Priority: Must.
 - Rationale: Provider secrets are high-impact credentials and must not leak through the public workflow.
-- Acceptance criteria: AC-023, AC-024.
+- Acceptance criteria: AC-023, AC-024, AC-025.
 - Tests: TEST-FR-011.
 - Jira: Not created.
 
-## FR-012 Required bring-your-own OpenRouter key
+## FR-012 Optional bring-your-own OpenRouter key
 
-- Actor: Authenticated user.
-- Trigger: The user opens the workspace and wants to enable execution.
-- Behavior: The system uses server-configured provider keys from environment variables and does not expose a user-facing provider-key input for the first cut.
-- Outcome: The core workflow runs without user-entered provider secrets in the UI.
-- Source: `docs/01-product-brief.md`, `docs/115-release-scope.md`.
+- Actor: Signed-in user.
+- Trigger: The user connects their own OpenRouter key through OpenRouter's sign-in.
+- Behavior: A signed-in user may connect their own OpenRouter key. A run on it follows the user's posture: live answers and the judge on by default, the user's own budget window and per-run cap, and never the app's key. A run without one uses the app's server-side key (FR-011). The key is stored encrypted against the account and never reaches the browser (ADR-0180). Not built yet: board row W28.
+- Outcome: A user can run on their own OpenRouter account, under limits they choose, without the key passing through the page.
+- Source: `docs/01-product-brief.md`, `docs/115-release-scope.md`, CHG-075 to CHG-080 in `docs/19-change-control-log.md`, ADR-0180.
 - Owner: Product owner.
 - Priority: Should.
-- Rationale: This slice moves all execution cost responsibility behind explicit BYO credentials while durable accounts remain deferred.
-- Acceptance criteria: AC-025, AC-026.
+- Rationale: The party paying chooses the flags; the party at risk sets the rails (ADR-0121, carried into ADR-0180). Decided by the owner as optional, with two postures (CHG-079).
+- Acceptance criteria: AC-026.
 - Tests: TEST-FR-012.
 - Jira: Not created.
 

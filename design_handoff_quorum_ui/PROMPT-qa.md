@@ -93,7 +93,7 @@ Each NFR already names its TEST-NFR-xxx ID, owner, and alert — implement again
 - **No invented requirements**: if a scenario isn't derivable from an FR/AC/edge-case doc or the handoff screens, list it under "proposed additions" and ask — don't test it as if it were spec.
 - **No invented APIs**: missing backend capability → gap report + ticket, never a stub that pretends it exists.
 - **Verify claims of completion**: "tests pass" only after actually running them and pasting the summary output; include the command used. Never mark an AC covered without a runnable test name.
-- **Ambiguity protocol**: known conflicts exist (e.g. FR-012 title vs AC-026 on BYO keys — the UI follows AC-026). When docs conflict, stop and ask; record the resolution in `docs/19-change-control-log.md`.
+- **Ambiguity protocol**: conflicts may exist (one, FR-012 title vs AC-026 on BYO keys, was reconciled on 2026-10-17, CHG-079; until W28 is built the UI has no user key field). When docs conflict, stop and ask; record the resolution in `docs/19-change-control-log.md`.
 - **Scope**: do not modify UI behavior to make tests pass; a mismatch between UI and spec is a bug report, not a test rewrite. Do not touch provider keys, `.env`, or billing config.
 - Work in small reviewed increments: matrix → framework skeleton → happy path → negative/edge → a11y/visual → contract/gap report. Pause for review after each.
 

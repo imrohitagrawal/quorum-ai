@@ -5,7 +5,7 @@
 - Account required before running queries.
 - One active query at a time per account.
 - App-owned OpenRouter/Tavily keys kept server-side for default usage.
-- Optional BYO OpenRouter key for more usage.
+- Not in release 1: an optional own OpenRouter key for a signed-in user, decided on 2026-10-17 (CHG-079, ADR-0180) and built later as board row W28.
 - Single-query workflow.
 - Four configurable model slots with selected defaults.
 - OpenRouter search first, then Tavily or another free search option as fallback.
@@ -47,7 +47,7 @@
 
 - R1-RISK-001: Two debate rounds may exceed latency/cost guardrails.
 - R1-RISK-002: Search fallback may create inconsistent citation quality.
-- R1-RISK-003: BYO OpenRouter keys increase secret-handling complexity.
+- R1-RISK-003: BYO OpenRouter keys increase secret-handling complexity (now W28's, after release 1; its risks are listed in `docs/analysis/2026-10-17-w28-key-storage-research.md`).
 - R1-RISK-004: Users may submit sensitive data despite warnings.
 - R1-RISK-005: Users may over-trust decision-support answers.
 

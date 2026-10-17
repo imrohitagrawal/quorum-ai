@@ -242,7 +242,7 @@ body: |
   - FR-009 Final synthesis with confidence structure.
   - FR-010 Timeout and partial-result recovery.
   - FR-011 Server-side provider key handling.
-  - FR-012 Optional bring-your-own OpenRouter key.
+  - FR-012 Optional bring-your-own OpenRouter key (planned, not built: W28, ADR-0180).
   - FR-013 Query result presentation.
 
   ## Non-Functional Requirements
@@ -251,7 +251,7 @@ body: |
   - NFR-002 Average completed query cost <= USD 0.05, normal max <= USD 0.15, block or approved confirmation path above USD 0.25.
   - NFR-003 At least 80 percent citation coverage for material factual claims when source-backed search succeeds.
   - NFR-004 At least 95 percent completed or partial-result response within 180 seconds during MVP validation.
-  - NFR-005 Authenticated access for execution, BYO key management, and result retrieval.
+  - NFR-005 Authenticated access for execution, BYO key management (planned: W28, ADR-0180), and result retrieval.
   - NFR-006 Zero provider secrets exposed in browser payloads, logs, prompts, errors, or analytics.
   - NFR-007 Sensitive/private-data warning before query submission.
   - NFR-008 High-stakes decision-support-only boundary.
@@ -293,7 +293,7 @@ body: |
   - ADR-002 Authentication, account, and query ownership model.
   - ADR-003 Provider orchestration and timeout model.
   - ADR-004 Search fallback provider selection.
-  - ADR-005 Secret handling for app-owned and BYO provider keys.
+  - ADR-005 Secret handling for app-owned and BYO provider keys (the BYO part is decided in ADR-0180, not built: W28).
   - ADR-006 Data retention and query content handling.
   - ADR-007 Observability, dashboard, and alerting model.
   - ADR-008 AI safety, grounding, prompt-injection, and evaluation controls.

@@ -13,7 +13,7 @@ Read `AGENTS.md` for the factory lifecycle and Jira workflow. This file adds sta
 1. `docs/design-handoff/README.md` + `Quorum Final Review.dc.html` — approved R1 UI (pixels, tokens, copy placement, states). The `.dc.html` is a design reference; never ship it or `support.js`.
 2. `docs/22-api-contract.md` + `openapi.yaml` — API shapes. `docs/29-state-machines.md` — state names, 1:1, never renamed.
 3. `docs/12-acceptance-criteria.md` (AC-001…036) — behavior. `docs/33-content-design.md` (COPY-001…006) — all warning/notice copy, verbatim.
-4. Known conflict: FR-012 title vs AC-026 (BYO OpenRouter key). Follow AC-026 (server-configured keys, no user key field) until docs are reconciled.
+4. Former conflict: FR-012 title vs AC-026 (BYO OpenRouter key). The docs were reconciled on 2026-10-17 (CHG-079): FR-012 is an optional own key, not built (W28, ADR-0180), and AC-026 says a user's key never reaches the browser. Until W28 is built, the UI has no user key field.
 
 ## UI invariants (non-negotiable)
 - **Green rule**: #0E6B50 only for the brand mark and agreement/consensus/completed semantics. Exactly one large green surface per journey (the verdict band). Never green buttons, links, or decoration. Money always moves on ink (#14171C) buttons.

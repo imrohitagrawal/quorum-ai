@@ -20,12 +20,12 @@ Retention is not finalized. Until the product owner approves a retention policy,
 | Cited page text read by the judge (W29, ADR-0148) | The text of a cited web page the app fetched (only when robots.txt allows it), cleaned and cut to 4,000 characters, sent to the judge's provider inside the judge call. Held only for that call; never served to the page, logged or stored. Applies when fetching is in effect (`quorum_source_fetch_enabled`, set in `fly.toml` since ADR-0156, 2026-10-10) and a live panel run reaches the judge. | Product owner | Approved (CHG-029, 2026-10-06) |
 | Cost/latency/status metadata | Retain longer than content if needed for cost, reliability, and abuse monitoring, without raw prompt text. | Engineering lead | Pending approval |
 | App-owned provider keys | Retain in secret store/environment while integration is active. | Engineering lead | Required |
-| BYO OpenRouter key | Retain until user removes it or account deletion policy requires removal. | Product owner | Pending approval |
+| BYO OpenRouter key | Kept encrypted until the user removes it or deletes the account; an encrypted copy stays in volume snapshots for up to 5 days, and the privacy text says so. Not built (W28). | Product owner | Decided 2026-10-17 (CHG-075, CHG-076) |
 | Structured logs | Retain non-secret operational logs per deployment platform policy. | Engineering lead | Pending deployment decision |
 
 ## Deletion Requirements
 
-- BYO OpenRouter key removal must stop future use immediately.
+- Removing a user's own OpenRouter key deletes it; a run already using it stops at its next step unless the user chooses to let that run finish (CHG-078).
 - Account-owned query result deletion/export behavior must be defined before production launch if durable history exists.
 - Deletion jobs must avoid retaining raw prompt/output content in logs or dead-letter payloads.
 

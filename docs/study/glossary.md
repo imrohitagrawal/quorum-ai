@@ -10,7 +10,7 @@ Status: Git draft only. Owner: documentation. Evidence: repository source-of-tru
 
 **AI grounding** - Connecting AI output to visible sources or approved context so users can inspect why an answer was produced.
 
-**BYO key** - A bring-your-own OpenRouter key provided by a user for that user's account only.
+**BYO key** - A bring-your-own OpenRouter key provided by a user for that user's account only. Planned, not built: board row W28, ADR-0180.
 
 **Consensus** - The part of the answer where model outputs materially agree.
 

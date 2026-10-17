@@ -20,7 +20,7 @@ Stage: Proposed implementation plan review for "Rebuild Quorum AI as a Working 4
 - Current implementation shape checked in:
   - `src/product_app/auth.py`
   - `src/product_app/main.py`
-  - `src/product_app/provider_keys.py`
+  - `src/product_app/provider_keys.py` (in every commit, from the first on 2026-06-20, this file is a 7-line enum of credential sources)
   - `src/product_app/providers.py`
   - `src/product_app/query_runs.py`
 
@@ -34,7 +34,7 @@ Blocker and High findings must be resolved, explicitly downgraded with rationale
 
 ### 1. Blocker: the plan rewrites approved product behavior without change control
 
-The plan replaces authenticated account-gated execution with pre-auth session-scoped identity and BYO-key-required execution. That is not a doc correction. It contradicts the approved MVP in `docs/01-product-brief.md:49-51`, FR-001 and FR-002 in `docs/10-functional-requirements.md:7-33`, NFR-005 in `docs/11-non-functional-requirements.md:63-75`, the architecture auth model in `docs/20-architecture.md:54-58` and `docs/20-architecture.md:86-91`, the API contract in `docs/22-api-contract.md:9-28`, and the UX auth boundary in `docs/30-ux-design.md:14-25` and `docs/30-ux-design.md:34-40`.
+The plan replaces authenticated account-gated execution with pre-auth session-scoped identity and BYO-key-required execution (the BYO key was never built; the owner later made it optional, CHG-079, ADR-0180). That is not a doc correction. It contradicts the approved MVP in `docs/01-product-brief.md:49-51`, FR-001 and FR-002 in `docs/10-functional-requirements.md:7-33`, NFR-005 in `docs/11-non-functional-requirements.md:63-75`, the architecture auth model in `docs/20-architecture.md:54-58` and `docs/20-architecture.md:86-91`, the API contract in `docs/22-api-contract.md:9-28`, and the UX auth boundary in `docs/30-ux-design.md:14-25` and `docs/30-ux-design.md:34-40`.
 
 Concise remediation: either realign the plan to the approved account-gated, app-funded-default MVP, or run change control and get product-owner approval for a new MVP definition before coding.
 
@@ -52,13 +52,13 @@ Concise remediation: add explicit estimate, confirm, and block states to the pla
 
 ### 4. High: the session bridge is security-critical but underspecified
 
-The plan proposes a temporary session-scoped ownership model, but it does not define session issuance, secure cookie settings, CSRF protection, TTL/rotation, session fixation prevention, session loss behavior, wrong-owner denial, or rate limiting. Those are not optional details because the threat model ties identity directly to quota, result access, and BYO key scope in `docs/40-threat-model.md:11-44` and `docs/40-threat-model.md:46-77`. The architecture also assumes authenticated owner-scoped resources in `docs/20-architecture.md:68-91`.
+The plan proposes a temporary session-scoped ownership model, but it does not define session issuance, secure cookie settings, CSRF protection, TTL/rotation, session fixation prevention, session loss behavior, wrong-owner denial, or rate limiting. Those are not optional details because the threat model ties identity directly to quota, result access, and BYO key scope (BYO keys not built: W28, ADR-0180) in `docs/40-threat-model.md:11-44` and `docs/40-threat-model.md:46-77`. The architecture also assumes authenticated owner-scoped resources in `docs/20-architecture.md:68-91`.
 
 Concise remediation: keep the approved account model, or specify the temporary session model as a real security design with owner checks, secure cookies, CSRF defense, TTL, rate limits, and explicit risk acceptance.
 
 ### 5. High: the plan underestimates the backend and contract blast radius
 
-The plan names `src/product_app/providers.py` and `src/product_app/query_runs.py`, but the actual behavior being changed also lives in `src/product_app/auth.py:12-30`, `src/product_app/provider_keys.py:167-220`, `src/product_app/main.py:147-257`, and `docs/22-api-contract.md:14-28`. This is not a provider swap. It is an auth, API, state, secret-handling, and UI contract rewrite.
+The plan names `src/product_app/providers.py` and `src/product_app/query_runs.py`, but the actual behavior being changed also lives in `src/product_app/auth.py:12-30`, `src/product_app/provider_keys.py:167-220` (in every commit, from the first on 2026-06-20, that file has 7 lines, so these lines are not in the repository), `src/product_app/main.py:147-257`, and `docs/22-api-contract.md:14-28`. This is not a provider swap. It is an auth, API, state, secret-handling, and UI contract rewrite.
 
 Concise remediation: expand the implementation plan to include auth boundary replacement, provider-key endpoint changes, UI contract changes, and API compatibility sequencing before coding starts.
 
@@ -76,7 +76,7 @@ Concise remediation: add accepted-run plus polling semantics, cancellation rules
 
 ### 8. High: "auditable results" is not credible without durable persistence and retention rules
 
-The plan claims auditable results while proposing session-scoped ownership and not addressing persistence, restart behavior, retention, deletion, or secret storage. The approved architecture expects a relational database and encrypted BYO key metadata in `docs/20-architecture.md:35-36`, `docs/20-architecture.md:76-80`, and flags retention as an open architecture blocker in `docs/20-architecture.md:135-138`. Current code is still in-memory in `src/product_app/provider_keys.py:61-126` and `src/product_app/query_runs.py:145-265`.
+The plan claims auditable results while proposing session-scoped ownership and not addressing persistence, restart behavior, retention, deletion, or secret storage. The approved architecture expects a relational database and encrypted BYO key metadata in `docs/20-architecture.md:35-36`, `docs/20-architecture.md:76-80`, and flags retention as an open architecture blocker in `docs/20-architecture.md:135-138`. Current code is still in-memory in `src/product_app/provider_keys.py:61-126` (that file has 7 lines in every commit; BYO key storage is not built: W28, ADR-0180) and `src/product_app/query_runs.py:145-265`.
 
 Concise remediation: either remove the "auditable" claim and scope the slice as ephemeral preview behavior, or add persistence, retention, deletion, and restart-survival design to the plan.
 

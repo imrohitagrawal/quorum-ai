@@ -38,8 +38,8 @@ This strategy defines safe test data for the Release 1 MVP query workflow. It su
 | TD-012 | Provider failure, timeout, and redacted error payloads. | Failure-path, security, and partial-result tests. | AC-015, AC-021, AC-022, AC-024 |
 | TD-013 | Debate round one and round two synthetic outputs. | Debate tests. | AC-016, AC-017 |
 | TD-014 | Synthesis with consensus, disagreement, source support, uncertainty, and recommendation. | Synthesis and result presentation tests. | AC-018, AC-019, AC-020, AC-028 |
-| TD-015 | App-owned fake provider key and BYO fake OpenRouter key patterns. | Secret redaction and BYO key tests. | AC-023, AC-024, AC-025, AC-026 |
-| TD-016 | Wrong-account query run and BYO key records. | Authorization tests. | AC-032 |
+| TD-015 | App-owned fake provider key and BYO fake OpenRouter key patterns. | Secret redaction and BYO key tests (BYO tests not written: W28, ADR-0180). | AC-023, AC-024, AC-025, AC-026 |
+| TD-016 | Wrong-account query run and BYO key records (BYO keys planned: W28, ADR-0180). | Authorization tests. | AC-032 |
 | TD-017 | Accessibility page states: empty, invalid, warning, running, partial, completed, provider failure. | Accessibility tests. | AC-035 |
 | TD-018 | Structured workflow event stream for submission, provider call, fallback, debate, synthesis, terminal status, latency, and cost. | Observability tests. | AC-029, AC-030, AC-036 |
 | TD-019 | Citation coverage sample with supported and unsupported material claims. | AI evaluation tests. | AC-031 |
@@ -71,7 +71,7 @@ This strategy defines safe test data for the Release 1 MVP query workflow. It su
 
 - Unit and contract tests should use in-memory repositories or isolated test databases.
 - Integration and E2E tests must create a unique synthetic account/run namespace per test.
-- Test teardown must remove query runs, model outputs, source references, BYO key metadata, cost records, and workflow events.
+- Test teardown must remove query runs, model outputs, source references, BYO key metadata (planned: W28, ADR-0180), cost records, and workflow events.
 - Fake secret values must be non-live strings with obvious prefixes such as `test_openrouter_key_`.
 - No test should require real OpenRouter, Tavily, or fallback-provider credentials unless explicitly marked as an optional live-provider smoke test outside required CI.
 

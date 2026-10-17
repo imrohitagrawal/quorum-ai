@@ -2,7 +2,7 @@
 
 ## 2026-06-17 correction
 
-- The active implementation slice replaces account-header execution with browser-session ownership, CSRF protection, BYO-key-required execution, live stage polling, and a real working `/ui` workspace.
+- The active implementation slice replaces account-header execution with browser-session ownership, CSRF protection, BYO-key-required execution (not built; the owner later made a user's own key optional, CHG-079, ADR-0180), live stage polling, and a real working `/ui` workspace.
 
 ## Scope
 
@@ -38,7 +38,7 @@ This plan converts the approved Release 1 MVP requirements, architecture, UX, se
 | SLICE-008 | Per-model answer capture and result projection. | FR-007, FR-013 | TEST-FR-007, TEST-FR-013 | Model outputs, sources, status, latency, cost, and notices are visible. |
 | SLICE-009 | Debate round orchestration with timeout budget. | FR-008, NFR-001 | TEST-FR-008, TEST-NFR-001 | Round one and round two run with recoverable partial behavior. |
 | SLICE-010 | Final synthesis with consensus, disagreement, uncertainty, and recommendation sections. | FR-009, NFR-003, NFR-008 | TEST-FR-009, TEST-NFR-003, TEST-NFR-008 | Required sections are present; false consensus regression tests pass. |
-| SLICE-011 | BYO OpenRouter key add/remove/status and account scoping. | FR-012, NFR-005, NFR-006 | TEST-FR-012, TEST-NFR-005, TEST-NFR-006 | BYO key never leaves server boundary and is removable. |
+| SLICE-011 | BYO OpenRouter key add/remove/status and account scoping (not built: W28, ADR-0180). | FR-012, NFR-005, NFR-006 | TEST-FR-012, TEST-NFR-005, TEST-NFR-006 | BYO key never leaves server boundary and is removable. |
 | SLICE-012 | End-to-end UX, accessibility, observability, performance, and release hardening. | FR-013, NFR-001 through NFR-010 | TEST-NFR-009, TEST-NFR-010, performance/eval/security suites | Core workflow is auditable, accessible, observable, and release-gate ready. |
 
 ## Release 2: Trust & Evaluation Slices

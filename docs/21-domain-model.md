@@ -8,8 +8,8 @@ The Release 1 domain centers on a single account-owned query run that moves thro
 
 | Entity | Description | Key Fields | Trace |
 |---|---|---|---|
-| Account | Authenticated user identity that owns query runs and optional BYO provider key. | `account_id`, auth subject, status, quota policy. | FR-001, FR-012, NFR-005 |
-| ProviderCredential | Server-side app-owned or user-owned OpenRouter/Tavily credential reference. | credential ID, owner scope, provider, encrypted secret reference, active/deleted status. | FR-011, FR-012, NFR-006 |
+| Account | Authenticated user identity that owns query runs and optional BYO provider key (the key: planned, W28, ADR-0180). | `account_id`, auth subject, status, quota policy. | FR-001, FR-012, NFR-005 |
+| ProviderCredential | Server-side app-owned or user-owned OpenRouter/Tavily credential reference. Planned, not built: W28, ADR-0180. Today only the credential-source enum in `src/product_app/provider_keys.py` exists. | credential ID, owner scope, provider, encrypted secret reference, active/deleted status. | FR-011, FR-012, NFR-006 |
 | ModelSlot | One of four configured model choices for a query run. | slot number 1-4, provider model ID, display label, validation status. | FR-004 |
 | QueryRun | The top-level workflow instance for one submitted user query. | run ID, account ID, query text reference, status, correlation ID, cost estimate, timestamps. | FR-002, FR-005, FR-010 |
 | SafetyAcknowledgement | Record that required warnings were shown or acknowledged before execution. | warning types, timestamp, version, account ID, run ID. | FR-003, NFR-007, NFR-008 |
@@ -44,7 +44,7 @@ The Release 1 domain centers on a single account-owned query run that moves thro
 - A query run cannot enter `accepted` unless the user is authenticated. Trace: FR-001.
 - An account cannot have more than one non-terminal query run. Trace: FR-002.
 - Four model slots are required for execution, even if some later fail. Trace: FR-004.
-- App-owned and BYO provider keys never leave the server boundary. Trace: FR-011, FR-012.
+- App-owned and BYO provider keys never leave the server boundary (BYO keys: planned, W28, ADR-0180). Trace: FR-011, FR-012.
 - Estimated cost above USD 0.15 requires explicit confirmation; above USD 0.25 is blocked unless a later product-approved override path exists. Trace: FR-005.
 - Model failures, fallback usage, timeout, and missing outputs must remain visible in result presentation. Trace: FR-010, FR-013.
 - The final synthesis must preserve material disagreement and uncertainty. Trace: FR-009.

@@ -14,11 +14,11 @@ Use STRIDE plus AI-specific abuse cases for the Release 1 query workflow. Threat
 | Asset | Why It Matters |
 |---|---|
 | App-owned OpenRouter/Tavily/fallback keys | Direct provider spend and account abuse risk. |
-| BYO OpenRouter keys | User-owned secret with financial and privacy impact. |
+| BYO OpenRouter keys (not built: W28, ADR-0180) | User-owned secret with financial and privacy impact. |
 | Query text | May contain sensitive/private data despite warnings. |
 | Model outputs and synthesis | Can influence user decisions and may contain hallucinations. |
 | Source links/search snippets | Untrusted content that can carry prompt-injection instructions. |
-| Account/session identity | Protects quota, result access, and BYO key scope. |
+| Account/session identity | Protects quota, result access, and BYO key scope (BYO keys not built: W28, ADR-0180). |
 | Cost and usage records | Needed for guardrails and abuse detection. |
 | Observability events/logs | Must support operations without leaking secrets or raw sensitive content. |
 
@@ -27,7 +27,7 @@ Use STRIDE plus AI-specific abuse cases for the Release 1 query workflow. Threat
 | Actor | Intent |
 |---|---|
 | Anonymous visitor | May browse non-execution surfaces; must not consume provider capacity. |
-| Authenticated user | Runs own queries and manages optional BYO OpenRouter key. |
+| Authenticated user | Runs own queries and manages optional BYO OpenRouter key (not built: W28, ADR-0180). |
 | Malicious authenticated user | Attempts cost abuse, prompt injection, credential extraction, wrong-account access, or policy bypass. |
 | External provider | Processes prompts/search requests and returns outputs/errors. |
 | Operator/support engineer | Diagnoses issues through redacted telemetry and correlation IDs. |
@@ -50,7 +50,7 @@ Use STRIDE plus AI-specific abuse cases for the Release 1 query workflow. Threat
 | T-003 | Repudiation | User disputes high-cost execution or safety warning display. | Support and compliance ambiguity. | Store warning version, cost estimate, confirmation, and correlation ID. |
 | T-004 | Information disclosure | Provider key leaks through browser payload, log, prompt, or error. | Credential compromise and provider spend. | Server-only key handling, redaction, secret scanning, user-safe errors. |
 | T-005 | Denial of service | User starts many concurrent expensive queries. | Provider cost and service exhaustion. | One active query per account, rate limits, timeout budget, cost guardrails. |
-| T-006 | Elevation of privilege | User reads another account's result or BYO key status. | Privacy and account compromise. | Owner-scoped authorization on every resource read/write. |
+| T-006 | Elevation of privilege | User reads another account's result or BYO key status (BYO keys not built: W28, ADR-0180). | Privacy and account compromise. | Owner-scoped authorization on every resource read/write. |
 | T-007 | Tampering / AI safety | Retrieved source instructs model to ignore system rules or reveal secrets. | Prompt injection, unsafe output, misleading synthesis. | Treat retrieved content as untrusted evidence; prompt-injection tests; no tool execution from sources. |
 | T-008 | Information disclosure | Logs store raw query text containing sensitive/private data. | Privacy breach. | Minimize logging; redact content; avoid full prompts/outputs in operational logs. |
 | T-009 | Safety | Synthesis presents high-stakes output as professional advice. | User harm and compliance risk. | Decision-support language, uncertainty, warnings, high-stakes test cases. |
@@ -85,7 +85,7 @@ Use STRIDE plus AI-specific abuse cases for the Release 1 query workflow. Threat
 - TEST-FR-002: Duplicate active query rejected.
 - TEST-FR-005: Cost threshold confirmation/blocking enforced server-side.
 - TEST-FR-011 and TEST-NFR-006: Provider keys absent from browser payloads, logs, prompts, errors, and analytics.
-- TEST-FR-012 and TEST-NFR-005: BYO key scoped to account and removable.
+- TEST-FR-012 and TEST-NFR-005: BYO key scoped to account and removable (planned: W28, ADR-0180).
 - TEST-NFR-008: High-stakes warning coverage across medical, legal, financial, safety, and regulated examples.
 - Prompt-injection tests: retrieved content cannot override system/developer instructions or request secret/tool disclosure.
 - TEST-FR-015 (`tests/unit/test_evaluation_auth_boundary.py`): unauthenticated `GET /v1/query-runs/{id}` returns 401 and a cross-account authenticated read returns 404, neither carrying an `evaluation` payload (T-012, AB-008).

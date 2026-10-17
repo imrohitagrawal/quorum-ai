@@ -3,7 +3,7 @@
 ## 2026-06-17 correction
 
 - The current implemented slice uses an opaque browser session cookie plus CSRF token instead of durable account login.
-- BYO OpenRouter keys are stored server-side only and keyed to the current session.
+- BYO OpenRouter keys are not built. The owner's decided design (2026-10-17, ADR-0180, board row W28) stores a user's key encrypted per signed-in account: never per session and never in the browser.
 - Query runs and results are held in ephemeral in-memory session-scoped storage for this slice.
 
 ## Scope
@@ -35,10 +35,10 @@ This keeps the MVP deployable as one service while preserving seams for later ex
 
 | Container | Responsibility | Key Requirements |
 |---|---|---|
-| Web UI | Query setup, warnings, model selection, progress, result review, BYO key management. | FR-001, FR-003, FR-004, FR-005, FR-012, FR-013, NFR-009 |
+| Web UI | Query setup, warnings, model selection, progress, result review, BYO key management (planned: W28, ADR-0180). | FR-001, FR-003, FR-004, FR-005, FR-012, FR-013, NFR-009 |
 | FastAPI API service | Authenticated API, authorization, orchestration commands, result reads, provider-key isolation, structured events. | FR-001 through FR-013, NFR-005, NFR-006, NFR-010 |
 | Orchestration worker module | Executes accepted query workflow, provider calls, fallback, debate rounds, synthesis, timeout and partial-result logic. | FR-006 through FR-010, NFR-001, NFR-004 |
-| Relational database | Stores account-owned query state, model outputs, source references, debate outputs, synthesis, cost/latency metadata, encrypted BYO key metadata. | FR-002, FR-007, FR-010, FR-012, FR-013 |
+| Relational database | Stores account-owned query state, model outputs, source references, debate outputs, synthesis, cost/latency metadata, encrypted BYO key metadata (planned: W28, ADR-0180). | FR-002, FR-007, FR-010, FR-012, FR-013 |
 | Secret store | Stores app-owned provider keys and encryption material outside source control and browser payloads. | FR-011, NFR-006 |
 | External providers | OpenRouter models/search first; Tavily or approved free-search fallback when OpenRouter search fails or lacks usable sources. | FR-006, FR-008, FR-009 |
 | Observability stack | Structured logs, metrics, traces, dashboards, alerts, and redaction checks. | NFR-001, NFR-002, NFR-004, NFR-006, NFR-010 |
@@ -52,7 +52,7 @@ This keeps the MVP deployable as one service while preserving seams for later ex
 | `orchestration` | Query state machine, timeout budget, partial-result policy, debate order, synthesis command. | UI rendering or account authentication. |
 | `providers` | OpenRouter and fallback search adapters, retryable error mapping, provider usage/cost metadata. | Business decisions about final answer confidence. |
 | `safety` | High-stakes detection, sensitive-data warning rules, prompt-injection boundaries, grounding rules, synthesis output constraints. | Silent blocking of in-scope decision-support queries unless policy later requires it. |
-| `persistence` | Query, output, source, cost, event, and BYO key storage repositories. | Logging full secrets or bypassing authorization filters. |
+| `persistence` | Query, output, source, cost, event, and BYO key storage repositories (BYO key storage planned: W28, ADR-0180). | Logging full secrets or bypassing authorization filters. |
 | `observability` | Non-secret events, metrics, trace IDs, redaction helpers, dashboard contracts. | Full prompt/output analytics without privacy approval. |
 
 `query_api` is `src/product_app/query_runs.py` (FastAPI routes, request/response
@@ -89,7 +89,7 @@ was originally checked against without a matching module boundary in the code.
 
 ## Data Ownership
 
-- Account owns its query runs, results, and optional BYO OpenRouter key association.
+- Account owns its query runs, results, and optional BYO OpenRouter key association (the key: planned, W28, ADR-0180).
 - App operator owns app-level OpenRouter/Tavily credentials, cost limits, provider configuration, and safety policy.
 - External providers process submitted query text and generated intermediate prompts; the MVP must not claim sensitive/private-data safety until provider terms and retention rules are finalized.
 
@@ -99,9 +99,9 @@ Design-level contract is recorded in `docs/22-api-contract.md`. Implementation s
 
 ## Authentication And Authorization
 
-- All query execution, result retrieval, active-query status, and BYO key management endpoints require authentication.
-- Every query and BYO key row is scoped to `account_id`.
-- Wrong-account result access and BYO key management are denied.
+- All query execution, result retrieval, active-query status, and BYO key management endpoints require authentication. BYO key endpoints are planned, not built: W28, ADR-0180.
+- Every query and BYO key row is scoped to `account_id` (BYO key rows: planned, W28, ADR-0180).
+- Wrong-account result access and BYO key management (planned: W28, ADR-0180) are denied.
 - App-owned provider keys are never available to browser code.
 
 ## Scalability And Performance Assumptions
@@ -178,4 +178,4 @@ Deployment target is still open. The design assumes:
 | OQ-007 | Confirm production deployment/runtime target. | Engineering lead | Determines database, worker, secret-store, and observability implementation details. |
 | OQ-008 | Confirm exact fallback search provider if Tavily is not used. | Product owner | Required before implementation can finalize adapter contracts and cost estimates. |
 | OQ-009 | Confirm retention and deletion period for query text, outputs, source links, and run metadata. | Product owner | Required before privacy sign-off and production release. |
-| OQ-010 | Confirm extra usage policy unlocked by BYO OpenRouter key. | Product owner | Determines quota, cost, and abuse controls for FR-012. |
+| OQ-010 | Confirm extra usage policy unlocked by BYO OpenRouter key. | Product owner | Determines quota, cost, and abuse controls for FR-012. Answered in part 2026-10-17: on their own key a user sets their own budget window and per-run cap; the app keeps one run at a time and its abuse limits (CHG-078, ADR-0180); the abuse-limit numbers are not decided. |

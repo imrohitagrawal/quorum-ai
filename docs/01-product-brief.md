@@ -36,7 +36,7 @@ The MVP proves that a user can reduce hallucination risk by running one query th
 
 - Single-query public web workflow.
 - Server-issued browser session in a secure cookie; no signup/login in this slice.
-- Provider access is configured from server-side environment variables, not through a user-entered key field.
+- Provider access is configured from server-side environment variables, not through a user-entered key field. A signed-in user's own OpenRouter key, connected through OpenRouter's sign-in and never typed into this app, is planned as board row W28 (CHG-079, ADR-0180); it is not in release 1.
 - Four model slots with these default IDs:
   - `openai/gpt-4o-mini`
   - `anthropic/claude-haiku-4.5`
