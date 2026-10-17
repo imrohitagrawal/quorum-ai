@@ -65,8 +65,12 @@ def _make_old_file(path: Path, residue: bytes | None = None) -> None:
             (session_store.SECURE_DELETE_VACUUM_MARKER,),
         )
         if residue is not None:
-            _insert(connection, "residue", residue.decode(), NOW.isoformat())
-            _insert(connection, "neighbour", "a question that stays", NOW.isoformat())
+            # Stamped by the WALL clock, not ``NOW``: the open that follows
+            # sweeps with the wall clock, so a fixed date would see the
+            # neighbour aged out once the calendar passes ``NOW + 30 days``.
+            fresh = datetime.now(UTC).isoformat()
+            _insert(connection, "residue", residue.decode(), fresh)
+            _insert(connection, "neighbour", "a question that stays", fresh)
             connection.execute("DELETE FROM history WHERE query_run_id = 'residue'")
     finally:
         connection.close()

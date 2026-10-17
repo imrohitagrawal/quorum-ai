@@ -86,8 +86,8 @@ A realistic file (300 accounts × 5 rows) sweeps in about 2 ms. Fly's shared CPU
 **F20. Old free pages already hold deleted text.** Space freed before this change keeps its bytes wherever the build default was off. MEASURED: a `VACUUM` took a file with 614 copies to 0 (3 ms for 450 KB). Design: one `VACUUM` per file in `__init__`, marked in `schema_migrations` (the W55 pattern). It never raises: on a read-only file it fails (MEASURED: `attempt to write a readonly database`), logs INFO and is retried at the next open. It needs free disk about the size of the file, and the volume is 1 GB. The existing read-only open tests guard this: `tests/security/test_durable_session_store.py:201-235`, `tests/integration/test_google_sign_in.py:857` and `:1006`, `tests/integration/test_spend_key.py:372`.
 
 **F21. Production's build already deletes securely by default, probably.** MEASURED today, on the `python:3.12-slim` tag (Debian 13 trixie, Python 3.12.15): SQLite 3.46.1, `compile_options` includes `SECURE_DELETE`, and `PRAGMA secure_delete` defaults to `1`. MEASURED locally (the repo `.venv`, Python 3.12.13, SQLite 3.50.4): default `0`, with no `SECURE_DELETE` option. So:
-(a) the pragma still matters: the image is pulled by tag, not digest, and CI and local builds default to off;
-(b) the mutation test (remove the pragma) bites locally and in CI, but not inside the production image;
+(a) the pragma still matters: the image is pulled by tag, not digest, and the local build defaults to off (CI's default is UNVERIFIED: not measured);
+(b) the mutation test (remove the pragma) bites locally, but not inside the production image; whether it bites in CI is UNVERIFIED;
 (c) what the image running in production actually reports is UNVERIFIED. The free check is `fly ssh console -C "python3 -c 'import sqlite3;c=sqlite3.connect(\":memory:\");print(sqlite3.sqlite_version,c.execute(\"PRAGMA secure_delete\").fetchone())'"`.
 If it reads 1, the old free pages in production are probably already clean, and the `VACUUM` is insurance.
 

@@ -695,10 +695,12 @@ HISTORY_SWEEP_INTERVAL_S = 3600.0
 class HistorySweepState:
     """When the history sweep last ran, on the monotonic clock (W86).
 
-    Stamped when made, so a new state is first due one interval later: the
-    open-time sweep has just run, and the import-time daemon then never
-    sweeps during an ordinary test run. Tests pass their OWN state to
-    :func:`_gc_tick` and never touch the daemon's.
+    Stamped when made, so a new state is first due one interval later. In
+    production ``main.py`` imports this module, which stamps the daemon's
+    state, BEFORE it opens the session store, whose open runs the open-time
+    sweep; so the daemon's first sweep comes a little under an interval after
+    that open-time sweep. Tests that drive :func:`_gc_tick` pass their OWN
+    state; ``tests/conftest.py`` holds the daemon's never due for the run.
     """
 
     last_run_monotonic: float = field(default_factory=_time_module.monotonic)

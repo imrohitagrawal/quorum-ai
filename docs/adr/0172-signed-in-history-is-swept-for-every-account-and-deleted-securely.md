@@ -8,7 +8,9 @@ more than `history_keep_days` (30) days ago). No new owner decision was needed: 
 code meet the approved rule. Everything below about how and when it is met is the session's design.
 The failure modes were listed before any code
 (`docs/analysis/2026-10-17-w86-history-sweep-failure-modes.md`, findings F1 to F26). Codex reviewed
-the plan before any code (ADR-0168, decision 7): it found four problems; the plan was revised, and a
+the plan before any code (ADR-0168, decision 7). Every Codex finding and figure in this record comes
+from the Codex plan reviews of this session, which are kept outside the repository; none has a
+committed record. By those reviews, Codex found four problems; the plan was revised, and a
 second pass confirmed three of them closed, held the fourth (the daemon racing tests) open, and raised
 one more (an interval setting). Both are answered below (decision 6 and the rejected alternatives);
 Codex did not review those answers again.
@@ -18,17 +20,19 @@ Codex did not review those answers again.
 Before W86, `SessionStore.record_history` deleted old rows only for the account that was saving
 (`DELETE FROM history WHERE account_id = ? AND completed_at < ?`, and a per-account count delete).
 `history_for` hid older rows on read, so the page was right, but an account that stopped using the
-site kept its old questions in the file for ever, against the approved rule.
+site kept its old questions in the file for ever, against the approved rule (CHG-023).
 
-The session store also never set `PRAGMA secure_delete`. On this repository's local and CI SQLite
-the default is off, so a deleted row's bytes stay in the page's free space, readable by anyone who
-holds the file. The feedback store has had it on since W55 (ADR-0165).
+The session store also never set `PRAGMA secure_delete`. On this repository's local SQLite (the
+`.venv`: Python 3.12.13, SQLite 3.50.4) the default is off; CI's default is UNVERIFIED (nobody has
+read it there). Where it is off, a deleted row's bytes stay in the page's free space, readable by
+anyone who holds the file. The feedback store has had it on since W55 (ADR-0165).
 
 ## Measured
 
 All figures are the failure-modes role's measurements (F10, F11, F19, F20, F21 in the failure-modes
 file), taken on 2026-10-17 with temporary databases, except the busy-timeout probe, which is from
-Codex's plan review. Local: SQLite 3.50.4, Python 3.12.13, macOS, load average about 12.
+Codex's plan review of this session (kept outside the repository). Local: SQLite 3.50.4, Python
+3.12.13, macOS, load average about 12.
 
 | What | Figure |
 |---|---|
@@ -38,7 +42,7 @@ Codex's plan review. Local: SQLite 3.50.4, Python 3.12.13, macOS, load average a
 | The same with the limit lowered from 5 to 2 (5,125 rows deleted) | 100-104 ms |
 | A realistic file (300 accounts x 5 rows) | about 2 ms |
 | A sweep's `COMMIT` while another connection holds a read transaction (default 5 s busy timeout) | waited 5.22 s, then `database is locked`; nothing deleted (F11) |
-| Statements run with a 1 ms busy timeout | 213 ms (Codex): the busy timeout bounds neither run time nor the store's lock |
+| Statements run with a 1 ms busy timeout | 213 ms (Codex's plan review; no committed record): the busy timeout bounds neither run time nor the store's lock |
 | Copies of deleted questions left in the file after 3,600 writes and a sweep of 300 accounts | 614 with `secure_delete` off; 25 with it on only for the sweep; 0 with it on from open (F19) |
 | `secure_delete` set on one connection, read on a second connection to the same file | `0`: the setting is per connection (F19) |
 | `PRAGMA secure_delete = FAST` read back | `2`; SQLite's documentation says FAST leaves traces on freelist pages (F19) |
@@ -70,17 +74,19 @@ Codex's plan review. Local: SQLite 3.50.4, Python 3.12.13, macOS, load average a
    `auth.py`, on the monotonic clock. The sweep is in its own `try` after the session purge, so a
    purge that raises cannot skip it, and it reaches the store through `session_store.get_store()` at
    call time, not through `session_repository` (F3). The throttle state is a `HistorySweepState`
-   stamped when it is made, so the daemon's first sweep is due an hour after import, just after the
-   open-time sweep has run. Tests pass their own state and an injected monotonic time to `_gc_tick`
-   and never touch the daemon's (F5; Codex's re-check showed that resetting a shared stamp would make
-   the real daemon due at once). The stamp moves before the sweep, so a failing sweep (a read-only
+   stamped when it is made, so the daemon's first sweep is due an hour after import. When the app
+   starts, `main.py` imports `auth` (the stamp) before it opens the store (the open-time sweep), so that is
+   a little under an hour after the open-time sweep. Tests pass their own state and an injected
+   monotonic time to `_gc_tick` (F5; Codex's re-check showed that resetting a shared stamp would make
+   the real daemon due at once), and `tests/conftest.py` holds the daemon's own state never due for
+   the whole run, so a run that lasts hours cannot have the daemon sweep a store a test installed. The stamp moves before the sweep, so a failing sweep (a read-only
    volume) is retried an hour later, not every minute.
 7. **The write-path deletes stay** (F1). They are free, and they keep a saving account within the
    rule between sweeps.
 8. **`PRAGMA secure_delete = ON` is the store connection's first statement**, before the schema and
    the migrations, and nothing turns it off. `ON`, not `FAST`. It is set in code although the
    production image's tag already defaults to `1`, because the image is pulled by tag, not digest,
-   and local and CI builds default to `0` (F21).
+   and the local `.venv` defaults to `0` (F21; CI's default is UNVERIFIED).
 9. **One `VACUUM` per file**, recorded in `schema_migrations` under `w86_secure_delete_vacuum`
    (`SECURE_DELETE_VACUUM_MARKER`), the W55 pattern (ADR-0165). It cleans space freed before W86. It
    is skipped for an in-memory database. It never raises: on a read-only, locked or full volume it
@@ -100,10 +106,10 @@ Codex's plan review. Local: SQLite 3.50.4, Python 3.12.13, macOS, load average a
 - **An interval setting** (Codex's second plan review). The repository's precedent for this kind of
   throttle is a module constant: ADR-0165's `IDENTIFIER_WIPE_INTERVAL`, pinned by a literal test in
   `tests/unit/test_risk_constant_pins.py`; this one is pinned the same way. Codex cited a rule that
-  configuration must hold tunable intervals; a search of the repository (`git grep -i "tunable"`) found
-  only the documentation skill's rule about not pasting values into walkthroughs, not such a rule. A
+  configuration must hold tunable intervals; a search of the repository (`git grep -i "tunable"`, 25
+  lines in 15 files besides this record) found no rule that an interval must be a setting. A
   setting would add an operator knob nobody has asked for, and a longer value would keep questions
-  longer than the approved rule allows.
+  longer than the approved rule (CHG-023) allows.
 - **A sweep on every 60-second tick.** It holds the store lock every session restore and spend-key
   read waits on, for 2 ms to about 300 ms (table). Hourly keeps that rare.
 - **`secure_delete` on only for the sweep.** It left 25 copies where on-from-open left 0 (F19).
@@ -145,7 +151,14 @@ Codex's plan review. Local: SQLite 3.50.4, Python 3.12.13, macOS, load average a
   first open.
 - **F21, production's own default.** What the running image reports for `PRAGMA secure_delete` is
   UNVERIFIED; the tag measured `1`. If it is `1`, the byte test's mutation (removing the pragma)
-  would not bite inside that image, only locally and in CI.
+  would not bite inside that image. It bites locally, where the default is `0`; whether it bites in
+  CI depends on CI's SQLite default, which is UNVERIFIED.
+- **A rollback to an older writer, then forward again.** W86, then a build without
+  `secure_delete`, then W86 again leaves one copy of a question that the older build pruned: its
+  delete does not zero the bytes, and the `VACUUM` does not run again because its marker survives in
+  `schema_migrations` (Codex reproduced this in its review of this session; no committed record).
+  Production's image tag (`python:3.12-slim`) defaults `secure_delete` to `1` (F21), so a rollback
+  there writes securely too; what the running machine reports is UNVERIFIED, as above.
 - **F7, a second process.** Any process that imports `product_app.auth` against the production file
   (an operator's `python` under `fly ssh console`) starts its own daemon and its own open-time sweep:
   two writers, which ADR-0002 forbids. The session purge already has this exposure. No code answer is

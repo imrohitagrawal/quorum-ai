@@ -408,8 +408,9 @@ class SessionStore:
             # for the life of the connection and before anything else, so the
             # schema, the migrations and every later delete zero the bytes they
             # free. It is per connection (MEASURED: a second connection to the
-            # same file reads 0), and this repo's local and CI SQLite defaults
-            # to 0, which leaves a deleted question readable in the file. ``ON``,
+            # same file reads 0), and this repo's local SQLite defaults to 0
+            # (MEASURED in the .venv, SQLite 3.50.4; CI's default UNVERIFIED),
+            # which leaves a deleted question readable in the file. ``ON``,
             # not ``FAST``: FAST leaves traces on freelist pages. A connection
             # setting, not a write: a read-only file accepts it.
             self._conn.execute("PRAGMA secure_delete = ON")

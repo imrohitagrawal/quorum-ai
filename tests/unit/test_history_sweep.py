@@ -13,8 +13,8 @@ triggers read the wall clock, and their tests seed rows with wide margins.
 
 from __future__ import annotations
 
+import ast
 import logging
-import math
 import sqlite3
 import time
 from collections.abc import Iterator
@@ -553,27 +553,53 @@ def test_a_due_tick_with_no_store_does_not_raise(monkeypatch: pytest.MonkeyPatch
     assert purge.calls == 1
 
 
-def test_the_daemons_own_state_is_stamped_at_import(live: SessionStore, path: Path) -> None:
-    """F5. The module-level state holds a real monotonic stamp, so a tick with
-    no arguments (the daemon's own call) does not sweep within the first
-    hour; its partner, a tick with a due state of our own, does. Red when:
-    ``_HISTORY_SWEEP_STATE`` starts due at once (for example stamped 0 or
-    -inf), or the default tick ignores it. The daemon's state is read, never
-    written."""
-    stamp = auth._HISTORY_SWEEP_STATE.last_run_monotonic
-    assert isinstance(auth._HISTORY_SWEEP_STATE, auth.HistorySweepState)
-    assert isinstance(stamp, float)
-    assert math.isfinite(stamp)
-    elapsed = time.monotonic() - stamp
-    assert elapsed >= 0.0
-    if elapsed > 3000.0:
-        pytest.skip("this process imported auth more than 50 minutes ago")
+def test_the_daemons_own_state_is_stamped_at_import(monkeypatch: pytest.MonkeyPatch) -> None:
+    """F5. A new ``HistorySweepState`` is stamped with ``time.monotonic()`` as
+    it is made, so it is not due until one full interval later; and
+    ``auth.py`` builds the daemon's ``_HISTORY_SWEEP_STATE`` with NO
+    arguments, so the daemon gets that import-time stamp. Red when: the
+    field's default stamp is anything but "now" (0.0, -inf,
+    ``monotonic() - 1e9``: a fresh state would be due at once), or the
+    module line passes its own stamp (``HistorySweepState(0.0)``,
+    ``HistorySweepState(last_run_monotonic=monotonic() - 1e9)``). The module
+    line is checked by its syntax tree, not by reading the daemon's live
+    state: ``tests/conftest.py`` holds that state never due for the whole run
+    (W86 round 1), and the daemon re-stamps it on its first due tick, which
+    is why an earlier behavioural version of this test survived both
+    mutations."""
+    sweeps: list[dict[str, object]] = []
 
-    _seed(path, "acct-a", "old", _wall_ago(31))
-    auth._gc_tick()
-    assert _ids(path) == {"old"}, "the daemon's default tick is not due yet"
-    assert auth._HISTORY_SWEEP_STATE.last_run_monotonic == stamp
+    class _Recorder:
+        def sweep_history(self, **kwargs: object) -> tuple[int, int]:
+            sweeps.append(kwargs)
+            return (0, 0)
 
+    monkeypatch.setattr(session_store, "get_store", lambda: _Recorder())
+    monkeypatch.setattr(auth, "session_repository", _QuietPurge())
+
+    before = time.monotonic()
     state = auth.HistorySweepState()
-    auth._gc_tick(now_monotonic=state.last_run_monotonic + 3600.0, sweep_state=state)
-    assert _ids(path) == set(), "positive partner: a due tick does sweep this row"
+    after = time.monotonic()
+    stamp = state.last_run_monotonic
+    assert before <= stamp <= after, "a new state is stamped with the monotonic clock, now"
+
+    auth._gc_tick(now_monotonic=stamp + 3599.0, sweep_state=state)
+    assert sweeps == [], "not due one second before the interval"
+    auth._gc_tick(now_monotonic=stamp + 3600.0, sweep_state=state)
+    assert len(sweeps) == 1, "positive partner: due at exactly the interval"
+
+    tree = ast.parse(Path(auth.__file__).read_text(encoding="utf-8"))
+    made = [
+        node.value
+        for node in tree.body
+        if isinstance(node, ast.Assign | ast.AnnAssign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "_HISTORY_SWEEP_STATE"
+            for target in (node.targets if isinstance(node, ast.Assign) else [node.target])
+        )
+    ]
+    assert len(made) == 1, "positive partner: the module assigns the daemon's state once"
+    call = made[0]
+    assert isinstance(call, ast.Call)
+    assert isinstance(call.func, ast.Name) and call.func.id == "HistorySweepState"
+    assert call.args == [] and call.keywords == [], "built with no arguments: stamped at import"
