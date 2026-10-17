@@ -1,7 +1,7 @@
 # Session Handoff
 
 ## Date/time
-2026-10-16T19:41:01+05:30
+2026-10-17T15:38:10+05:30
 
 ## Open work
 `docs/65-open-work.md` — the source of truth for what is open, what blocks what,
@@ -11,24 +11,24 @@ line further down this file is the factory router's view of the lifecycle, not a
 work status.
 
 ## Latest narrative handoff
-`docs/analysis/2026-10-16-session-handoff.md` — read this for full context before editing. (today)
+`docs/analysis/2026-10-17-session-handoff.md` — read this for full context before editing. (today)
 
 This file is a mechanical snapshot (branch/git-status/skill-route/live state) —
 regenerated fresh every `make handoff`. The narrative above (what happened,
 what's next, the traps) lives in the dated doc it points to, not here.
 
 ## Current branch/worktree
-docs/handoff-2026-10-16
+handoff/2026-10-17
 
 ## Live state (measured fresh by this run, not hand-carried)
 Run `make handoff` again for current numbers instead of trusting this file
 once it ages -- every value below is read from git/gh/`/status` at
 generation time, per #134.
 
-- **`origin/main` tip:** `3825a128aa19`
+- **`origin/main` tip:** `1571295eccaa`
 - **Last commit touching `src/`:** `ad959d2c1341`
-- **Production vs. last `src/` commit:** production build_sha 3825a12 is in sync: it is `origin/main`'s tip, which holds the last src/ commit ad959d2
-- **pytest collected (no execution):** 7326
+- **Production vs. last `src/` commit:** production build_sha 1571295 is in sync: it is `origin/main`'s tip, which holds the last src/ commit ad959d2
+- **pytest collected (no execution):** 7435
 - **e2e lane spec counts:** invariants: 26, ops: 2, degraded: 1
 - **Open issues:** 2
 - **Changed-lines coverage:** not computed here -- `make diff-cover` shares
@@ -36,8 +36,8 @@ generation time, per #134.
   concurrently (AGENTS.md rule 15), so this file does not run it. Run
   `make quality && make diff-cover DIFF_BASE=origin/main` for a current number.
 - **Remote branches not merged into `origin/main`:**
-- `docs/handoff-2026-10-16`
 - `w28/byok-pr1-plan`
+- `w82/baseline`
 
 ## Product readiness
 `docs/product-readiness.md`, regenerated from production's `/status` and `/ready` by this run (`make readiness`):
@@ -45,39 +45,40 @@ product readiness: verdict Not ready, written to docs/product-readiness.md
 
 ## Board and GitHub
 From `make board-github-check`: DONE rows whose issue is still open, and open issues no row cites.
-board vs GitHub: 83 board rows, 2 open issues
+board vs GitHub: 100 board rows, 2 open issues
   the board and GitHub agree
 
 ## Root prompt check
-`PASSED` (checked 1, exempt 1; `make prompt-check`)
+`PASSED` (checked 2, exempt 1; `make prompt-check`)
 Prompt write hook: not installed in `.claude/settings.json`; run `.venv/bin/python scripts/prompt_write_hook.py --install .`
 
 ## Parked work and branches
 From `make parked-check`:
 ```text
-Parked work check: 3 remote branches, 2 open pull requests, 4 Parked lines, 0 branches with no open pull request, 0 Parked items due
+Parked work check: 3 remote branches, 1 open pull requests, 4 Parked lines, 1 branches with no open pull request, 0 Parked items due
 Remote branches with no open pull request (merge, park or delete each):
-  - none
+  - w82/baseline
 Parked items whose resume-when has come (resume, re-park or close each):
   - none
 PASSED
 ```
 
 ## Next session
-Paste this line to start the next session:
+There are 2 validly named root prompts; only one should be left for the next session. Archive the others.
+The lines of those that pass:
 ```text
-Read CONTINUE-SECURITY-W82-W71-W81-PROMPT.md in the repo root and follow it exactly.
+Read CONTINUE-BYOK-RESEARCH-W28-PROMPT.md in the repo root and follow it exactly.
+Read CONTINUE-SECURITY-W85-W76-PROMPT.md in the repo root and follow it exactly.
 ```
 
 ## Leftovers
 From `make session-clean`, which reports and never deletes.
 ```text
-Poisoned local state:
-- `.data/feedback_events.sqlite3` — poisoned local state -- a stale mint cap makes the UI answer 429 and ~12 specs fail. The same events table also holds locally seeded audit and spend-rail events; production keeps its own database elsewhere
-
 Feature branches and worktrees:
-- `worktree ~/Projects/quorum-ai-wt-byok` — remove with 'git worktree remove' once its branch is merged
 - `worktree ~/Projects/quorum-ai-wt-handoff` — remove with 'git worktree remove' once its branch is merged
+- `worktree ~/Projects/quorum-ai-wt-w82` — remove with 'git worktree remove' once its branch is merged
+- `branch w82/baseline` — content already on refs/remotes/origin/main, squash-aware; CHECKED OUT at ~/Projects/quorum-ai-wt-w82 -- remove that worktree first. Delete by hand: git branch -D -- w82/baseline
+- `branch w82/security-baseline` — content already on refs/remotes/origin/main, squash-aware. Delete by hand: git branch -D -- w82/security-baseline
 ```
 
 ## Current phase
@@ -135,12 +136,15 @@ Operate, learn, and improve
 
 ## Git status
 ```text
-clean
+M CONTINUE-BYOK-RESEARCH-W28-PROMPT.md
+ M CONTINUE-SECURITY-W85-W76-PROMPT.md
 ```
 
 ## Diff stat
 ```text
-no unstaged diff
+CONTINUE-BYOK-RESEARCH-W28-PROMPT.md | 5 +++--
+ CONTINUE-SECURITY-W85-W76-PROMPT.md  | 4 ++--
+ 2 files changed, 5 insertions(+), 4 deletions(-)
 ```
 
 ## Completed in this session
