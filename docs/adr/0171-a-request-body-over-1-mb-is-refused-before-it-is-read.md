@@ -3,7 +3,9 @@
 ## Status
 
 Accepted — 2026-10-17, board row W85. The limit, 1 MB (1,048,576 bytes), and "413 before it is
-read" are the product owner's (CHG-063 (a)). Everything else below is the session's design. The
+read" are the product owner's (CHG-063 (a)), and so are the list bounds and the 20-error cap of
+decisions 6 and 7, which the session chose and the owner then approved (CHG-064). Everything else
+below is the session's design. The
 failure modes were listed before any code
 (`docs/analysis/2026-10-17-w85-request-body-limit-failure-modes.md`, findings A1 to A12). Codex
 reviewed the plan before any code (ADR-0168, decision 7): it found five problems, the plan was
