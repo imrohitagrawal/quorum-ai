@@ -44,6 +44,7 @@ import os
 import secrets
 import sqlite3
 import threading
+import time
 import weakref
 from contextlib import suppress
 from dataclasses import dataclass
@@ -51,6 +52,8 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from uuid import UUID, uuid4
+
+from product_app.config import settings
 
 _log = logging.getLogger(__name__)
 
@@ -83,6 +86,11 @@ _CLOSE_LOCK_TIMEOUT_S = 5.0
 #: 7200s is 360s, so 359 would be. Nothing turns on being maximal, so the
 #: superlative is dropped rather than corrected.
 SESSION_TOUCH_PERSIST_INTERVAL_S = 300.0
+
+#: W86 (ADR-0172): the ``schema_migrations`` name that records this file's
+#: one ``VACUUM`` after ``secure_delete`` was turned on. Renaming it would
+#: re-run the ``VACUUM`` (a rewrite of the whole file) on every database.
+SECURE_DELETE_VACUUM_MARKER = "w86_secure_delete_vacuum"
 
 
 @dataclass(frozen=True)
@@ -396,13 +404,73 @@ class SessionStore:
         )
         self._conn.row_factory = sqlite3.Row
         with self._lock:
+            # W86 (ADR-0172), as W55 did for the feedback store (ADR-0165): on
+            # for the life of the connection and before anything else, so the
+            # schema, the migrations and every later delete zero the bytes they
+            # free. It is per connection (MEASURED: a second connection to the
+            # same file reads 0), and this repo's local and CI SQLite defaults
+            # to 0, which leaves a deleted question readable in the file. ``ON``,
+            # not ``FAST``: FAST leaves traces on freelist pages. A connection
+            # setting, not a write: a read-only file accepts it.
+            self._conn.execute("PRAGMA secure_delete = ON")
             self._conn.executescript(self._SCHEMA)
         # Sign-in needs BOTH: without the spend key column a new account would
         # be metered under its random id, a fresh envelope (ADR-0136).
         self._accounts_ready = self._migrate_accounts() and self._migrate_spend_key()
         self._history_ready = self._accounts_ready and self._migrate_history()
         self._safety_ready = self._accounts_ready and self._migrate_session_safety()
+        # W86 (ADR-0172): every open sweeps history for every account, so a
+        # start, a deploy, a rollback or a restored snapshot applies the keep
+        # rule even if no signed-in user ever saves again. The wall clock is
+        # read here, by the caller; the sweep itself takes ``now``.
+        self.sweep_history(
+            keep_count=settings.history_keep_count,
+            keep_days=settings.history_keep_days,
+            now=datetime.now(UTC),
+        )
+        self._vacuum_once_after_secure_delete()
         _open_stores.add(self)
+
+    def _vacuum_once_after_secure_delete(self) -> None:
+        """Rewrite the file once, so space freed before W86 holds no old text.
+
+        W86, ADR-0172, the W55 pattern (``FeedbackStore``'s method of the same
+        name, ADR-0165). ``secure_delete`` zeroes what is freed from now on;
+        space freed earlier, by every write-path prune, account deletion and
+        page split, can still hold deleted questions, emails and Google
+        subjects. ``VACUUM`` rebuilds the file from its live rows (MEASURED: a
+        file holding 614 copies of deleted questions held 0 after it). Needed
+        once per file, so it is recorded under
+        :data:`SECURE_DELETE_VACUUM_MARKER` and never runs again there.
+
+        Runs only from ``__init__``, before the store is published. Skipped
+        for an in-memory database, which has no file to clean. NEVER RAISES:
+        a read-only file, a locked file or a full disk makes it fail; that is
+        logged at INFO, the marker is not written, and the next open retries.
+        On an already-marked file it only reads the marker, so a read-only
+        volume that has run it once opens with no write.
+        """
+        if self._db_path in ("", ":memory:"):
+            return
+        started = time.monotonic()
+        try:
+            with self._lock:
+                self._conn.execute(self._MIGRATIONS_DDL)
+                applied = self._conn.execute(
+                    "SELECT 1 FROM schema_migrations WHERE name = ?",
+                    (SECURE_DELETE_VACUUM_MARKER,),
+                ).fetchone()
+                if applied is not None:
+                    return
+                self._conn.execute("VACUUM")
+                self._conn.execute(
+                    "INSERT OR IGNORE INTO schema_migrations (name, applied_at) VALUES (?, ?)",
+                    (SECURE_DELETE_VACUUM_MARKER, datetime.now(UTC).isoformat()),
+                )
+        except Exception as exc:  # noqa: BLE001 — best-effort, see docstring
+            _log.info("session_store: one-shot VACUUM did not run: %s", exc)
+            return
+        _log.info("session_store: one-shot VACUUM done in %.3f s", time.monotonic() - started)
 
     def _migrate_accounts(self) -> bool:
         """Create the accounts table once; ``True`` if it is there to use.
@@ -702,10 +770,13 @@ class SessionStore:
                         "DELETE FROM history WHERE account_id = ? AND completed_at < ?",
                         (entry.account_id, cutoff.isoformat()),
                     )
+                    # W86 (ADR-0172): this prunes the saving account only, and
+                    # stays because it is free; :meth:`sweep_history` reaches
+                    # the idle ones. Its order is the sweep's and the read's.
                     self._conn.execute(
                         "DELETE FROM history WHERE account_id = ? AND query_run_id NOT IN ("
                         "SELECT query_run_id FROM history WHERE account_id = ? "
-                        "ORDER BY completed_at DESC LIMIT ?)",
+                        "ORDER BY completed_at DESC, query_run_id DESC LIMIT ?)",
                         (entry.account_id, entry.account_id, keep_count),
                     )
                     self._conn.execute("COMMIT")
@@ -731,8 +802,10 @@ class SessionStore:
                 return None
             try:
                 rows = self._conn.execute(
+                    # W86 (ADR-0172): the same order as both deletes, tie-break
+                    # included, so equal timestamps show the rows that are kept.
                     "SELECT * FROM history WHERE account_id = ? AND completed_at >= ? "
-                    "ORDER BY completed_at DESC LIMIT ?",
+                    "ORDER BY completed_at DESC, query_run_id DESC LIMIT ?",
                     (account_id, cutoff.isoformat(), keep_count),
                 ).fetchall()
             except sqlite3.Error as exc:
@@ -752,6 +825,71 @@ class SessionStore:
             )
             for row in rows
         ]
+
+    def sweep_history(self, *, keep_count: int, keep_days: int, now: datetime) -> tuple[int, int]:
+        """Apply the keep rules to EVERY account; return ``(aged, over_count)``.
+
+        W86 (ADR-0172). :meth:`record_history` prunes only the account that is
+        saving, so before this an idle account's old questions stayed in the
+        file for ever (:meth:`history_for` only hid them). This deletes, for
+        all accounts at once, every row completed before ``now - keep_days``
+        (the exact complement of the read's ``>=``, from the same expression)
+        and then every row past an account's newest ``keep_count``, in the
+        order the read and the write path use. No account filter, so a row
+        whose account is gone is aged out like any other.
+
+        A read first: when nothing is due it writes nothing (MEASURED: about
+        2 ms on a realistic file). Otherwise both deletes run in one
+        transaction. NEVER RAISES: on any ``sqlite3.Error`` it rolls back an
+        open transaction (a failed ``COMMIT`` leaves one open, and the next
+        ``BEGIN`` would fail), logs one WARNING carrying only SQLite's reason,
+        and returns ``(0, 0)``. No time bound is claimed: the busy timeout
+        bounds neither the statements' run time nor this store's lock.
+        """
+        if not self._history_ready:
+            return 0, 0
+        cutoff = (_to_utc(now) - timedelta(days=keep_days)).isoformat()
+        with self._lock:
+            if self._closed:
+                return 0, 0
+            try:
+                due = self._conn.execute(
+                    "SELECT EXISTS (SELECT 1 FROM history WHERE completed_at < ?) "
+                    "OR EXISTS (SELECT 1 FROM history GROUP BY account_id HAVING COUNT(*) > ?)",
+                    (cutoff, keep_count),
+                ).fetchone()[0]
+                if not due:
+                    return 0, 0
+                self._conn.execute("BEGIN IMMEDIATE")
+                try:
+                    aged = self._conn.execute(
+                        "DELETE FROM history WHERE completed_at < ?", (cutoff,)
+                    ).rowcount
+                    over = self._conn.execute(
+                        "DELETE FROM history WHERE query_run_id IN ("
+                        "SELECT query_run_id FROM (SELECT query_run_id, ROW_NUMBER() OVER ("
+                        "PARTITION BY account_id ORDER BY completed_at DESC, query_run_id DESC"
+                        ") AS place FROM history) WHERE place > ?)",
+                        (keep_count,),
+                    ).rowcount
+                    self._conn.execute("COMMIT")
+                except BaseException:
+                    if self._conn.in_transaction:
+                        with suppress(sqlite3.Error):
+                            self._conn.execute("ROLLBACK")
+                    raise
+            except sqlite3.Error as exc:
+                self._warn("sweep history", exc)
+                return 0, 0
+        aged, over = int(aged or 0), int(over or 0)
+        if aged or over:
+            _log.info(
+                "session_store: history sweep deleted %d rows past the age limit "
+                "and %d over the count limit",
+                aged,
+                over,
+            )
+        return aged, over
 
     def accounts_available(self) -> bool:
         """Whether the accounts table exists. ``False`` means sign-in refuses."""

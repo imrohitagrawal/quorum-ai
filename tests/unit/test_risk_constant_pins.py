@@ -203,6 +203,13 @@ BUCKET_A_LITERAL_PIN = (
     "session_store.SessionStore._HISTORY_MIGRATION",
     "session_store.SessionStore._SPEND_KEY_MIGRATION",
     "session_store.SessionStore._SESSION_SAFETY_MIGRATION",
+    # W86 (ADR-0172): the same reason; renaming it re-runs the VACUUM, a
+    # rewrite of the whole file, on every database.
+    "session_store.SECURE_DELETE_VACUUM_MARKER",
+    # W86 (ADR-0172): how often the daemon sweeps history for every account.
+    # Longer keeps a question past history_keep_days for longer, the direction
+    # the approved keep rule forbids; pinned in tests/unit/test_history_sweep.py.
+    "auth.HISTORY_SWEEP_INTERVAL_S",
     # How long a deleted account's spend key is kept for its re-creation: the
     # ledger's 24-hour window. Shorter resets a re-created account's day.
     "session_store.SPEND_KEY_CARRY",
@@ -872,6 +879,13 @@ BUCKET_C_NO_PIN = {
         "test_an_expired_row_never_resolves_even_if_the_purge_never_ran pins, "
         "and it is what makes this interval a tuning knob rather than a guard"
     ),
+    # --- Added 2026-10-18 with W86 (ADR-0172) ---
+    "auth._HISTORY_SWEEP_STATE": (
+        "the daemon's throttle stamp, a mutable object rather than a value; "
+        "that it is stamped at import (never due at once) is pinned by "
+        "tests/unit/test_history_sweep.py::"
+        "test_the_daemons_own_state_is_stamped_at_import"
+    ),
     "session_store.DEFAULT_DB_PATH": (
         "filesystem path, overridden by SESSION_DB_PATH everywhere it matters"
     ),
@@ -1482,6 +1496,7 @@ def test_the_google_sign_in_constants_are_pinned() -> None:
     assert session_store.SessionStore._HISTORY_MIGRATION == "w7_history"
     assert session_store.SessionStore._SPEND_KEY_MIGRATION == "w7_spend_key"
     assert session_store.SessionStore._SESSION_SAFETY_MIGRATION == "w7_session_safety"
+    assert session_store.SECURE_DELETE_VACUUM_MARKER == "w86_secure_delete_vacuum"
     assert timedelta(hours=24) == session_store.SPEND_KEY_CARRY
 
 

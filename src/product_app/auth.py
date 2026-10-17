@@ -40,7 +40,7 @@ import logging
 import secrets
 import threading
 import time as _time_module
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from threading import RLock
@@ -680,9 +680,39 @@ session_repository = SessionRepository()
 #: How often the daemon below purges. Seconds.
 SESSION_GC_INTERVAL_S = 60.0
 
+#: W86 (ADR-0172): at most how often the daemon below sweeps signed-in
+#: history for every account, on the monotonic clock. The store also sweeps
+#: once at every open, unthrottled. So while the process runs, a row outlives
+#: ``history_keep_days`` by at most about this much; while the machine is
+#: stopped, until its next start. A constant, not a setting, as ADR-0165's
+#: ``IDENTIFIER_WIPE_INTERVAL`` is. Hourly rather than every tick: the sweep
+#: holds the store lock every session restore waits on (MEASURED: about 2 ms
+#: with nothing due, 116-297 ms for a first sweep of 66,763 rows).
+HISTORY_SWEEP_INTERVAL_S = 3600.0
 
-def _gc_tick() -> None:
-    """One purge pass. Extracted from the loop so it can be tested.
+
+@dataclass
+class HistorySweepState:
+    """When the history sweep last ran, on the monotonic clock (W86).
+
+    Stamped when made, so a new state is first due one interval later: the
+    open-time sweep has just run, and the import-time daemon then never
+    sweeps during an ordinary test run. Tests pass their OWN state to
+    :func:`_gc_tick` and never touch the daemon's.
+    """
+
+    last_run_monotonic: float = field(default_factory=_time_module.monotonic)
+
+
+#: The daemon's own throttle state. Read and written only by its ticks.
+_HISTORY_SWEEP_STATE = HistorySweepState()
+
+
+def _gc_tick(
+    *, now_monotonic: float | None = None, sweep_state: HistorySweepState | None = None
+) -> None:
+    """One purge pass, and the history sweep when it is due. Extracted from
+    the loop so it can be tested; the daemon passes neither argument.
 
     Nothing may escape: this runs in a daemon thread with no supervisor, and
     a single escaped exception ends the thread permanently — after which
@@ -690,11 +720,36 @@ def _gc_tick() -> None:
     notice. The failure is LOGGED rather than suppressed silently: on an
     unwritable volume the durable half fails on every tick, and a bare
     ``suppress`` would hide 1,440 of those a day.
+
+    The sweep (W86, ADR-0172) has its OWN ``try``, after the purge, so a
+    purge that raises cannot skip it, and it reaches the store through
+    ``session_store.get_store()`` at call time, never through
+    ``session_repository``, which a test may replace with a purge-only fake.
     """
     try:
         session_repository.purge_expired()
     except Exception:  # noqa: BLE001 - the daemon must not die
         logging.getLogger(__name__).warning("session-gc: purge tick failed", exc_info=True)
+    state = _HISTORY_SWEEP_STATE if sweep_state is None else sweep_state
+    now = _time_module.monotonic() if now_monotonic is None else now_monotonic
+    try:
+        if now - state.last_run_monotonic < HISTORY_SWEEP_INTERVAL_S:
+            return
+        # Stamped before the sweep, so one that fails (a read-only volume)
+        # is retried an hour later, not on every tick.
+        state.last_run_monotonic = now
+        store = session_store.get_store()
+        if store is not None:
+            store.sweep_history(
+                keep_count=settings.history_keep_count,
+                keep_days=settings.history_keep_days,
+                now=datetime.now(UTC),
+            )
+    except Exception as exc:  # noqa: BLE001 - the daemon must not die
+        # The type only: no question text or account id can reach a log line.
+        logging.getLogger(__name__).warning(
+            "session-gc: history sweep tick failed: %s", type(exc).__name__
+        )
 
 
 def _start_gc_thread() -> threading.Thread:
