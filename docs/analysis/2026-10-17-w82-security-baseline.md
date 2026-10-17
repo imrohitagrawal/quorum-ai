@@ -33,8 +33,9 @@ owner's instruction, between 05:16 and 06:00 UTC (CHG-057).
   the whole run, answers included (SC-27; row W98). Paid live answers are off in production
   (`/status` `live_execution: false`), so nothing found spends money today.
 - **The first three rows, all live:**
-  1. W85: a request body is read before the session is checked, and nothing limits its size. The
-     session measured it in a local copy (details held back until the fix ships (CHG-060)).
+  1. W85: a request of any size was read, and parsed when it was JSON, before the session was checked.
+     The session measured it: a 200 MB body with no cookie was read in full (section 1). Fixed by W85:
+     a body over 1 MB now gets 413 before it is read (ADR-0171).
   2. W86: signed-in history older than 30 days is deleted only when that same account saves a new
      question, so an account that stops using the site keeps its old questions on disk. The owner
      approved "none completed more than 30 days ago" (`docs/48-data-retention.md`, CHG-023).
@@ -45,8 +46,9 @@ owner's instruction, between 05:16 and 06:00 UTC (CHG-057).
   is priced before any spend, and W94's limits still wait on the owner.
 
 **What this public file holds back.** The repository is public. For the live gaps not yet fixed
-(W85, W87, W88, W100), this file says what the gap is and which row fixes it, but not how to
+(W87, W88, W100), this file says what the gap is and which row fixes it, but not how to
 reproduce it; the full evidence is kept outside the repository until each fix ships (CHG-060).
+W85's detail was restored here when its fix was built (fixed by W85).
 
 ## 1. What the session ran
 
@@ -58,7 +60,7 @@ reproduce it; the full evidence is kept outside the repository until each fix sh
 | The inventory agent's cited tests exist | the same check over its report | `ids 144 ok 144 missing 0` |
 | The tests `docs/41-security-controls.md` names exist and pass | the same check over the file (the generator wrote each `::name` shorthand out in full), then `pytest` on those ids in a `git archive` copy of `2f13e22` | `ids 216 ok 216 missing 0`; `1 failed, 387 passed`. The failure is `tests/unit/test_w69_round2_regressions.py::test_the_command_make_runs_fails_on_a_planted_injection`: in the copy, `make` built a new environment without `zizmor` and printed `Failed to spawn: zizmor`. That test passed in the branch's full `make quality` run |
 | The page can acknowledge a high-stakes warning the user never ticked | read `src/product_app/static/app.js` | confirmed; details held back until the fix ships (CHG-060); the evidence is kept outside the repository |
-| A request body is read before the session is checked, with no size limit | a local probe in a `git archive` copy; nothing was sent to production | confirmed; details held back until the fix ships (CHG-060); the evidence is kept outside the repository |
+| A request body was parsed before the session was checked (fixed by W85) | a pytest probe in a `git archive` copy: `TestClient(main.app)`, `POST /v1/query-runs` with no cookie | bad JSON: `422` "JSON decode error" (not `401`); good JSON: `401 AUTH_REQUIRED`; a 200 MB body: `401`, and the test process's peak memory rose from 108 MB to 907 MB. The client and the server share that one process, so the 907 MB is both together. Whether Fly's proxy limits the size is UNVERIFIED; the session sent nothing large to production |
 | An unhandled error page has no security headers | a pytest probe: a route that raises, through `TestClient(raise_server_exceptions=False)` | `500`, body `Internal Server Error`, `content-security-policy` absent, `x-content-type-options` absent, `x-frame-options` absent; on `/health` the policy is present |
 | Production's response headers | `curl -s -D - -o /dev/null https://quorum-ai.fly.dev/status` (and `/health`, `/ready`) | `content-security-policy` with `script-src 'self' 'unsafe-inline'`, `strict-transport-security: max-age=31536000; includeSubDomains`, `x-frame-options: DENY`, `x-content-type-options: nosniff`, `referrer-policy: no-referrer`. No `cache-control`, no `permissions-policy` |
 | Plain HTTP is redirected | `curl -s -o /dev/null -w "%{http_code} -> %{redirect_url}" http://quorum-ai.fly.dev/health` | `301 -> https://quorum-ai.fly.dev/health` |
@@ -137,7 +139,7 @@ asked for three splits, a narrower W89 and corrected wording; those changes are 
 
 | Row | What | ASVS items and other sources | How bad | Evidence |
 |---|---|---|---|---|
-| W85 | Refuse a request body over a size limit before it is read, and refuse unknown fields and over-long lists in the request models | V2.4.1, V15.2.2, V2.2.1, V15.3.3, V5.2.1 | live: production is one machine with 512 MB (`fly.toml:195-197`); details held back until the fix ships (CHG-060) | measured |
+| W85 | Refuse a request body over a size limit before it is read, and refuse unknown fields and over-long lists in the request models | V2.4.1, V15.2.2, V2.2.1, V15.3.3, V5.2.1 | was live, fixed by W85: production is one machine with 512 MB (`fly.toml:195-197`), and its process used about 76 MB when read (`/metrics` `process_resident_memory_bytes 7.57e7`). A reviewer's probe of the server alone (not re-run by the session) read all of a 200 MB body sent with no cookie and raised peak memory by about 600 MB. Whether Fly's proxy limits the size is UNVERIFIED | measured |
 | W86 | Delete signed-in history older than 30 days for every account, not only the one saving a question, and turn on `secure_delete` in the session store | V14.2.4; section-9 agent | live: old questions stay on disk, though they are not shown, against the approved keep rule (`docs/48-data-retention.md`, CHG-023). Whether production's SQLite build (Debian, `python:3.12-slim`) already deletes securely by default is UNVERIFIED; `PRAGMA secure_delete` inside the image would settle it | read by the session; that deleted text stays in the file is an agent's probe, not re-run |
 | W87 | A session ends at a maximum age; deleting an account needs a recent sign-in; an operator can end one account's or every session; record why sign-in is single-factor | V7.1.1 to V7.1.3, V7.3.2, V7.6.1, V7.4.5, V7.5.2, V6.3.3, V6.8.4 | live; details held back until the fix ships (CHG-060). The owner set the values on 2026-10-17: 12 hours signed in, 24 hours anonymous, and a sign-in within 10 minutes before deletion (CHG-056 (c), (d)) | read by the session |
 | W88 | Check where a request comes from before opening a counted session or replacing a visitor's anti-forgery token | V3.5.3 | live: another site can affect a visitor's sessions; details held back until the fix ships (CHG-060) | read by the session |
@@ -200,7 +202,7 @@ because it moves the screenshot baselines (ADR-0149).
 
 | # | Row | Why here |
 |---|---|---|
-| 1 | W85 | Live, measured; a size limit is a small change |
+| 1 | W85 | Was live, measured, open to anyone with no session; a size limit is a small change. Fixed by W85 |
 | 2 | W86 | Live; keeps question text past the 30 days the owner approved |
 | 3 | W100 | Live; the server records a consent the user did not give |
 | 4 | W87 | Live; sessions have no maximum age. The owner set its values on 2026-10-17 (CHG-056 (c), (d)) |
