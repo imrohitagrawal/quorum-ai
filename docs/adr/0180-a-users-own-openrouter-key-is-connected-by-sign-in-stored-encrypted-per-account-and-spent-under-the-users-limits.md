@@ -21,13 +21,14 @@ stop and deploy (CHG-059).
 
 Three facts shaped the choice:
 - The one production machine stops when idle and at every deploy (`fly.toml:191-192`), so a key
-  held only in memory is lost many times a day.
+  held only in memory is lost at every idle stop and every deploy.
 - In every design where the server uses the key, whoever can deploy code to the app can read it.
   Fly says so of its own secrets (*"People with deploy access can deploy code that reads secret
   values"*, `docs.fly.io/apps/secrets`). Designs differ in how far they limit the damage.
-- Every hosted product the research read keeps users' keys on its server, encrypted, with no re-entry
-  after a restart; the decryption key usually sits in an environment variable beside the database,
-  and enterprise tiers move it into a key service.
+- Every product the research read that keeps users' keys on its server keeps them across restarts,
+  with no re-entry (inferred from where each stores the key); the decryption key usually sits in an
+  environment variable or a file beside the database, and enterprise tiers move it into a key service
+  (research file, section 6).
 
 ## Decision
 
@@ -46,21 +47,22 @@ decision.
    browser. The callback has its own path, distinct from Google's, and its query string is redacted
    from logs and Sentry (session's design, from ASVS 5.0 V10 and RFC 9700). The owner runs the free
    trial in section 16 of the research file first.
-3. **Where it is stored.** In its own table in the sessions database, added by a guarded
-   `schema_migrations` block, never on a session row, a session object, a cookie or in the browser
-   (CHG-075, CHG-076), encrypted with AES-256-GCM and bound to the account (CHG-075's chosen option
-   said so). The rest of this item is the session's design: the guarded migration; the pinned
+3. **Where it is stored.** In its own table, never on a session row, a session object, a cookie or
+   in the browser (CHG-075, CHG-076), encrypted with AES-256-GCM and bound to the account (CHG-075's
+   chosen option said so). The rest of this item is the session's design: the table sits in the
+   sessions database and is added by a guarded `schema_migrations` block; the pinned
    `cryptography` package; a fresh 12-byte random nonce each time; and associated data binding the
    account id, the master-key version and the purpose, so a row copied to another account fails to
    decrypt. The row also holds the
    master-key version, the key's last 4 characters, a SHA-256 fingerprint and the dates. That store
    turns on `PRAGMA secure_delete`.
-4. **The master key.** Its own Fly secret (CHG-075, CHG-077). It moves to AWS's key service,
-   reached with Fly's machine identity, if a Fly or GitHub token is ever suspected or a security
-   review asks for it (CHG-075). The session's design: never `QUORUM_TOKEN_SECRET` (NIST SP 800-57
-   §5.2, one key one purpose); versioned, so a new version can be added and old rows re-wrapped, and
-   the version on every row makes the move to the key service possible without anyone reconnecting;
-   rotated at least yearly and at once after any suspicion; with the feature on, production refuses
+4. **The master key.** Its own Fly secret (CHG-075, CHG-077). It moves to AWS's key service if a
+   Fly or GitHub token is ever suspected or a security review asks for it; CHG-075's chosen option
+   said *"Either way the old master key is replaced at once."* The question the owner answered
+   stated *"The storage will be built with a key version on every row, so a later move needs no one
+   to reconnect."* (CHG-075). The session's design: the key service reached with Fly's machine identity;
+   never `QUORUM_TOKEN_SECRET` (NIST SP 800-57 §5.2, one key one purpose); versioned, so a new version
+   can be added and old rows re-wrapped; rotated at least yearly and at once after any suspicion; with the feature on, production refuses
    to start without it, and with the feature off it starts without one (the 2026-10-13 key-safety
    test K10, narrowed so a feature-off deploy needs no secret); no copy kept outside Fly's vault, so a
    lost master key means users reconnect through OpenRouter's sign-in.
@@ -84,11 +86,13 @@ decision.
    ceiling, the per-account app allowance and the live-execution window do not apply (ADR-0121's
    rails table, CHG-080). The process-wide concurrency cap stays (session's design).
 8. **Failure posture: closed** (session's design, from ASVS 5.0 16.5.3 and the option text the
-   owner chose in CHG-078, "the run never moves to our key"). If the key cannot be decrypted, the
-   master key is missing, or OpenRouter answers 401, 402 or 403 on the user's key, the run on that key
-   stops. It never falls back to the app's key. The judge first runs when the run finishes
-   (`_persist_terminal_run`); a verdict already obtained is kept, with its cost record, after the key
-   is removed, and a later read never calls the judge again on any key.
+   owner chose in CHG-078, *"Either way it never moves to our key."*). If the key cannot be
+   decrypted, the master key is missing, or OpenRouter answers 401, 402 or 403 on the user's key, the
+   run on that key stops. It never falls back to the app's key. The judge's first call comes from
+   whichever evaluates the finished run first, the worker's terminal save or a page read; today a
+   repeat call happens only when both of its memos miss, and never after a restart, which empties
+   the runs too (research file, section 11). For a run on a user's key no repeat call is made, on any
+   key, and a verdict already paid for is kept with its cost record, also after the key is removed.
 9. **Removal.** "Remove key" deletes the row. During a run the page asks whether to stop the run now
    or let it finish on that key and then remove it; no answer means stop; a key removed and added
    again does not restart the stopped run (CHG-078; the remove-then-add rule is the session's design). "Sign out everywhere" offers "Also remove my
@@ -113,9 +117,15 @@ decision.
 
 - What today's OpenRouter approval screen offers (a credit-limit box, an expiry field), whether
   reconnecting leaves the old key live, and the exact error at a key's limit: the owner's trial.
-- The abuse-limit numbers for signed-in users with their own key. ADR-0121's "100 or 200" and "10 in
-  1 or 2 minutes" were about anonymous session mints behind office networks; with signed-in only,
-  users are limited per account (CHG-026 (a)). The build proposes values for the owner.
+- The abuse-limit numbers for signed-in users with their own key. The owner wrote on 2026-09-23
+  (transcript `23fee4a3`, 16:21:02Z) *"We should look at 100 or 200 requests, that is something, but
+  yes, within 1 or 2 minutes, we can have a limit of, say, 10 requests."* Reading those numbers as
+  anonymous session mints behind office networks is the session's interpretation, as ADR-0121 says
+  of its own reading; with signed-in only, users are limited per account (CHG-026 (a)). The build
+  puts the numbers to the owner as an abuse-limit question.
+- Whether OpenRouter's terms allow an app to store users' keys, and whether it disables leaked keys
+  itself (U9 in section 16 of the research file: written questions to OpenRouter's support).
+- Whether an API key is personal data under GDPR or India's DPDP Act (U13: a question for counsel).
 - How long audit rows are kept, the privacy text's wording, and which law applies (where the users
   are): for the owner, with the build.
 - The page copy.
@@ -134,7 +144,7 @@ decision.
 | A fixed $0.50 per-run cap | The owner wants the user to choose (CHG-078) |
 | The app's Tavily key on a user's run | The app's money, uncounted (row W71) |
 | Falling back to the app's key | Spends the app's money on a user's run, silently (ASVS 5.0 16.5.3) |
-| A data key per user, wrapped by the master key | On one machine the wrapped data key sits beside the master key's reach, so it adds little (OWASP's one-server note); a per-user key held in a key service is part of the trigger move |
+| A data key per user, wrapped by the master key | On one machine the wrapped data key sits beside the master key's reach, so it adds little (OWASP's one-server note). The trigger move (CHG-075) moves the master key to a key service; whether per-user keys go there too is not decided |
 | A copy of the master key kept outside Fly | One more place to steal it; losing the key means users reconnect through OpenRouter's sign-in |
 
 ## Consequences

@@ -32,11 +32,9 @@ OWASP texts are quoted briefly under their CC BY-SA 4.0 licence; most are paraph
   deploy (`fly.toml:191-192`), so a memory-held key is lost at every idle stop and every deploy, and
   the user would paste it again each time. The owner asked for no re-paste after a stop or deploy (CHG-059).
 - **Every product the research read that stores the key on its server keeps it across restarts and
-  deploys** (inferred from where each stores the key; no vendor page says it in words), and most
-  that name a cipher use authenticated encryption, though LibreChat, and Retool by default, do not
-  (section 6). The usual design is the
-  one the owner chose: authenticated encryption in the database, with the decryption key held apart from
-  the database file. Enterprise offerings move that key into a key service.
+  deploys** (inferred from where each stores the key; no vendor page says it in words; section 6).
+  The decryption key usually sits in an environment variable or a file beside the database, and the
+  enterprise tiers move it into a key service (section 6, pattern 2).
 - **The decided design** (the owner's answers of 2026-10-17, section 15; ADR-0180):
   - the key arrives only through OpenRouter's own sign-in flow (OAuth with PKCE), exchanged on our
     server, so it never passes through the browser; on OpenRouter's approval screen the user sets
@@ -238,7 +236,7 @@ From [agent, `r3-products.md`], which read vendor pages and, for open-source pro
 | GitHub Copilot (app) | the device's keychain | — | — | once per device | *"never read back by the UI"* |
 | TypingMind | browser local storage | optional AES with a password | the user's password | on every new browser | — |
 | Vercel AI Gateway | Vercel, per team | not stated | not stated | No | not stated |
-| Open WebUI | the server's user-settings record (and the browser), despite its docs | none found in the code | — | No | yes, to the owner |
+| Open WebUI | the server's user-settings record (and the browser), despite its docs | none found in the code | — | No | yes, to the owner (inferred from the settings round trip, `r3-products.md` 2.7) |
 | Retool (self-hosted) | Postgres | AES-192-CBC by default, AES-192-GCM opt-in | environment variable `ENCRYPTION_KEY`; a documented zero-downtime rotation | No | not stated |
 | Zapier | its servers | "bank-level encryption" | not stated | only when the upstream credential changes | not stated |
 | Make | its servers | AES-256 full-disk encryption (read through a fetch tool) | AWS KMS, for that disk encryption | not stated | No, for its credential requests |
@@ -256,8 +254,10 @@ Patterns:
    database**: in 6 of the 9 codebases read (LibreChat, LiteLLM, Langfuse, LobeHub, n8n, Flowise), and
    Retool documents the same. Key services appear in the enterprise tiers (Portkey, Cloudflare,
    Dify's Azure mode).
-3. **The hosted gateways whose behaviour was read (OpenRouter, Portkey, Cloudflare, LangSmith,
-   Langfuse) never show a stored key again**; Vercel's is not stated. Some open-source chat apps do.
+3. **Of the hosted gateways whose behaviour was read, OpenRouter, Portkey, Cloudflare, LangSmith and
+   Langfuse never show a stored key again.** Helicone is the exception: its API returns stored keys
+   to an organisation's admins and owners [agent, `r3-products.md` 1.5, read in its code]. Vercel's
+   is not stated. Some open-source chat apps show it too.
 4. **The recurring failures are not cipher failures.** They are: one tenant reaching another's key
    by id (LibreChat, Flowise, n8n, Helicone advisories); a user-set base URL that makes the server
    send the stored key to an attacker (LobeChat, Langfuse, Flowise, LiteLLM); a master key read out of
@@ -361,12 +361,12 @@ OAuth); "not met" gives the reason it was accepted; "build" means the W28 build 
 | Cryptographic Storage: keys apart from data | Keep keys in a separate place from the encrypted data | Partly: the Fly secret is not on the volume, so a database copy alone is useless; the same machine holds both while running. The key-service move separates them |
 | Cryptographic Storage: encrypting stored keys; Secrets Management §4.2, §7.3 (envelope encryption) | A data key wrapped by a key-encryption key kept elsewhere. Where the two cannot be kept apart, as on one server, wrapping has *"limited value"* but is *"an additional barrier to unskilled attackers"* | Not met: one master key encrypts every user's key directly. On one machine a per-user data key wrapped by the same master key would add little; a key held in a key service would meet it. NIST SP 800-57 §5.5.2 suggests a key per person; the trigger move of CHG-075 brings a key service, and per-user keys there would be the build's choice |
 | NIST SP 800-57 §5.5.2 and §9.5.4; Rev. 6 draft items 21 and 22 | A key should protect one person's data, or few; a key protecting many stored keys is the hard case to recover from | Not met, for the same reason: one app-wide master key. Accepted at this scale; recovery is rotation plus users revoking at OpenRouter |
-| Key Management cheat sheet: escrow and backup | Data under a lost key is lost; plan a key backup | Not met on purpose (the session's design): no copy of the master key outside Fly's vault, since each copy is one more place to steal it. If it is lost, users reconnect (one click) |
+| Key Management cheat sheet: escrow and backup | Data under a lost key is lost; plan a key backup | Not met on purpose (the session's design): no copy of the master key outside Fly's vault, since each copy is one more place to steal it. If it is lost, users reconnect through OpenRouter's sign-in |
 | Secrets Management §5.1 | Environment variables *"not recommended unless the other methods are not possible"* | Not met by F, accepted for $0 and no new account (CHG-075); the key-service move meets it (no master key in the environment) |
 | Key Management cheat sheet: application code never reads raw keys | | Not met by F, for the same reason; the key-service move meets it |
 | ASVS 13.3.1 (L2) | A secrets-management solution such as a key vault, for the whole lifecycle | Partly: Fly's vault holds the master key; a key service holds it without exposing it |
 | ASVS 13.3.2 (L2) | Least privilege on secret access | Build: only the run path decrypts; no route, export or admin page does |
-| ASVS 13.3.3, 13.3.4, 13.1.4 (L3) | Crypto inside an isolated module; secrets expire and rotate as documented; the critical secrets and their rotation written down | 13.3.3 not met (the app decrypts); the trigger move meets it. 13.3.4 and 13.1.4: build (the master key yearly and after suspicion; the user's own key not force-rotated) |
+| ASVS 13.3.3, 13.3.4, 13.1.4 (L3) | Crypto inside an isolated module; secrets expire and rotate as documented; the critical secrets and their rotation written down | 13.3.3 not met (the app decrypts with a master key it holds), accepted for $0 and no new account (CHG-075); the trigger move meets it. 13.3.4 and 13.1.4: build (the master key yearly and after suspicion; the user's own key not force-rotated) |
 | ASVS 14.1.1, 14.1.2, 14.2.4 (L2) | Classify the key as sensitive; write down and apply its protection | Build: `docs/43-privacy-data-governance.md` and `docs/48-data-retention.md` list it; this file is the protection record |
 | ASVS 14.2.7 (L3) | Retention, with deletion on a schedule | Partly: kept until the user removes it or deletes the account (CHG-075, CHG-076); no rule yet for a key left unused |
 | ASVS 11.2.1, 11.5.1 (L2) | Industry-validated libraries; random values from a CSPRNG, at least 128 bits | Build: the `cryptography` package; nonces, `state` and the PKCE verifier from Python's `secrets` module, as the Google sign-in already does |
@@ -491,15 +491,25 @@ overstated: the item is about the app's own components.
   key that may be spent": `providers.py:1005-1006`, `debate.py:1818`, `synthesis.py:1473` [agent].
   With production's flag off (`fly.toml:80`), a user-key run would be simulated unless all three
   change. ADR-0121's rule stands: one predicate decides "this run holds a key that may be spent".
-- **When the judge runs.** Its first call is made when the run finishes, inside
-  `_persist_terminal_run` on the run's own thread (`query_run_orchestration.py:1142-1146` and `:1791`,
-  with the comment at `:1803-1805`), and its verdict is kept in memory; a later read reuses it, and
-  calls the judge again only if that memory is gone, as after a restart [session: read in the code].
-  The 2026-09-29 raw map said it ran when the result is read; that is out of date. So under a user
-  key: the judge is a stage of the run, and a removal during the run follows the owner's rule (ask,
-  stop by default); a verdict already paid for is kept with its cost record; and a read after the key
-  was removed never calls the judge again, on any key (ADR-0180 decision 8, the session's design;
-  test T29).
+  A fourth place reads the app's posture, for the page's copy: `_peer_critique_in_effect`
+  (`main.py:402`) needs the peer flag, the live flag and the app's own key [session: read in the
+  code].
+- **When the judge runs.** The run's status becomes COMPLETED at `query_run_orchestration.py:1664`.
+  Two paths then evaluate the finished run: the worker's terminal save (`_persist_terminal_run`,
+  called from the `finally` at `:1146`, which evaluates through `_result_response` at `:1791`) and a
+  page read of the result (`_result_response` at `query_runs.py:1114`). Whichever comes first makes
+  the first judge call. Both share the evaluation memo (`query_run_orchestration.py:2840-2850`) and
+  the judge's verdict memo, so the other reuses that verdict. A read calls the judge again only when
+  both memos miss, as after the verdict memo evicts the run (#216). A restart never leads to a
+  repeat call: it empties the in-memory runs too, so a read then answers 404
+  (`query_run_orchestration.py:1831-1838`, `query_runs.py:1106-1113`) [session: read in the code].
+  The 2026-09-29 raw map said the judge runs when the result is read, and the comment at
+  `main.py:1745-1751` says the first call is inside `_persist_terminal_run` and that #216's repeat
+  call also follows a restart; all three are out of date (the comment is for a later code pull
+  request). So under a user key the judge is a stage of the run, and a removal during the run
+  follows the owner's rule (ask, stop by default). The rule (ADR-0180 decision 8, the session's
+  design; test T29): for a run on a user's key no repeat call is made, on any key, and a verdict
+  already paid for is kept with its cost record.
 - **Only answer slots record which key paid today**; debate, synthesis and judge calls record no
   credential source [agent, `r6-repo.md` C]. The receipt needs it on every stage.
 - **Web search.** OpenRouter's search fees land on the user's key. The app's own Tavily key also runs
@@ -510,8 +520,12 @@ overstated: the item is about the app's own components.
   can say whether the feature is on. The readiness banner today says for production *"Live execution
   is turned off. Every model answer and the synthesis will come from Quorum's local simulation
   helpers."* (`static/app.js:1263-1272`) [agent]. That would be false for a user who has connected a
-  key, so the banner and the simulated-result banner must read the run's credential source; the
-  receipt says "Paid by your OpenRouter key ending in `ab12`". The watchdog
+  key. The simulated-result banner must read the run's credential source. The readiness banner is
+  shown before any run and reads `/ready`, which takes no session (`main.py:1376`), so it must read
+  the signed-in account's key status from the key's own status route. The readiness probe keeps one
+  cached key verdict per process (`readiness.py:76`, `_key_auth_state`), so a per-account key needs
+  its own state [session: read in the code]. The receipt says "Paid by your OpenRouter key ending
+  in `ab12`". The watchdog
   (`scripts/live_posture_check.py`) watches the app's own posture and must not treat a user-key run
   as drift.
 
@@ -547,10 +561,12 @@ All measured on `main` [agent, `r6-repo.md`] unless marked.
 7. **Risk constants.** `tests/unit/test_risk_constant_pins.py` covers `auth.py`, `config.py`,
    `main.py`, `costs.py`, `session_store.py`, `google_signin.py` and others; a new constant there needs
    a triage entry, and a new key-holding module should be added to its list.
-8. **The security-measures list** (`docs/41-security-controls.md`) uses ids SC-01 to SC-97 written
-   out in `tests/unit/test_security_controls_cite_real_tests.py`; only SC-98 and SC-99 fit the
-   two-digit rule. Its CTRL-006 line (`docs/41:232`) cites W28's needle as proof that BYOK is not
-   built and goes false when the build lands.
+8. **The security-measures list** (`docs/41-security-controls.md`) uses every id the two-digit rule
+   allows: since W85 (#575) it holds SC-01 to SC-99, written out in
+   `tests/unit/test_security_controls_cite_real_tests.py`, whose pattern is `SC-[0-9][0-9]` [session:
+   read on `main` after #575]. A new measure for W28 needs a reviewed change to that rule first. Its
+   CTRL-006 line cites W28's needle as proof that BYOK is not built and goes false when the build
+   lands.
 9. **The 422 handler returns a validator's message text** (`main.py:925-974`): a key validator must
    never put the value in its message.
 10. **Settings hold keys as plain `str`**, hidden from `repr` but printed by `model_dump_json`
@@ -601,18 +617,18 @@ research: T24, T26 to T28 and T30 to T32 for the owner's decisions; T25 and T29 
 | T15 | Removal mid-run, "stop" chosen or no answer: remove after the answer calls; exactly 4 answer calls and 0 debate, synthesis and judge calls; the recorded status says why. Remove-then-add also stops the run. Partner: the control run makes every call | K13, M8 | a stage uses the copy made at run start |
 | T16 | The resolver's table: feature setting by app key by user key by global ceiling by live flag; the resolved key and recorded source for each (`NOT_CONFIGURED` for a simulated or blanked run); no app key plus a user key is not "misconfigured" | M10 | a hard-coded source, or the check reading the app key |
 | T17 | The feature off gives exactly today's calls, key and events; the key routes answer 404. Partner: on gives 200 | K21, M9 | the resolver changes the default path |
-| T18 | Missing CSRF: 403; legacy test path: 403; an anonymous session: 403 and can never hold or use a key; a key in a query string: 400, never logged; intake and status carry `Cache-Control: no-store`. Partner: a signed-in cookie with CSRF gives 200 | K15, M11 | a check is removed |
+| T18 | Missing CSRF: 403; legacy test path: 403; an anonymous session: 403 and can never hold or use a key; the connect start route called with a `key` query parameter: 400, the value never logged; intake and status carry `Cache-Control: no-store`. Partner: a signed-in cookie with CSRF gives 200 | K15, M11 | a check is removed |
 | T19 | An invalid key's 422 holds no canary, with a validator that quotes its input. Partner: the 422 is returned | K16, M11 | the handler forwards the validator's message |
 | T20 | Intake attempt N+1 in the window: 429 with exactly N outbound checks; one message for invalid and revoked keys; no `limit_remaining` in the response | K14 | the limiter is removed |
 | T21 | OAuth: a `state` mismatch is refused; the verifier never reaches the browser; the callback query is redacted from logs and Sentry; exactly one exchange call; the pending entry is checked before it is discarded | K18 | no `state` check |
 | T22 | Browser: after intake the canary is absent from localStorage, sessionStorage, IndexedDB, cookies and the DOM | K19 | the page keeps the key |
 | T23 | No `'unsafe-inline'` in `script-src` on any HTML route | K20 | it is reverted |
 | T24 | A user-key run makes zero calls on the app's Tavily key. Partner: an app-key run whose answer has no sources still calls it | CHG-078 | a user run spends app money unseen |
-| T25 | The readiness banner and result banner read the run's credential source: a user-key run is never labelled simulated. Partner: an app-key simulated run still is | new | the banner reads only the app flag |
-| T26 | Removal mid-run, the question: pressing Remove during a run asks whether to stop or finish; "finish" makes exactly the remaining debate, synthesis and judge calls on the user's key, then deletes the row once the finished run is saved; never the app's key. Partner: "stop" gives T15's counts | CHG-078 | the question is skipped, finish uses the app's key, or the row outlives the run |
+| T25 | The result banner reads the run's credential source, and the readiness banner reads the signed-in account's key status from the key's own route (`/ready` has no session): a user-key run, and a signed-in user with a connected key, are never told the answers will be simulated. Partner: an app-key simulated run, and a user with no key, still are | new | a banner reads only the app flag |
+| T26 | Removal or replacement mid-run, the question: pressing Remove, or connecting a new key, during a run asks whether to stop or finish; "finish" makes exactly the remaining debate, synthesis and judge calls on the key the run started with, and that key is gone (removed, or replaced by the new one) once the finished run is saved; never the app's key. Partner: "stop" gives T15's counts | CHG-078 | the question is skipped, finish uses the app's key, or the old key outlives the run |
 | T27 | The user's limits: with a $5 window and a $0.50 cap, a run estimated at $0.62 is held for exactly one question and makes zero calls before the answer; "yes" runs it, "no" makes zero calls; a run of $0.40 with $4.70 already spent (under the cap, past the window) is also held for exactly one question; the number of runs the window allows is exact. Partner: a run under both limits starts with no question | CHG-078; failure mode 4 of the 2026-09-23 page | a limit is skipped, or the count is wrong |
 | T28 | Sign out everywhere: the tick box "Also remove my OpenRouter key" is ticked by default; ticked deletes the key and ends every session, unticked ends the sessions and keeps the key. Partner: both ways end every session | CHG-076 | the default flips, or the tick is ignored |
-| T29 | The judge after removal: a verdict obtained when the run finished stays, with its cost record, after the key is removed; a read after a restart, with the key gone, makes zero judge calls on any key and says the judge did not run again. Partner: with the key present, the judge makes exactly one call, on the user's key, when the run finishes | ADR-0180 decision 8 (the session's design) | the judge falls back to the app's key, or a paid verdict is dropped |
+| T29 | The judge's repeat call: on a user-key run, a verdict obtained when the run finished stays, with its cost record, after the key is removed; with the run still in memory and both the evaluation memo and the verdict memo missed (evicted the way `tests/integration/test_judge_preflight_respects_the_spend_rails.py:210-216` does), a read makes zero judge calls on any key. Partner: the same eviction on an app-key run makes exactly one repeat call, on the app's key; and the user-key run's first judge call is exactly one, on the user's key | ADR-0180 decision 8 (the session's design) | a user-key run's judge is called again, falls back to the app's key, or a paid verdict is dropped |
 | T30 | The no-limit warning: when `GET /api/v1/key` reports no limit, the Connected panel shows the warning and the link; with a limit it shows the limit and no warning; runs work in both. Partner: the limit shown equals the one reported | CHG-077 | the warning is missing, or it blocks runs |
 | T31 | No route accepts a pasted OpenRouter key: a key reaches the store only through OpenRouter's code exchange. Partner: the connect flow does store a key | CHG-077 | a paste route appears |
 | T32 | A second run on a user's key while one is running gets the same 409 as today, and the abuse rate limits still apply. Partner: one run starts | CHG-078 | a user-key run skips the one-at-a-time rule or the abuse limits |
@@ -674,8 +690,8 @@ the improvements above, which the owner then chose; and no design that runs the 
 prevents a deploy-access reader, so the decided design limits the damage (a dedicated key with a
 credit limit the user sets, revocation at OpenRouter, a record of every use) and the circle able to
 deploy should stay small (2-step login on GitHub and Fly; short-lived Fly tokens, which no board row
-owns yet). The transcript holds no record of this view reaching the owner in chat, so it is recorded
-here and in CHG-080, and the session's closing report gives it to the owner.
+owns yet). This view reached the owner in chat in the session's closing message, at 20:53:10Z UTC; it
+is recorded here and in CHG-080.
 
 **A correction the owner was shown.** Review round 1 (Codex) found that decision 1's option text
 understated a theft: it said a stolen master key works offline "until we rotate it", but database
@@ -751,6 +767,11 @@ All in the pull request that adds this file (CHG-079).
 | NFR-005's target named "BYO key management endpoints", which do not exist | Now names the own-key routes once W28 builds them |
 | The June documents describing a built BYO slice | Marked "not built" or corrected (the list below) |
 
+No check pins the FR-012 and AC-025 repairs: `make fr-completeness` compares no titles and no AC ids
+[session: in a `git archive` copy, FR-012's title in `docs/10` was changed and AC-025 swapped for
+AC-026 in `docs/17`'s FR-011 row; `scripts/validate_fr_completeness.py --min-requirements 25` still
+printed OK].
+
 The June 2026 documents marked or corrected in the same pull request: `README.md`, `docs/104-next-iteration-backlog.md`, `docs/118-qa-test-charter-jira.md`, `docs/20-architecture.md`, `docs/21-domain-model.md`, `docs/34-jira-issue-authoring.md`, `docs/35-confluence-operational-guide.md`, `docs/40-threat-model.md`, `docs/43-privacy-data-governance.md`, `docs/45-control-mapping.md`, `docs/50-test-strategy.md`, `docs/51-test-data-strategy.md`, `docs/57-test-evidence.md`, `docs/60-implementation-plan.md`, `docs/61-vertical-slice-plan.md`, `docs/62-delivery-decomposition.md`, `docs/64-feature-flag-plan.md`, `docs/73-release-evidence.md`, `docs/REVIEW.md`, `docs/architecture/40-decisions.md`, `docs/atlassian-publication-payloads.md`, `docs/faq/index.html`, `docs/reviews/implementation-plan-critic-review.md`, `docs/study/glossary.md`, `docs/design-handoff/README.md` and the two `design_handoff_quorum_ui/` notes. Row W99 still owns rewriting `docs/40` and `docs/45`; they are only marked here. `docs/41-security-controls.md` is left alone: the parallel security session owns it, and its CTRL-006 line stays true until the build lands.
 
 ---
@@ -781,8 +802,9 @@ The research brief's own list of open points (its section 10), and where each st
   (section 5); HCP Vault Secrets' end (section 5); Doppler has no encrypt service; LiteLLM's virtual
   keys are hashed; LibreChat's cipher (section 6); NIST SP 800-57's cryptoperiods and SP 800-88
   Rev. 2's date (section 8); a `CryptoKey` can be kept in IndexedDB (section 3); CloudTrail logs
-  every KMS decrypt (section 5); HCP Vault Dedicated's price (about $450 a month) and Infisical's
-  algorithms (AES-256-GCM among others), section 5; Portkey's and Retool's storage, section 6.
+  every KMS decrypt (section 5); HCP Vault Dedicated's price (about $450 a month, section 5);
+  Infisical's algorithms (AES-256-GCM among others, [agent, `r5-kms.md` 7.1]); Portkey's and
+  Retool's storage, section 6.
 - OpenRouter's open points (a limit or expiry on an OAuth-issued key, revocation, automatic
   disabling of leaked keys, whether its terms allow an app to store users' keys) are U1, U2, U5 and
   U9 in section 16.

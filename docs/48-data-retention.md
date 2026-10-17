@@ -21,6 +21,8 @@ Retention is not finalized. Until the product owner approves a retention policy,
 | Cost/latency/status metadata | Retain longer than content if needed for cost, reliability, and abuse monitoring, without raw prompt text. | Engineering lead | Pending approval |
 | App-owned provider keys | Retain in secret store/environment while integration is active. | Engineering lead | Required |
 | BYO OpenRouter key | Kept encrypted until the user removes it or deletes the account; an encrypted copy stays in volume snapshots for up to 5 days, and the privacy text says so. Not built (W28). | Product owner | Decided 2026-10-17 (CHG-075, CHG-076) |
+| A user's own OpenRouter key's last 4 characters, SHA-256 fingerprint and dates added and last used (W28, ADR-0180 decisions 3 and 5) | Kept in the key's own row and deleted with it, when the user removes the key or deletes the account; like the key, a copy stays in volume snapshots for up to 5 days. Not built (W28). | Product owner | Pending approval |
+| Own-key audit rows (W28, ADR-0180 decision 10) | One row per key event (added, used, replaced, removed, decrypt failed): the account id, the key's fingerprint, the run id and the time; never the key. How long they are kept is not decided (ADR-0180, "Not decided"). Not built (W28). | Product owner | Pending approval |
 | Structured logs | Retain non-secret operational logs per deployment platform policy. | Engineering lead | Pending deployment decision |
 
 ## Deletion Requirements
