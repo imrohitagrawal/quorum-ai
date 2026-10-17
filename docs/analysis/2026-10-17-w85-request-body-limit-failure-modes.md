@@ -4,7 +4,8 @@
 and A6 as far as the server goes (no `Connection: close`). Recorded as advisory, not built: A5, A7,
 A10, A12, and what Fly's proxy shows on an early 413 (A6, UNVERIFIED). The decisions and the
 measured before-and-after table are in ADR-0171. This list was written before any code, by a
-read-only agent; its text below is unchanged except that home-folder paths are now repo-relative.
+read-only agent; its text below is unchanged except that home-folder paths are now repo-relative
+and one citation (ADR-0120, section D) was rewritten to the ADR's real file name.
 
 Tree: the W85 worktree at `a2af06c`. Versions measured: starlette 1.3.1, fastapi 0.137.2, uvicorn 0.49.0, h11 0.16.0, httptools 0.8.0, pydantic 2.13.4.
 Production runs `uvicorn ... --workers 1` (Dockerfile:89-95) with `uvicorn[standard]`, so httptools is the parser. Fly `hard_limit = 100` connections (fly.toml:173-176), `memory = "512mb"` (fly.toml:197).

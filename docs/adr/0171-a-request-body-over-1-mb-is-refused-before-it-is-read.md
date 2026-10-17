@@ -71,9 +71,6 @@ Where the limit sits decides what the 413 carries (A8, measured in fresh process
    strictly: plain ASCII digits only. Python's `int()` accepts `1_0`, `+5`, spaces and non-ASCII
    digits, and raises on `abc`, which would be a 500. Anything that is not plain digits is left to
    the server, which answers 400 for it before the app runs, and the body is counted either way.
-   GET and HEAD are checked by declared length only and never read, because reading made a GET
-   that declares a body it never sends wait forever (review round 1, on uvicorn h11 and httptools),
-   and no GET route reads a body (every one has `body_field=None`).
 4. **The body is kept in one `bytearray` and handed to the app as one message.** Keeping each
    received message instead cost about 192 bytes per message (Codex plan review 1). The buffer is
    dropped before the app runs, so at most one second copy of at most 1 MB exists for a moment. If
@@ -113,6 +110,9 @@ Where the limit sits decides what the 413 carries (A8, measured in fresh process
 
 - **Trust `Content-Length` when it is present and under the limit.** Beaten by a lying header under
   h11 (A4). Counting costs nothing extra, because the body is read anyway.
+- **Skip buffering for GET and HEAD.** Rejected because Sentry's request integration reads a GET
+  body before the handler (reproduced on h11 by Codex, round 2), and nothing pins that no GET route
+  reads a body.
 - **Keep the received messages in a list and replay them.** 192 MB held for 1,000,000 one-byte
   messages (Codex plan review 1).
 - **Return without calling the app when the client leaves mid-body.** A 500 and an ERROR log (A3).
@@ -137,8 +137,7 @@ Where the limit sits decides what the 413 carries (A8, measured in fresh process
   field. Two other senders did: `e2e/tests/navigation/navigation.spec.ts:58` and `:71` send
   `model_ids`, which is not a field, and that spec accepts the 422; and two tests in
   `tests/integration/test_quick_mode_backend.py` sent `safety_acknowledgements` to `/estimate`, which
-  commit `92b6ca6` changed (failure modes, section C). `make quality`
-  ran the full suite on the branch with these docs: `7462 passed, 78 skipped`, exit 0.
+  commit `92b6ca6` changed (failure modes, section C).
 - The list of security measures gains SC-98 (the size limit) and SC-99 (the request-model bounds)
   in `docs/41-security-controls.md`.
 - **Left open, recorded as advisory, none built here:**
@@ -151,9 +150,12 @@ Where the limit sits decides what the 413 carries (A8, measured in fresh process
   - **A10, strings with no length bound.** A model id, an acknowledgement's `version` and a cost
     confirmation's token rely on the 1 MB limit alone. A too-long string would map to the misleading
     `QUERY_TOO_LONG` banner code today, so it needs its own change.
-  - **A12, slow bodies.** The limit waits for the whole body before the app runs, and uvicorn has
-    no timeout on reading a body, so a client that sends slowly holds a connection on every route,
-    not only on the routes that read a body.
+  - **A12, a body that does not arrive.** A request that declares a length and does not send it
+    now waits for it on every route, as a body-reading route already did on main; real clients send
+    the body or `Content-Length: 0`.
+  - **Sentry reads request bodies.** Sentry's FastAPI integration reads request bodies by default
+    (`max_request_body_size` is not set in `main.py`'s Sentry options); whether a body reaches
+    Sentry is for W76 to check.
   - **What Fly's proxy does with an early 413** (whether a browser gets the 413, a 502 or a reset)
     is UNVERIFIED: no production probe was made.
   - **Under `TestClient` only**, a `Content-Length` such as `abc` makes the Prometheus
