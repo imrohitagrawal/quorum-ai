@@ -141,11 +141,10 @@ Where the limit sits decides what the 413 carries (A8, measured in fresh process
 - The list of security measures gains SC-98 (the size limit) and SC-99 (the request-model bounds)
   in `docs/41-security-controls.md`.
 - **Left open, recorded as advisory, none built here:**
-  - **A5, many bodies at once.** 100 concurrent bodies of about 1 MB raised the maximum resident
-    memory from 85 MB to 453 MB with the earlier list-of-chunks design (failure mode A5, under
-    `tracemalloc`, which inflates memory). The one-`bytearray` design was not re-measured under
-    concurrency: UNVERIFIED. Fly's connection limit is 100 (`fly.toml`, `hard_limit`). Limits at
-    scale belong to board row W94.
+  - **A5, many bodies at once.** Many requests of just under 1 MB, sent at once, still cost the
+    server far more memory than one does. It was measured locally after the build; the figures are
+    held back until board row W102 ships (the session's reading of CHG-060, not an owner decision).
+    Fly's connection limit is 100 (`fly.toml`, `hard_limit`). Limits at scale are also row W94's.
   - **A7, no counter of its own for 413.** `/metrics` groups it with 401 and 422 as `4xx`.
   - **A10, strings with no length bound.** A model id, an acknowledgement's `version` and a cost
     confirmation's token rely on the 1 MB limit alone. A too-long string would map to the misleading

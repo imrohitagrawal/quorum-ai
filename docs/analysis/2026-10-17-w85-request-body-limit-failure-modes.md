@@ -37,13 +37,10 @@ Test: raw ASGI call with messages `[{"type":"http.request","body":b"x"*1000,"mor
 Fix: always count bytes, whatever the header says.
 Test: the TestClient case (`headers={"content-length":"5"}` with a 2 MB body) and the raw h11 case.
 
-**A5. Memory under 100 concurrent bodies of about 1 MB.** Raw ASGI, 100 concurrent requests of 1,040,082 bytes in 64 KB chunks, all ending in 422:
-- without the middleware: tracemalloc peak 216 MB, max RSS 310 MB;
-- with the planned design (a list of chunks, then a join, then a replay): **peak 323 MB, max RSS 85 -> 453 MB**.
-tracemalloc inflates RSS, so take these as relative numbers. The production container is UNVERIFIED. The extra ~100 MB is the second copy, made while the chunk list and the joined bytes both exist.
-At the 1 MB limit, 100 connections (the Fly hard_limit) come close to 512 MB.
-Options: buffer into one `bytearray` and drop the list; cap concurrent buffering; or a lower limit. The owner set 1 MB, so the session can only propose that last one.
-Test: this concurrency probe, with a stated RSS ceiling.
+**A5. Memory under many bodies at once.** Many requests of just under the limit, sent at once, still
+cost the server far more memory than one request does. Measured locally, before and after the build;
+the figures and the method are held back until row W102 ships (the session applied CHG-060's rule to
+this new live gap; the owner has not been asked). Limits at scale are also row W94's.
 
 **A6. A 413 sent before the body is read: what the client sees.** Measured on loopback, both parsers. The raw client got the 413 in every case.
 - Without `Connection: close`, uvicorn keeps the connection and reads and discards the rest of the declared body. The 2 MB case ended in a read-timeout with the socket still open. This costs no memory (`on_body` returns once the response is complete, httptools_impl.py:313). It does cost bandwidth, for as long as the client keeps sending.

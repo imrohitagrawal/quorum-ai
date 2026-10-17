@@ -6,7 +6,7 @@ original, because a gate and an offline agent can read it and cannot read `gh`.
 
 Verified at: `4ba35cec0ce40f9dd48b9c1bf0b9aefeb862a28c`
 
-The board holds **100** rows, **52** of them unpinned.
+The board holds **101** rows, **53** of them unpinned.
 
 `scripts/check_open_work.py --check` reads every row's evidence off disk and
 refuses if a claim is false. It runs inside `make validate`, and
@@ -196,6 +196,7 @@ caught by any automated check and 10 of 16 by adversarial review
 | W99 | The security documents do not match the code: `docs/40-threat-model.md` says anonymous visitors cannot run questions and lists bring-your-own key as built; `docs/45-control-mapping.md` reads "Not available" throughout; no table lists the routes and who may call them, the stored data and its keep time, the outbound connections, the logs, the sign-in pathways, or the request rules and limits; ADR-0130 to ADR-0139 lack amendment lines, except ADR-0134 and ADR-0136; `docs/18-requirement-traceability-matrix.md` names test files that never existed; `.github/CODEOWNERS` is a placeholder; and several comments state old numbers. Rewrite them; takes `docs/45` over from W77 (section 4 of `docs/analysis/2026-10-17-w82-security-baseline.md`) | UNPINNED | `—` | — | — |
 | W100 | The page can tell the server a visitor acknowledged a high-stakes warning they never ticked (read by the session, by Codex and by a reviewer; details held back until the fix ships (CHG-060)). Send an acknowledgement only for a box the visitor ticked, and hold the run for the box when the final check finds a warning (section 4 of `docs/analysis/2026-10-17-w82-security-baseline.md`) | UNPINNED | `—` | — | — |
 | W101 | Invite links, off in production (`/status` `invite_links.enabled: false`): the `quorum_invite` cookie has no `__Host-` prefix, the signing key need only be 32 characters, not 32 random bytes, the host is not part of what is signed, and revoking a link leaves the sessions it opened working. Fix each before invite links are switched on (ASVS V3.3.1, V3.3.3, V9.1.3, V9.2.3; agents' reports; section 4 of `docs/analysis/2026-10-17-w82-security-baseline.md`) | UNPINNED | `—` | — | — |
+| W102 | Many requests of just under W85's 1 MB limit, sent at once, still cost the server far more memory than their size, and production is one machine with 512 MB (measured locally on 2026-10-18; details held back until the fix ships, the session applying CHG-060's rule). Options, each needing the owner: a lower body limit than CHG-063 (a)'s 1 MB, a cap on how many bodies are read at once, or checking the session before parsing the body (ADR-0171, A5) | UNPINNED | `—` | — | — |
 
 **STOP** marks a row that cannot be finished without a human decision — a money,
 cost or safety guardrail value that only real measurement could justify. Do not
