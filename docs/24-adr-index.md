@@ -172,6 +172,7 @@ ways, so the record shows what was believed on a date and what replaced it.
 | [ADR-0167](adr/0167-the-secret-scan-reads-every-committable-file.md) | The secret scan reads every file git could commit | Architecture | Accepted — 2026-10-14 |
 | [ADR-0168](adr/0168-parked-work-carries-a-reason-an-owner-and-a-resume-when.md) | Parked work carries a reason, an owner and a resume-when; a branch is deleted only when nothing in it is lost | Architecture | Accepted — 2026-10-16 |
 | [ADR-0169](adr/0169-the-next-session-prompt-is-a-checked-template.md) | The next-session prompt is copied from a template, checked by name and sections, committed, and its paste line printed | Architecture | Accepted — 2026-10-16, building CHG-052 (the owner's "rule, not a habit") |
+| [ADR-0170](adr/0170-the-security-measures-list-names-a-test-for-each-measure.md) | The security measures list names a test for each measure, and a test checks the names | Architecture | Accepted — 2026-10-17, board row W82 |
 
 **This index was itself stale** until 2026-07-30: ADR-0002 had existed since
 2026-07-19 and was never listed here. A hand-maintained index is a derived fact
