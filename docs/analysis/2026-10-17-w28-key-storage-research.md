@@ -499,7 +499,7 @@ overstated: the item is about the app's own components.
   called from the `finally` at `:1146`, which evaluates through `_result_response` at `:1791`) and a
   page read of the result (`_result_response` at `query_runs.py:1114`). Whichever comes first makes
   the first judge call. Both share the evaluation memo (`query_run_orchestration.py:2840-2850`) and
-  the judge's verdict memo, so the other reuses that verdict. A read calls the judge again only when
+  the judge's verdict memo. A read calls the judge again only when
   both memos miss, as after the verdict memo evicts the run (#216). A restart never leads to a
   repeat call: it empties the in-memory runs too, so a read then answers 404
   (`query_run_orchestration.py:1831-1838`, `query_runs.py:1106-1113`) [session: read in the code].

@@ -25,8 +25,8 @@ Three facts shaped the choice:
 - In every design where the server uses the key, whoever can deploy code to the app can read it.
   Fly says so of its own secrets (*"People with deploy access can deploy code that reads secret
   values"*, `docs.fly.io/apps/secrets`). Designs differ in how far they limit the damage.
-- Every product the research read that keeps users' keys on its server keeps them across restarts,
-  with no re-entry (inferred from where each stores the key); the decryption key usually sits in an
+- Every product the research read that keeps users' keys on its server keeps them across restarts
+  (inferred from where each stores the key); the decryption key usually sits in an
   environment variable or a file beside the database, and enterprise tiers move it into a key service
   (research file, section 6).
 
