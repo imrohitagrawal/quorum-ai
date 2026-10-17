@@ -1,7 +1,7 @@
 """W86: a deleted question must leave the session file, not just the table.
 
-SQLite's default on this repo's local and CI builds is ``secure_delete = 0``
-(measured 2026-10-17, SQLite 3.50.4): a deleted row's bytes stay in the page's
+SQLite's default on this repo's local build is ``secure_delete = 0`` (measured
+2026-10-17, SQLite 3.50.4; CI's build is UNVERIFIED): a deleted row's bytes stay in the page's
 free space or on the freelist, readable by anyone with the file. W86 turns
 ``PRAGMA secure_delete = ON`` on as the store connection's first statement and
 runs one ``VACUUM`` per file, recorded in ``schema_migrations`` under
