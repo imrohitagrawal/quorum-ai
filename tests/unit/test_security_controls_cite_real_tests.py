@@ -1,6 +1,6 @@
 """Every security measure in docs/41-security-controls.md must name tests that exist.
 
-docs/41 lists the security measures SC-01 to SC-99 in tables, one row each. A
+docs/41 lists the security measures SC-01 to SC-101 in tables, one row each. A
 row that says a measure is TESTED is worth something only if the test it names
 is real.
 
@@ -16,9 +16,10 @@ A MEASURE TABLE is a rendered table whose header has seven cells, with the text
 ``Proof`` in the fourth and ``Status`` in the seventh. Its body rows are the
 measure rows. The rules:
 
-1. The measure ids are exactly SC-01 to SC-99, each once. They are written out
+1. The measure ids are exactly SC-01 to SC-101, each once. They are written out
    by hand below, so the document cannot define its own population. An ID cell
-   whose text is not ``SC-`` and two digits is reported.
+   whose text is not ``SC-`` and two digits, or ``SC-`` and three digits not
+   starting with 0 (SC-100 onward, added by W86), is reported.
 2. A body row of any other table whose first cell is an SC id (ignoring spaces)
    is reported. That is how a measure table whose header lost its Proof or
    Status column shows up.
@@ -118,7 +119,8 @@ SC-51 SC-52 SC-53 SC-54 SC-55 SC-56 SC-57 SC-58 SC-59 SC-60
 SC-61 SC-62 SC-63 SC-64 SC-65 SC-66 SC-67 SC-68 SC-69 SC-70
 SC-71 SC-72 SC-73 SC-74 SC-75 SC-76 SC-77 SC-78 SC-79 SC-80
 SC-81 SC-82 SC-83 SC-84 SC-85 SC-86 SC-87 SC-88 SC-89 SC-90
-SC-91 SC-92 SC-93 SC-94 SC-95 SC-96 SC-97 SC-98 SC-99
+SC-91 SC-92 SC-93 SC-94 SC-95 SC-96 SC-97 SC-98 SC-99 SC-100
+SC-101
 """
 EXPECTED_IDS = frozenset(_EXPECTED_ID_TEXT.split())
 
@@ -129,7 +131,7 @@ NEEDS_A_PROOF = frozenset({"TESTED", "PARTIAL"})
 UNCONDITIONAL_SKIPS = frozenset({"pytest.mark.skip", "mark.skip"})
 
 _MARKDOWN = MarkdownIt("gfm-like", {"linkify": False})
-_MEASURE_ID = re.compile(r"SC-[0-9][0-9]")
+_MEASURE_ID = re.compile(r"SC-(?:[0-9][0-9]|[1-9][0-9][0-9])")
 _EMPTY_CELL = re.compile(r"[\s\-\u2013\u2014]*")
 _BREAK_TAG = re.compile(r"<br\s*/?>", re.IGNORECASE)
 _STRIKE_TAG = re.compile(r"<(?:s|del|strike)(?:\s[^>]*)?>", re.IGNORECASE)
@@ -220,7 +222,11 @@ def check_security_controls(text: str, root: Path, expected_ids: frozenset[str])
                 continue
             if not _MEASURE_ID.fullmatch(measure):
                 problems.append(
-                    Problem("id-malformed", measure, "the ID is not SC- and two digits")
+                    Problem(
+                        "id-malformed",
+                        measure,
+                        "the ID is not SC- and two digits, or three not starting with 0",
+                    )
                 )
                 continue
             if measure in seen:
@@ -363,7 +369,7 @@ def _report(problems: Sequence[Problem]) -> str:
 
 
 def test_real_document_names_real_tests_for_every_measure() -> None:
-    """docs/41 has exactly SC-01 to SC-99, each in a measure table, each proof real.
+    """docs/41 has exactly SC-01 to SC-101, each in a measure table, each proof real.
 
     Red when: docs/41 drops, adds or renumbers a measure row, moves one out of a
     measure table, or any row breaks rules 2 to 7 (for example, a cited test is
@@ -374,15 +380,15 @@ def test_real_document_names_real_tests_for_every_measure() -> None:
     assert not problems, _report(problems)
 
 
-def test_the_hand_written_id_list_is_sc01_to_sc99() -> None:
-    """The literal expected list has 99 distinct ids, SC-01 to SC-99.
+def test_the_hand_written_id_list_is_sc01_to_sc101() -> None:
+    """The literal expected list has 101 distinct ids, SC-01 to SC-101.
 
     Red when: an id in _EXPECTED_ID_TEXT is dropped, repeated or mistyped.
     """
     written = _EXPECTED_ID_TEXT.split()
-    assert len(written) == 99
-    assert len(set(written)) == 99
-    assert set(written) == {f"SC-{number:02d}" for number in range(1, 100)}
+    assert len(written) == 101
+    assert len(set(written)) == 101
+    assert set(written) == {f"SC-{number:02d}" for number in range(1, 102)}
 
 
 # ---------------------------------------------------------------------------
@@ -524,13 +530,14 @@ def test_a_good_document_has_no_problems(fake_root: Path) -> None:
 
 
 def test_a_full_size_document_matches_the_real_expected_ids(fake_root: Path) -> None:
-    """Rows SC-01..SC-99, generated here independently, satisfy EXPECTED_IDS.
+    """Rows SC-01..SC-101, generated here independently, satisfy EXPECTED_IDS.
 
-    Red when: EXPECTED_IDS stops being exactly SC-01 to SC-99.
+    Red when: EXPECTED_IDS stops being exactly SC-01 to SC-101, or a
+    three-digit id (SC-100, SC-101) is reported as malformed.
     """
     rows = [
         (f"SC-{n:02d}", "a measure", "a module", "—", "nothing runs it", "—", "CODE-ONLY")
-        for n in range(1, 100)
+        for n in range(1, 102)
     ]
     assert check_security_controls(_doc(rows), fake_root, EXPECTED_IDS) == []
     problems = check_security_controls(_doc(rows[:41] + rows[42:]), fake_root, EXPECTED_IDS)
@@ -571,13 +578,18 @@ def test_a_missing_extra_or_repeated_id_is_reported(
         (f"SC{chr(0x2212)}02", [("id-malformed", f"SC{chr(0x2212)}02"), ("id-missing", "SC-02")]),
         ("", [("id-malformed", ""), ("id-missing", "SC-02")]),
         ("—", [("id-malformed", "—"), ("id-missing", "SC-02")]),
+        # W86: three digits are allowed from SC-100 on, but not a padded
+        # two-digit id or four digits.
+        ("SC-002", [("id-malformed", "SC-002"), ("id-missing", "SC-02")]),
+        ("SC-1000", [("id-malformed", "SC-1000"), ("id-missing", "SC-02")]),
     ],
 )
 def test_a_renumbered_or_malformed_id_is_reported(
     fake_root: Path, id_cell: str, expected: list[tuple[str, str]]
 ) -> None:
-    """Red when: a measure row whose ID is not exactly SC- and two digits (a
-    Unicode minus, a space, lower case, an empty cell) is accepted or skipped."""
+    """Red when: a measure row whose ID is not exactly SC- and two digits, or
+    three not starting with 0 (a Unicode minus, a space, lower case, an empty
+    cell, a padded ``SC-002``, four digits) is accepted or skipped."""
     assert _check(_doc(_with_cell(1, 0, id_cell)), fake_root) == expected
 
 

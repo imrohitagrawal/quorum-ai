@@ -174,6 +174,7 @@ ways, so the record shows what was believed on a date and what replaced it.
 | [ADR-0169](adr/0169-the-next-session-prompt-is-a-checked-template.md) | The next-session prompt is copied from a template, checked by name and sections, committed, and its paste line printed | Architecture | Accepted — 2026-10-16, building CHG-052 (the owner's "rule, not a habit") |
 | [ADR-0170](adr/0170-the-security-measures-list-names-a-test-for-each-measure.md) | The security measures list names a test for each measure, and a test checks the names | Architecture | Accepted — 2026-10-17, board row W82 |
 | [ADR-0171](adr/0171-a-request-body-over-1-mb-is-refused-before-it-is-read.md) | A request body over 1 MB is refused before it is read, and the request models bound what a body may hold | Architecture | Accepted — 2026-10-17, board row W85 |
+| [ADR-0172](adr/0172-signed-in-history-is-swept-for-every-account-and-deleted-securely.md) | Signed-in history is swept for every account, at every open and hourly, and the session store deletes securely | Architecture | Accepted — 2026-10-18, board row W86 |
 
 **This index was itself stale** until 2026-07-30: ADR-0002 had existed since
 2026-07-19 and was never listed here. A hand-maintained index is a derived fact
