@@ -71,6 +71,9 @@ Where the limit sits decides what the 413 carries (A8, measured in fresh process
    strictly: plain ASCII digits only. Python's `int()` accepts `1_0`, `+5`, spaces and non-ASCII
    digits, and raises on `abc`, which would be a 500. Anything that is not plain digits is left to
    the server, which answers 400 for it before the app runs, and the body is counted either way.
+   GET and HEAD are checked by declared length only and never read, because reading made a GET
+   that declares a body it never sends wait forever (review round 1, on uvicorn h11 and httptools),
+   and no GET route reads a body (every one has `body_field=None`).
 4. **The body is kept in one `bytearray` and handed to the app as one message.** Keeping each
    received message instead cost about 192 bytes per message (Codex plan review 1). The buffer is
    dropped before the app runs, so at most one second copy of at most 1 MB exists for a moment. If
@@ -115,8 +118,11 @@ Where the limit sits decides what the 413 carries (A8, measured in fresh process
 - **Return without calling the app when the client leaves mid-body.** A 500 and an ERROR log (A3).
 - **Add the limit last (outermost), as `add_middleware` order suggests at first reading.** The 413
   then has no security headers and no `X-Request-ID`, and is not counted (A8).
-- **Bound `model_slots` at 4.** Measured in ADR-0120 decision 6: the typed `INVALID_MODEL_SLOT`
-  answer for 5 slots becomes generic.
+- **Bound `model_slots` at 4.** ADR-0120 decision 6 measured a `min_length=max_length=4` bound:
+  `test_create_query_run_with_wrong_slot_count_preserves_typed_envelope`, which sends ONE slot, went
+  RED because the typed `INVALID_MODEL_SLOT` answer became generic. The typed answer for 5 slots is
+  pinned by
+  `tests/integration/test_panel_size_api_and_workspace.py::test_estimate_refuses_one_and_five_slots_with_the_range_message`.
 - **Rely on `extra="forbid"` alone.** It creates a new flood: one error per unknown key (A2).
 - **Rely on the 20-error cap alone.** It shortens the answer but not the work: 85,000 errors were
   still built, at 78 MB traced, before the cap could cut them (Codex plan review 2).
@@ -127,8 +133,11 @@ Where the limit sits decides what the 413 carries (A8, measured in fresh process
 ## Consequences
 
 - A body over 1 MB from any client gets 413 with no session needed, before any work. A client that
-  sends unknown fields now gets 422 where it was silently let through. The scan of the page's bodies, the
-  e2e specs and the Python tests found no unknown field (failure modes, section C), and `make quality`
+  sends unknown fields now gets 422 where it was silently let through. The page (`app.js`) sends no unknown
+  field. Two other senders did: `e2e/tests/navigation/navigation.spec.ts:58` and `:71` send
+  `model_ids`, which is not a field, and that spec accepts the 422; and two tests in
+  `tests/integration/test_quick_mode_backend.py` sent `safety_acknowledgements` to `/estimate`, which
+  commit `92b6ca6` changed (failure modes, section C). `make quality`
   ran the full suite on the branch with these docs: `7462 passed, 78 skipped`, exit 0.
 - The list of security measures gains SC-98 (the size limit) and SC-99 (the request-model bounds)
   in `docs/41-security-controls.md`.

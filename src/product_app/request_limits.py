@@ -10,7 +10,9 @@ event loop of a single-worker server (``Dockerfile`` runs ``--workers 1``,
    to Pydantic. A declared ``Content-Length`` over the limit is refused
    without reading a byte; every other body is COUNTED as it arrives, whatever
    the header says, because under h11 ``Content-Length: 5`` plus chunked
-   framing delivered 2,097,152 bytes to the app (W85 failure mode A4).
+   framing delivered 2,097,152 bytes to the app (W85 failure mode A4). GET
+   and HEAD are the exception: checked by declared length only, never read,
+   because no route for them reads a body (:data:`_UNBUFFERED_METHODS`).
 2. :func:`refuse_unknown_fields` makes any number of unknown keys in a request
    body ONE validation error. Plain ``extra="forbid"`` builds one error per
    key, so 111,000 unknown keys in a body under 1 MB came back as a 9.5 MB 422
@@ -37,6 +39,15 @@ MAX_REQUEST_BODY_BYTES = 1_048_576
 #: Digits in the limit. A longer ``Content-Length`` (leading zeros aside) is
 #: over it without calling ``int()``, which raises on a value over 4,300 digits.
 _LIMIT_DIGITS = len(str(MAX_REQUEST_BODY_BYTES))
+
+#: Methods checked by declared ``Content-Length`` only and never buffered.
+#: Buffering made ``GET /health`` with ``Content-Length: 10`` and no body wait
+#: forever (W85 review round 1, on uvicorn h11 and httptools). No GET route
+#: reads a body: every GET ``APIRoute`` has ``body_field=None`` and nothing
+#: under ``src/product_app`` calls ``.body()``, ``.json()``, ``.form()`` or
+#: ``.stream()`` (checked 2026-10-17). An unread body is not held either:
+#: uvicorn pauses reading past 65,536 bytes (``HIGH_WATER_LIMIT``).
+_UNBUFFERED_METHODS = frozenset({"GET", "HEAD"})
 
 UNKNOWN_FIELD_MESSAGE = "The request holds a field this endpoint does not accept."
 
@@ -146,6 +157,9 @@ class RequestBodyLimitMiddleware:
             return
         if _declares_too_large(scope.get("headers") or ()):
             await _send_too_large(send)
+            return
+        if scope.get("method") in _UNBUFFERED_METHODS:
+            await self._app(scope, receive, send)
             return
         buffer = bytearray()
         while True:
