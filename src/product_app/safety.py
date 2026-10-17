@@ -22,9 +22,10 @@ from threading import RLock
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, model_validator
 
 from product_app.feedback_store import record_event as _record_feedback_event
+from product_app.request_limits import refuse_unknown_fields
 from product_app.synthesis_length import _CaveatEnforcer
 
 WARNING_VERSION = "2026-06-17"
@@ -175,8 +176,12 @@ class SafetyWarning(BaseModel):
 
 
 class SafetyAcknowledgement(BaseModel):
+    # W85 (ADR-0171): an unknown key is refused, as ONE error however many
+    # keys are sent (``request_limits.refuse_unknown_fields``).
+    model_config = ConfigDict(extra="forbid")
     warning_type: WarningType
     version: str
+    _refuse_unknown_fields = model_validator(mode="before")(refuse_unknown_fields)
 
 
 @dataclass(frozen=True)

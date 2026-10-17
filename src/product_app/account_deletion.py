@@ -23,9 +23,10 @@ from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, StrictStr
+from pydantic import BaseModel, ConfigDict, StrictStr, model_validator
 
 from product_app import account_history, auth, run_history_store, session_store
+from product_app.request_limits import refuse_unknown_fields
 
 _log = logging.getLogger(__name__)
 
@@ -65,6 +66,9 @@ class AccountDeleteRequest(BaseModel):
     #: The visitor types their own email; compared without case or
     #: surrounding spaces.
     confirm_email: StrictStr
+    #: W85 (ADR-0171): ``extra="forbid"`` alone builds one error per unknown
+    #: key (85,000 keys, 85,000 errors); this makes them ONE.
+    _refuse_unknown_fields = model_validator(mode="before")(refuse_unknown_fields)
 
 
 def delete_signed_in_account(body: AccountDeleteRequest, request: Request) -> JSONResponse:

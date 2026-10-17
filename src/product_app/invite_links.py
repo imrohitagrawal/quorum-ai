@@ -37,7 +37,9 @@ from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request, Response, status
 from fastapi.responses import HTMLResponse
-from pydantic import BaseModel, ConfigDict, StrictStr
+from pydantic import BaseModel, ConfigDict, StrictStr, model_validator
+
+from product_app.request_limits import refuse_unknown_fields
 
 #: PROPOSED — AWAITING OWNER (ADR-0134), built at the safe default: a link
 #: works at most this many days ahead; each link opens at most this many new
@@ -189,6 +191,9 @@ def status_snapshot() -> dict[str, object]:
 class InviteAcceptRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     token: StrictStr
+    #: W85 (ADR-0171): ``extra="forbid"`` alone builds one error per unknown
+    #: key (85,000 keys, 85,000 errors); this makes them ONE.
+    _refuse_unknown_fields = model_validator(mode="before")(refuse_unknown_fields)
 
 
 def accept_invite(body: InviteAcceptRequest, request: Request) -> Response:

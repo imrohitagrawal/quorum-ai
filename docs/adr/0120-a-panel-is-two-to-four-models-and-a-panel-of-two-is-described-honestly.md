@@ -25,6 +25,10 @@ two branches cannot collide on a number (ADR-0119 exists on branch
 `proposal/268-web-search-context-tokens`). Update, 2026-10-16: ADR-0119 never joined `docs/adr/`;
 it is archived at `docs/archive/2026-10/adr-0119-the-web-search-context-constant-is-measured-low-and-raising-it-blocks-mixes.md` (ADR-0168).
 
+**Decision 6 amended by ADR-0171 (2026-10-17, board row W85):** the API edge is now bounded at 16
+items for `model_slots` and `slot_search`, well above the range, so every count from 5 to 16 still
+gets the typed `INVALID_MODEL_SLOT` answer and only a count above 16 gets the generic one.
+
 **Amendment, 2026-09-23 (CHG-011) — the third pull request, the copy outside
 the run path.** The product owner decided the wording in session, and the
 words are in CHG-011 and the decision register's 2026-09-23 section. In

@@ -18,7 +18,7 @@ from typing import Annotated, Literal, Self
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, model_validator
 
 from product_app import account_history
 from product_app.auth import (
@@ -210,6 +210,7 @@ from product_app.query_run_orchestration import (
 from product_app.query_run_orchestration import (
     query_run_repository as query_run_repository,
 )
+from product_app.request_limits import REQUEST_TOO_LARGE_RESPONSES, refuse_unknown_fields
 from product_app.safety import SafetyAcknowledgement, SafetyWarning, safety_warning_policy
 from product_app.synthesis import FINAL_SYNTHESIS_MAX_CHARS
 
@@ -250,6 +251,39 @@ _CONTEXT_MAX_LENGTHS = {
     "prior_synthesis": _CONTEXT_PRIOR_SYNTHESIS_MAX_LENGTH,
 }
 
+#: W85 (ADR-0171): FIXED text naming only the allowed keys. It used to list
+#: the unexpected keys too, so one 1 MB key came back as a 2 MB 422 (Codex
+#: plan review 5).
+_CONTEXT_KEYS_MESSAGE = f"context may only contain {sorted(_CONTEXT_MAX_LENGTHS)}"
+
+#: W85 (ADR-0171): how many items a request list may hold. ``model_slots`` and
+#: ``slot_search`` stop at 16, not at the panel's 4: a count of 5 to 16 still
+#: reaches ``_validate_model_id_list`` and gets the typed
+#: ``INVALID_MODEL_SLOT`` envelope (ADR-0120 decision 6); only above 16 is it
+#: Pydantic's generic ``VALIDATION_ERROR``. Unbounded, 500,000 wrong items in
+#: a body under 1 MB were 500,000 errors and a 47.4 MB 422 (failure mode A1).
+#: There are 2 warning types; 8 acknowledgements leave room for repeats.
+_MODEL_SLOTS_MAX_ITEMS = 16
+_SAFETY_ACKNOWLEDGEMENTS_MAX_ITEMS = 8
+
+
+def _refuse_unknown_context_keys(value: object) -> object:
+    """Refuse a ``context`` holding a key other than the two allowed, BEFORE
+    Pydantic checks each value.
+
+    W85 (ADR-0171): checked after, 80,000 unknown keys with wrong-typed values
+    were 80,000 errors (failure mode A1). ``None`` passes unchanged: the
+    schema advertises ``context: null`` (Codex plan review 3). Wired with
+    ``BeforeValidator``, not a decorator (the decorated-function cap of 55 is
+    full).
+    """
+    if isinstance(value, dict) and any(key not in _CONTEXT_MAX_LENGTHS for key in value):
+        raise ValueError(_CONTEXT_KEYS_MESSAGE)
+    return value
+
+
+_Context = Annotated[dict[str, str | None] | None, BeforeValidator(_refuse_unknown_context_keys)]
+
 
 def _check_context(ctx: dict[str, str | None] | None) -> None:
     """Validate a ``context`` mapping, or raise ``ValueError``.
@@ -264,12 +298,8 @@ def _check_context(ctx: dict[str, str | None] | None) -> None:
     """
     if ctx is None:
         return
-    allowed = set(_CONTEXT_MAX_LENGTHS)
-    extra = set(ctx.keys()) - allowed
-    if extra:
-        raise ValueError(
-            f"context may only contain {sorted(allowed)}; unexpected keys: {sorted(extra)}"
-        )
+    if any(key not in _CONTEXT_MAX_LENGTHS for key in ctx):
+        raise ValueError(_CONTEXT_KEYS_MESSAGE)
     for key, value in ctx.items():
         if value is None:
             continue
@@ -294,6 +324,11 @@ class _QueryRunRequestBase(BaseModel):
     a drift test pins it (``tests/unit/test_context_carry.py``).
     """
 
+    # W85 (ADR-0171): an unknown field is refused, as ONE error however many
+    # are sent. ``extra="forbid"`` is kept for the OpenAPI document; alone it
+    # builds one error per key (111,000 keys, a 9.5 MB 422, failure mode A2).
+    model_config = ConfigDict(extra="forbid")
+
     query_text: str = Field(min_length=1, max_length=_QUERY_TEXT_MAX_LENGTH)
     # W4. Deliberately NOT bounded to the panel range here: the count is
     # checked by ``_validate_model_id_list`` so a wrong count gets the typed
@@ -301,12 +336,15 @@ class _QueryRunRequestBase(BaseModel):
     # ``test_create_query_run_with_wrong_slot_count_preserves_typed_envelope``),
     # not Pydantic's generic ``VALIDATION_ERROR``. Measured 2026-09-22: a
     # ``min_length=max_length=4`` bound here turned that envelope generic.
-    model_slots: list[str] = Field(min_length=1)
+    # W85 bounds it at 16 instead, well above the range, so the typed envelope
+    # holds for every count up to 16 (see ``_MODEL_SLOTS_MAX_ITEMS``).
+    model_slots: list[str] = Field(min_length=1, max_length=_MODEL_SLOTS_MAX_ITEMS)
     # L2: optional per-slot web-search opt-in. Same length as
     # ``model_slots`` when provided. ``None`` (the default) means
     # "use the per-slot default" — which is search-enabled for the
-    # default four-slot demo run.
-    slot_search: list[bool] | None = None
+    # default four-slot demo run. W85: the same bound of 16 as
+    # ``model_slots``, so a length mismatch up to 16 stays typed.
+    slot_search: Annotated[list[bool], Field(max_length=_MODEL_SLOTS_MAX_ITEMS)] | None = None
     # L4: optional follow-up context from a previous query run. ``None``
     # (default) means no prior context — a fresh query. Values are ``str``,
     # not ``Any``: a wrong type is a 422 from the edge, never a 500 from
@@ -316,7 +354,9 @@ class _QueryRunRequestBase(BaseModel):
     # consumer is already None-safe (``costs.py`` does ``or ""``,
     # ``providers.py`` guards on truthiness), so rejecting it would break a
     # working client to fix a different bug (adversarial review, WP-G2).
-    context: dict[str, str | None] | None = Field(default=None)
+    #
+    # W85: ``_Context`` refuses unknown keys before the values are checked.
+    context: _Context = Field(default=None)
     # W5 (CHG-012 D1, ADR-0126): the request's SHAPE. ``"panel"`` (the
     # default, and everything a client sent before W5) is two to four models,
     # two debate rounds and a synthesis; ``"quick"`` is one model's sourced
@@ -324,6 +364,8 @@ class _QueryRunRequestBase(BaseModel):
     # shared base so ``/estimate`` and create price the same shape; a closed
     # set so a typo is a 422, never a silently priced panel.
     mode: Literal["panel", "quick"] = "panel"
+
+    _refuse_unknown_fields = model_validator(mode="before")(refuse_unknown_fields)
 
     @model_validator(mode="after")
     def _validate_context(self) -> Self:
@@ -343,7 +385,9 @@ class QueryRunEstimateResponse(BaseModel):
 
 
 class QueryRunCreateRequest(_QueryRunRequestBase):
-    safety_acknowledgements: list[SafetyAcknowledgement] = Field(default_factory=list)
+    safety_acknowledgements: list[SafetyAcknowledgement] = Field(
+        default_factory=list, max_length=_SAFETY_ACKNOWLEDGEMENTS_MAX_ITEMS
+    )
     cost_confirmation: CostConfirmation | None = None
 
 
@@ -389,6 +433,9 @@ class QueryRunWarningsRequest(BaseModel):
       and over-long values that create rejects — and accepted a 20 MB body.
     """
 
+    #: W85 (ADR-0171): unknown fields refused as ONE error, as on create.
+    model_config = ConfigDict(extra="forbid")
+
     query_text: str = Field(min_length=1, max_length=_QUERY_TEXT_MAX_LENGTH)
     #: Issue #155. Same shape as ``QueryRunCreateRequest.context`` on purpose:
     #: the probe must be able to describe the SAME request the client is about
@@ -396,12 +443,14 @@ class QueryRunWarningsRequest(BaseModel):
     #:
     #: Optional and defaulted, so a pre-#155 client that omits it is
     #: unaffected — it simply gets the query-text-only answer it got before.
-    context: dict[str, str | None] | None = Field(default=None)
+    context: _Context = Field(default=None)
     #: W5 (ADR-0126): the request's shape, so the probe can describe the same
     #: request create receives. Since ADR-0143 decision 3 no context rule
     #: depends on it: both shapes take the same context (issue #155: probe and
     #: create agree).
     mode: Literal["panel", "quick"] = "panel"
+
+    _refuse_unknown_fields = model_validator(mode="before")(refuse_unknown_fields)
 
     @model_validator(mode="after")
     def _validate_context(self) -> Self:
@@ -598,7 +647,11 @@ def _enforce_account_rate_limit(request: Request, session: SessionContext) -> No
 # -- routes ------------------------------------------------------------------
 
 
-@router.post("/estimate", response_model=QueryRunEstimateResponse)
+@router.post(
+    "/estimate",
+    response_model=QueryRunEstimateResponse,
+    responses=REQUEST_TOO_LARGE_RESPONSES,
+)
 def estimate_query_run(
     payload: QueryRunEstimateRequest,
     request: Request,
@@ -657,7 +710,12 @@ def estimate_query_run(
     )
 
 
-@router.post("", response_model=QueryRunCreateResponse, status_code=status.HTTP_202_ACCEPTED)
+@router.post(
+    "",
+    response_model=QueryRunCreateResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    responses=REQUEST_TOO_LARGE_RESPONSES,
+)
 def create_query_run(
     payload: QueryRunCreateRequest,
     request: Request,
@@ -1037,7 +1095,11 @@ def _create_response_for(query_run: QueryRun) -> QueryRunCreateResponse:
     )
 
 
-@router.post("/warnings", response_model=QueryRunWarningsResponse)
+@router.post(
+    "/warnings",
+    response_model=QueryRunWarningsResponse,
+    responses=REQUEST_TOO_LARGE_RESPONSES,
+)
 def get_query_run_warnings(
     payload: QueryRunWarningsRequest,
     request: Request,
