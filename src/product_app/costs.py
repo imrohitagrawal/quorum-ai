@@ -51,7 +51,7 @@ from threading import RLock
 from typing import TYPE_CHECKING, Any, Literal
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from product_app.catalog_fetcher import _FALLBACK_CATALOG
 from product_app.config import settings
@@ -70,6 +70,7 @@ from product_app.model_slots import (
     ModelSlot,
     openrouter_model_catalog_service,
 )
+from product_app.request_limits import refuse_unknown_fields
 
 #: The two critique shapes a run can take (``debate`` imports these, so the
 #: run's recorded ``critique_shape`` and the confirmation token's bound shape
@@ -650,8 +651,12 @@ class CostEstimate(BaseModel):
 
 
 class CostConfirmation(BaseModel):
+    # W85 (ADR-0171): an unknown key is refused, as ONE error however many
+    # keys are sent (``request_limits.refuse_unknown_fields``).
+    model_config = ConfigDict(extra="forbid")
     estimated_cost_usd: Decimal
     confirmation_token: str
+    _refuse_unknown_fields = model_validator(mode="before")(refuse_unknown_fields)
 
 
 class CostGuardrailDecision(BaseModel):

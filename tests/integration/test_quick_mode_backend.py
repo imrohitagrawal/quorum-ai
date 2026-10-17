@@ -172,7 +172,10 @@ def test_a_quick_run_answers_once_skips_debate_and_synthesis_and_completes(
                 {"warning_type": WarningType.HIGH_STAKES, "version": WARNING_VERSION},
             ],
         }
-        estimate = _estimate(client, headers, body)
+        # W85 (ADR-0171): /estimate refuses an unknown field, and
+        # ``safety_acknowledgements`` is a create-only field, so it is not sent.
+        estimate_body = {k: v for k, v in body.items() if k != "safety_acknowledgements"}
+        estimate = _estimate(client, headers, estimate_body)
         assert estimate.status_code == 200, estimate.text
         cost_estimate = estimate.json()["cost_estimate"]
         if cost_estimate["threshold_action"] == "require_confirmation":
@@ -235,7 +238,10 @@ def test_a_panel_run_still_reports_mode_panel_and_an_agreement(
                 {"warning_type": WarningType.HIGH_STAKES, "version": WARNING_VERSION},
             ],
         }
-        estimate = _estimate(client, headers, body).json()["cost_estimate"]
+        # W85 (ADR-0171): ``safety_acknowledgements`` is create-only; /estimate
+        # refuses it as an unknown field.
+        estimate_body = {k: v for k, v in body.items() if k != "safety_acknowledgements"}
+        estimate = _estimate(client, headers, estimate_body).json()["cost_estimate"]
         if estimate["threshold_action"] == "require_confirmation":
             body["cost_confirmation"] = {
                 "estimated_cost_usd": estimate["estimated_cost_usd"],

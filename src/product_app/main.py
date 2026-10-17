@@ -94,6 +94,7 @@ from product_app.readiness import (
     start_key_auth_probe,
 )
 from product_app.request_id import RequestIdMiddleware
+from product_app.request_limits import RequestBodyLimitMiddleware
 from product_app.run_history_store import RunHistoryStore
 from product_app.run_history_store import configure as configure_run_history_store
 from product_app.session_store import HistoryEntry, SessionStore
@@ -654,6 +655,13 @@ app.include_router(invite_links.router)
 app.include_router(account_deletion.router)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
+# W85 (CHG-063 (a), ADR-0171): a request body over 1,048,576 bytes is answered
+# 413 before it is read. Added FIRST, so it is the INNERMOST layer: every
+# layer added below wraps it, so the 413 still carries the security headers
+# and ``X-Request-ID`` and is counted in /metrics (as ``4xx``). Added after
+# the security-headers function, the 413 had neither (failure mode A8).
+app.add_middleware(RequestBodyLimitMiddleware)
+
 # OD-1 observability: Prometheus exposition at /metrics. Routes are grouped
 # by route TEMPLATE (instrumentator default), so raw paths/UUIDs never become
 # label values; /metrics itself is excluded so a scrape does not count itself
@@ -922,6 +930,13 @@ _PYDANTIC_TYPE_TO_CODE = {
 }
 
 
+#: W85 (ADR-0171): the most field errors a 422 returns, the FIRST ones. A body
+#: under 1 MB once bought 500,000 of them: a 47.4 MB response and a 521 MB
+#: peak on the single worker (failure mode A1). The list bounds stop most of
+#: those at one error each; this cap bounds whatever is left.
+_MAX_FIELD_ERRORS = 20
+
+
 def _format_validation_error(exc: RequestValidationError) -> JSONResponse:
     """Render a Pydantic validation error using the app's error envelope.
 
@@ -930,8 +945,12 @@ def _format_validation_error(exc: RequestValidationError) -> JSONResponse:
     object with a ``code``, a ``message``, and a ``field_errors`` list
     so it can show a domain-specific banner instead of "Unprocessable
     Content". This handler bridges the two shapes.
+
+    W85: at most ``_MAX_FIELD_ERRORS`` errors are returned, and the banner
+    code is picked from those alone, so it never names an error the response
+    does not show.
     """
-    raw_errors = exc.errors()
+    raw_errors = exc.errors()[:_MAX_FIELD_ERRORS]
     field_errors: list[dict[str, object]] = []
     primary_code = "VALIDATION_ERROR"
     primary_message = "Some of the values you provided could not be processed."

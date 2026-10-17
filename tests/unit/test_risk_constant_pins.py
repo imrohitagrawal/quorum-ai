@@ -540,6 +540,22 @@ BUCKET_B_PIN_BEHAVIOUR = {
         "assert an over-long value is refused on BOTH the create and /warnings "
         "routes; the numbers are tunable, the shared refusal is not (#155)"
     ),
+    # --- Added 2026-10-17 with W85 (ADR-0171) ---
+    "main._MAX_FIELD_ERRORS": (
+        "assert 20 errors are all returned and 21 are cut to the FIRST 20, with "
+        "literals on both sides: tests/unit/test_request_model_bounds.py::"
+        "test_twenty_one_validation_errors_are_cut_to_the_first_twenty"
+    ),
+    "query_runs._MODEL_SLOTS_MAX_ITEMS": (
+        "assert 16 slots validate and 17 are one too_long error, and 5 to 16 "
+        "keep the typed INVALID_MODEL_SLOT envelope: tests/unit/"
+        "test_request_model_bounds.py::test_model_slots_hold_16_but_not_17"
+    ),
+    "query_runs._SAFETY_ACKNOWLEDGEMENTS_MAX_ITEMS": (
+        "assert 8 acknowledgements validate and 9 are one too_long error: "
+        "tests/unit/test_request_model_bounds.py::"
+        "test_safety_acknowledgements_hold_8_but_not_9"
+    ),
     "readiness.APPROVED_REASON_PREFIXES": (
         "assert an unapproved reason cannot reach /ready; the list grows"
     ),
@@ -776,6 +792,12 @@ BUCKET_C_NO_PIN = {
         "cache lifetime; exercised by the result-fetch tests"
     ),
     "query_runs._CONTEXT_PRIOR_QUESTION_MAX_LENGTH": "derived from _QUERY_TEXT_MAX_LENGTH",
+    "query_runs._CONTEXT_KEYS_MESSAGE": (
+        "W85: message text built from _CONTEXT_MAX_LENGTHS; what must hold, that "
+        "it never echoes a key the client sent, is pinned by tests/unit/"
+        "test_request_model_bounds.py::"
+        "test_a_context_with_80_000_wrong_keys_is_one_error_naming_none_of_them"
+    ),
     "query_runs._CONTEXT_PRIOR_SYNTHESIS_MAX_LENGTH": (
         "derived; the pair is pinned via _CONTEXT_MAX_LENGTHS"
     ),

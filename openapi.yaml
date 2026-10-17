@@ -28,6 +28,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/QueryRunEstimateResponse'
+        '413':
+          description: The request body is larger than 1 MB (1,048,576 bytes).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RequestTooLargeResponse'
         '422':
           description: Validation Error
           content:
@@ -53,6 +59,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/QueryRunCreateResponse'
+        '413':
+          description: The request body is larger than 1 MB (1,048,576 bytes).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RequestTooLargeResponse'
         '422':
           description: Validation Error
           content:
@@ -78,6 +90,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/QueryRunWarningsResponse'
+        '413':
+          description: The request body is larger than 1 MB (1,048,576 bytes).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RequestTooLargeResponse'
         '422':
           description: Validation Error
           content:
@@ -581,6 +599,7 @@ components:
         confirmation_token:
           type: string
           title: Confirmation Token
+      additionalProperties: false
       type: object
       required:
       - estimated_cost_usd
@@ -1220,6 +1239,7 @@ components:
           items:
             type: string
           type: array
+          maxItems: 16
           minItems: 1
           title: Model Slots
         slot_search:
@@ -1227,6 +1247,7 @@ components:
           - items:
               type: boolean
             type: array
+            maxItems: 16
           - type: 'null'
           title: Slot Search
         context:
@@ -1249,11 +1270,13 @@ components:
           items:
             $ref: '#/components/schemas/SafetyAcknowledgement'
           type: array
+          maxItems: 8
           title: Safety Acknowledgements
         cost_confirmation:
           anyOf:
           - $ref: '#/components/schemas/CostConfirmation'
           - type: 'null'
+      additionalProperties: false
       type: object
       required:
       - query_text
@@ -1312,6 +1335,7 @@ components:
           items:
             type: string
           type: array
+          maxItems: 16
           minItems: 1
           title: Model Slots
         slot_search:
@@ -1319,6 +1343,7 @@ components:
           - items:
               type: boolean
             type: array
+            maxItems: 16
           - type: 'null'
           title: Slot Search
         context:
@@ -1337,6 +1362,7 @@ components:
           - quick
           title: Mode
           default: panel
+      additionalProperties: false
       type: object
       required:
       - query_text
@@ -1668,6 +1694,7 @@ components:
           - quick
           title: Mode
           default: panel
+      additionalProperties: false
       type: object
       required:
       - query_text
@@ -1795,6 +1822,31 @@ components:
       description: 'One source the judge was shown, as it was shown (title and URL
 
         collapsed and truncated by ``judge_evidence_sources``).'
+    RequestTooLargeDetail:
+      properties:
+        code:
+          type: string
+          const: REQUEST_TOO_LARGE
+          title: Code
+        message:
+          type: string
+          title: Message
+      type: object
+      required:
+      - code
+      - message
+      title: RequestTooLargeDetail
+    RequestTooLargeResponse:
+      properties:
+        detail:
+          $ref: '#/components/schemas/RequestTooLargeDetail'
+      type: object
+      required:
+      - detail
+      title: RequestTooLargeResponse
+      description: 'The 413 envelope: the same ``{"detail": {"code", "message"}}`` shape as
+
+        every other refusal, so the page''s error banner needs no special case.'
     ResultProjection:
       properties:
         model_answers:
@@ -1840,6 +1892,7 @@ components:
         version:
           type: string
           title: Version
+      additionalProperties: false
       type: object
       required:
       - warning_type
