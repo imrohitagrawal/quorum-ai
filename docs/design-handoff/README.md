@@ -171,6 +171,6 @@ No image assets. Logo is typographic: green rounded square + serif "Q" (Newsread
 
 ## Known repo follow-ups (not UI work)
 - `docs/32-ui-state-matrix.md` is a TBD stub — this package's screens/states can fill it.
-- `docs/10-functional-requirements.md` FR-012: title says "Required bring-your-own OpenRouter key" but behavior/ACs (AC-026) specify server-configured keys with **no** user key field. The UI follows the behavior + AC-026. Reconcile the FR title.
+- `docs/10-functional-requirements.md` FR-012: title says "Required bring-your-own OpenRouter key" but behavior/ACs (AC-026) specify server-configured keys with **no** user key field. The UI follows the behavior + AC-026. Reconcile the FR title. **Reconciled 2026-10-17 (CHG-079):** FR-012 is now "Optional bring-your-own OpenRouter key", not built (W28, ADR-0180), and AC-026 now says a user's own key never reaches the browser. Until W28 is built, no provider-key field is shown.
 - `docs/91-product-naming.md` contains placeholder names pending sign-off; record "Quorum".
 - **This section (05b) closes a real staleness gap**: this package was R1-only for three weeks after Release 2 shipped a trust/evaluation surface (FR-016) that wasn't documented here, and `AC-CROSSWALK.md`'s coverage claim was inaccurate as a result (see that file's own note). Checked `docs/10-functional-requirements.md` FR-016's title/scope against the as-shipped surface while writing this — consistent, no reconciliation needed there.

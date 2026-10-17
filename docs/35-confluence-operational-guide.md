@@ -96,7 +96,7 @@ Users who rely on AI for important work currently switch between multiple chatbo
 
 - Query execution: authenticated account only.
 - Result retrieval: owning account only.
-- BYO OpenRouter key management: owning account only.
+- BYO OpenRouter key management: owning account only (planned: W28, ADR-0180).
 - App-owned provider keys: server-side access only.
 - External Jira/Confluence publication: explicit human approval and authorized tool access only.
 
@@ -193,7 +193,7 @@ The MVP uses multiple AI models through OpenRouter-supported model identifiers. 
 - Users may over-trust a synthesized answer.
 - Two debate rounds may exceed cost or latency guardrails.
 - Search fallback may produce inconsistent citation quality.
-- BYO OpenRouter keys increase secret-handling complexity.
+- BYO OpenRouter keys increase secret-handling complexity (planned: W28, ADR-0180).
 - Users may submit sensitive/private data despite warnings.
 - Provider errors may leak unsafe metadata if redaction fails.
 
@@ -204,7 +204,7 @@ The MVP uses multiple AI models through OpenRouter-supported model identifiers. 
 - Source-backed answer: An answer that includes visible links from search-backed retrieval.
 - Critique round: A step where models evaluate other outputs for disagreement, missing reasoning, or weak evidence.
 - Final synthesis: The user-facing answer that combines model outputs and critique results.
-- BYO key: A user-provided OpenRouter key used only for that user's account.
+- BYO key: A user-provided OpenRouter key used only for that user's account (planned, not built: W28, ADR-0180).
 - Partial result: A result returned when one or more workflow steps fail but useful output remains.
 
 ## FAQ
@@ -214,7 +214,7 @@ The MVP uses multiple AI models through OpenRouter-supported model identifiers. 
 | Is the guide published in Confluence? | No. It is a repository draft until explicit human approval and approved tool execution. |
 | Can users run queries without an account? | No. Query execution requires an authenticated account. |
 | Are high-stakes answers professional advice? | No. They must be presented as decision support only. |
-| Is sensitive/private data supported? | No. The MVP warns users not to submit it until privacy controls are finalized, and a BYO OpenRouter key does not change that. |
+| Is sensitive/private data supported? | No. The MVP warns users not to submit it until privacy controls are finalized, and a BYO OpenRouter key (planned: W28, ADR-0180) does not change that. |
 | Does the product guarantee factual correctness? | No. It reduces hallucination risk by exposing sources, consensus, disagreement, and uncertainty. |
 | What happens when a provider fails? | The system should return safe failure notices and partial results where quality rules allow. |
 

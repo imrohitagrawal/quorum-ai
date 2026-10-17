@@ -187,12 +187,12 @@ Given the server is configured with provider credentials from environment variab
 - Requirement: FR-011, NFR-006
 - Test: TEST-FR-011, TEST-NFR-006
 
-## AC-026 No user-entered provider key field
+## AC-026 A user's own key never reaches the browser
 
-Given a user opens the query workflow, when the workspace loads, then no user-entered provider-key field is shown and no provider key is stored in the browser.
+Given a signed-in user has connected their own OpenRouter key, when any page, response, export, log line or error is produced, then the key is in none of them and in no browser storage, and only its last 4 characters are ever shown. Until W28 is built no key can be connected, and no provider-key field is shown (CHG-079, ADR-0180).
 
-- Requirement: FR-011, FR-012, NFR-006
-- Test: TEST-FR-011, TEST-FR-012, TEST-NFR-006
+- Requirement: FR-012, NFR-006
+- Test: TEST-FR-012, TEST-NFR-006
 
 ## AC-027 Full result components displayed
 

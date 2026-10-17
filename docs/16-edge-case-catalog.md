@@ -14,7 +14,7 @@
 | EDGE-010 | FR-009 | Models disagree on a material conclusion. | Final synthesis preserves disagreement and avoids false consensus. | TEST-FR-009 | Product owner | Planned |
 | EDGE-011 | FR-010 | Provider latency reaches the 180-second hard timeout. | A terminal completed-partial or failure state is returned with explanation. | TEST-NFR-001 | Engineering lead | Planned |
 | EDGE-012 | FR-011 | Provider exception includes credentials or request metadata. | Logs and user-visible errors redact secrets and show only safe diagnostics. | TEST-NFR-006 | Engineering lead | Planned |
-| EDGE-013 | FR-012 | User removes a BYO OpenRouter key while a query is running. | Key removal affects future executions; current execution behavior is recorded by implementation design before coding. | TEST-FR-012 | Product owner | Planned |
+| EDGE-013 | FR-012 | User removes a BYO OpenRouter key while a query is running. | The page asks whether to stop the run now or let it finish on that key and then remove it; no answer means stop; the run never moves to the app's key (CHG-078, ADR-0180). | TEST-FR-012 (tests T15 and T26 of the W28 research file) | Product owner | Planned (W28) |
 | EDGE-014 | FR-013 | Result page loads for a partial-result query. | Available model answers, failed steps, cost, elapsed time, and partial synthesis state are visible. | TEST-FR-013 | Product owner | Planned |
 
 ## Required Edge-Case Categories

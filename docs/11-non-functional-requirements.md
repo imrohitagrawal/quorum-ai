@@ -65,12 +65,12 @@ These NFRs apply to the Release 1 MVP query workflow and supporting browser-sess
 ## NFR-005 Session ownership, CSRF, and authorization
 
 - Category: Security.
-- Target: 100 percent of query execution, BYO key management, and result retrieval endpoints require a valid browser session tied to the owning session cookie; all mutating endpoints reject missing or invalid CSRF tokens.
+- Target: 100 percent of query execution and result retrieval endpoints (and the own-key routes, once board row W28 builds them, ADR-0180) require a valid browser session tied to the owning session cookie; all mutating endpoints reject missing or invalid CSRF tokens.
 - Measurement: Automated permission tests and API contract tests for missing-session, expired-session, wrong-session, and invalid-CSRF requests.
 - Owner: Engineering lead.
 - Priority: Must.
 - Rationale: Session ownership is the temporary security boundary for secrets, cost, and result access until durable accounts are introduced.
-- Acceptance criteria: AC-001, AC-002, AC-025, AC-032.
+- Acceptance criteria: AC-001, AC-002, AC-032.
 - Tests: TEST-NFR-005.
 - Dashboard: Authentication failure counts and authorization denial counts.
 - Alert: Security ticket for any permission regression in CI or production monitoring.
@@ -84,7 +84,7 @@ These NFRs apply to the Release 1 MVP query workflow and supporting browser-sess
 - Owner: Engineering lead.
 - Priority: Must.
 - Rationale: App-owned and BYO OpenRouter/Tavily credentials must remain confidential.
-- Acceptance criteria: AC-023, AC-024, AC-026.
+- Acceptance criteria: AC-023, AC-024, AC-025, AC-026.
 - Tests: TEST-NFR-006.
 - Dashboard: Secret scanning status and redaction test status.
 - Alert: Immediate security incident for any detected provider-key exposure.

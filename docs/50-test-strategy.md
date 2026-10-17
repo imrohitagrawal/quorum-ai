@@ -2,7 +2,7 @@
 
 ## 2026-06-17 correction
 
-- Primary regression coverage now includes browser-session issuance/expiry, CSRF protection, session-scoped BYO key ownership, estimate-confirm-block flow, live stage progress, cancellation, and ephemeral-result behavior.
+- Primary regression coverage now includes browser-session issuance/expiry, CSRF protection, session-scoped BYO key ownership (not built; the decided design keeps the key per signed-in account, never per session: W28, ADR-0180), estimate-confirm-block flow, live stage progress, cancellation, and ephemeral-result behavior.
 
 ## Test pyramid
 

@@ -77,7 +77,7 @@ Users currently compare multiple AI chatbots manually to reduce hallucination ri
 - Query runs and results are ephemeral and in memory for the current process/session.
 - Browser mode uses an opaque session cookie and CSRF token for mutating requests.
 - Legacy `X-Account-Id` header mode exists only for tests/dev and must not be enabled in production.
-- The current repository has known documentation/API drift around removed BYO provider-key endpoints. QA must validate and report that drift if still present.
+- The current repository has known documentation/API drift around removed BYO provider-key endpoints. QA must validate and report that drift if still present. Since #10 (2026-07-11) `openapi.yaml` no longer lists them; a user's own key is planned as board row W28 (ADR-0180).
 
 ## Scope In
 
@@ -298,7 +298,7 @@ The testing task is ready when all of the following are true:
 | Test data | Synthetic test data from this ticket is approved for use. |
 | Evidence location | QA knows where to store test reports, screenshots, accessibility notes, security scan output, and defect links. |
 | Known gaps | QA understands that remote CI, external scans, load/percentile evidence, full manual WCAG audit, durable persistence, live provider execution, deployment, and production telemetry may still be missing. |
-| Contract drift | QA is instructed to test and report OpenAPI/runtime/doc drift, especially around removed BYO key routes. |
+| Contract drift | QA is instructed to test and report OpenAPI/runtime/doc drift, especially around removed BYO key routes (`openapi.yaml` dropped them in #10; a user's own key is planned as W28, ADR-0180). |
 
 ## Definition Of Test
 
@@ -364,8 +364,8 @@ This QA Jira is done when all of the following are true:
 
 | Seed | Expected QA Action |
 |---|---|
-| `openapi.yaml` still lists `/v1/provider-keys/openrouter` routes while current `src/product_app` has no provider-key route implementation. | Verify runtime behavior and file a contract drift defect unless already fixed. |
-| Release evidence and test evidence mention BYO provider-key endpoint tests that are not present in the current test tree. | File documentation/evidence drift defect unless evidence is restored or corrected. |
+| `openapi.yaml` listed `/v1/provider-keys/openrouter` routes until #10 (2026-07-11), while `src/product_app` had no provider-key route implementation. | Verify runtime behavior and file a contract drift defect unless already fixed. #10 removed the routes from `openapi.yaml`, so this seed is closed. |
+| Release evidence and test evidence mention BYO provider-key endpoint tests that are not present in the current test tree. Those files never existed in any commit; both evidence files now mark BYO as not built (W28, ADR-0180). | File documentation/evidence drift defect unless evidence is restored or corrected. |
 | `docs/50-test-strategy.md` is sparse compared with `docs/54-ac-to-test-map.md`. | Use `docs/54-ac-to-test-map.md` as the detailed map and file improvement if needed. |
 | Production readiness remains no-go in release evidence. | Do not certify production release without missing release evidence. |
 | Live provider execution may not be testable without a key. | Mark live smoke blocked if no key is supplied; do not infer live behavior from local simulation. |

@@ -1,5 +1,7 @@
 # Bring-your-own-key: the failure modes, listed before any code (2026-09-23)
 
+> **Superseded by** `docs/analysis/2026-10-17-w28-key-storage-research.md` (2026-10-17), the one W28 analysis; its section 17 says where each mode below went. This page keeps its path because the W28 board row, ADR-0121 and ADR-0123 cite it. The design is now ADR-0180 (CHG-075 to CHG-080).
+
 **PROPOSED — AWAITING OWNER.** AGENTS.md rule 16e: before code that touches
 money, auth or safety, list the known failure modes on one page and design
 against the list. The owner planned BYOK on 2026-09-23 (CHG-011 D8, ADR-0121,

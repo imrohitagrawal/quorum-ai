@@ -209,7 +209,7 @@ A few non-obvious properties that are worth a closer look:
 │   ├── request_id.py             # Per-request ID correlation
 │   ├── untrusted_text.py         # Fencing for untrusted prose sent to an LLM
 │   ├── visible_text.py           # "does this provider text have visible content" predicate
-│   ├── provider_keys.py          # Provider API key lookup
+│   ├── provider_keys.py          # Credential-source enum (every run is app-owned today)
 │   ├── static/                   # app.js, app.css
 │   └── templates/workspace.html  # The single page
 ├── tests/

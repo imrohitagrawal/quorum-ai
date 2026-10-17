@@ -289,6 +289,8 @@ Each is free, takes minutes and needs no code.
 
 ## 5. Bring-your-own key: the session's recommendation
 
+> **For W28 this section is superseded by** `docs/analysis/2026-10-17-w28-key-storage-research.md` (2026-10-17) and ADR-0180; the owner's decisions are CHG-075 to CHG-080. The plan on branch `w28/byok-pr1-plan` named below is now `docs/archive/2026-10/2026-09-29-byok-pr1-plan.md`; its 21 tests are merged into section 13 of the new file.
+
 **PROPOSED — AWAITING OWNER.** ADR-0121 is still PROPOSED. The six decisions listed in the
 unmerged plan on branch `w28/byok-pr1-plan` (commit `7bdfa87`) are still open. That plan's line
 "no encryption exists" is out of date: `cryptography==50.0.2` is a dependency (`pyproject.toml:42`).

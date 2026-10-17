@@ -22,8 +22,8 @@
 | Feature | FEAT-003 | Debate and synthesis decision-support output | CAP-001 | Story | To Do |
 | Vertical Slice | VS-009 | Two critique/debate rounds with timeout budget | FEAT-003 | Task | Ready For Dev |
 | Vertical Slice | VS-010 | Final synthesis sections and AI eval checks | FEAT-003 | Task | Ready For Dev |
-| Feature | FEAT-004 | Provider secret and BYO key handling | CAP-001 | Story | To Do |
-| Vertical Slice | VS-011 | BYO OpenRouter key add/remove/status and account scoping | FEAT-004 | Task | Ready For Dev |
+| Feature | FEAT-004 | Provider secret and BYO key handling (BYO part not built: W28, ADR-0180) | CAP-001 | Story | To Do |
+| Vertical Slice | VS-011 | BYO OpenRouter key add/remove/status and account scoping (not built: W28, ADR-0180) | FEAT-004 | Task | Ready For Dev |
 | Feature | FEAT-005 | Release hardening and evidence | CAP-001 | Story | To Do |
 | Vertical Slice | VS-012 | E2E, accessibility, performance, observability, security, and eval evidence | FEAT-005 | Task | Ready For Dev |
 
@@ -41,7 +41,7 @@
 | VS-008 | AC-014, AC-015, AC-027, AC-028 | Model answer capture, redaction, result presentation tests |
 | VS-009 | AC-016, AC-017, AC-021, AC-022 | Debate round and timeout tests |
 | VS-010 | AC-018, AC-019, AC-020, AC-031, AC-034 | Synthesis, false-consensus, citation, high-stakes eval tests |
-| VS-011 | AC-023, AC-024, AC-025, AC-026, AC-032 | Secret redaction, BYO scoping, removal, wrong-account tests |
+| VS-011 | AC-023, AC-024, AC-025, AC-026, AC-032 | Secret redaction, BYO scoping, removal, wrong-account tests (BYO tests not written: W28, ADR-0180) |
 | VS-012 | AC-029, AC-035, AC-036 plus regression coverage | Performance, accessibility, observability, E2E, release evidence |
 
 ## Smallest deliverable chunk
