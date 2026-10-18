@@ -56,7 +56,7 @@ The user asks a medical, legal, financial, safety, or regulated-domain question.
 
 1. System detects or receives the query as high-stakes.
 2. System shows decision-support-only warning.
-3. User chooses whether to continue.
+3. User chooses whether to continue. The run is held until the user ticks the acknowledgement box: a run started before the box appears is stopped at the final warnings check, back on the question, with the line "Tick the box above to run this question." under the buttons and focus on the box. Each new run needs a fresh tick (W100, ADR-0173, CHG-065 (b)).
 4. If the run continues, the output includes limitation language and source-backed uncertainty.
 
 ### Success Criteria

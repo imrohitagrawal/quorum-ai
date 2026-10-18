@@ -513,8 +513,8 @@
     // is set from ``POST /v1/query-runs/warnings`` (a ``high_stakes``
     // warning in the response). While it is true and the user has not
     // checked the acknowledgement (``highStakesAck``), the primary CTA
-    // stays disabled. The acknowledgement itself is still sent as
-    // ``safety_acknowledgements[]`` by the existing run flow.
+    // stays disabled. W100 (ADR-0173): ``proceedWithRun`` sends it only if
+    // ``highStakesAck`` is true after the final check; else it holds the run.
     highStakesRequired: false,
     highStakesAck: false,
     // Per-SLOT USD estimate keyed by slot position (array index),

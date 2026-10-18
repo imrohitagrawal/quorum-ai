@@ -40,16 +40,19 @@ owner's instruction, between 05:16 and 06:00 UTC (CHG-057).
      question, so an account that stopped using the site kept its old questions on disk. The owner
      approved "none completed more than 30 days ago" (`docs/48-data-retention.md`, CHG-023). Fixed by
      W86: every account is swept when the store opens and about hourly (ADR-0172).
-  3. W100: the page can tell the server the user acknowledged a high-stakes warning that was never
-     shown (details held back until the fix ships (CHG-060)).
+  3. W100: when "Run now" was pressed before the page's half-second check answered, or when that
+     check failed, the page told the server the user acknowledged a high-stakes warning that was never
+     shown. Fixed by W100: the high-stakes acknowledgement is sent only when the box is ticked after
+     the final warnings check, and the run is held for the box otherwise (ADR-0173).
 - **17 new rows, W85 to W101.** Seven existing rows change (W71, W72, W73, W74, W75, W77, W78). The owner
   answered four questions on 2026-10-17 (CHG-056, section 6): W87 and W78 are no longer waiting, W74
   is priced before any spend, and W94's limits still wait on the owner.
 
 **What this public file holds back.** The repository is public. For the live gaps not yet fixed
-(W87, W88, W100), this file says what the gap is and which row fixes it, but not how to
+(W87, W88), this file says what the gap is and which row fixes it, but not how to
 reproduce it; the full evidence is kept outside the repository until each fix ships (CHG-060).
-W85's detail was restored here when its fix was built (fixed by W85).
+W85's detail was restored here when its fix was built (fixed by W85), and W100's when its fix was
+built (fixed by W100).
 
 ## 1. What the session ran
 
@@ -60,7 +63,7 @@ W85's detail was restored here when its fix was built (fixed by W85).
 | The section-9 agent's cited tests exist | the same check over its report | `ids 30 ok 30 missing 0` |
 | The inventory agent's cited tests exist | the same check over its report | `ids 144 ok 144 missing 0` |
 | The tests `docs/41-security-controls.md` names exist and pass | the same check over the file (the generator wrote each `::name` shorthand out in full), then `pytest` on those ids in a `git archive` copy of `2f13e22` | `ids 216 ok 216 missing 0`; `1 failed, 387 passed`. The failure is `tests/unit/test_w69_round2_regressions.py::test_the_command_make_runs_fails_on_a_planted_injection`: in the copy, `make` built a new environment without `zizmor` and printed `Failed to spawn: zizmor`. That test passed in the branch's full `make quality` run |
-| The page can acknowledge a high-stakes warning the user never ticked | read `src/product_app/static/app.js` | confirmed; details held back until the fix ships (CHG-060); the evidence is kept outside the repository |
+| The page could acknowledge a high-stakes warning the user never ticked (fixed by W100) | read `src/product_app/static/app.js` (line numbers as the session read them, before W100): `startRun` (`:9425`), `highStakesGateSatisfied` (`:9358`), `scheduleHighStakesCheck` (`:9348`), `proceedWithRun` (`:9481`, the create body near `:9566`) | the box was checked only when the half-second background check had already marked the question high-stakes; on "Run now" an allowed estimate went straight to `proceedWithRun`, which fetched the warnings and sent every one back as acknowledged |
 | A request body was parsed before the session was checked (fixed by W85) | a pytest probe in a `git archive` copy: `TestClient(main.app)`, `POST /v1/query-runs` with no cookie | bad JSON: `422` "JSON decode error" (not `401`); good JSON: `401 AUTH_REQUIRED`; a 200 MB body: `401`, and the test process's peak memory rose from 108 MB to 907 MB. The client and the server share that one process, so the 907 MB is both together. Whether Fly's proxy limits the size is UNVERIFIED; the session sent nothing large to production |
 | An unhandled error page has no security headers | a pytest probe: a route that raises, through `TestClient(raise_server_exceptions=False)` | `500`, body `Internal Server Error`, `content-security-policy` absent, `x-content-type-options` absent, `x-frame-options` absent; on `/health` the policy is present |
 | Production's response headers | `curl -s -D - -o /dev/null https://quorum-ai.fly.dev/status` (and `/health`, `/ready`) | `content-security-policy` with `script-src 'self' 'unsafe-inline'`, `strict-transport-security: max-age=31536000; includeSubDomains`, `x-frame-options: DENY`, `x-content-type-options: nosniff`, `referrer-policy: no-referrer`. No `cache-control`, no `permissions-policy` |
@@ -155,7 +158,7 @@ asked for three splits, a narrower W89 and corrected wording; those changes are 
 | W97 | Google sign-in token checks: send and check a `nonce`, refuse a future `nbf`, and either check the ID token's signature against Google's keys or record the exception to ASVS in ADR-0130 | V6.8.2, V9.1.1, V9.1.2, V9.2.1, V10.5.1 | low: the token comes only from the server's own call to Google over verified TLS, which ADR-0130 decision 4 says OpenID Connect allows (the ADR notes the specification text was not re-read); no bypass is shown | ADR-0130 read by the session; the rest agents' report |
 | W98 | Give a test to each measure in place that no test would miss | V1.2.3, V3.3.4, V3.4.2, V3.5.1, V3.5.2, V3.7.2, V4.1.1, V6.3.2, V6.3.4, V7.2.2, V7.2.3, V8.2.2, V8.2.3, V12.2.1, V12.3.2, V13.2.2, V13.2.3, V13.4.1, V13.4.3, V13.4.4, V14.3.3, V15.2.3, V16.5.1; the "no test" list in `docs/41-security-controls.md` | a later change could remove the measure unnoticed | agents' report |
 | W99 | Make the security documents match the code: rewrite `docs/40-threat-model.md` and `docs/45-control-mapping.md`; one table each for routes and who may call them, stored data and its keep time, outbound connections, logs, sign-in pathways, and request rules and limits; amendment lines on the session ADRs; test files `docs/18-requirement-traceability-matrix.md` names that never existed; stale numbers and comments; the placeholder `.github/CODEOWNERS` | V2.1.1 to V2.1.3, V14.2.4, V6.1.1, V6.1.3, V8.1.1, V8.1.2, V13.1.1, V14.1.1, V14.1.2, V15.1.3, V16.1.1, V16.2.3; section-9 and inventory agents | process. Takes `docs/45` over from W77 | agents' report |
-| W100 | The page sends a high-stakes acknowledgement only when the user ticked the box, and checks the warnings again before it creates the run | inventory SC-68 | live: the server records an acknowledgement the user never gave; details held back until the fix ships (CHG-060) | read by the session (section 1) |
+| W100 | The page sends a high-stakes acknowledgement only when the user ticked the box, and checks the warnings again before it creates the run | inventory SC-68 | was live, fixed by W100 (ADR-0173): the server recorded an acknowledgement the user never gave. By reading, three ways reached it: "Run now" before the half-second check answered; a failed background check, which left the gate open; and the cost gate's confirm button (also Ctrl or Cmd and Enter), which had no high-stakes check. Not run in a browser by W82; W100's failure-modes list reproduced all three on a local simulated server (`docs/analysis/2026-10-18-w100-high-stakes-ack-failure-modes.md`, section 0) | read by the session (section 1) |
 | W101 | Invite links, off in production: the cookie gets the `__Host-` prefix, the key must be 32 random bytes, the host is part of what is signed, and revoking a link ends the sessions it opened | V3.3.1, V3.3.3, V9.1.3, V9.2.3; section-9 agent | low while invite links are off (`/status` `invite_links.enabled: false`) | agents' report |
 
 **Existing rows that change** (same concern, same code, so they share the pull request):
@@ -205,7 +208,7 @@ because it moves the screenshot baselines (ADR-0149).
 |---|---|---|
 | 1 | W85 | Was live, measured, open to anyone with no session; a size limit is a small change. Fixed by W85 |
 | 2 | W86 | Was live; kept question text past the 30 days the owner approved. Fixed by W86 |
-| 3 | W100 | Live; the server records a consent the user did not give |
+| 3 | W100 | Was live; the server recorded a consent the user did not give. Fixed by W100 |
 | 4 | W87 | Live; sessions have no maximum age. The owner set its values on 2026-10-17 (CHG-056 (c), (d)) |
 | 5 | W88 | Live; another site can affect a visitor's sessions |
 | 6 | W80 | Live: a cross-site link cancels a sign-in in progress. `/feedback/audit` answers any session, though production has no report to serve (`/status` `latest_audit: null`) |
