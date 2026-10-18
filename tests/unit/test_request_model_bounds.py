@@ -13,8 +13,9 @@ Every bound is pinned with literals on both sides (16 accepted, 17 refused;
 positive partner showing the valid body still validates (rule 7).
 
 The valid bodies are the exact shapes the page sends (failure-modes section C:
-``runRequestBody``, ``warningsRequestBody``, ``warningAcknowledgements`` and the
-cost-confirmation payload in ``app.js``).
+``runRequestBody``, ``warningsRequestBody``, ``safetyAcknowledgementsFor`` (W100;
+it replaced ``warningAcknowledgements`` and keeps its ``{warning_type, version}``
+shape) and the cost-confirmation payload in ``app.js``).
 """
 
 from __future__ import annotations
