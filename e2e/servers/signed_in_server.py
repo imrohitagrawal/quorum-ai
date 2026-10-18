@@ -21,6 +21,14 @@ Everything is hermetic and $0: a fresh temporary directory holds the sessions,
 feedback and run-history databases; live execution is off and every provider
 key is blank, so every run is a local simulation.
 
+W87-1 (ADR-0174) adds ONE more test-only seam, on the same loopback stub and
+never on the app: ``POST /age-sessions`` with ``{"session_id": ..., "age_seconds":
+...}`` makes that session have started ``age_seconds`` ago (in the process
+cache and its durable row), so a browser test can stand at 11 h 55 m of a
+12-hour session without waiting. The stub listens on the app's port + 1 so a
+spec can reach it. ``tests/unit/test_age_sessions_is_test_only.py`` keeps the
+handler out of ``src``.
+
 Usage (from the repository root)::
 
     PYTHONPATH=src:. uv run python e2e/servers/signed_in_server.py --port 18096
@@ -53,10 +61,44 @@ def _claims_for(code: str) -> dict[str, Any]:
     return good_claims(sub=sub, email=email)
 
 
+def _age_session(raw: bytes) -> tuple[int, dict[str, Any]]:
+    """TEST-ONLY (W87-1): the session started ``age_seconds`` ago and was
+    last used now. Imported here, at call time: the app is imported by then."""
+    from datetime import UTC, datetime, timedelta
+
+    from product_app import auth, session_store
+    from product_app.session_store import _digest
+
+    asked = json.loads(raw.decode() or "{}")
+    session_id = str(asked.get("session_id") or "")
+    now = datetime.now(UTC)
+    started = now - timedelta(seconds=float(asked.get("age_seconds") or 0))
+    with auth.session_repository._lock:
+        cached = auth.session_repository._sessions.get(session_id)
+        if cached is not None:
+            cached.created_at = started
+            cached.last_used_at = now
+    rows = 0
+    store = session_store.get_store()
+    if store is not None:
+        with store._lock:
+            rows = store._conn.execute(
+                "UPDATE sessions SET created_at = ?, last_used_at = ? WHERE session_digest = ?",
+                (started.isoformat(), now.isoformat(), _digest(session_id)),
+            ).rowcount
+    found = cached is not None or rows > 0
+    return (200 if found else 404), {"cached": cached is not None, "rows": rows}
+
+
 class _TokenHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802 - http.server's name
         length = int(self.headers.get("Content-Length") or 0)
-        form = {k: v[0] for k, v in parse_qs(self.rfile.read(length).decode()).items()}
+        raw = self.rfile.read(length)
+        if self.path == "/age-sessions":
+            status, answer = _age_session(raw)
+            self._send(status, json.dumps(answer).encode())
+            return
+        form = {k: v[0] for k, v in parse_qs(raw.decode()).items()}
         body = json.dumps(
             {
                 "access_token": ACCESS_TOKEN,
@@ -66,7 +108,10 @@ class _TokenHandler(BaseHTTPRequestHandler):
                 "id_token": make_id_token(_claims_for(form.get("code", ""))),
             }
         ).encode()
-        self.send_response(200)
+        self._send(200, body)
+
+    def _send(self, status: int, body: bytes) -> None:
+        self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
@@ -76,8 +121,8 @@ class _TokenHandler(BaseHTTPRequestHandler):
         return
 
 
-def _start_token_stub() -> str:
-    server = ThreadingHTTPServer(("127.0.0.1", 0), _TokenHandler)
+def _start_token_stub(port: int) -> str:
+    server = ThreadingHTTPServer(("127.0.0.1", port), _TokenHandler)
     server.daemon_threads = True
     threading.Thread(target=server.serve_forever, daemon=True).start()
     return f"http://127.0.0.1:{server.server_address[1]}/token"
@@ -125,7 +170,8 @@ def main() -> None:
     from product_app import google_signin
     from product_app.main import app
 
-    google_signin.GOOGLE_TOKEN_ENDPOINT = _start_token_stub()
+    # Port + 1, fixed, so session-max-age.spec.ts can reach /age-sessions.
+    google_signin.GOOGLE_TOKEN_ENDPOINT = _start_token_stub(port + 1)
     uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")
 
 
