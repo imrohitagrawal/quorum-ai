@@ -187,7 +187,7 @@ async function expectReleasedByTick(page: Page) {
   await ack(page).check();
   await expect(line(page)).toBeHidden();
   await expect
-    .poll(() => ack(page).getAttribute("aria-describedby"), { message: "the description goes with the line" })
+    .poll(() => ack(page).getAttribute("aria-describedby").then((v) => v ?? ""), { message: "the description goes with the line" })
     .not.toMatch(/(^|\s)high-stakes-held(\s|$)/);
   await expect(runNow(page)).toBeEnabled();
   await expect(seeEstimate(page)).toBeEnabled();
@@ -386,7 +386,7 @@ test.describe("W100 — a high-stakes acknowledgement only for a ticked box (moc
     await expect(line(page)).toBeHidden();
     await expect(line(page)).toHaveCount(1);
     await expect
-      .poll(() => ack(page).getAttribute("aria-describedby"))
+      .poll(() => ack(page).getAttribute("aria-describedby").then((v) => v ?? ""))
       .not.toMatch(/(^|\s)high-stakes-held(\s|$)/);
     await expect(runNow(page)).toBeEnabled();
     await runNow(page).click();
