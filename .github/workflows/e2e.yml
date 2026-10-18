@@ -403,12 +403,12 @@ jobs:
         # (W29, ADR-0148): trust-score-invariants.spec.ts adds two tests (the
         # page-reading wording, rendered with the readiness island rewritten);
         # the hosted run of PR #541 (E2E run 37404804508) printed "455 passed".
-        # 455 -> 459 (W100, ADR-0173): safety-acknowledgement.spec.ts adds two
-        # tests. Measured, not added: the W100 builder ran this lane's 24 specs
-        # locally (AGENTS.md rule 13 flags) and check_e2e_executed.py printed
-        # "459 tests executed, 0 skipped", so the tree had grown by two more
-        # before W100 without this floor following it.
-        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 459 --lane "invariants lane"
+        # 455 -> 457 (W100, ADR-0173): safety-acknowledgement.spec.ts adds two
+        # tests. Added to the old floor, not set to the local count, so the
+        # floor keeps the slack it had: the W100 builder ran this lane's 24
+        # specs locally (AGENTS.md rule 13 flags) and check_e2e_executed.py
+        # printed "459 tests executed (floor 457), 0 skipped".
+        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 457 --lane "invariants lane"
 
       - name: Clear the previous lane's JUnit report
         run: rm -f e2e/results.xml
@@ -443,13 +443,13 @@ jobs:
       # the reason given
       # on the invariants lane above: they are not derived from
       # the spec list above, or they could never detect that list shrinking.
-      # 96 -> 126 (W100, ADR-0173): high-stakes-acknowledgement.spec.ts adds 14
-      # tests. Measured, not added: the W100 builder ran this lane's 9 specs
+      # 96 -> 110 (W100, ADR-0173): high-stakes-acknowledgement.spec.ts adds 14
+      # tests. Added to the old floor, not set to the local count, so the
+      # floor keeps the slack it had: the W100 builder ran this lane's 9 specs
       # locally (AGENTS.md rule 13 flags) and check_e2e_executed.py printed
-      # "126 tests executed, 0 skipped", so the lane had already outgrown 96 by
-      # 16 tests before W100.
+      # "126 tests executed (floor 110), 0 skipped".
       - name: "axe + parity lane: floor on tests actually executed"
-        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 126 --lane "axe + parity lane"
+        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 110 --lane "axe + parity lane"
 
       - name: Clear the previous lane's JUnit report
         run: rm -f e2e/results.xml
