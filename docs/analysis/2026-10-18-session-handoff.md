@@ -62,11 +62,11 @@ W28's Parked line at that file and adds row W110.
 
 Checked by this session on the #576 tree:
 - **W99**: its clause "`docs/18-requirement-traceability-matrix.md` names test files that never
-  existed" is no longer true: all 47 `tests/` paths docs/18 cites exist. Its "docs/40 lists
+  existed" is no longer true: every test path docs/18 cites exists. Its "docs/40 lists
   bring-your-own key as built" is now marked "not built" there.
 - **W76**: its clause "Sentry breadcrumbs keep a key" conflicts with `main.py:182-202`: since W56 the
-  whole event, breadcrumbs included, goes through the redaction; only key shapes the pattern misses
-  survive, which is W76's second clause.
+  whole event, breadcrumbs included, goes through the redaction; what survives is key shapes the
+  pattern misses, which is W76's second clause, and dict keys, which are not redacted (ADR-0163).
 - `docs/analysis/2026-10-17-asvs-5-level-2-check.md:295` says the volume's encryption is UNVERIFIED;
   `fly volumes list -a quorum-ai --json` printed `encrypted: true` on 2026-10-17.
 - `docs/41-security-controls.md` CTRL-006 goes false when the W28 build lands, and every id SC-01 to
@@ -77,7 +77,7 @@ Checked by this session on the #576 tree:
 - The security session continues from `CONTINUE-SECURITY-W85-W76-PROMPT.md`.
 - `CONTINUE-BYOK-BUILD-W28-PROMPT.md` (at the root since #576) starts only when W85, W86, W100, W87,
   W88, W80, W75 and W76 all read DONE (CHG-061). `make handoff` prints a paste line for each root
-  prompt, sorted by name, so the W28 line comes first though it must wait.
+  prompt named `CONTINUE-...-PROMPT.md`, sorted by name, so the W28 line comes first though it must wait.
 
 ## Advisory leftovers (recorded, not fixed)
 
@@ -103,5 +103,12 @@ From the two re-checks' reports (`~/Projects/quorum-ai-evidence/2026-10-18/w28-f
   plan's sources too, not only the text it asks you to change.
 - **Deleting worked where rewording had failed three times.** Each rewrite of the judge's timing and
   the product headline added a new claim; deleting the failing phrase added none.
+- **The W54 PDF tests can fail on this Mac with no code change.** Late in the session about 60 of
+  them failed (`unusable` instead of `fetched`), though the same source code, unchanged since #576,
+  gave 0 failures in `make quality` hours earlier, and none in #576's CI on Linux. Measured: the non-blocking `os.write` to the PDF child's pipe at
+  `source_fetcher.py:630` raised `BlockingIOError: [Errno 35]`, which the reader turns into
+  `unusable`. Why this Mac refused the write then is UNVERIFIED (free memory pages were low). Production
+  is Linux; a write that the selector reports ready but the kernel refuses is still unhandled there, a
+  lead for a later code row, not a reproduced production fault.
 - **Disk.** Free space was 306 MB at the start and came back to about 11 GB during the session, from
   outside this work.
