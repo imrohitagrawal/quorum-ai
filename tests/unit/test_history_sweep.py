@@ -16,6 +16,7 @@ from __future__ import annotations
 import ast
 import logging
 import sqlite3
+import threading
 import time
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
@@ -452,11 +453,20 @@ def test_the_open_time_sweep_uses_the_settings(path: Path, monkeypatch: pytest.M
 
 
 class _QuietPurge:
+    """Counts only the calls made from the thread that built it: the real
+    ``session-gc`` daemon thread also reaches ``auth.session_repository``
+    while this stand-in is installed, and once added a call mid-test."""
+
     def __init__(self) -> None:
-        self.calls = 0
+        self._owner = threading.get_ident()
+        self._threads: list[int] = []
+
+    @property
+    def calls(self) -> int:
+        return sum(1 for ident in self._threads if ident == self._owner)
 
     def purge_expired(self) -> tuple[int, int]:
-        self.calls += 1
+        self._threads.append(threading.get_ident())
         return (0, 0)
 
 
@@ -561,7 +571,10 @@ def test_the_daemons_own_state_is_stamped_at_import(monkeypatch: pytest.MonkeyPa
     field's default stamp is anything but "now" (0.0, -inf,
     ``monotonic() - 1e9``: a fresh state would be due at once), or the
     module line passes its own stamp (``HistorySweepState(0.0)``,
-    ``HistorySweepState(last_run_monotonic=monotonic() - 1e9)``). The module
+    ``HistorySweepState(last_run_monotonic=monotonic() - 1e9)``). A later
+    module line that re-stamps it is caught by ``tests/unit/
+    test_history_sweep_daemon.py::test_a_fresh_import_leaves_the_daemon_stamped_at_import``.
+    The module
     line is checked by its syntax tree, not by reading the daemon's live
     state: ``tests/conftest.py`` holds that state never due for the whole run
     (W86 round 1), and the daemon re-stamps it on its first due tick, which

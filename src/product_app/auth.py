@@ -686,8 +686,9 @@ SESSION_GC_INTERVAL_S = 60.0
 #: ``history_keep_days`` by at most about this much; while the machine is
 #: stopped, until its next start. A constant, not a setting, as ADR-0165's
 #: ``IDENTIFIER_WIPE_INTERVAL`` is. Hourly rather than every tick: the sweep
-#: holds the store lock every session restore waits on (MEASURED: about 2 ms
-#: with nothing due, 116-297 ms for a first sweep of 66,763 rows).
+#: holds the store lock every session restore waits on (MEASURED, ADR-0172:
+#: 2.7-2.9 ms with nothing due on 100,000 rows, about 2 ms on a realistic file
+#: of 300 accounts x 5 rows, 116-297 ms for a first sweep of 66,763 rows).
 HISTORY_SWEEP_INTERVAL_S = 3600.0
 
 
