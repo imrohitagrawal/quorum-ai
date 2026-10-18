@@ -88,3 +88,32 @@ def test_the_warning_never_blames_inactivity_or_offers_to_stay() -> None:
     for text in warnings:
         assert "nothing has happened" not in text
         assert "Stay signed in" not in text
+
+
+def _object_literal(source: str, name: str) -> str:
+    """The ``{...}`` assigned by ``const <name> = {`` in ``app.js``, braces
+    balanced, so Node can evaluate it as data."""
+    start = source.index("{", source.index(f"const {name} = {{"))
+    depth = 0
+    for i in range(start, len(source)):
+        if source[i] == "{":
+            depth += 1
+        elif source[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return source[start : i + 1]
+    raise ValueError(f"unbalanced braces after const {name}")
+
+
+@pytest.mark.usefixtures("_node")
+def test_the_late_run_card_has_the_owners_title() -> None:
+    """CHG-070 (a): the refusal card for a 409 ``SESSION_ENDS_SOON`` is titled
+    "Your session ends soon" (signed in and anonymous alike; "Session expired"
+    would be false, the session is still alive). Red when: the entry is missing
+    (the card would read "Something went wrong") or worded otherwise. Partner:
+    an existing title is read through the same path."""
+    titles = _object_literal(APP_JS.read_text(encoding="utf-8"), "ERROR_TITLES")
+    got = _run(
+        [], f"(() => {{ const t = {titles}; return [t.SESSION_EXPIRED, t.SESSION_ENDS_SOON]; }})()"
+    )
+    assert got == ["Session expired", "Your session ends soon"]

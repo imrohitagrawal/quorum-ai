@@ -31,7 +31,8 @@ from tests.integration.test_query_run_cost_guardrails import (
 )
 from tests.session_clock import Clock, age, freeze
 
-from product_app import auth, feedback_store
+from product_app import auth, feedback_store, google_signin
+from product_app.config import settings
 from product_app.costs import cost_event_recorder
 from product_app.main import app
 from product_app.query_run_orchestration import query_run_repository
@@ -204,3 +205,35 @@ def test_the_409_is_declared_in_the_api_description(path: str) -> None:
     responses = app.openapi()["paths"][path]["post"]["responses"]
     assert "200" in responses or "202" in responses, "partner: the route is the one described"
     assert "409" in responses
+
+
+# -- CHG-070 (c): with sign-in switched off ------------------------------------
+
+#: CHG-070 (c), verbatim: the anonymous text when Google sign-in is off.
+SIGN_IN_OFF_TEXT = (
+    "This session ends in less than 12 minutes, so this question cannot run now. "
+    "Reload the page after the session ends."
+)
+
+
+@pytest.mark.parametrize("path", [ESTIMATE, CREATE])
+def test_with_sign_in_off_the_anonymous_refusal_does_not_offer_sign_in(
+    clock: Clock, monkeypatch: pytest.MonkeyPatch, path: str
+) -> None:
+    """CHG-070 (c). The app has no Google client configured, so "Sign in to
+    keep going" would be false. Red when: the text is the CHG-069 one (or any
+    other) while sign-in is off, or anything is recorded first. The CHG-069
+    tests above are the partner: with sign-in on, the sign-in text is given."""
+    monkeypatch.setattr(settings, "google_oauth_client_id", "")
+    monkeypatch.setattr(settings, "google_oauth_client_secret", "")
+    monkeypatch.setattr(settings, "google_oauth_redirect_uri", "")
+    assert google_signin.sign_in_enabled() is False, "positive partner: sign-in really is off"
+    client = TestClient(app)
+    csrf = _boot(client)
+    account = auth.session_repository._sessions[_sid(client)].account_id
+    _left(client, ANONYMOUS, 719, clock)
+    before = _spend(account)
+    refused = _post(client, path, csrf)
+    assert refused.status_code == 409, refused.text
+    assert refused.json()["detail"] == {"code": "SESSION_ENDS_SOON", "message": SIGN_IN_OFF_TEXT}
+    assert _spend(account) == before

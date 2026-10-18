@@ -27,6 +27,13 @@ const WARNING_AT_FIVE_MINUTES =
 const TWELVE_HOURS_ENDED =
   "You were signed out because 12 hours have passed since you signed in. Reload the page to sign in again.";
 const SIGNED_IN_LATE_RUN = "Your session ends in less than 12 minutes. Sign in again, then run this question.";
+/** CHG-070 (a): the refusal card's title, signed in and anonymous. */
+const LATE_RUN_TITLE = "Your session ends soon";
+/** CHG-070 (b): long enough that a person would mind retyping it. */
+const LONG_QUESTION =
+  "My grandmother's recipe for lemon cake uses 250 g of butter, 200 g of sugar, four eggs and the zest of " +
+  "two lemons. If I swap half the butter for olive oil, how will the crumb, the rise and the keeping time " +
+  "change, and should I lower the oven from 180 °C?";
 const ANONYMOUS_LATE_RUN =
   "This session ends in less than 12 minutes, so this question cannot run now. " +
   "Sign in to keep going, or reload the page after the session ends.";
@@ -81,6 +88,13 @@ async function ageSession(page: Page, request: APIRequestContext, ageSeconds: nu
   });
   expect(aged.status(), "the lane's test-only handler found the session").toBe(200);
   expect((await aged.json()).cached, "the running app's own copy was aged").toBe(true);
+}
+
+/** Every value this tab holds in sessionStorage. */
+async function sessionStorageValues(page: Page): Promise<string[]> {
+  return page.evaluate(() =>
+    Object.keys(window.sessionStorage).map((key) => window.sessionStorage.getItem(key) ?? ""),
+  );
 }
 
 async function pressRun(page: Page, question: string) {
@@ -154,12 +168,54 @@ test.describe("a session ends at a maximum age (W87-1)", () => {
     await signIn(page, account);
     await ageSession(page, request, 12 * HOUR - 600);
     await pressRun(page, question);
+    await expect(page.locator("#error-region-title")).toHaveText(LATE_RUN_TITLE);
     await expect(page.locator("#error-region-message")).toHaveText(SIGNED_IN_LATE_RUN);
     const again = page.locator("#error-region-actions").getByRole("button", { name: "Sign in again", exact: true });
     await expect(again).toBeVisible();
     await again.click();
     await expect(page.locator("#account-email")).toHaveText(account.email);
     await runQuestion(page, question);
+  });
+
+  test("Sign in again from the late-run refusal keeps the typed question, once", async ({ page, request }) => {
+    // CHG-070 (b). RED-IF: the question box is empty after the sign-in round
+    // trip (the refusal text "Sign in again, then run this question" would
+    // then be untrue for a long question), the saved copy is left in
+    // sessionStorage, or a later fresh load of the page fills the box again.
+    // Partner: the question really was in the box before the round trip.
+    test.setTimeout(120000);
+    const account = freshAccount("max-age-keep-question");
+    await signIn(page, account);
+    await ageSession(page, request, 12 * HOUR - 600);
+    await pressRun(page, LONG_QUESTION);
+    await expect(page.locator("#query-text")).toHaveValue(LONG_QUESTION);
+    await expect(page.locator("#error-region-message")).toHaveText(SIGNED_IN_LATE_RUN);
+    await page.locator("#error-region-actions").getByRole("button", { name: "Sign in again", exact: true }).click();
+    await expect(page.locator("#account-email")).toHaveText(account.email);
+    await expect(page.locator("#query-text")).toHaveValue(LONG_QUESTION);
+    expect(await sessionStorageValues(page)).not.toContain(LONG_QUESTION);
+
+    await page.goto("/ui", { waitUntil: "domcontentloaded" });
+    await expect(page.locator("#account-email")).toHaveText(account.email);
+    await expect(page.locator("#query-text")).toBeVisible();
+    await expect(page.locator("#query-text")).toHaveValue("");
+  });
+
+  test("a plain sign-in, not from the refusal, puts no question back", async ({ page }) => {
+    // CHG-070 (b), "nothing is saved for any other path". RED-IF: a sign-in
+    // started from the top bar restores what was typed before it, or leaves a
+    // copy in sessionStorage. Partner: the text really was typed, and the
+    // sign-in really completed.
+    const account = freshAccount("max-age-plain-sign-in");
+    await routeGoogle(page, account);
+    await openWorkspace(page);
+    await page.locator("#query-text").fill(LONG_QUESTION);
+    await expect(page.locator("#query-text")).toHaveValue(LONG_QUESTION);
+    await page.locator("#sign-in-google").click();
+    await expect(page.locator("#account-email")).toHaveText(account.email);
+    await expect(page.locator("#query-text")).toBeVisible();
+    await expect(page.locator("#query-text")).toHaveValue("");
+    expect(await sessionStorageValues(page)).not.toContain(LONG_QUESTION);
   });
 
   test("an anonymous run in the last 12 minutes is refused with its own words, and sign-in lets it run", async ({
@@ -180,6 +236,7 @@ test.describe("a session ends at a maximum age (W87-1)", () => {
     await expect(page.locator("#sign-in-google")).toBeVisible(); // anonymous, sign-in offered
     await ageSession(page, request, 24 * HOUR - 600);
     await pressRun(page, question);
+    await expect(page.locator("#error-region-title")).toHaveText(LATE_RUN_TITLE);
     await expect(page.locator("#error-region-message")).toHaveText(ANONYMOUS_LATE_RUN);
     const signInAction = page.locator("#error-region-actions").getByRole("button", { name: "Sign in", exact: true });
     await expect(signInAction).toBeVisible();
