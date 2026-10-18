@@ -5573,6 +5573,15 @@ main:focus { outline: none; }
   accent-color: var(--ink);
   cursor: pointer;
 }
+/* W100 round 1: a hold moves focus to this box, and the sheet-wide
+   input:focus rule (outline: none, a 6%-ink shadow) leaves that focus nearly
+   invisible. The id outranks that rule and touches no other control.
+   :focus, not :focus-visible: measured in Chromium, a focus moved by script
+   after a mouse press on "Run now" does not match :focus-visible. */
+#high-stakes-ack:focus {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
 
 /* ----- Model slots: 2x2 grid of cards -------------------------------- */
 .model-slot-grid {
@@ -5775,11 +5784,25 @@ main:focus { outline: none; }
   font-weight: 600;
   color: var(--ink);
 }
+/* W100 (ADR-0173): the held-run line under the buttons. Its own [hidden]
+   rule: this sheet has no global one, so without it the display below would
+   show the line on every load. */
+.high-stakes-held {
+  display: block;
+  margin: 0;
+  font-size: 0.85rem;
+  font-weight: 600;
+  line-height: 1.5;
+  color: var(--danger);
+  text-align: right;
+}
+.high-stakes-held[hidden] { display: none; }
 
 @media (max-width: 600px) {
   .model-slot-grid { grid-template-columns: 1fr; }
   .composer-footer { flex-direction: column; align-items: stretch; }
   .composer-footer-actions { justify-content: space-between; }
+  .high-stakes-held { text-align: left; }
 }
 
 /* ----- Landing (01 · marketing front door) ---------------------------- */

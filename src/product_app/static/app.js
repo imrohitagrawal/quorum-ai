@@ -357,6 +357,8 @@
   const runNowButton = el("run-now");
   const highStakesGate = el("high-stakes-gate");
   const highStakesAckCheckbox = el("high-stakes-ack");
+  // W100 (ADR-0173): "Tick the box above to run this question." under the buttons.
+  const highStakesHeldLine = el("high-stakes-held");
   const composerTotalEstimate = el("composer-total-estimate");
   const costConfirmationSecondary = el("cost-confirmation-secondary");
   const copyCorrelationButton = el("copy-correlation");
@@ -511,8 +513,8 @@
     // is set from ``POST /v1/query-runs/warnings`` (a ``high_stakes``
     // warning in the response). While it is true and the user has not
     // checked the acknowledgement (``highStakesAck``), the primary CTA
-    // stays disabled. The acknowledgement itself is still sent as
-    // ``safety_acknowledgements[]`` by the existing run flow.
+    // stays disabled. W100 (ADR-0173): ``proceedWithRun`` sends it only if
+    // ``highStakesAck`` is true after the final check; else it holds the run.
     highStakesRequired: false,
     highStakesAck: false,
     // Per-SLOT USD estimate keyed by slot position (array index),
@@ -9250,11 +9252,34 @@
     applyHighStakesGate();
   }
 
-  function warningAcknowledgements(warnings) {
-    return warnings.map((warning) => ({
-      warning_type: warning.warning_type,
-      version: warning.version,
-    }));
+  // W100 (ADR-0173): turn the final warnings check's answer into the create's
+  // ``safety_acknowledgements``, or say the run must be held for the box.
+  // Self-contained (no globals): tests/unit/test_safety_acknowledgements_for.py
+  // slices it out and runs it alone under node. The owner's rules (CHG-065):
+  //   sensitive_data → always sent: its notice is always on screen above the
+  //     question, so sending the question acknowledges it (a);
+  //   high_stakes    → sent only when ``highStakesTicked === true``; otherwise
+  //     the run is held and nothing is sent;
+  //   any other type → never sent (c): the server refuses the run, so the
+  //     visitor sees an error instead of a consent they never gave.
+  // Each entry is exactly ``{warning_type, version}`` (the server forbids extra
+  // keys), with the version the final check returned. An answer with no
+  // warnings list throws, so a malformed check creates nothing (fail closed).
+  function safetyAcknowledgementsFor(warnings, highStakesTicked) {
+    if (!Array.isArray(warnings)) {
+      throw new Error("The safety check did not answer as expected. Please try again.");
+    }
+    const acknowledgements = [];
+    for (const warning of warnings) {
+      const type = warning && warning.warning_type;
+      if (type === "high_stakes" && highStakesTicked !== true) {
+        return { hold: true, acknowledgements: [] };
+      }
+      if (type === "sensitive_data" || type === "high_stakes") {
+        acknowledgements.push({ warning_type: type, version: warning.version });
+      }
+    }
+    return { hold: false, acknowledgements };
   }
 
   // ---------------------------------------------------------------------------
@@ -9263,8 +9288,10 @@
   // The gate appears only when ``POST /v1/query-runs/warnings`` reports a
   // ``high_stakes`` warning for the current query. While it is showing and
   // the acknowledgement checkbox is unchecked, the primary CTA stays
-  // disabled. The acknowledgement itself is still delivered to the server as
-  // ``safety_acknowledgements[]`` by the existing run flow.
+  // disabled. W100 (ADR-0173): this background check is only a convenience.
+  // The authority is the final check ``proceedWithRun`` makes just before the
+  // create: the high-stakes acknowledgement is sent only if the box is ticked
+  // at that moment, and an unticked one holds the run on the composer.
 
   // Re-derive the primary CTA's disabled state from the run + gate state.
   function applyHighStakesGate() {
@@ -9288,6 +9315,36 @@
     }
   }
 
+  // W100 (ADR-0173, CHG-063 (g)): the line under the buttons that says why a
+  // run did not start. Only a hold or the click-time block shows it, and only
+  // while the acknowledgement is pending; tied to the box's description,
+  // intended to let a screen reader hear it with the focus move (not checked
+  // with a screen reader).
+  function showHighStakesHeld() {
+    if (!highStakesHeldLine || !highStakesAckPending()) return;
+    highStakesHeldLine.hidden = false;
+    if (highStakesAckCheckbox) {
+      highStakesAckCheckbox.setAttribute("aria-describedby", "high-stakes-held");
+    }
+  }
+
+  // The ONE place the line hides: called whenever the gate or the tick
+  // changes, so it never outlives the box ("Tick the box above" over no box).
+  function syncHighStakesHeld() {
+    if (!highStakesHeldLine || highStakesAckPending()) return;
+    highStakesHeldLine.hidden = true;
+    if (highStakesAckCheckbox) highStakesAckCheckbox.removeAttribute("aria-describedby");
+  }
+
+  // W100: clear the tick from code (a create spends it), keeping the box, the
+  // line and both buttons in step.
+  function clearHighStakesTick() {
+    state.highStakesAck = false;
+    if (highStakesAckCheckbox) highStakesAckCheckbox.checked = false;
+    syncHighStakesHeld();
+    applyHighStakesGate();
+  }
+
   // Show or hide the gate; hiding resets the acknowledgement so a later
   // high-stakes query re-requires an explicit check.
   function setHighStakesRequired(required) {
@@ -9297,6 +9354,7 @@
       state.highStakesAck = false;
       if (highStakesAckCheckbox) highStakesAckCheckbox.checked = false;
     }
+    syncHighStakesHeld();
     applyHighStakesGate();
     // W33 (ADR-0140, failure-mode row 18): a hand-off hint on screen must not
     // name buttons the gate has just disabled. If the probe answered after the
@@ -9357,13 +9415,44 @@
   // or acknowledged). When it blocks, it nudges the user to the checkbox.
   function highStakesGateSatisfied() {
     if (!state.highStakesRequired || state.highStakesAck) return true;
+    toastHighStakesAck();
+    // W100: the click-time block shows the held line too. That is this
+    // session's reading of "when a run is held" (CHG-063 (g)); the owner's
+    // CHG-065 (d) is "keep the toast and add the line".
+    showHighStakesHeld();
+    if (highStakesAckCheckbox) highStakesAckCheckbox.focus();
+    return false;
+  }
+
+  function toastHighStakesAck() {
     toast({
       message:
         "Acknowledge the decision-support notice before running this query.",
       tone: "warn",
     });
-    if (highStakesAckCheckbox) highStakesAckCheckbox.focus();
-    return false;
+  }
+
+  // W100 (ADR-0173): the final check named a high-stakes topic and the box is
+  // not ticked, so nothing is sent. Back to the composer (the box is not on the
+  // cost gate), with the box shown, the toast that exists today and the line
+  // (CHG-065 (d)), and focus on the box. The estimate is dropped, so the next
+  // press prices the question afresh (and, in the confirmation band, gets a
+  // fresh confirmation). No error card: nothing failed, a step is missing.
+  function holdForHighStakesAck() {
+    state.currentEstimate = null;
+    state.pricedRun = null;
+    // W100 round 1: and the running total beside the buttons stops showing
+    // the dropped estimate's figure. "—" is what the template ships; no other
+    // path resets this total today (Cancel and going home leave it too).
+    if (composerTotalEstimate) composerTotalEstimate.textContent = "—";
+    setView("composer");
+    setHighStakesRequired(true);
+    toastHighStakesAck();
+    showHighStakesHeld();
+    if (highStakesAckCheckbox) {
+      highStakesAckCheckbox.focus({ preventScroll: true });
+      highStakesAckCheckbox.scrollIntoView({ behavior: "auto", block: "center" });
+    }
   }
 
   // L5c: developer-only "magic" phrases that flip the pipeline into
@@ -9544,6 +9633,17 @@
       // Row 26: the user went home while the warnings check was answering, so
       // nothing has been sent that costs anything — stop here.
       if (generation !== estimateGeneration) return;
+      // W100 (ADR-0173): read the tick HERE, after the final check answered,
+      // so a tick withdrawn while it was answering is never sent. Read it from
+      // ``state.highStakesAck`` alone, not from whether the box is on screen:
+      // the cost gate hides the composer and the box with it, and a tick made
+      // before the gate still counts there. Holding returns inside this try,
+      // so the finally below releases the latch and the spinner.
+      const safety = safetyAcknowledgementsFor(warnings.warnings, state.highStakesAck);
+      if (safety.hold) {
+        holdForHighStakesAck();
+        return;
+      }
       const costConfirmationPayload =
         thresholdAction === "require_confirmation"
           ? {
@@ -9553,6 +9653,14 @@
                 state.currentEstimate.cost_estimate.confirmation_token,
             }
           : null;
+      // W100 (ADR-0173 decision 4): the tick is spent as the create is sent
+      // and is never given back, whatever the answer: a lost or garbled answer
+      // to a create the server took cannot leave it on for a retry (a second
+      // run), and a tick withdrawn while the create is pending stays withdrawn.
+      // After any failed create the visitor ticks again: stricter than
+      // CHG-065 (b)'s words ("the tick clears once a run starts"), and
+      // approved by the owner as such (CHG-068).
+      clearHighStakesTick();
       // From here the create is on the wire and a run will exist, so going
       // home waits for it (goToNewQuestion checks ``createInFlight``) rather
       // than leaving a charged run nobody is watching.
@@ -9565,7 +9673,7 @@
             priced.modelIds,
             priced.quick,
             {
-              safety_acknowledgements: warningAcknowledgements(warnings.warnings),
+              safety_acknowledgements: safety.acknowledgements,
               cost_confirmation: costConfirmationPayload,
             },
             priced.context,
@@ -11195,6 +11303,7 @@
     if (!highStakesAckCheckbox) return;
     highStakesAckCheckbox.addEventListener("change", () => {
       state.highStakesAck = highStakesAckCheckbox.checked;
+      syncHighStakesHeld();
       applyHighStakesGate();
       // W33: once ticked, a hand-off hint on screen drops "tick … first".
       renderHandoffHint(false);

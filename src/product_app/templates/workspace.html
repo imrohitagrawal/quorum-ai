@@ -263,8 +263,11 @@
 
             <!-- COPY-002 high-stakes gate. Hidden until POST /v1/query-runs/warnings
                  flags a ``high_stakes`` topic; the acknowledgement checkbox keeps
-                 the primary CTA disabled until it is checked. The safety
-                 acknowledgement is sent as ``safety_acknowledgements[]``. -->
+                 the primary CTA disabled until it is checked. W100 (ADR-0173):
+                 the high-stakes acknowledgement is sent in
+                 ``safety_acknowledgements[]`` only when this box is ticked as
+                 the run is created; an unticked one holds the run here and
+                 shows #high-stakes-held under the buttons. -->
             <div id="high-stakes-gate" class="high-stakes-gate" role="group" aria-label="High-stakes topic acknowledgement" hidden>
               <div class="high-stakes-label">
                 <span class="high-stakes-dot" aria-hidden="true"></span>
@@ -382,6 +385,12 @@
                 </button>
               </div>
             </div>
+            <!-- W100 (ADR-0173, CHG-063 (g)): shown when a run is held because the
+                 high-stakes box above is not ticked; hidden again as soon as the
+                 acknowledgement is no longer pending. A sibling of the footer, not
+                 inside its button row, so it sits under the buttons at every width.
+                 #high-stakes-ack points its aria-describedby here while it shows. -->
+            <p id="high-stakes-held" class="high-stakes-held" hidden>Tick the box above to run this question.</p>
             <div class="keyboard-hint muted">
               <kbd>Ctrl</kbd>+<kbd>Enter</kbd> shows the estimate · <kbd>Esc</kbd> cancels
             </div>

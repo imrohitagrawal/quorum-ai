@@ -89,8 +89,12 @@ jobs:
       # Issue #100: the DURABLE per-IP daily mint cap (2/24h in production)
       # is a separate control and needs its own override for the same
       # reason — without it, the 3rd cookie-less /ui boot in this run gets
-      # a 429 and every invariant spec after it fails to render.
-      SESSION_MINT_CAP_OVERRIDE: "600"
+      # a 429 and every invariant spec after it fails to render. The count is
+      # kept on disk across the lanes of this job: measured 2026-10-18 (W100),
+      # the first two lanes open 459 and then 571 sessions, and the third lane
+      # reached 600 partway through and failed to render. 1500 leaves room;
+      # the code allows up to 10,000 (config.py, SESSION_MINT_CAP_OVERRIDE_MAX).
+      SESSION_MINT_CAP_OVERRIDE: "1500"
       # W47 (ADR-0144 decision 7): every browser here shares one loopback address,
       # so per-network anonymous spend would give the whole lane one $0.40 a day.
       # LOCAL-only; the app refuses to start with it set anywhere else.
@@ -224,6 +228,7 @@ jobs:
           tests/invariants/limit-messages.spec.ts
           tests/invariants/follow-up-context.spec.ts
           tests/invariants/help-and-tour.spec.ts
+          tests/invariants/safety-acknowledgement.spec.ts
           --project=chromium
           --retries=0
 
@@ -402,7 +407,12 @@ jobs:
         # (W29, ADR-0148): trust-score-invariants.spec.ts adds two tests (the
         # page-reading wording, rendered with the readiness island rewritten);
         # the hosted run of PR #541 (E2E run 37404804508) printed "455 passed".
-        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 455 --lane "invariants lane"
+        # 455 -> 457 (W100, ADR-0173): safety-acknowledgement.spec.ts adds two
+        # tests. Added to the old floor, not set to the local count, so the
+        # floor keeps the slack it had: the W100 builder ran this lane's 24
+        # specs locally (AGENTS.md rule 13 flags) and check_e2e_executed.py
+        # printed "459 tests executed (floor 457), 0 skipped".
+        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 457 --lane "invariants lane"
 
       - name: Clear the previous lane's JUnit report
         run: rm -f e2e/results.xml
@@ -419,6 +429,7 @@ jobs:
           npx playwright test
           tests/accessibility/axe-all-views.spec.ts
           tests/ui-parity/parity-behavior.spec.ts
+          tests/ui-parity/high-stakes-acknowledgement.spec.ts
           tests/docs/docs-under-csp.spec.ts
           tests/invariants/real-integration-smoke.spec.ts
           tests/degraded/degraded-banner.spec.ts
@@ -436,8 +447,17 @@ jobs:
       # the reason given
       # on the invariants lane above: they are not derived from
       # the spec list above, or they could never detect that list shrinking.
+      # 96 -> 110 (W100, ADR-0173): high-stakes-acknowledgement.spec.ts adds 14
+      # tests. Added to the old floor, not set to the local count, so the
+      # floor keeps the slack it had: the W100 builder ran this lane's 9 specs
+      # locally (AGENTS.md rule 13 flags) and check_e2e_executed.py printed
+      # "126 tests executed (floor 110), 0 skipped".
+      # 110 -> 114 (W100 review round 1): the same spec adds 4 tests, added to
+      # the floor the same way.
+      # 114 -> 117 (W100 review round 2): the same spec adds 3 tests (two
+      # existing ones were changed, not added), added to the floor the same way.
       - name: "axe + parity lane: floor on tests actually executed"
-        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 96 --lane "axe + parity lane"
+        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 117 --lane "axe + parity lane"
 
       - name: Clear the previous lane's JUnit report
         run: rm -f e2e/results.xml
