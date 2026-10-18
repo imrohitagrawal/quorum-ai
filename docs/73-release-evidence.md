@@ -2,6 +2,8 @@
 
 > **Not a current status.** This file records release evidence as written in June and July 2026, and it is not maintained. Current status has three homes, named in `docs/README.md`: delivery is the board (`docs/65-open-work.md`) with GitHub; product readiness is `docs/product-readiness.md`, generated from production; decisions are `docs/19-change-control-log.md` and `docs/adr/`.
 
+> **A user's own OpenRouter key (BYO) is not built.** Every BYO line in this file describes a feature that does not exist: the BYO slice in the opening paragraph, the VS-011 and VS-012 rows of the slice table, the "VS-011 Local Evidence" section, and the BYO part of the VS-012 evidence. The two VS-011 test files named below never existed in any commit, so its 14-test result cannot be re-run. No commit ever had the add, status and remove routes in the code, and `openapi.yaml` dropped them in #10. The owner decided the design on 2026-10-17 (CHG-075 to CHG-080, ADR-0180); it will be built as board row W28.
+
 ## Release Readiness Status
 
 Decision: No-go for production release.
@@ -11,7 +13,7 @@ the authenticated execution-boundary slice, the in-memory query-run state-machin
 safety/privacy warning acknowledgement slice, the model-slot defaults/replacement validation
 slice, the cost guardrails slice, the provider-stub/search-fallback slice, the
 per-model answer result-projection slice, the two-round debate orchestration slice, the
-final-synthesis/eval-check slice, the BYO OpenRouter key account-scoping slice, local
+final-synthesis/eval-check slice, the BYO OpenRouter key account-scoping slice (not built: W28, ADR-0180), local
 VS-012 API E2E/accessibility-contract/performance/security/eval evidence, and local VS-013
 CI-style report/security-scan/browser-UI evidence.
 The full Release 1 production workflow has not been released. A remote CI run, external vendor
@@ -70,7 +72,7 @@ full rubric-backed AI eval, and production telemetry evidence are not available 
 
 ## VS-011 Local Evidence
 
-- Scope: BYO OpenRouter key add/remove/status and account scoping for FR-012, NFR-005, and NFR-006.
+- Scope: BYO OpenRouter key add/remove/status and account scoping for FR-012, NFR-005, and NFR-006. Not built: see the note at the top of this file (W28, ADR-0180).
 - Command: `uv run pytest tests/unit/test_provider_keys.py tests/integration/test_provider_key_endpoints.py tests/unit/test_query_run_auth_boundary.py tests/integration/test_query_run_provider_stubs.py`.
 - Result: Passed locally on 2026-06-17 with 14 tests and one upstream Starlette/httpx deprecation warning.
 - Security evidence: focused assertions verify unauthenticated access is rejected, account B cannot see or remove account A's BYO status, status/remove responses omit raw keys and secret references, provider-key events omit secrets, and future stubbed provider events use `byo_openrouter` only for the owning account.

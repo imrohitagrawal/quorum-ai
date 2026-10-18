@@ -1,5 +1,7 @@
 # W28 bring-your-own-key: research for the owner's six decisions (2026-10-16)
 
+> **Superseded by** `docs/analysis/2026-10-17-w28-key-storage-research.md` (2026-10-17), the one W28 analysis. The owner decided the questions below on 2026-10-17 (CHG-059 decision 3, CHG-075 to CHG-080, ADR-0180); this file's memory-only recommendation for decision 1 was not chosen. The plan it cites on branch `w28/byok-pr1-plan` is now `docs/archive/2026-10/2026-09-29-byok-pr1-plan.md`.
+
 **PROPOSED — AWAITING OWNER. Research only; no decision is recorded here.** Every
 recommendation below is the research's, not the owner's. The owner asked for this
 research on 2026-10-15 (CHG-051: *"do a thorough research on the 6 decisions for
@@ -38,7 +40,7 @@ at the end).
   the enum (`src/product_app/provider_keys.py:7`). MEASURED:
   `grep -rn "credential_source = ProviderCredentialSource\|BYO_OPENROUTER" src/product_app`.
 - The key is copied once at run start; clearing it mid-run still sent all 11 calls.
-  INHERITED (the draft plan on `origin/w28/byok-pr1-plan`, from an uncommitted probe).
+  INHERITED (the draft plan on `origin/w28/byok-pr1-plan`, now `docs/archive/2026-10/2026-09-29-byok-pr1-plan.md`, from an uncommitted probe).
 - The session cookie is `__Host-quorum_session`, `HttpOnly`, `Secure` in production,
   with a CSRF token on every change. MEASURED: `grep -n -i "cookie\|csrf" src/product_app/auth.py`.
 - Sessions are **durable**: mirrored to SQLite on the Fly volume (ADR-0073). The

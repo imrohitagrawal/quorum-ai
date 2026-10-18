@@ -8,14 +8,14 @@ The MVP is public but account-gated for execution. Users must be warned not to s
 
 | Data | Classification | Purpose | Handling | Trace |
 |---|---|---|---|---|
-| Account identity | Personal/account data | Auth, ownership, quota, BYO key scope. | Protected by auth and authorization checks. | FR-001, NFR-005 |
+| Account identity | Personal/account data | Auth, ownership, quota, BYO key scope (BYO keys planned: W28, ADR-0180). | Protected by auth and authorization checks. | FR-001, NFR-005 |
 | Query text | User-provided content; may contain sensitive data despite warnings | Provider execution and result generation. | Warn before submission; minimize logs; retention unresolved. | FR-003, NFR-007 |
 | Model answers | AI-generated content | Result comparison and synthesis. | Store for result retrieval; no factual guarantee claims. | FR-007, FR-013 |
 | Debate outputs | AI-generated content | Explain disagreement and critique. | Store with run; preserve failures and uncertainty. | FR-008, FR-013 |
 | Synthesis | AI-generated content | Final decision-support answer. | Separate consensus/disagreement/uncertainty/recommendation. | FR-009 |
 | Source links/search metadata, and search excerpts (W52, in memory only) | Third-party retrieved content | Citation and grounding. | Preserve attribution; treat as untrusted input. | FR-006, NFR-003 |
 | App provider keys | Secret | Default OpenRouter/Tavily/fallback access. | Server-side only; never in browser/logs/prompts/errors. | FR-011, NFR-006 |
-| BYO OpenRouter key | User secret | Expanded user-specific usage. | Account-scoped, protected, removable, never returned. | FR-012, NFR-006 |
+| BYO OpenRouter key | User secret | Expanded user-specific usage. | Account-scoped, protected, removable, never returned. Planned, not built: stored encrypted per account (CHG-076), only its last 4 characters ever shown (W28, ADR-0180). | FR-012, NFR-006 |
 | Cost/latency/failure metadata | Operational metadata | Guardrails, observability, support. | Non-secret structured events; no raw prompts/secrets. | NFR-002, NFR-010 |
 
 ## Data Minimization
@@ -29,14 +29,14 @@ The MVP is public but account-gated for execution. Users must be warned not to s
 
 - Sensitive/private-data warning must appear before query execution.
 - High-stakes decision-support warning must appear for medical, legal, financial, safety, and regulated topics.
-- BYO key setup must clearly state that the key is used only for that account and can be removed.
+- BYO key setup must clearly state that the key is used only for that account and can be removed (planned: W28, ADR-0180).
 - Product copy must not claim the MVP is safe for confidential, regulated, or secret data.
 
 ## Access And Deletion
 
 - Query runs and results are readable only by the owning account.
-- BYO key status is readable only by the owning account and must not reveal the key value.
-- BYO key removal must deactivate future use.
+- BYO key status is readable only by the owning account and must not reveal the key value (planned: W28, ADR-0180).
+- BYO key removal must deactivate future use (planned: W28, ADR-0180). The privacy text, once written, must also say that a removed key's encrypted copy stays in volume snapshots for up to 5 days, and the Remove confirmation must tell the user to revoke the key at OpenRouter too (CHG-075; the wording is not decided, ADR-0180).
 - Deletion/export behavior for stored query text and outputs remains open and must be resolved before production launch if durable history is retained.
 
 ## Open Privacy Decisions
@@ -49,5 +49,5 @@ The MVP is public but account-gated for execution. Users must be warned not to s
 
 ## Traceability
 
-- Requirements: FR-001, FR-003, FR-007, FR-011, FR-012, FR-013, NFR-005, NFR-006, NFR-007, NFR-008, NFR-010.
-- Tests: TEST-FR-001, TEST-FR-003, TEST-FR-011, TEST-FR-012, TEST-NFR-005, TEST-NFR-006, TEST-NFR-007, TEST-NFR-008, TEST-NFR-010.
+- Requirements: FR-001, FR-003, FR-007, FR-011, FR-012, FR-013, NFR-005, NFR-006, NFR-007, NFR-008, NFR-010. FR-012 is planned, not built: W28, ADR-0180.
+- Tests: TEST-FR-001, TEST-FR-003, TEST-FR-011, TEST-FR-012 (not written yet: W28), TEST-NFR-005, TEST-NFR-006, TEST-NFR-007, TEST-NFR-008, TEST-NFR-010.

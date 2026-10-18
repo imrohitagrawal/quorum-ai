@@ -588,7 +588,7 @@ pre code {
         <dt>Prometheus</dt><dd>A monitoring system that scrapes metrics from Quorum AI's <code>/metrics</code> endpoint. Used by the ops dashboard at <code>/ui/ops</code>.</dd>
         <dt>SLO</dt><dd>Service Level Objective — a target the product is held to. Quorum AI declares SLOs for availability (99%), 5xx rate (&lt;1%), and query latency (P50 ≤ 45s, P95 ≤ 120s, hard timeout 180s).</dd>
         <dt>Trust score</dt><dd>A weighted composite of deterministic quality signals (citation coverage, agreement ratio, uncertainty surfaced, etc.) that measures how trustworthy a run's output is. Suppressed to "unverified" while citation support has not been verified.</dd>
-        <dt>BYO key</dt><dd>"Bring Your Own" key — a user-supplied  API key stored server-side for their session, allowing higher usage limits. Controlled by <code>OPENROUTER_LIVE_EXECUTION_ENABLED</code> and the operator's key.</dd>
+        <dt>BYO key</dt><dd>"Bring Your Own" key — a user's own OpenRouter key. Not built yet: it is board row W28. The owner's decided design (ADR-0180): a signed-in user connects it through OpenRouter's own sign-in; it is stored encrypted per account, never per session and never in the browser; and runs on it are spent under limits the user sets.</dd>
         <dt>Simulation mode</dt><dd>A fallback where the app produces templated, deterministic outputs instead of calling live LLMs. Active when no  key is configured or <code>OPENROUTER_LIVE_EXECUTION_ENABLED</code> is false. The <code>/ready</code> endpoint surfaces the state so the UI can show a banner.</dd>
       </dl>
     </div>
@@ -684,7 +684,7 @@ pre code {
         <span class="honesty built">● Built</span>
         <div class="example project">
           <div class="example-label">In your project</div>
-          <p>Run <code>fly secrets list</code> on the deployed app to see the secret names (values are redacted in the CLI output). Locally, keys live in <code>.env</code> (gitignored). The Sentry integration in <code>main.py</code> includes a <code>_redact_sentry_event</code> hook that strips any field containing "query" or "prompt" from Sentry events before sending. The auth layer scopes BYO keys to the session that created them.</p>
+          <p>Run <code>fly secrets list</code> on the deployed app to see the secret names (values are redacted in the CLI output). Locally, keys live in <code>.env</code> (gitignored). The Sentry integration in <code>main.py</code> includes a <code>_redact_sentry_event</code> hook that strips any field containing "query" or "prompt" from Sentry events before sending. BYO keys are not built yet; the decided design stores a user's key encrypted per signed-in account (ADR-0180, board row W28).</p>
         </div>
         <div class="example real-life">
           <div class="example-label">Picture it in real life</div>
@@ -891,7 +891,7 @@ pre code {
         <ul style="margin:8px 0 8px 20px;">
           <li><strong>Authentication:</strong> Opaque browser session cookie + CSRF token. No passwords, no email, no account creation. Sessions are issued by <code>GET /v1/session</code> and expire automatically.</li>
           <li><strong>Authorization:</strong> Every execution and result endpoint requires a valid session. Results are scoped to the session's <code>account_id</code> — cross-account access returns 404.</li>
-          <li><strong>Secret isolation:</strong> App-owned provider keys (, Tavily, eval judge) are stored in Fly secrets, never in source control, never in API responses, never in logs. BYO keys are server-side only and session-scoped.</li>
+          <li><strong>Secret isolation:</strong> App-owned provider keys (, Tavily, eval judge) are stored in Fly secrets, never in source control, never in API responses, never in logs. BYO keys are not built yet; the decided design keeps a user's key on the server, encrypted per account (ADR-0180, board row W28).</li>
           <li><strong>Redaction:</strong> Every error log strips API keys, session tokens, and raw model output. The redaction contract is pinned by <code>tests/security/test_release_security_redaction.py</code>.</li>
           <li><strong>Content Security Policy:</strong> Strict CSP with <code>script-src 'self' 'unsafe-inline'</code> (required for the inline CSRF token injection — a TODO is to migrate to a nonced approach). <code>base-uri 'none'</code> and <code>form-action 'none'</code> prevent injected base tags and form submissions. No CORS middleware — same-origin only.</li>
           <li><strong>Cost guardrail:</strong> Three-band system (ALLOW / REQUIRE_CONFIRMATION / BLOCK) plus a per-account daily cap. Confirmation tokens are HMAC-signed, account-bound, and single-use with a 5-minute TTL.</li>

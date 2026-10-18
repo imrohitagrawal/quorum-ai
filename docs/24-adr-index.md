@@ -175,6 +175,7 @@ ways, so the record shows what was believed on a date and what replaced it.
 | [ADR-0170](adr/0170-the-security-measures-list-names-a-test-for-each-measure.md) | The security measures list names a test for each measure, and a test checks the names | Architecture | Accepted — 2026-10-17, board row W82 |
 | [ADR-0171](adr/0171-a-request-body-over-1-mb-is-refused-before-it-is-read.md) | A request body over 1 MB is refused before it is read, and the request models bound what a body may hold | Architecture | Accepted — 2026-10-17, board row W85 |
 | [ADR-0172](adr/0172-signed-in-history-is-swept-for-every-account-and-deleted-securely.md) | Signed-in history is swept for every account, at every open and hourly, and the session store deletes securely | Architecture | Accepted — 2026-10-18, board row W86 |
+| [ADR-0180](adr/0180-a-users-own-openrouter-key-is-connected-by-sign-in-stored-encrypted-per-account-and-spent-under-the-users-limits.md) | A user's own OpenRouter key is connected by OpenRouter's sign-in, stored encrypted per account, and spent under the user's own limits | Architecture | Accepted — 2026-10-17, for the parts the product owner decided: CHG-075 to CHG-080, and decision 3 of CHG-059 |
 
 **This index was itself stale** until 2026-07-30: ADR-0002 had existed since
 2026-07-19 and was never listed here. A hand-maintained index is a derived fact

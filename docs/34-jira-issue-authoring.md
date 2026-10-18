@@ -96,7 +96,7 @@ The MVP provides account-gated query execution, four configurable model slots, s
 
 ### Requirement IDs
 
-- FR-001, FR-002, FR-003, FR-004, FR-005, FR-006, FR-007, FR-008, FR-009, FR-010, FR-011, FR-012, FR-013.
+- FR-001, FR-002, FR-003, FR-004, FR-005, FR-006, FR-007, FR-008, FR-009, FR-010, FR-011, FR-012, FR-013. FR-012 (a user's own OpenRouter key) is planned, not built: W28, ADR-0180.
 - NFR-001, NFR-002, NFR-003, NFR-004, NFR-005, NFR-006, NFR-007, NFR-008, NFR-009, NFR-010.
 
 ### Acceptance Criteria
@@ -108,7 +108,7 @@ The MVP provides account-gated query execution, four configurable model slots, s
 - Latency: P50 <= 45 seconds, P95 <= 120 seconds, hard timeout at 180 seconds.
 - Cost: average completed query <= USD 0.05, normal max <= USD 0.15, block or approved confirmation path above USD 0.25 estimated cost.
 - Citation coverage: at least 80 percent of material factual claims in final synthesis have visible source links when source-backed search succeeds.
-- Security: authenticated access required for execution, result retrieval, and BYO key management.
+- Security: authenticated access required for execution, result retrieval, and BYO key management (planned: W28, ADR-0180).
 - Privacy and AI safety: sensitive-data warning and decision-support-only warning required before reliance.
 - Accessibility: WCAG 2.2 AA baseline for the core workflow.
 - Observability: non-secret structured events for accepted query lifecycle stages.
@@ -122,7 +122,7 @@ The MVP provides account-gated query execution, four configurable model slots, s
 - Provider timeout or partial failure.
 - Material model disagreement.
 - Provider exception containing sensitive metadata.
-- BYO key removal while usage is active.
+- BYO key removal while usage is active (planned: W28; the owner decided the page asks whether to stop the run or let it finish on that key, and no answer means stop, CHG-078, ADR-0180).
 
 ### Negative Scenarios
 
@@ -143,7 +143,7 @@ The MVP provides account-gated query execution, four configurable model slots, s
 
 ### Security/Privacy Impact
 
-High. The workflow handles user-submitted prompts, account identity, app-owned provider keys, optional BYO OpenRouter keys, external model calls, search-provider calls, and safety warnings. Secrets must remain server-side and logs must avoid provider credentials and sensitive user data.
+High. The workflow handles user-submitted prompts, account identity, app-owned provider keys, optional BYO OpenRouter keys (planned: W28, ADR-0180), external model calls, search-provider calls, and safety warnings. Secrets must remain server-side and logs must avoid provider credentials and sensitive user data.
 
 ### Observability Expectations
 
@@ -268,7 +268,7 @@ Authenticated users can configure four model slots, see safety/privacy warnings,
 
 ### NFRs
 
-- Query execution and BYO key management require authenticated account access.
+- Query execution and BYO key management require authenticated account access (BYO keys: planned, W28, ADR-0180).
 - Normal query cost estimate proceeds at or below USD 0.15; above USD 0.25 is blocked or requires approved path.
 - Warnings are visible before reliance and before sensitive/private-data submission.
 - Core setup workflow meets WCAG 2.2 AA baseline.

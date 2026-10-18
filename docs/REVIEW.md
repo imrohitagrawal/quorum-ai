@@ -73,6 +73,7 @@
   The `BYO_OPENROUTER` value exists as a first-class enum member, is imported in `providers.py:50` and `query_runs.py:85`, and is used in the `ProviderCredentialSource` branching logic. There is no `NotImplementedError`, no `raise`, no feature flag, and no `_MVP_NO_BYO` guard anywhere in the import chain.
 - **Error class**: Simplification-gone-false. The documentation says the MVP has no user key input, but the codebase already contains the full BYO key enum, credential source branching, and provider_keys module. The feature is not merely "designed"; it is implemented and wired. This is a different claim entirely.
 - **Concrete fix**: Clarify whether BYO keys are in-scope for the current release or deferred. If deferred, add a runtime guard that raises or returns `NOT_CONFIGURED` until the feature is ready. If in-scope, update FR-012, the architecture doc OQ-010 row, and both diagrams to state that BYO keys are a shipped (or planned) feature with clear policy rules.
+- **Correction, 2026-10-17**: this finding is wrong. `BYO_OPENROUTER` is defined in `src/product_app/provider_keys.py` and assigned nowhere. The only value any code sets is `APP_OWNED` (in `src/product_app/providers.py` and `src/product_app/query_run_orchestration.py`), and no code branches on the value. No BYO route exists. BYO keys are not built; the owner decided the design on 2026-10-17 (CHG-075 to CHG-080, ADR-0180), and it is board row W28.
 
 ---
 
@@ -145,6 +146,7 @@
 - The context diagram's abbreviated list omits `provider_keys`, which is relevant because FR-012 (BYO keys) is a trust-boundary item. A reader who only sees the context diagram gets no signal that provider key management is a separate concern inside the boundary.
 - **Error class**: Simplification-gone-false. The simplification is reasonable for a context diagram, but it omits the component most directly relevant to FR-012 and T-004/T-006 (credential-scoping threats).
 - **Concrete fix**: Add `provider_keys` to the abbreviated component list in `diagrams/01-c4-context.md:54`, or add a footnote noting that credential management is a distinct internal component.
+- **Note, 2026-10-17**: `provider_keys` is the 7-line credential-source enum, not key management. BYO keys are not built (board row W28, ADR-0180).
 
 ---
 
@@ -200,13 +202,13 @@
 |---|---|---|---|---|
 | B1 | BLOCKER | `docs/20-architecture.md:152` | Code-vs-doc mismatch | `feedback_store.db` filename wrong; source and diagrams use `feedback_events.sqlite3` |
 | B2 | BLOCKER | `docs/20-architecture.md:105`, `diagrams/02-c4-container.md:166` | Honesty-posture drift | Concurrency claimed "configurable" but is fully hardcoded in source |
-| B3 | BLOCKER | `docs/20-architecture.md:172`, `diagrams/02-c4-container.md:25` | Simplification-gone-false | FR-012 says "no user key input in MVP" but `BYO_OPENROUTER` is a live, wired enum value |
+| B3 | BLOCKER | `docs/20-architecture.md:172`, `diagrams/02-c4-container.md:25` | Simplification-gone-false | FR-012 says "no user key input in MVP" but `BYO_OPENROUTER` is a live, wired enum value. Corrected 2026-10-17: the value is defined and assigned nowhere; BYO keys are not built (W28, ADR-0180) |
 | M1 | MAJOR | `docs/20-architecture.md:145`, `docs/40-threat-model.md:60` | Term collision / Term-definition gap | "Trust triangle" used as a distinct surface in threat model but never defined in architecture doc |
 | M2 | MAJOR | `docs/21-domain-model.md:64–66` | Term-definition gap | NFR-012 traced before a reader can find its definition (line 161 in `docs/11`) |
 | N1 | MINOR | `diagrams/13-mermaid-sub-module-level.md:196` | Broken internal reference | Orphan Mermaid edge with empty target node |
 | N2 | MINOR | `docs/20-architecture.md:152` | Code-vs-doc mismatch (narrower) | `feedback_store.db` extension `.db` vs actual `.sqlite3`; stale filename propagates to ops scripts |
 | N3 | MINOR | `diagrams/02-c4-container.md:33` vs `:166` | Internal contradiction | NFR-004 requirement row says "hardcoded"; implementation note says "configurable" |
-| N4 | MINOR | `diagrams/01-c4-context.md:54` | Simplification-gone-false | `provider_keys` omitted from abbreviated component list despite being a trust-boundary concern |
+| N4 | MINOR | `diagrams/01-c4-context.md:54` | Simplification-gone-false | `provider_keys` omitted from abbreviated component list despite being a trust-boundary concern. Note 2026-10-17: it is the credential-source enum; BYO keys are not built (W28) |
 | N5 | MINOR | `diagrams/README.md` (inferred) | Broken forward reference | Claims 13 diagrams; files 05–09 missing; 00 is prose index not a diagram |
 | N6 | MINOR | `diagrams/02-c4-container.md:61–63` vs `diagrams/03-c4-component.md:91–96` | Reader confusion (C4 level boundary) | `catalog_fetcher`/`model_slots` appear as sub-components in container diagram but as full components in component diagram |
 
