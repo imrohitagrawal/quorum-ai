@@ -36,9 +36,10 @@ owner's instruction, between 05:16 and 06:00 UTC (CHG-057).
   1. W85: a request of any size was read, and parsed when it was JSON, before the session was checked.
      The session measured it: a 200 MB body with no cookie was read in full (section 1). Fixed by W85:
      a body over 1 MB now gets 413 before it is read (ADR-0171).
-  2. W86: signed-in history older than 30 days is deleted only when that same account saves a new
-     question, so an account that stops using the site keeps its old questions on disk. The owner
-     approved "none completed more than 30 days ago" (`docs/48-data-retention.md`, CHG-023).
+  2. W86: signed-in history older than 30 days was deleted only when that same account saved a new
+     question, so an account that stopped using the site kept its old questions on disk. The owner
+     approved "none completed more than 30 days ago" (`docs/48-data-retention.md`, CHG-023). Fixed by
+     W86: every account is swept when the store opens and about hourly (ADR-0172).
   3. W100: the page can tell the server the user acknowledged a high-stakes warning that was never
      shown (details held back until the fix ships (CHG-060)).
 - **17 new rows, W85 to W101.** Seven existing rows change (W71, W72, W73, W74, W75, W77, W78). The owner
@@ -140,7 +141,7 @@ asked for three splits, a narrower W89 and corrected wording; those changes are 
 | Row | What | ASVS items and other sources | How bad | Evidence |
 |---|---|---|---|---|
 | W85 | Refuse a request body over a size limit before it is read, and refuse unknown fields and over-long lists in the request models | V2.4.1, V15.2.2, V2.2.1, V15.3.3, V5.2.1 | was live, fixed by W85: production is one machine with 512 MB (`fly.toml:195-197`), and its process used about 76 MB when read (`/metrics` `process_resident_memory_bytes 7.57e7`). A reviewer's probe of the server alone (not re-run by the session) read all of a 200 MB body sent with no cookie and raised peak memory by about 600 MB. Whether Fly's proxy limits the size is UNVERIFIED | measured |
-| W86 | Delete signed-in history older than 30 days for every account, not only the one saving a question, and turn on `secure_delete` in the session store | V14.2.4; section-9 agent | live: old questions stay on disk, though they are not shown, against the approved keep rule (`docs/48-data-retention.md`, CHG-023). Whether production's SQLite build (Debian, `python:3.12-slim`) already deletes securely by default is UNVERIFIED; `PRAGMA secure_delete` inside the image would settle it | read by the session; that deleted text stays in the file is an agent's probe, not re-run |
+| W86 | Delete signed-in history older than 30 days for every account, not only the one saving a question, and turn on `secure_delete` in the session store | V14.2.4; section-9 agent | was live: old questions stayed on disk, though they were not shown, against the approved keep rule (`docs/48-data-retention.md`, CHG-023). Fixed by W86 (ADR-0172). The `python:3.12-slim` image tag defaults `secure_delete` to on (measured by W86's failure-modes role, finding F21); the running machine is UNVERIFIED | read by the session; that deleted text stays in the file is an agent's probe, not re-run |
 | W87 | A session ends at a maximum age; deleting an account needs a recent sign-in; an operator can end one account's or every session; record why sign-in is single-factor | V7.1.1 to V7.1.3, V7.3.2, V7.6.1, V7.4.5, V7.5.2, V6.3.3, V6.8.4 | live; details held back until the fix ships (CHG-060). The owner set the values on 2026-10-17: 12 hours signed in, 24 hours anonymous, and a sign-in within 10 minutes before deletion (CHG-056 (c), (d)) | read by the session |
 | W88 | Check where a request comes from before opening a counted session or replacing a visitor's anti-forgery token | V3.5.3 | live: another site can affect a visitor's sessions; details held back until the fix ships (CHG-060) | read by the session |
 | W89 | A crash inside a run is logged and reaches Sentry; refusals (401, 403, anti-forgery, 429, 422) are counted apart in `/metrics`; uvicorn logs in the app's JSON format. No new identifier is recorded: adding an address or a network to sign-in events would change their approved keep rule (`docs/48-data-retention.md`, which says "never … an address"), so that is the owner's decision | V15.3.4, V16.2.1, V16.2.2, V16.2.4, V16.3.1 to V16.3.4, V16.4.1 | live: today a crash marks the run failed with the error's class name and nothing more, and refusals are counted only as `4xx`. Sign-in, sign-out and sign-out everywhere already write events | crash: read by the session; the rest agents' report |
@@ -203,7 +204,7 @@ because it moves the screenshot baselines (ADR-0149).
 | # | Row | Why here |
 |---|---|---|
 | 1 | W85 | Was live, measured, open to anyone with no session; a size limit is a small change. Fixed by W85 |
-| 2 | W86 | Live; keeps question text past the 30 days the owner approved |
+| 2 | W86 | Was live; kept question text past the 30 days the owner approved. Fixed by W86 |
 | 3 | W100 | Live; the server records a consent the user did not give |
 | 4 | W87 | Live; sessions have no maximum age. The owner set its values on 2026-10-17 (CHG-056 (c), (d)) |
 | 5 | W88 | Live; another site can affect a visitor's sessions |

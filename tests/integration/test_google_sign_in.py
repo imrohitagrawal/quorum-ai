@@ -843,8 +843,15 @@ def test_the_migration_adds_the_accounts_table_to_an_old_database(tmp_path: Path
         names = {r[0] for r in connection.execute("SELECT name FROM schema_migrations")}
     finally:
         connection.close()
-    # W7 history (ADR-0135) adds its own guarded migration beside the accounts one.
-    assert names == {"w7_accounts", "w7_spend_key", "w7_history", "w7_session_safety"}
+    # W7 history (ADR-0135) adds its own guarded migration beside the accounts one,
+    # and W86 (ADR-0172) records the file's one VACUUM after secure_delete.
+    assert names == {
+        "w7_accounts",
+        "w7_spend_key",
+        "w7_history",
+        "w7_session_safety",
+        "w86_secure_delete_vacuum",
+    }
     # Opening again is a no-op (the marker is there) and keeps the row.
     again = SessionStore(str(path))
     try:
@@ -1063,7 +1070,9 @@ def test_a_migration_that_fails_part_way_leaves_no_marker_so_the_next_open_retri
         markers = list(connection.execute("SELECT name FROM schema_migrations"))
     finally:
         connection.close()
-    assert markers == []
+    # No accounts marker. The W86 VACUUM marker (ADR-0172) does not depend on
+    # the accounts table, so it is recorded on this writable file regardless.
+    assert markers == [("w86_secure_delete_vacuum",)]
     healed = SessionStore(str(path))
     try:
         assert healed.accounts_available() is True

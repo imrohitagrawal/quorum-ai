@@ -271,7 +271,13 @@ def test_a_history_table_that_cannot_be_created_leaves_history_off(
         names = {r[0] for r in connection.execute("SELECT name FROM schema_migrations")}
     finally:
         connection.close()
-    assert names == {"w7_accounts", "w7_spend_key", "w7_session_safety"}
+    # W86 (ADR-0172): the VACUUM marker does not depend on the history table.
+    assert names == {
+        "w7_accounts",
+        "w7_spend_key",
+        "w7_session_safety",
+        "w86_secure_delete_vacuum",
+    }
 
 
 def test_a_write_that_fails_inside_its_transaction_rolls_back(

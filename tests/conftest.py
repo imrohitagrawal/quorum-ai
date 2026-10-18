@@ -168,7 +168,7 @@ from typing import Any
 
 import pytest
 
-from product_app import costs, feedback_store, session_store, store_reconnect
+from product_app import auth, costs, feedback_store, session_store, store_reconnect
 from product_app.auth import session_repository
 from product_app.google_signin import pending_sign_ins, sign_in_start_limiter
 from product_app.query_runs import (
@@ -326,6 +326,30 @@ def _isolated_session_store() -> Iterator[None]:
         yield
     finally:
         session_store.configure(saved)
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _the_gc_daemon_never_sweeps_history() -> Iterator[None]:
+    """Hold the import-time ``session-gc`` daemon's history sweep never due.
+
+    W86 (ADR-0172). Importing ``product_app.auth`` starts a real daemon thread
+    whose ticks sweep signed-in history through ``session_store.get_store()``
+    once an hour after import, with the wall clock. A run on this machine can
+    take hours, so without this the daemon would one day sweep a store a test
+    had installed, deleting that test's seeded rows mid-test. A stamp of
+    ``+inf`` keeps ``now - stamp`` at ``-inf``, below any interval, so the
+    daemon's state is never due. Tests that drive ``auth._gc_tick`` pass their
+    OWN ``HistorySweepState`` and are untouched; the session purge in the same
+    tick still runs. Pinned by ``tests/unit/test_history_sweep_daemon.py::
+    test_the_import_time_daemon_cannot_sweep_during_the_run``.
+    """
+    state = auth._HISTORY_SWEEP_STATE
+    saved = state.last_run_monotonic
+    state.last_run_monotonic = float("inf")
+    try:
+        yield
+    finally:
+        state.last_run_monotonic = saved
 
 
 @pytest.fixture(autouse=True)
