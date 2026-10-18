@@ -77,44 +77,79 @@ def test_the_import_time_daemon_cannot_sweep_during_the_run(
         store.close()
 
 
-def test_the_daemons_own_tick_sweeps_when_its_own_state_is_due(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """W86 round 2. The daemon's real path: ``auth._gc_tick()`` with NO
-    arguments, on the module's own ``_HISTORY_SWEEP_STATE`` made due for this
-    test only, against a store installed as the global store, deletes a
-    31-day-old row. Red when: the tick returns early when no ``sweep_state``
-    is passed, or reads some other state than ``_HISTORY_SWEEP_STATE``. The
-    state is put back to the never-due value ``tests/conftest.py`` holds in a
-    ``finally``, so a failure here cannot let the daemon sweep later tests."""
+_OWN_TICK = """
+import sqlite3, sys, threading, time
+from datetime import UTC, datetime, timedelta
+threading.Thread.start = lambda self: None
+from product_app import auth, session_store
+from product_app.session_store import SessionStore
+
+class _QuietPurge:
+    def purge_expired(self):
+        return (0, 0)
+
+path = sys.argv[1]
+store = SessionStore(path)
+connection = sqlite3.connect(path, isolation_level=None)
+for run_id, days in (("old", 31), ("recent", 1)):
+    connection.execute(
+        "INSERT INTO history (query_run_id, account_id, question, status, mode, "
+        "model_count, cost_usd, completed_at, verdict) "
+        "VALUES (?, 'acct-a', 'a question', 'completed', 'panel', 4, '0.0400', ?, NULL)",
+        (run_id, (datetime.now(UTC) - timedelta(days=days)).isoformat()),
+    )
+before = sorted(r[0] for r in connection.execute("SELECT query_run_id FROM history"))
+session_store.configure(store)
+auth.session_repository = _QuietPurge()
+auth._HISTORY_SWEEP_STATE.last_run_monotonic = (
+    time.monotonic() - 2 * auth.HISTORY_SWEEP_INTERVAL_S
+)
+auth._gc_tick()
+after = sorted(r[0] for r in connection.execute("SELECT query_run_id FROM history"))
+connection.close()
+store.close()
+print(auth.__file__)
+print(threading.active_count(), ",".join(before), ",".join(after))
+"""
+
+
+def test_the_daemons_own_tick_sweeps_when_its_own_state_is_due(tmp_path: Path) -> None:
+    """W86 round 3. The daemon's real path: ``auth._gc_tick()`` with NO
+    arguments, on the module's own ``_HISTORY_SWEEP_STATE`` made due, against
+    a file-backed store installed as the global store, deletes a 31-day-old
+    row and keeps a 1-day-old one. Run in a fresh interpreter whose threads
+    cannot start, as the import-stamp test below is: making the module's state
+    due inside the pytest process would also let the LIVE import-time daemon
+    stamp it and later sweep another test's store. Red when: the tick returns
+    early when no ``sweep_state`` is passed, or reads some other state than
+    ``_HISTORY_SWEEP_STATE`` (the old row then stays)."""
+    src = Path(auth.__file__).resolve().parents[1]
     path = tmp_path / "sessions.sqlite3"
-    store = SessionStore(str(path))
-    state = auth._HISTORY_SWEEP_STATE
-    saved = state.last_run_monotonic
-    assert saved == float("inf"), "precondition: conftest holds the daemon never due"
-    try:
-        connection = sqlite3.connect(str(path), isolation_level=None)
-        try:
-            connection.execute(
-                "INSERT INTO history (query_run_id, account_id, question, status, mode, "
-                "model_count, cost_usd, completed_at, verdict) "
-                "VALUES ('old', 'acct-a', 'an old question', 'completed', 'panel', 4, "
-                "'0.0400', ?, NULL)",
-                ((datetime.now(UTC) - timedelta(days=31)).isoformat(),),
-            )
-        finally:
-            connection.close()
-        session_store.configure(store)
-        monkeypatch.setattr(auth, "session_repository", _QuietPurge())
-        assert _ids(path) == {"old"}, "positive partner: the row exists before the tick"
-
-        state.last_run_monotonic = time.monotonic() - 2 * auth.HISTORY_SWEEP_INTERVAL_S
-        auth._gc_tick()
-
-        assert _ids(path) == set(), "the daemon's own due tick swept the row"
-    finally:
-        state.last_run_monotonic = saved
-        store.close()
+    result = subprocess.run(
+        [sys.executable, "-c", _OWN_TICK, str(path)],
+        cwd=tmp_path,
+        env=env_without_coverage(
+            PYTHONPATH=str(src),
+            SESSION_DB_PATH=":memory:",
+            RUN_HISTORY_DB_PATH=":memory:",
+            FEEDBACK_DB_PATH=":memory:",
+            OPENROUTER_LIVE_EXECUTION_ENABLED="false",
+        ),
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    imported_file, numbers = result.stdout.strip().splitlines()[-2:]
+    assert Path(imported_file).resolve() == Path(auth.__file__).resolve(), (
+        "positive partner: the child imported this tree's auth.py"
+    )
+    threads, before, after = numbers.split()
+    assert threads == "1", "the child ran no daemon thread beside the tick"
+    assert before == "old,recent", "positive partner: both rows existed before the tick"
+    assert after == "recent", "the daemon's own due tick swept the old row and kept the new"
+    assert _ids(path) == {"recent"}, "the parent counts the same single kept row"
 
 
 def test_the_daemon_loop_calls_the_tick_with_no_arguments() -> None:
