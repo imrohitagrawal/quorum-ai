@@ -89,8 +89,12 @@ jobs:
       # Issue #100: the DURABLE per-IP daily mint cap (2/24h in production)
       # is a separate control and needs its own override for the same
       # reason — without it, the 3rd cookie-less /ui boot in this run gets
-      # a 429 and every invariant spec after it fails to render.
-      SESSION_MINT_CAP_OVERRIDE: "600"
+      # a 429 and every invariant spec after it fails to render. The count is
+      # kept on disk across the lanes of this job: measured 2026-10-18 (W100),
+      # the first two lanes open 459 and then 571 sessions, and the third lane
+      # reached 600 partway through and failed to render. 1500 leaves room;
+      # the code allows up to 10,000 (config.py, SESSION_MINT_CAP_OVERRIDE_MAX).
+      SESSION_MINT_CAP_OVERRIDE: "1500"
       # W47 (ADR-0144 decision 7): every browser here shares one loopback address,
       # so per-network anonymous spend would give the whole lane one $0.40 a day.
       # LOCAL-only; the app refuses to start with it set anywhere else.
