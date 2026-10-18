@@ -146,8 +146,8 @@ Codex's plan review of this session (kept outside the repository). Local: SQLite
   text. After the commit the file is gone, but its disk blocks are not overwritten, so the text may
   survive at the filesystem level until they are reused. No pragma fixes this; WAL is ruled out by
   ADR-0002.
-- **F23, Fly volume snapshots** keep copies taken before a sweep. How long Fly keeps them is
-  UNVERIFIED (`fly volumes snapshots list <id>` would settle it). A restored snapshot is swept at its
+- **F23, Fly volume snapshots** keep copies taken before a sweep. Fly keeps them for up to 5 days
+  (`snapshot_retention: 5`, measured with `fly volumes list` on 2026-10-17 and recorded in ADR-0180). A restored snapshot is swept at its
   first open.
 - **F21, production's own default.** What the running image reports for `PRAGMA secure_delete` is
   UNVERIFIED; the tag measured `1`. If it is `1`, the byte test's mutation (removing the pragma)

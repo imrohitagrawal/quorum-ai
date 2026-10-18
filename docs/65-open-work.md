@@ -6,7 +6,7 @@ original, because a gate and an offline agent can read it and cannot read `gh`.
 
 Verified at: `4ba35cec0ce40f9dd48b9c1bf0b9aefeb862a28c`
 
-The board holds **101** rows, **52** of them unpinned.
+The board holds **100** rows, **52** of them unpinned.
 
 `scripts/check_open_work.py --check` reads every row's evidence off disk and
 refuses if a claim is false. It runs inside `make validate`, and
