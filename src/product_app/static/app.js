@@ -9657,9 +9657,9 @@
       // and is never given back, whatever the answer: a lost or garbled answer
       // to a create the server took cannot leave it on for a retry (a second
       // run), and a tick withdrawn while the create is pending stays withdrawn.
-      // After any failed create the visitor ticks again. This is the session's
-      // reading of CHG-065 (b), stricter than the owner's words ("the tick
-      // clears once a run starts").
+      // After any failed create the visitor ticks again: stricter than
+      // CHG-065 (b)'s words ("the tick clears once a run starts"), and
+      // approved by the owner as such (CHG-068).
       clearHighStakesTick();
       // From here the create is on the wire and a run will exist, so going
       // home waits for it (goToNewQuestion checks ``createInFlight``) rather

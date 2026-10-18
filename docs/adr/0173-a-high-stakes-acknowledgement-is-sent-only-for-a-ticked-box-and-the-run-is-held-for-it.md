@@ -53,9 +53,9 @@ cost gate, whose confirm button and Ctrl/Cmd+Enter never looked at the box.
    box and is always on screen above the question, so sending the question acknowledges it. Sending
    only ticked boxes would have made the server refuse every run.
 4. **A fresh tick per run (CHG-065 (b)).** The tick clears when a create is sent and is never
-   restored, whatever the answer; after any failed create the visitor ticks again. This is the
-   session's reading of CHG-065 (b), stricter than its words ("the tick clears once a run
-   starts"). Review round 2 showed why: a tick given back after a refused create also brings back a
+   restored, whatever the answer; after any failed create the visitor ticks again. This is
+   stricter than CHG-065 (b)'s words ("the tick clears once a run starts"); the session proposed
+   it and the owner approved it (CHG-068). Review round 2 showed why: a tick given back after a refused create also brings back a
    tick the visitor withdrew while that create was pending, and the next "Run now" then sends it.
    The cost is one extra tick after a failed create, for example an expired cost confirmation
    (402). The box stays as the background check says.
