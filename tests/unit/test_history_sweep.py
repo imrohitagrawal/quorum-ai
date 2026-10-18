@@ -488,7 +488,9 @@ def test_a_fresh_sweep_state_is_not_due_before_an_hour(live: SessionStore, path:
     """F5: the first daemon sweep is an hour after start, so the import-time
     daemon cannot race a test's seeded rows. Red when: a fresh state is due at
     once, or the throttle compares against the wrong stamp."""
-    state = auth.HistorySweepState()
+    # A literal stamp: with the real clock, ``stamp + 3600.0`` can round to
+    # just under one interval after it (about one value in a thousand).
+    state = auth.HistorySweepState(last_run_monotonic=1_000.0)
     start = state.last_run_monotonic
     _seed(path, "acct-a", "old", _wall_ago(31))
 
@@ -503,7 +505,9 @@ def test_a_fresh_sweep_state_is_not_due_before_an_hour(live: SessionStore, path:
 def test_the_daemon_sweeps_at_most_once_an_hour(live: SessionStore, path: Path) -> None:
     """F2(c), cardinality. Red when: the throttle is removed (the second due
     row would go at once) or never re-arms (the third tick would not sweep)."""
-    state = auth.HistorySweepState()
+    # A literal stamp: with the real clock, ``stamp + 3600.0`` can round to
+    # just under one interval after it (about one value in a thousand).
+    state = auth.HistorySweepState(last_run_monotonic=1_000.0)
     start = state.last_run_monotonic
     _seed(path, "acct-a", "first", _wall_ago(31))
     auth._gc_tick(now_monotonic=start + 3600.0, sweep_state=state)
@@ -521,7 +525,9 @@ def test_the_daemon_sweep_runs_with_the_purge(live: SessionStore, path: Path) ->
     """Red when: adding the sweep stops the tick reaching the session purge."""
     purge = auth.session_repository
     assert isinstance(purge, _QuietPurge)
-    state = auth.HistorySweepState()
+    # A literal stamp: with the real clock, ``stamp + 3600.0`` can round to
+    # just under one interval after it (about one value in a thousand).
+    state = auth.HistorySweepState(last_run_monotonic=1_000.0)
     auth._gc_tick(now_monotonic=state.last_run_monotonic + 3600.0, sweep_state=state)
     auth._gc_tick(now_monotonic=state.last_run_monotonic + 1.0, sweep_state=state)
     assert purge.calls == 2
@@ -542,7 +548,9 @@ def test_a_raising_purge_does_not_skip_the_sweep(
             raise RuntimeError("the volume went away")
 
     monkeypatch.setattr(auth, "session_repository", _Exploding())
-    state = auth.HistorySweepState()
+    # A literal stamp: with the real clock, ``stamp + 3600.0`` can round to
+    # just under one interval after it (about one value in a thousand).
+    state = auth.HistorySweepState(last_run_monotonic=1_000.0)
     _seed(path, "acct-a", "old", _wall_ago(31))
     assert _ids(path) == {"old"}
 
@@ -558,7 +566,9 @@ def test_a_due_tick_with_no_store_does_not_raise(monkeypatch: pytest.MonkeyPatch
     purge = _QuietPurge()
     monkeypatch.setattr(auth, "session_repository", purge)
     session_store.configure(None)
-    state = auth.HistorySweepState()
+    # A literal stamp: with the real clock, ``stamp + 3600.0`` can round to
+    # just under one interval after it (about one value in a thousand).
+    state = auth.HistorySweepState(last_run_monotonic=1_000.0)
     auth._gc_tick(now_monotonic=state.last_run_monotonic + 3600.0, sweep_state=state)
     assert purge.calls == 1
 
@@ -596,9 +606,13 @@ def test_the_daemons_own_state_is_stamped_at_import(monkeypatch: pytest.MonkeyPa
     stamp = state.last_run_monotonic
     assert before <= stamp <= after, "a new state is stamped with the monotonic clock, now"
 
-    auth._gc_tick(now_monotonic=stamp + 3599.0, sweep_state=state)
+    # The boundary ticks use a literal stamp: with the real clock's value,
+    # ``(stamp + 3600.0) - stamp`` can round to just under 3600.0 (about one
+    # value in a thousand; CI hit it), which reads "not yet due".
+    state.last_run_monotonic = 1_000.0
+    auth._gc_tick(now_monotonic=4_599.0, sweep_state=state)
     assert sweeps == [], "not due one second before the interval"
-    auth._gc_tick(now_monotonic=stamp + 3600.0, sweep_state=state)
+    auth._gc_tick(now_monotonic=4_600.0, sweep_state=state)
     assert len(sweeps) == 1, "positive partner: due at exactly the interval"
 
     tree = ast.parse(Path(auth.__file__).read_text(encoding="utf-8"))

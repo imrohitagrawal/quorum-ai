@@ -239,12 +239,11 @@ def test_a_failing_daemon_sweep_logs_the_type_only(
     monkeypatch.setattr(session_store, "get_store", lambda: _Raising())
     monkeypatch.setattr(auth, "session_repository", _QuietPurge())
     caplog.set_level(logging.WARNING, logger="product_app.auth")
-    state = auth.HistorySweepState()
+    # A literal stamp: with the real clock, adding one interval can round to
+    # just under an interval later (about one value in a thousand).
+    state = auth.HistorySweepState(last_run_monotonic=1_000.0)
 
-    auth._gc_tick(
-        now_monotonic=state.last_run_monotonic + auth.HISTORY_SWEEP_INTERVAL_S,
-        sweep_state=state,
-    )
+    auth._gc_tick(now_monotonic=4_600.0, sweep_state=state)
 
     warnings = [
         r for r in caplog.records if r.name == "product_app.auth" and r.levelno >= logging.WARNING
