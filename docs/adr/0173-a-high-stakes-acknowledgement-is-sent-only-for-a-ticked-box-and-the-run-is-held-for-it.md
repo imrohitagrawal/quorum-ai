@@ -48,12 +48,17 @@ cost gate, whose confirm button and Ctrl/Cmd+Enter never looked at the box.
    cost gate hides the composer, and the box with it. Codex's plan review showed, with the real
    `setView` in a node probe, that a visibility condition held every confirmed run in a loop. A tick
    made before the cost gate still counts there. It clears when the box hides
-   (`setHighStakesRequired(false)`) or when a run is created (decision 4).
+   (`setHighStakesRequired(false)`) or when a create is sent, and is never given back (decision 4).
 3. **The sensitive-data acknowledgement stays automatic (CHG-065 (a)).** Its notice has no tick
    box and is always on screen above the question, so sending the question acknowledges it. Sending
    only ticked boxes would have made the server refuse every run.
-4. **A fresh tick per run (CHG-065 (b)).** The tick clears once the create succeeds; the box stays
-   as the background check says.
+4. **A fresh tick per run (CHG-065 (b)).** The tick clears when a create is sent and is never
+   restored, whatever the answer; after any failed create the visitor ticks again. This is the
+   session's reading of CHG-065 (b), stricter than its words ("the tick clears once a run
+   starts"). Review round 2 showed why: a tick given back after a refused create also brings back a
+   tick the visitor withdrew while that create was pending, and the next "Run now" then sends it.
+   The cost is one extra tick after a failed create, for example an expired cost confirmation
+   (402). The box stays as the background check says.
 5. **A warning type the page does not know is never acknowledged (CHG-065 (c)).** The server then
    refuses the run and the visitor sees an error, never a silent consent.
 6. **A held run shows the toast that existed and the new line (CHG-065 (d)).** The toast says
@@ -85,9 +90,11 @@ cost gate, whose confirm button and Ctrl/Cmd+Enter never looked at the box.
   one more final check, out of the 30 requests a minute per account that warnings, estimate and
   create share (`query_runs.py`, `_enforce_account_rate_limit`).
 - The background check is now only a convenience. The final check is the authority.
-- The two e2e lane floors rise by the new tests only: 455 to 457 and 96 to 114 (110, then 4 more
-  tests in review round 1). They keep the slack they had rather than taking the local counts (459
-  and 130).
+- The two e2e lane floors rise by the new tests only: 455 to 457 and 96 to 117 (110, then 4 more
+  tests in review round 1 and 3 more in round 2). They keep the slack they had rather than taking
+  the local counts, measured by the round 2 fixer's lane runs on 2026-10-18 (logs kept outside the
+  repository): `invariants lane: 459 tests executed (floor 457), 0 skipped.` and
+  `axe + parity lane: 133 tests executed (floor 117), 0 skipped.`
 - Advisory, not built:
   - **F11:** when the server refuses a run for a missing acknowledgement (422), the page shows
     "Please check the form" rather than the hold. Reading `required_warnings` from that answer to
@@ -116,6 +123,9 @@ cost gate, whose confirm button and Ctrl/Cmd+Enter never looked at the box.
 - **A tick box for the sensitive-data notice too.** The owner chose to keep it automatic (CHG-065
   (a)).
 - **Keep the tick across runs.** The owner chose a fresh tick per run (CHG-065 (b)).
+- **Give the tick back when the server refuses a create with a 4xx (review round 1's design).** It
+  saved the extra tick after an expired confirmation, but it restored a tick withdrawn while the
+  create was pending (decision 4).
 - **The line only, without the toast.** The session recommended it; the owner chose both
   (CHG-065 (d)).
 - **A fix on the server.** The server cannot tell a ticked acknowledgement from a made-up one.

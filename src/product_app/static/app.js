@@ -9336,25 +9336,13 @@
     if (highStakesAckCheckbox) highStakesAckCheckbox.removeAttribute("aria-describedby");
   }
 
-  // W100 round 1: set the tick from code (the create spends it; a refused
-  // create gives it back), keeping the box, the line and both buttons in step.
-  function setHighStakesTick(ticked) {
-    state.highStakesAck = ticked;
-    if (highStakesAckCheckbox) highStakesAckCheckbox.checked = ticked;
+  // W100: clear the tick from code (a create spends it), keeping the box, the
+  // line and both buttons in step.
+  function clearHighStakesTick() {
+    state.highStakesAck = false;
+    if (highStakesAckCheckbox) highStakesAckCheckbox.checked = false;
     syncHighStakesHeld();
     applyHighStakesGate();
-  }
-
-  // A create the server answered with its own 4xx error envelope (parsed
-  // JSON with a code): the server refused it, so no run was made.
-  function createRefusedByServer(error) {
-    return (
-      error instanceof ApiError &&
-      error.status >= 400 &&
-      error.status < 500 &&
-      !!error.partial &&
-      typeof error.code === "string"
-    );
   }
 
   // Show or hide the gate; hiding resets the acknowledgement so a later
@@ -9635,7 +9623,6 @@
     // concurrent proceedWithRun bails at the guard above.
     state.creatingRun = true;
     setButtonLoading(confirmBtn, true);
-    let tickSent = false;
     try {
       const thresholdAction =
         state.currentEstimate.cost_estimate.threshold_action;
@@ -9666,12 +9653,14 @@
                 state.currentEstimate.cost_estimate.confirmation_token,
             }
           : null;
-      // W100 round 1 (CHG-065 (b)): the tick is spent as the create is sent,
-      // not when its answer parses, so a lost or garbled answer to a create
-      // the server took cannot leave it on for a retry (a second run). The
-      // catch below gives it back only for a refusal that proves no run.
-      tickSent = state.highStakesAck;
-      setHighStakesTick(false);
+      // W100 (ADR-0173 decision 4): the tick is spent as the create is sent
+      // and is never given back, whatever the answer: a lost or garbled answer
+      // to a create the server took cannot leave it on for a retry (a second
+      // run), and a tick withdrawn while the create is pending stays withdrawn.
+      // After any failed create the visitor ticks again. This is the session's
+      // reading of CHG-065 (b), stricter than the owner's words ("the tick
+      // clears once a run starts").
+      clearHighStakesTick();
       // From here the create is on the wire and a run will exist, so going
       // home waits for it (goToNewQuestion checks ``createInFlight``) rather
       // than leaving a charged run nobody is watching.
@@ -9745,13 +9734,6 @@
       toast({ message: "Run started. Tracking progress below.", tone: "info" });
       startPolling();
     } catch (error) {
-      // W100 round 1: give the tick back only when the server refused this
-      // create with its own parsed 4xx error envelope, which means no run was
-      // made (the expired-confirmation 402 below then needs no new tick). A
-      // network failure, a 5xx or a malformed answer leaves it cleared.
-      if (tickSent && generation === estimateGeneration && createRefusedByServer(error)) {
-        setHighStakesTick(true);
-      }
       // If the server reports the confirmation token expired (HTTP 402
       // with COST_CONFIRMATION_REQUIRED), auto-re-estimate so the user
       // sees fresh copy rather than a stale estimate.

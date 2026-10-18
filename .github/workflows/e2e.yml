@@ -450,8 +450,10 @@ jobs:
       # "126 tests executed (floor 110), 0 skipped".
       # 110 -> 114 (W100 review round 1): the same spec adds 4 tests, added to
       # the floor the same way.
+      # 114 -> 117 (W100 review round 2): the same spec adds 3 tests (two
+      # existing ones were changed, not added), added to the floor the same way.
       - name: "axe + parity lane: floor on tests actually executed"
-        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 114 --lane "axe + parity lane"
+        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 117 --lane "axe + parity lane"
 
       - name: Clear the previous lane's JUnit report
         run: rm -f e2e/results.xml

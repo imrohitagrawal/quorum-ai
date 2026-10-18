@@ -499,10 +499,10 @@ test.describe("W100 round 1 — the tick clears when a create is sent; the held 
     expect(mock.creates[1].safety_acknowledgements).toEqual([SD, HS]);
   });
 
-  test("an expired cost confirmation still completes with one tick: one 402, then exactly one 202", async ({ page }) => {
-    // Red when: the tick cleared as the create was sent is not restored when
-    // the server refuses that create with its 402 envelope (no run was made),
-    // so the re-confirmed run is held for a second tick.
+  test("an expired cost confirmation needs a fresh tick: one 402, the re-confirm holds for the box, then exactly one 202", async ({ page }) => {
+    // Red when: a create the server refused with its 402 envelope gives the
+    // tick cleared at send back (round 2 removed that), so the re-confirm
+    // creates a run carrying the high-stakes acknowledgement with no new tick.
     const mock = await installMocks(page, { band: "require_confirmation" });
     const statuses: number[] = [];
     let expireNext = true;
@@ -538,9 +538,16 @@ test.describe("W100 round 1 — the tick clears when a create is sent; the held 
     await expect(page.locator("#gate-confirm")).toBeVisible();
     await expect(page.locator("#gate-confirm")).toBeEnabled();
     await page.locator("#gate-confirm").click();
+    await expectHeld(page, mock, 0, HS_Q);
+    expect(statuses, "the re-confirm without a fresh tick sent no create").toEqual([402]);
+
+    await expectReleasedByTick(page);
+    await seeEstimate(page).click();
+    await expect(page.locator("#gate-confirm")).toBeVisible();
+    await page.locator("#gate-confirm").click();
     await expect.poll(() => statuses.length).toBe(2);
     await settle(page);
-    expect(statuses, "one refused create, then exactly one run").toEqual([402, 202]);
+    expect(statuses, "one refused create, then exactly one run, for the fresh tick").toEqual([402, 202]);
     expect(mock.creates, "the mock recorded the one run").toHaveLength(1);
     expect(mock.creates[0].safety_acknowledgements).toEqual([SD, HS]);
     await expect(page.locator('[data-view="live-run"]:not([hidden]), [data-view="result"]:not([hidden])')).toHaveCount(1);
@@ -549,7 +556,9 @@ test.describe("W100 round 1 — the tick clears when a create is sent; the held 
 
   test("after a hold the tick box shows a visible focus outline; other inputs keep theirs off", async ({ page }) => {
     // Red when: the focus the hold puts on #high-stakes-ack is drawn only by
-    // the sheet-wide input:focus shadow (outline: none, a 6%-ink shadow).
+    // the sheet-wide input:focus shadow (outline: none, a 6%-ink shadow), or
+    // the ring rule is widened past the box (to every input or checkbox), so
+    // the quick-answer checkbox loses the sheet's outline: none.
     const mock = await installMocks(page, { blindUntilEstimate: true });
     await boot(page);
     await page.locator("#query-text").fill(HS_Q);
@@ -586,6 +595,11 @@ test.describe("W100 round 1 — the tick clears when a create is sent; the held 
     await page.locator("#query-text").focus();
     expect(await activeId(page)).toBe("query-text");
     expect((await outlineOf("query-text")).style, "the question box keeps the sheet's rule").toBe("none");
+    // A non-textarea <input>, the same type as the box: a rule widened to
+    // `input:focus` or `input[type=checkbox]:focus` reaches it.
+    await page.locator("#quick-mode-input").focus();
+    expect(await activeId(page)).toBe("quick-mode-input");
+    expect((await outlineOf("quick-mode-input")).style, "the quick-answer checkbox keeps the sheet's rule").toBe("none");
   });
 
   test("after a hold through the cost gate the running total no longer shows the dropped estimate", async ({ page }) => {
@@ -604,4 +618,98 @@ test.describe("W100 round 1 — the tick clears when a create is sent; the held 
     await expect(total).not.toHaveText(shown);
     await expect(total).not.toContainText("0.19");
   });
+});
+
+test.describe("W100 round 2 — a tick spent on a failed create is never given back (mocked)", () => {
+  test.skip(({ browserName }) => browserName !== "chromium", "chromium-only reference run");
+
+  /**
+   * After a failed create: a press on Run now (if it can be pressed) and
+   * Ctrl/Cmd+Enter create nothing, the box is shown unticked and both buttons
+   * wait for it. Then a fresh tick creates exactly one run, with both
+   * acknowledgements (the positive partner).
+   */
+  async function expectWaitsForFreshTick(page: Page, mock: Mock) {
+    const before = mock.creates.length;
+    if (await runNow(page).isEnabled()) await runNow(page).click();
+    await settle(page);
+    await page.locator("#query-text").focus();
+    await page.keyboard.press("ControlOrMeta+Enter");
+    await settle(page);
+    expect(mock.creates, "no further run until the box is ticked again").toHaveLength(before);
+    await expect(composer(page)).toBeVisible();
+    await expect(box(page)).toBeVisible();
+    expect(await ackChecked(page), "the tick spent on the failed create is not given back").toBe(false);
+    for (const button of [runNow(page), seeEstimate(page)]) {
+      await expect(button).toBeDisabled();
+      await expect(button).toHaveAttribute("data-gate-blocked", "true");
+    }
+
+    await ack(page).check();
+    await expect(runNow(page)).toBeEnabled();
+    await runNow(page).click();
+    await expect.poll(() => mock.creates.length).toBe(before + 1);
+    await settle(page);
+    expect(mock.creates, "one run, for the fresh tick").toHaveLength(before + 1);
+    expect(mock.creates[before].safety_acknowledgements).toEqual([SD, HS]);
+  }
+
+  test("a tick withdrawn while a create is pending stays withdrawn when the server refuses that create", async ({ page }) => {
+    // Red when: a refused create (a parsed 4xx, here 409) puts the tick back,
+    // so a tick the visitor withdrew while the create was pending returns and
+    // the next Run now creates a run with the high-stakes acknowledgement.
+    const mock = await installMocks(page);
+    let releaseCreate: () => void = () => {};
+    const createGate = new Promise<void>((r) => (releaseCreate = r));
+    let refused = 0;
+    await page.route(/\/v1\/query-runs$/, async (r) => {
+      if (r.request().method() !== "POST" || refused > 0) return r.fallback();
+      refused += 1;
+      await createGate;
+      return r.fulfill(
+        fulfil({ detail: { code: "ACTIVE_QUERY_EXISTS", message: "One query can run at a time for this account." } }, 409),
+      );
+    });
+    await boot(page);
+    await page.locator("#query-text").fill(HS_Q);
+    await expect(box(page)).toBeVisible();
+    await ack(page).check();
+    await runNow(page).click();
+    await expect.poll(() => refused, { message: "the create is pending" }).toBe(1);
+    expect(await ackChecked(page), "the tick clears as the create is sent").toBe(false);
+    // The visitor ticks and then withdraws the tick while the create is pending.
+    await ack(page).check();
+    await ack(page).uncheck();
+    await page.waitForTimeout(1500);
+    releaseCreate();
+    await expect(page.locator("#error-region")).toBeVisible();
+    expect(mock.creates, "the refused create made no run").toHaveLength(0);
+    await expectWaitsForFreshTick(page, mock);
+  });
+
+  for (const how of ["a 5xx", "a network failure"] as const) {
+    test(`after a create that ends in ${how}, Run now waits for a fresh tick`, async ({ page }) => {
+      // Red when: the tick is given back (or never cleared) after a create
+      // that ended in a 5xx or a network failure, so the retry carries the
+      // high-stakes acknowledgement with no new tick. True on 844f781; it
+      // guards the fix.
+      const mock = await installMocks(page);
+      let failed = 0;
+      await page.route(/\/v1\/query-runs$/, (r) => {
+        if (r.request().method() !== "POST" || failed > 0) return r.fallback();
+        failed += 1;
+        if (how === "a network failure") return r.abort("failed");
+        return r.fulfill(fulfil({ detail: { code: "INTERNAL_ERROR", message: "Internal error." } }, 500));
+      });
+      await boot(page);
+      await page.locator("#query-text").fill(HS_Q);
+      await expect(box(page)).toBeVisible();
+      await ack(page).check();
+      await runNow(page).click();
+      await expect.poll(() => failed, { message: "the create was sent" }).toBe(1);
+      await expect(page.locator("#error-region")).toBeVisible();
+      expect(mock.creates).toHaveLength(0);
+      await expectWaitsForFreshTick(page, mock);
+    });
+  }
 });
