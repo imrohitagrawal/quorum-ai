@@ -483,13 +483,16 @@ jobs:
           tests/accessibility/accessibility.spec.ts
           tests/api-mocking/api-mocking.spec.ts
           tests/navigation/navigation.spec.ts
+          tests/api-mocking/late-run-sign-in-off.spec.ts
           --project=chromium
           --retries=0
 
       # EXECUTED-COUNT FLOOR, same reasoning as the two lanes above. Floor is
       # the EXACT count measured on 2026-08-03 (51 = 16 + 16 + 9 + 10).
+      # 51 -> 52 (W87-1, ADR-0174): late-run-sign-in-off.spec.ts adds 1 test,
+      # added to the old floor.
       - name: "workspace/accessibility/api-mocking/navigation lane: floor on tests actually executed"
-        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 51 --lane "workspace/accessibility/api-mocking/navigation lane"
+        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 52 --lane "workspace/accessibility/api-mocking/navigation lane"
 
       - name: Clear the previous lane's JUnit report
         run: rm -f e2e/results.xml
@@ -512,6 +515,7 @@ jobs:
           tests/signed-in/follow-up-context.spec.ts
           tests/signed-in/shared-allowance.spec.ts
           tests/signed-in/help-history-hint.spec.ts
+          tests/signed-in/session-max-age.spec.ts
           --config=playwright.signed-in.config.ts
           --project=chromium
           --retries=0
@@ -529,8 +533,10 @@ jobs:
       # Review round 2 added two (the idle reminder over a toast, at 1440 and
       # 700 px): against b552d37's code the lane gave "12 passed", "2 failed",
       # red by design until their fix. Re-measure when that fix lands.
+      # 25 -> 31 (W87-1, ADR-0174): session-max-age.spec.ts adds 6 tests,
+      # added to the old floor.
       - name: "signed-in History lane: floor on tests actually executed"
-        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 25 --lane "signed-in History lane"
+        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 31 --lane "signed-in History lane"
 
       - name: Clear the previous lane's JUnit report
         # Adversarial review (#162/#166): without this, a Playwright run that

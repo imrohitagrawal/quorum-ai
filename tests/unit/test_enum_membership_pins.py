@@ -155,7 +155,16 @@ def _production_enum_classes() -> dict[str, int]:
 #: not just the previously-gap ones. Redundancy here is cheap and costs
 #: nothing but a few lines.
 ENUM_MEMBER_PINS: dict[str, frozenset[str]] = {
-    "auth.AuthError": frozenset({"AUTH_REQUIRED", "SESSION_EXPIRED", "CSRF_INVALID"}),
+    "auth.AuthError": frozenset(
+        {
+            "AUTH_REQUIRED",
+            "SESSION_EXPIRED",
+            "CSRF_INVALID",
+            # W87-1 (ADR-0174): the 12-hour end and the late-run refusal.
+            "SESSION_MAX_AGE",
+            "SESSION_ENDS_SOON",
+        }
+    ),
     "config.RuntimeEnvironment": frozenset({"local", "staging", "production"}),
     "costs.CostThresholdAction": frozenset({"allow", "require_confirmation", "block"}),
     "debate.DebateRoundStatus": frozenset({"completed", "skipped"}),

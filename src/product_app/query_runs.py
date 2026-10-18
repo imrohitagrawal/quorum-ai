@@ -14,7 +14,7 @@ from __future__ import annotations
 import logging
 import time as _time_module
 from threading import BoundedSemaphore, RLock, Thread
-from typing import Annotated, Literal, Self
+from typing import Annotated, Any, Literal, Self
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -24,6 +24,7 @@ from product_app import account_history
 from product_app.auth import (
     SessionContext,
     enforce_csrf,
+    refuse_if_session_ends_soon,
     refuse_sign_in_only,
     require_session,
     spend_meter_for,
@@ -644,13 +645,59 @@ def _enforce_account_rate_limit(request: Request, session: SessionContext) -> No
         )
 
 
+class RunRefusedDetail(BaseModel):
+    code: str
+    message: str
+
+
+class RunRefusedResponse(BaseModel):
+    """A 409: the same ``{"detail": {"code", "message"}}`` envelope as every
+    other refusal."""
+
+    detail: RunRefusedDetail
+
+
+#: W87-1 (ADR-0174): the estimate's declared refusals. A 409
+#: ``SESSION_ENDS_SOON`` when the session has less than 12 minutes left
+#: before its maximum age.
+ESTIMATE_RESPONSES: dict[int | str, dict[str, Any]] = {
+    **REQUEST_TOO_LARGE_RESPONSES,
+    409: {
+        "model": RunRefusedResponse,
+        "description": "SESSION_ENDS_SOON: the session ends in less than 12 minutes.",
+    },
+}
+
+#: The run creation's: the same 409, and ``ACTIVE_QUERY_EXISTS`` when the
+#: account already has a run in progress.
+CREATE_RESPONSES: dict[int | str, dict[str, Any]] = {
+    **REQUEST_TOO_LARGE_RESPONSES,
+    409: {
+        "model": RunRefusedResponse,
+        "description": (
+            "SESSION_ENDS_SOON: the session ends in less than 12 minutes; or "
+            "ACTIVE_QUERY_EXISTS: the account already has a run in progress."
+        ),
+    },
+}
+
+
+def _refuse_late_run(session: SessionContext) -> None:
+    """W87-1 (ADR-0174): no run, or estimate, in the session's last 12
+    minutes. Imported here, not at the top: ``google_signin`` imports this
+    module."""
+    from product_app.google_signin import sign_in_enabled
+
+    refuse_if_session_ends_soon(session, sign_in_offered=sign_in_enabled())
+
+
 # -- routes ------------------------------------------------------------------
 
 
 @router.post(
     "/estimate",
     response_model=QueryRunEstimateResponse,
-    responses=REQUEST_TOO_LARGE_RESPONSES,
+    responses=ESTIMATE_RESPONSES,
 )
 def estimate_query_run(
     payload: QueryRunEstimateRequest,
@@ -661,6 +708,8 @@ def estimate_query_run(
     # (``record_guardrail_event``) and is therefore a state-mutating
     # action — it must enforce CSRF like the create and delete routes.
     enforce_csrf(request, session)
+    # W87-1 (ADR-0174): after CSRF, before anything is recorded.
+    _refuse_late_run(session)
     # SEC-C3: per-account rate limit to prevent rapid-fire estimate spam
     _enforce_account_rate_limit(request, session)
     # W7 (ADR-0136): the key the per-account spend rails read; W47
@@ -714,7 +763,7 @@ def estimate_query_run(
     "",
     response_model=QueryRunCreateResponse,
     status_code=status.HTTP_202_ACCEPTED,
-    responses=REQUEST_TOO_LARGE_RESPONSES,
+    responses=CREATE_RESPONSES,
 )
 def create_query_run(
     payload: QueryRunCreateRequest,
@@ -722,6 +771,8 @@ def create_query_run(
     session: Annotated[SessionContext, Depends(require_session)],
 ) -> QueryRunCreateResponse:
     enforce_csrf(request, session)
+    # W87-1 (ADR-0174): after CSRF, before anything is recorded or charged.
+    _refuse_late_run(session)
     # SEC-C3: per-account rate limit to prevent rapid-fire run creation
     _enforce_account_rate_limit(request, session)
     # W7 (ADR-0136): read once, stored on the run, so its charge, void and

@@ -60,6 +60,29 @@ from product_app.session_store import (
 #: Session lifetime. Renewed on every successful ``/v1/session`` call.
 SESSION_TTL = timedelta(hours=2)
 
+#: W87-1 (ADR-0174, CHG-056 c): the longest a session lives, however much it
+#: is used. A signed-in session ends 12 hours after the sign-in that made it;
+#: an anonymous one 24 hours after its mint, the same 24 hours the per-network
+#: mint count looks back over. Both are strict: alive at exactly the limit,
+#: ended one microsecond past it (``_Session.is_expired``).
+SIGNED_IN_MAX_AGE = timedelta(hours=12)
+ANONYMOUS_MAX_AGE = timedelta(hours=24)
+
+#: W87-1 (ADR-0174, CHG-066 b, CHG-069): a run, or its estimate, is refused
+#: when the session has less than this many seconds left before its maximum
+#: age. Its own constant, not ``quorum_run_deadline_seconds``: the refusal
+#: texts the owner approved say "less than 12 minutes", and that setting may be
+#: raised without the texts changing.
+LATE_RUN_REFUSAL_SECONDS = 720
+
+
+def _now() -> datetime:
+    """The session code's one clock (W87-1). Every reader looks it up on this
+    module at call time, so a test can stand the session code at an exact
+    instant (``tests/session_clock.py``)."""
+    return datetime.now(UTC)
+
+
 #: Issue #100 §2.3. Durable per-IP cap on NEW session MINTS per rolling 24h —
 #: distinct from the in-memory per-minute BURST limiter
 #: (``query_runs._InMemoryIpRateLimiter``, tightened separately to 10/min in
@@ -256,6 +279,34 @@ class AuthError(StrEnum):
     AUTH_REQUIRED = "AUTH_REQUIRED"
     SESSION_EXPIRED = "SESSION_EXPIRED"
     CSRF_INVALID = "CSRF_INVALID"
+    #: W87-1 (ADR-0174): a signed-in session ended by its 12 hours.
+    SESSION_MAX_AGE = "SESSION_MAX_AGE"
+    #: W87-1 (ADR-0174): a run refused in the session's last 12 minutes.
+    SESSION_ENDS_SOON = "SESSION_ENDS_SOON"
+
+
+#: CHG-063 (f)(2), verbatim: the 401 for a session ended by its 12 hours.
+SESSION_MAX_AGE_MESSAGE = (
+    "You were signed out because 12 hours have passed since you signed in. "
+    "Reload the page to sign in again."
+)
+
+#: CHG-066 (b), verbatim: a signed-in run refused in the session's last 12 minutes.
+SESSION_ENDS_SOON_SIGNED_IN_MESSAGE = (
+    "Your session ends in less than 12 minutes. Sign in again, then run this question."
+)
+
+#: CHG-069, verbatim: the same refusal for an anonymous session, sign-in on.
+SESSION_ENDS_SOON_ANONYMOUS_MESSAGE = (
+    "This session ends in less than 12 minutes, so this question cannot run now. "
+    "Sign in to keep going, or reload the page after the session ends."
+)
+
+#: CHG-070 (c), verbatim: the anonymous refusal when Google sign-in is off.
+SESSION_ENDS_SOON_NO_SIGN_IN_MESSAGE = (
+    "This session ends in less than 12 minutes, so this question cannot run now. "
+    "Reload the page after the session ends."
+)
 
 
 @dataclass(frozen=True)
@@ -304,9 +355,28 @@ class _Session:
     #: can never have it set. A restart loses it at the cost of one retry of
     #: the capped page.
     sign_in_only: bool = False
+    #: W87-1 (ADR-0174): the longest this session lives from ``created_at``,
+    #: however much it is used. ``ANONYMOUS_MAX_AGE`` unless the session is
+    #: signed in, or a restore could not tell (the shorter one, the closed side).
+    max_age: timedelta = ANONYMOUS_MAX_AGE
 
     def is_expired(self, *, now: datetime) -> bool:
-        return (now - self.last_used_at) > self.idle_limit
+        return (now - self.last_used_at) > self.idle_limit or (now - self.created_at) > self.max_age
+
+    def idle_end(self) -> datetime:
+        return self.last_used_at + self.idle_limit
+
+    def max_age_end(self) -> datetime:
+        return self.created_at + self.max_age
+
+    def ends_at(self) -> datetime:
+        """The nearer of the two ends (W87-1): the idle end or the maximum age."""
+        return min(self.idle_end(), self.max_age_end())
+
+    def ends_by_max_age(self) -> bool:
+        """Whether the maximum age comes no later than the idle end, so using
+        the page cannot keep this session past :meth:`ends_at`."""
+        return self.max_age_end() <= self.idle_end()
 
 
 def signed_in_idle_limit() -> timedelta:
@@ -364,10 +434,11 @@ class SessionRepository:
         account_id: UUID,
         idle_limit: timedelta = SESSION_TTL,
         sign_in_only: bool = False,
+        max_age: timedelta = ANONYMOUS_MAX_AGE,
     ) -> _Session:
         with self._lock:
             self._purge_expired_locked()
-            now = datetime.now(UTC)
+            now = _now()
             session = _Session(
                 session_id=secrets.token_urlsafe(24),
                 account_id=account_id,
@@ -376,6 +447,7 @@ class SessionRepository:
                 last_used_at=now,
                 idle_limit=idle_limit,
                 sign_in_only=sign_in_only,
+                max_age=max_age,
             )
             self._sessions[session.session_id] = session
         self._persist(session)
@@ -409,7 +481,7 @@ class SessionRepository:
         that it is still the cached one). The in-memory cutoff never moves
         back, and cutoffs older than the session lifetime refuse nothing and
         are dropped here."""
-        now = datetime.now(UTC)
+        now = _now()
         with self._lock:
             for lapsed in [a for a, c in self._valid_after.items() if c + SESSION_TTL <= now]:
                 del self._valid_after[lapsed]
@@ -427,7 +499,7 @@ class SessionRepository:
         if session is None:
             return None
         with self._lock:
-            session.last_used_at = datetime.now(UTC)
+            session.last_used_at = _now()
         self._persist_touch(session)
         return session
 
@@ -437,7 +509,7 @@ class SessionRepository:
             return None
         with self._lock:
             session.csrf_token = secrets.token_urlsafe(24)
-            session.last_used_at = datetime.now(UTC)
+            session.last_used_at = _now()
         # UNCONDITIONAL, not throttled like :meth:`touch`. The token the
         # client is about to be handed must be the one on disk: a restart
         # that restored a superseded CSRF token would 403 every mutating
@@ -452,7 +524,7 @@ class SessionRepository:
         (``SessionStore.delete_account``); from then on a restore racing the
         delete sees the account refused, and ``_persist`` writes no row for
         it. Lapsed marks are dropped here."""
-        now = datetime.now(UTC)
+        now = _now()
         with self._lock:
             for lapsed in [aid for aid, until in self._deleted_accounts.items() if until <= now]:
                 del self._deleted_accounts[lapsed]
@@ -466,7 +538,7 @@ class SessionRepository:
         """Whether ``account_id`` was deleted within the session lifetime."""
         with self._lock:
             until = self._deleted_accounts.get(account_id)
-            return until is not None and until > datetime.now(UTC)
+            return until is not None and until > _now()
 
     def begin_deletion(self, account_id: UUID) -> None:
         """A delete of ``account_id`` is under way (ADR-0136). No session is
@@ -524,13 +596,27 @@ class SessionRepository:
         store = session_store.get_store()
         if store is None:
             return cached, 0
-        return cached, store.purge_expired(cutoff=datetime.now(UTC) - SESSION_TTL)
+        # W87-1 (ADR-0174): the exact complement of :meth:`_restore`'s read,
+        # on the same clock: a row is deleted once it is idle past the
+        # lifetime OR older than the longest maximum age.
+        now = _now()
+        return cached, store.purge_expired(
+            cutoff=now - SESSION_TTL, created_cutoff=now - ANONYMOUS_MAX_AGE
+        )
 
     def _restore(self, session_id: str) -> _Session | None:
         store = session_store.get_store()
         if store is None:
             return None
-        stored = store.fetch(session_id, not_used_before=datetime.now(UTC) - SESSION_TTL)
+        # W87-1 (ADR-0174): the read itself refuses a row older than the
+        # longest maximum age, so a row no purge reached never resolves; the
+        # signed-in 12 hours are checked below, once the kind is known.
+        now = _now()
+        stored = store.fetch(
+            session_id,
+            not_used_before=now - SESSION_TTL,
+            not_created_before=now - ANONYMOUS_MAX_AGE,
+        )
         if stored is None:
             return None
         # W7 part 3 (ADR-0137): the durable sessions cutoff, read AFTER the
@@ -540,7 +626,8 @@ class SessionRepository:
             return None
         # W7 part 3 (ADR-0138): the row does not say whether the session is
         # signed in, so ask once, here; a lookup that fails gets the signed-in
-        # limit, the shorter one (the closed side).
+        # limits, the shorter ones (the closed side): the idle limit and,
+        # since W87-1 (ADR-0174), the 12-hour maximum age.
         anonymous = store.is_anonymous(stored.account_id)
         session = _Session(
             session_id=stored.session_id,
@@ -550,8 +637,9 @@ class SessionRepository:
             last_used_at=stored.last_used_at,
             persisted_last_used_at=stored.last_used_at,
             idle_limit=SESSION_TTL if anonymous is True else signed_in_idle_limit(),
+            max_age=ANONYMOUS_MAX_AGE if anonymous is True else SIGNED_IN_MAX_AGE,
         )
-        if session.is_expired(now=datetime.now(UTC)):
+        if session.is_expired(now=_now()):
             return None
         with self._lock:
             # W7 (ADR-0136): re-checked under the lock, after the disk read,
@@ -565,6 +653,31 @@ class SessionRepository:
             # object the winner cached or one of them mutates a copy nobody
             # else can see.
             return self._sessions.setdefault(session_id, session)
+
+    def end_reason(self, session_id: str) -> str:
+        """Why the session behind ``session_id`` no longer resolves (W87-1,
+        ADR-0174): ``SESSION_MAX_AGE`` or ``SESSION_EXPIRED``.
+
+        Called only after :meth:`get` or :meth:`touch` found nothing, and read
+        from the durable row, never guessed: ``SESSION_MAX_AGE`` only when the
+        row still exists, its account is signed in by a lookup that worked,
+        it is past the 12 hours, and its idle end did not come first. Every
+        other case (no store, no row, an anonymous row, a failed lookup, an
+        idle end) is the generic ``SESSION_EXPIRED``, so the page never tells
+        anyone they were signed out after 12 hours when they were not."""
+        expired = AuthError.SESSION_EXPIRED.value
+        store = session_store.get_store()
+        if store is None:
+            return expired
+        # Any row, however old: the time conditions are applied below.
+        stored = store.fetch(session_id, not_used_before=datetime(1970, 1, 1, tzinfo=UTC))
+        if stored is None or store.is_anonymous(stored.account_id) is not False:
+            return expired
+        max_age_end = stored.created_at + SIGNED_IN_MAX_AGE
+        idle_end = stored.last_used_at + signed_in_idle_limit()
+        if _now() > max_age_end and max_age_end <= idle_end:
+            return AuthError.SESSION_MAX_AGE.value
+        return expired
 
     def _persist(self, session: _Session) -> None:
         """Mirror ``session`` to the durable sink, if it is still the live one.
@@ -641,7 +754,7 @@ class SessionRepository:
         self._persist(session)
 
     def _purge_expired_locked(self) -> int:
-        now = datetime.now(UTC)
+        now = _now()
         expired = [
             session_id
             for session_id, session in self._sessions.items()
@@ -857,14 +970,7 @@ def issue_session(
                         ip=client_ip, cap=cap
                     ),
                 )
-    session = session_repository.create(account_id=account_id)
-    return SessionIssueResponse(
-        account_id=session.account_id,
-        session_id=session.session_id,
-        csrf_token=session.csrf_token,
-        expires_at=session.last_used_at + SESSION_TTL,
-        session_expires_in_seconds=int(SESSION_TTL.total_seconds()),
-    )
+    return _issued(session_repository.create(account_id=account_id))
 
 
 def issue_signed_in_session(previous_session_id: str, *, account_id: UUID) -> SessionIssueResponse:
@@ -888,23 +994,28 @@ def issue_signed_in_session(previous_session_id: str, *, account_id: UUID) -> Se
     """
     _enforce_production_guards(require_legacy_disabled=True)
     session_repository.revoke(previous_session_id)
-    session = session_repository.create(account_id=account_id, idle_limit=signed_in_idle_limit())
-    return SessionIssueResponse(
-        account_id=session.account_id,
-        session_id=session.session_id,
-        csrf_token=session.csrf_token,
-        expires_at=session.last_used_at + session.idle_limit,
-        session_expires_in_seconds=int(session.idle_limit.total_seconds()),
+    # W87-1 (ADR-0174): a signed-in session's 12 hours start here, at the
+    # rotation, whatever the age of the session it replaces.
+    return _issued(
+        session_repository.create(
+            account_id=account_id,
+            idle_limit=signed_in_idle_limit(),
+            max_age=SIGNED_IN_MAX_AGE,
+        )
     )
 
 
 def _issued(session: _Session) -> SessionIssueResponse:
+    """The issue or resume answer for ``session``. ``expires_at`` is the
+    nearer of its idle end and its maximum age (W87-1, ADR-0174), on every
+    path, so no caller is told a later end than the session has."""
+    expires_at = session.ends_at()
     return SessionIssueResponse(
         account_id=session.account_id,
         session_id=session.session_id,
         csrf_token=session.csrf_token,
-        expires_at=session.last_used_at + session.idle_limit,
-        session_expires_in_seconds=int(session.idle_limit.total_seconds()),
+        expires_at=expires_at,
+        session_expires_in_seconds=max(0, int((expires_at - session.last_used_at).total_seconds())),
     )
 
 
@@ -986,6 +1097,52 @@ def refuse_sign_in_only(session: SessionContext) -> None:
         )
 
 
+def refuse_if_session_ends_soon(session: SessionContext, *, sign_in_offered: bool) -> None:
+    """Refuse a run, or its estimate, with 409 ``SESSION_ENDS_SOON`` when the
+    session has less than ``LATE_RUN_REFUSAL_SECONDS`` left before its
+    maximum age (W87-1, ADR-0174; CHG-066 b, CHG-069, CHG-070 c).
+
+    A run's deadline is 12 minutes at the default ``quorum_run_deadline_seconds``,
+    so a run started later could outlive its session and its result would be
+    lost (ADR-0174 records that a run can still overshoot its deadline).
+    Called by the estimate and the run creation after the CSRF check and
+    before anything is recorded or charged. The words are the owner's: the
+    signed-in text for a signed-in session (or one whose kind a restore
+    could not read: "Sign in again" works for both), and for an anonymous
+    one the text that offers sign-in only when ``sign_in_offered``. The
+    legacy header has no server-side session, and a session that has
+    already ended is refused by its own 401 further on.
+    """
+    if session.legacy:
+        return
+    live = session_repository.get(session.session_id)
+    if live is None:
+        return
+    left = live.max_age_end() - _now()
+    if left >= timedelta(seconds=LATE_RUN_REFUSAL_SECONDS):
+        return
+    if live.max_age != ANONYMOUS_MAX_AGE:
+        message = SESSION_ENDS_SOON_SIGNED_IN_MESSAGE
+    elif sign_in_offered:
+        message = SESSION_ENDS_SOON_ANONYMOUS_MESSAGE
+    else:
+        message = SESSION_ENDS_SOON_NO_SIGN_IN_MESSAGE
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail={"code": AuthError.SESSION_ENDS_SOON.value, "message": message},
+    )
+
+
+def max_age_seconds_left(session_id: str) -> int:
+    """Whole seconds until the session's maximum age, never below 0 (W87-1).
+    The signed-in page carries it so its first check is due from the nearer
+    of the two ends; a session that no longer resolves has 0 left."""
+    session = session_repository.get(session_id)
+    if session is None:
+        return 0
+    return max(0, int((session.max_age_end() - _now()).total_seconds()))
+
+
 @dataclass(frozen=True)
 class SpendMeter:
     """The key a request's spend is metered under, and whether that key is its
@@ -1029,6 +1186,22 @@ def _session_expired() -> HTTPException:
             "message": "Browser session expired and must be renewed.",
         },
     )
+
+
+def session_ended(session_id: str) -> HTTPException:
+    """The 401 for a presented session that no longer resolves, with the
+    reason the durable row gives (W87-1, ADR-0174): the owner's 12-hour
+    sentence for a signed-in session ended by its maximum age, the generic
+    expiry for every other end (:meth:`SessionRepository.end_reason`)."""
+    if session_repository.end_reason(session_id) == AuthError.SESSION_MAX_AGE.value:
+        return HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={
+                "code": AuthError.SESSION_MAX_AGE.value,
+                "message": SESSION_MAX_AGE_MESSAGE,
+            },
+        )
+    return _session_expired()
 
 
 def _spend_key_unavailable() -> HTTPException:
@@ -1076,7 +1249,7 @@ def spend_meter_for(session: SessionContext, request: Request) -> SpendMeter:
     # account signed out everywhere (or was deleted) is refused here, before
     # it can be estimated or charged.
     if session_repository.get(session.session_id) is None:
-        raise _session_expired()
+        raise session_ended(session.session_id)
     store = session_store.get_store()
     anonymous: bool | None
     if store is None:
@@ -1129,16 +1302,11 @@ def require_session(request: Request) -> SessionContext:
     """
     session_id = get_session_cookie_from_request(request)
     if session_id:
-        session = session_repository.get(session_id)
+        # W87-1 (ADR-0174): what the touch returns is what the request uses,
+        # so a session that ends between a lookup and the touch is refused.
+        session = session_repository.touch(session_id)
         if session is None:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail={
-                    "code": AuthError.SESSION_EXPIRED.value,
-                    "message": "Browser session expired and must be renewed.",
-                },
-            )
-        session_repository.touch(session_id)
+            raise session_ended(session_id)
         return SessionContext(
             account_id=session.account_id,
             session_id=session.session_id,
@@ -1330,19 +1498,13 @@ def issue_or_resume_session(
         if (
             existing is not None
             and not existing.sign_in_only
-            and not existing.is_expired(now=datetime.now(UTC))
+            and not existing.is_expired(now=_now())
         ):
             if not rotate_csrf:
                 resumed = session_repository.touch(presented_session_id)
                 if resumed is None:
                     return issue_session(client_ip=client_ip, mint_cap=mint_cap)
-                return SessionIssueResponse(
-                    account_id=resumed.account_id,
-                    session_id=resumed.session_id,
-                    csrf_token=resumed.csrf_token,
-                    expires_at=resumed.last_used_at + resumed.idle_limit,
-                    session_expires_in_seconds=int(resumed.idle_limit.total_seconds()),
-                )
+                return _issued(resumed)
             # C10: rotate CSRF on resume. The fresh token replaces
             # the one previously issued for this session. See
             # ``SessionRepository.rotate_csrf``.
@@ -1352,11 +1514,5 @@ def issue_or_resume_session(
                 # ``rotate_csrf``. Fall through to issuing a new
                 # session.
                 return issue_session(client_ip=client_ip, mint_cap=mint_cap)
-            return SessionIssueResponse(
-                account_id=rotated.account_id,
-                session_id=rotated.session_id,
-                csrf_token=rotated.csrf_token,
-                expires_at=rotated.last_used_at + rotated.idle_limit,
-                session_expires_in_seconds=int(rotated.idle_limit.total_seconds()),
-            )
+            return _issued(rotated)
     return issue_session(client_ip=client_ip, mint_cap=mint_cap)

@@ -894,6 +894,11 @@
   const ERROR_TITLES = {
     AUTH_REQUIRED: "Start a session to run a query",
     SESSION_EXPIRED: "Session expired",
+    // W87-1 (ADR-0174): a signed-in session ended by its 12 hours.
+    SESSION_MAX_AGE: "Session expired",
+    // CHG-070 (a): a run refused in the session's last 12 minutes. Not
+    // "Session expired": the session is still alive.
+    SESSION_ENDS_SOON: "Your session ends soon",
     CSRF_INVALID: "Security check failed",
     INVALID_MODEL_SLOT: "One model slot needs a fix",
     SAFETY_ACK_REQUIRED: "Acknowledgement required",
@@ -917,6 +922,11 @@
   // N models" buttons — there is no backend endpoint for either.
   const ERROR_ACTIONS = {
     SESSION_EXPIRED: [{ label: "Refresh session", action: () => location.reload() }],
+    // W87-1 (ADR-0174): the message says "Reload the page to sign in again";
+    // the action is the idle note's own "Reload the page". SESSION_ENDS_SOON
+    // has no entry here on purpose: its action depends on the page (see
+    // ``edgeStateFromError``), and with sign-in off it has none.
+    SESSION_MAX_AGE: [{ label: "Reload the page", action: () => window.location.assign("/ui") }],
     CSRF_INVALID: [{ label: "Refresh session", action: () => location.reload() }],
   };
 
@@ -10311,6 +10321,21 @@
       };
     }
 
+    // W87-1 (ADR-0174; CHG-066 b, CHG-069, CHG-070): a run refused in the
+    // session's last 12 minutes. The words are the server's, chosen by the
+    // session's kind and whether sign-in is on. A signed-in page offers
+    // "Sign in again" (which keeps the typed question for this tab); an
+    // anonymous page offers "Sign in" only where it offers sign-in at all.
+    if (code === "SESSION_ENDS_SOON") {
+      let actions = [];
+      if (el("account-email")) {
+        actions = [{ label: "Sign in again", primary: true, action: signInAgainKeepingQuestion }];
+      } else if (signInOffered()) {
+        actions = [{ label: "Sign in", primary: true, action: () => el("sign-in-google").click() }];
+      }
+      return { code, severity: "warning", message: error.message, actions };
+    }
+
     // AC-001 Anonymous — session establishment failed on boot.
     if (code === "AUTH_REQUIRED") {
       return {
@@ -11404,18 +11429,58 @@
   // page. Sign-out asks the server to end the session, then reloads /ui.
   const GOOGLE_CONSENT_HOST = "accounts.google.com";
 
+  async function startGoogleSignIn() {
+    const started = await api("/v1/auth/google/start", { method: "POST" });
+    const target = new URL(started.authorization_url);
+    if (target.protocol !== "https:" || target.host !== GOOGLE_CONSENT_HOST) {
+      throw new Error("unexpected sign-in address");
+    }
+    window.location.assign(target.href);
+  }
+
+  // CHG-070 (b): "Sign in again" from the late-run refusal keeps the typed
+  // question across the trip to Google, in this tab only (sessionStorage),
+  // and the next load of the page puts it back once and clears it. Nothing
+  // else saves it, so a plain sign-in restores nothing.
+  const LATE_RUN_QUESTION_KEY = "quorum.lateRunQuestion";
+
+  async function signInAgainKeepingQuestion() {
+    const question = queryTextarea ? queryTextarea.value : "";
+    try {
+      if (question) window.sessionStorage.setItem(LATE_RUN_QUESTION_KEY, question);
+    } catch (_) {
+      // Storage refused (a private window): the sign-in still works.
+    }
+    try {
+      await startGoogleSignIn();
+    } catch (err) {
+      try {
+        window.sessionStorage.removeItem(LATE_RUN_QUESTION_KEY);
+      } catch (_) {}
+      throw new Error(signInStartMessage(err));
+    }
+  }
+
+  function restoreLateRunQuestion() {
+    let question = null;
+    try {
+      question = window.sessionStorage.getItem(LATE_RUN_QUESTION_KEY);
+      window.sessionStorage.removeItem(LATE_RUN_QUESTION_KEY);
+    } catch (_) {
+      return;
+    }
+    if (!question || !queryTextarea) return;
+    queryTextarea.value = question;
+    queryTextarea.dispatchEvent(new Event("input", { bubbles: true }));
+  }
+
   function initAccountControls() {
     const signIn = el("sign-in-google");
     if (signIn) {
       signIn.addEventListener("click", async () => {
         signIn.disabled = true;
         try {
-          const started = await api("/v1/auth/google/start", { method: "POST" });
-          const target = new URL(started.authorization_url);
-          if (target.protocol !== "https:" || target.host !== GOOGLE_CONSENT_HOST) {
-            throw new Error("unexpected sign-in address");
-          }
-          window.location.assign(target.href);
+          await startGoogleSignIn();
         } catch (err) {
           signIn.disabled = false;
           toast({ message: signInStartMessage(err), tone: "error" });
@@ -11462,6 +11527,8 @@
       document.body.appendChild(idleBox);
       const idleSeconds = Number(idleBox.dataset.idleSeconds);
       const warningSeconds = Number(idleBox.dataset.warningSeconds);
+      // W87-1 (ADR-0174): the time left before the 12 hours end, at load.
+      const maxAgeLeft = Number(idleBox.dataset.maxAgeSecondsLeft);
       const idleText = el("idle-reminder-text");
       const stay = el("idle-stay");
       const leave = el("idle-sign-out");
@@ -11489,9 +11556,11 @@
         liftToasts();
       };
       // Shown first, text second, so the polite announcement is heard.
-      const showReminder = (text, expired) => {
+      // ``canStay`` is false for the 12-hour warning (CHG-066 a): "Stay signed
+      // in" cannot extend the 12 hours, so it is not offered.
+      const showReminder = (text, expired, canStay = true) => {
         idleBox.hidden = false;
-        stay.hidden = expired;
+        stay.hidden = expired || !canStay;
         leave.hidden = expired;
         reload.hidden = !expired;
         liftToasts();
@@ -11500,9 +11569,12 @@
           liftToasts();
         }, 50);
       };
-      const showExpired = () => {
+      // W87-1 (ADR-0174): a session ended by its 12 hours is told so in the
+      // server's words (CHG-063 f 2), never that nothing happened.
+      const showExpired = (err) => {
         window.clearTimeout(idleTimer);
-        showReminder(idleExpiredText(idleSeconds), true);
+        const maxAge = err && err.code === "SESSION_MAX_AGE" && err.message;
+        showReminder(maxAge || idleExpiredText(idleSeconds), true);
       };
       const idleCheck = async () => {
         let body;
@@ -11510,7 +11582,7 @@
           body = await api("/v1/session/idle");
         } catch (err) {
           if (err && err.status === 401) {
-            showExpired();
+            showExpired(err);
           } else {
             later(60000, idleCheck);
           }
@@ -11519,6 +11591,13 @@
         if (body.idle_seconds_left > warningSeconds) {
           hideReminder();
           later(idleCheckDelayMs(body.idle_seconds_left, warningSeconds), idleCheck);
+          return;
+        }
+        if (body.ends_because === "max_age") {
+          // CHG-070 (d): the 12-hour warning counts its minutes down, so it
+          // asks again each minute until the last one.
+          showReminder(maxAgeReminderText(body.idle_seconds_left), false, false);
+          later(Math.min(body.idle_seconds_left + 2, 60) * 1000, idleCheck);
           return;
         }
         showReminder(idleReminderText(body.idle_seconds_left), false);
@@ -11532,7 +11611,7 @@
           later(idleCheckDelayMs(body.idle_seconds_left, warningSeconds), idleCheck);
         } catch (err) {
           if (err && err.status === 401) {
-            showExpired();
+            showExpired(err);
           } else {
             toast({ message: "Could not keep you signed in. Please try again.", tone: "error" });
           }
@@ -11543,8 +11622,10 @@
       leave.addEventListener("click", () => idleSignOutNow(el));
       reload.addEventListener("click", () => window.location.assign("/ui"));
       // The page load itself used the session, so the first ask is due one
-      // warning before a full idle length from now.
-      later(idleCheckDelayMs(idleSeconds, warningSeconds), idleCheck);
+      // warning before a full idle length from now, or before the 12 hours
+      // end, whichever is sooner (W87-1).
+      const firstLeft = Number.isFinite(maxAgeLeft) ? Math.min(idleSeconds, maxAgeLeft) : idleSeconds;
+      later(idleCheckDelayMs(firstLeft, warningSeconds), idleCheck);
     }
     // W7 (ADR-0135): the History disclosure closes on Escape (focus returns to
     // its button) and on a click outside it, as a menu does.
@@ -11771,6 +11852,18 @@
     );
   }
 
+  // W87-1 (CHG-066 a): the warning before the 12 hours end. Minutes rounded
+  // as ``idleReminderText`` rounds them; self-contained for the Node harness.
+  function maxAgeReminderText(secondsLeft) {
+    const minutes = Math.ceil(secondsLeft / 60);
+    const when = minutes <= 1 ? "about a minute" : "about " + minutes + " minutes";
+    return (
+      "You will be signed out in " +
+      when +
+      " because 12 hours have passed since you signed in."
+    );
+  }
+
   function idleExpiredText(idleSeconds) {
     return (
       "You were signed out after " +
@@ -11869,6 +11962,8 @@
     initReadinessBannerToggle();
     initWorkflowKeyboard();
     initAccountControls();
+    // CHG-070 (b): the question kept across "Sign in again", put back once.
+    restoreLateRunQuestion();
     // W48 (ADR-0145): the one-time hints and the optional tour.
     initHelpHints();
     initHelpTour();

@@ -254,6 +254,13 @@ BUCKET_A_LITERAL_PIN = (
     "costs.BOUND_WEB_SEARCH_CONTEXT_TOKENS",
     "auth.SESSION_TTL",
     "auth.SESSION_MINT_CAP_PER_IP",
+    # W87-1 (ADR-0174, CHG-056 c, CHG-066 b): the two maximum session ages
+    # and the late-run window. Longer keeps a stolen cookie working for
+    # longer; a different window makes the approved "less than 12 minutes"
+    # false. Pinned in tests/unit/test_session_max_age.py.
+    "auth.SIGNED_IN_MAX_AGE",
+    "auth.ANONYMOUS_MAX_AGE",
+    "auth.LATE_RUN_REFUSAL_SECONDS",
     # W30 (ADR-0132): who may name the visitor, and how an IPv6 visitor is
     # counted. Widening either lets one visitor mint more sessions.
     "auth.TRUSTED_PROXY_NETWORKS",
@@ -334,6 +341,29 @@ BUCKET_A_LITERAL_PIN = (
 #: Pin the BEHAVIOUR, not the literal — these legitimately change, and a literal
 #: pin would teach people to edit the test alongside the code.
 BUCKET_B_PIN_BEHAVIOUR = {
+    # --- Added 2026-10-19 with W87-1 (ADR-0174) ---
+    "auth.SESSION_MAX_AGE_MESSAGE": (
+        "CHG-063 (f)(2), the 401 for a session ended by its 12 hours; the exact "
+        "sentence is pinned at the routes, and that it is given only for that "
+        "end: tests/integration/test_session_max_age_routes.py::"
+        "test_a_signed_in_session_ends_12_hours_after_sign_in_with_the_owners_words "
+        "and ::test_an_idle_end_keeps_the_generic_expiry"
+    ),
+    "auth.SESSION_ENDS_SOON_SIGNED_IN_MESSAGE": (
+        "CHG-066 (b), the signed-in late-run refusal; the exact sentence is pinned "
+        "on both run routes: tests/integration/test_late_run_refusal.py::"
+        "test_a_signed_in_session_with_719_seconds_left_is_refused_and_spends_nothing"
+    ),
+    "auth.SESSION_ENDS_SOON_ANONYMOUS_MESSAGE": (
+        "CHG-069, the anonymous late-run refusal with sign-in on; pinned on both "
+        "run routes: tests/integration/test_late_run_refusal.py::"
+        "test_an_anonymous_session_with_719_seconds_left_is_refused_with_its_own_words"
+    ),
+    "auth.SESSION_ENDS_SOON_NO_SIGN_IN_MESSAGE": (
+        "CHG-070 (c), the anonymous late-run refusal with sign-in off; pinned on "
+        "both run routes: tests/integration/test_late_run_refusal.py::"
+        "test_with_sign_in_off_the_anonymous_refusal_does_not_offer_sign_in"
+    ),
     # --- Added 2026-09-25 with W7's first pull request (ADR-0130) ---
     "google_signin.MAX_PENDING_SIGN_INS": (
         "a memory backstop on started-and-unfinished sign-ins; the value may "
@@ -717,6 +747,15 @@ BUCKET_B_PIN_BEHAVIOUR = {
 
 #: No pin. A literal here restates the implementation and catches nothing.
 BUCKET_C_NO_PIN = {
+    "query_runs.ESTIMATE_RESPONSES": (
+        "W87-1: the estimate's declared responses in the API description; the "
+        "409 is pinned by tests/integration/test_late_run_refusal.py::"
+        "test_the_409_is_declared_in_the_api_description and the document by "
+        "make openapi-check"
+    ),
+    "query_runs.CREATE_RESPONSES": (
+        "W87-1: the run creation's declared responses; pinned as query_runs.ESTIMATE_RESPONSES is"
+    ),
     "session_store._PROCESS_ACCOUNT_KEY": (
         "a random per-process key used only when QUORUM_TOKEN_SECRET is unset (local); "
         "its use is pinned by test_the_spend_key_depends_on_the_server_secret"
