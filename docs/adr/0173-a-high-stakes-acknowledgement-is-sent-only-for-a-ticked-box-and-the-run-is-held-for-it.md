@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted — 2026-10-18, board row W100. The product owner made four choices: the line under the
+Accepted — 2026-10-18, board row W100. The product owner made five choices: the line under the
 buttons (CHG-063 (g)) and how each warning is acknowledged (CHG-065 (a) to (d)). Everything else
 below is the session's design. The failure modes were listed before any code
 (`docs/analysis/2026-10-18-w100-high-stakes-ack-failure-modes.md`, F1 to F16). Codex reviewed the plan
@@ -85,8 +85,9 @@ cost gate, whose confirm button and Ctrl/Cmd+Enter never looked at the box.
   one more final check, out of the 30 requests a minute per account that warnings, estimate and
   create share (`query_runs.py`, `_enforce_account_rate_limit`).
 - The background check is now only a convenience. The final check is the authority.
-- The two e2e lane floors rise by the new tests only: 455 to 457 and 96 to 110. They keep the slack
-  they had rather than taking the local counts (459 and 126).
+- The two e2e lane floors rise by the new tests only: 455 to 457 and 96 to 114 (110, then 4 more
+  tests in review round 1). They keep the slack they had rather than taking the local counts (459
+  and 130).
 - Advisory, not built:
   - **F11:** when the server refuses a run for a missing acknowledgement (422), the page shows
     "Please check the form" rather than the hold. Reading `required_warnings` from that answer to

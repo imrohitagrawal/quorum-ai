@@ -452,3 +452,156 @@ test.describe("W100 — a high-stakes acknowledgement only for a ticked box (moc
     }
   });
 });
+
+test.describe("W100 round 1 — the tick clears when a create is sent; the held state's focus ring and total (mocked)", () => {
+  test.skip(({ browserName }) => browserName !== "chromium", "chromium-only reference run");
+
+  test("a create the server took whose answer is garbled clears the tick, so a retry holds for the box", async ({ page }) => {
+    // Red when: the tick clears only after a create's answer parses, so a
+    // retry after a lost or garbled answer creates a SECOND run carrying the
+    // high-stakes acknowledgement with no new tick (CHG-065 (b)).
+    const mock = await installMocks(page);
+    let garbleNext = true;
+    await page.route(/\/v1\/query-runs$/, (r) => {
+      if (r.request().method() !== "POST" || !garbleNext) return r.fallback();
+      garbleNext = false;
+      // The server took this create (counted as a run), but the page gets a
+      // truncated body.
+      mock.creates.push((r.request().postDataJSON() ?? {}) as CreateBody);
+      return r.fulfill({ status: 202, contentType: "application/json", body: '{"query_run_id": "8f1c' });
+    });
+    await boot(page);
+    await page.locator("#query-text").fill(HS_Q);
+    await expect(box(page)).toBeVisible();
+    await ack(page).check();
+    await runNow(page).click();
+    await expect.poll(() => mock.creates.length).toBe(1);
+    expect(mock.creates[0].safety_acknowledgements).toEqual([SD, HS]);
+    await expect(page.locator("#error-region")).toBeVisible();
+
+    // The retry, from the keyboard: Ctrl/Cmd+Enter in the question box, then
+    // again (which confirms, if the first one reached the cost gate).
+    await page.locator("#query-text").focus();
+    await page.keyboard.press("ControlOrMeta+Enter");
+    await settle(page);
+    await page.keyboard.press("ControlOrMeta+Enter");
+    await settle(page);
+    expect(mock.creates, "no second run until the box is ticked again").toHaveLength(1);
+    await expect(ack(page)).not.toBeChecked();
+    await expect(runNow(page)).toBeDisabled();
+
+    await ack(page).check();
+    await expect(runNow(page)).toBeEnabled();
+    await runNow(page).click();
+    await expect.poll(() => mock.creates.length).toBe(2);
+    await settle(page);
+    expect(mock.creates, "one more run, for the new tick").toHaveLength(2);
+    expect(mock.creates[1].safety_acknowledgements).toEqual([SD, HS]);
+  });
+
+  test("an expired cost confirmation still completes with one tick: one 402, then exactly one 202", async ({ page }) => {
+    // Red when: the tick cleared as the create was sent is not restored when
+    // the server refuses that create with its 402 envelope (no run was made),
+    // so the re-confirmed run is held for a second tick.
+    const mock = await installMocks(page, { band: "require_confirmation" });
+    const statuses: number[] = [];
+    let expireNext = true;
+    await page.route(/\/v1\/query-runs$/, (r) => {
+      if (r.request().method() !== "POST") return r.fallback();
+      if (!expireNext) {
+        statuses.push(202);
+        return r.fallback();
+      }
+      expireNext = false;
+      statuses.push(402);
+      return r.fulfill(
+        fulfil(
+          {
+            detail: {
+              code: "COST_CONFIRMATION_REQUIRED",
+              message: "Estimated query cost requires explicit confirmation.",
+              cost_estimate: estimateResp("require_confirmation").cost_estimate,
+            },
+          },
+          402,
+        ),
+      );
+    });
+    await boot(page);
+    await page.locator("#query-text").fill(HS_Q);
+    await expect(box(page)).toBeVisible();
+    await ack(page).check();
+    await seeEstimate(page).click();
+    await expect(page.locator("#gate-confirm")).toBeVisible();
+    await page.locator("#gate-confirm").click();
+    await expect.poll(() => mock.estimates, { message: "the 402 re-estimates" }).toBe(2);
+    await expect(page.locator("#gate-confirm")).toBeVisible();
+    await expect(page.locator("#gate-confirm")).toBeEnabled();
+    await page.locator("#gate-confirm").click();
+    await expect.poll(() => statuses.length).toBe(2);
+    await settle(page);
+    expect(statuses, "one refused create, then exactly one run").toEqual([402, 202]);
+    expect(mock.creates, "the mock recorded the one run").toHaveLength(1);
+    expect(mock.creates[0].safety_acknowledgements).toEqual([SD, HS]);
+    await expect(page.locator('[data-view="live-run"]:not([hidden]), [data-view="result"]:not([hidden])')).toHaveCount(1);
+    await expect(line(page)).toBeHidden();
+  });
+
+  test("after a hold the tick box shows a visible focus outline; other inputs keep theirs off", async ({ page }) => {
+    // Red when: the focus the hold puts on #high-stakes-ack is drawn only by
+    // the sheet-wide input:focus shadow (outline: none, a 6%-ink shadow).
+    const mock = await installMocks(page, { blindUntilEstimate: true });
+    await boot(page);
+    await page.locator("#query-text").fill(HS_Q);
+    await runNow(page).click();
+    await settle(page);
+    expect(mock.creates).toHaveLength(0);
+    expect(await activeId(page), "the hold put focus on the box").toBe("high-stakes-ack");
+    const outlineOf = (id: string) =>
+      page.evaluate((i) => {
+        const s = getComputedStyle(document.getElementById(i)!);
+        return { style: s.outlineStyle, width: s.outlineWidth };
+      }, id);
+    const boxOutline = await outlineOf("high-stakes-ack");
+    expect(boxOutline.style, "the focused box draws an outline").not.toBe("none");
+    expect(boxOutline.width, "with a non-zero width").not.toBe("0px");
+    for (const theme of ["light", "dark"] as const) {
+      await page.evaluate((t) => document.documentElement.setAttribute("data-theme", t), theme);
+      await page.waitForTimeout(150);
+      const ratio = await page.evaluate(() => {
+        const rgb = (c: string) => (c.match(/[\d.]+/g) ?? []).slice(0, 3).map(Number);
+        const lum = ([r, g, b]: number[]) => {
+          const f = (v: number) => {
+            const x = v / 255;
+            return x <= 0.03928 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4;
+          };
+          return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b);
+        };
+        const ring = lum(rgb(getComputedStyle(document.getElementById("high-stakes-ack")!).outlineColor));
+        const bg = lum(rgb(getComputedStyle(document.getElementById("high-stakes-gate")!).backgroundColor));
+        return (Math.max(ring, bg) + 0.05) / (Math.min(ring, bg) + 0.05);
+      });
+      expect(ratio, `the ring against the box's background [${theme}] is at least 3:1`).toBeGreaterThanOrEqual(3);
+    }
+    await page.locator("#query-text").focus();
+    expect(await activeId(page)).toBe("query-text");
+    expect((await outlineOf("query-text")).style, "the question box keeps the sheet's rule").toBe("none");
+  });
+
+  test("after a hold through the cost gate the running total no longer shows the dropped estimate", async ({ page }) => {
+    // Red when: the hold drops the estimate but the total beside the buttons
+    // keeps its figure.
+    const mock = await installMocks(page, { blindUntilEstimate: true, band: "require_confirmation" });
+    await boot(page);
+    await page.locator("#query-text").fill(HS_Q);
+    await seeEstimate(page).click();
+    await expect(page.locator("#gate-confirm")).toBeVisible();
+    const total = page.locator("#composer-total-estimate");
+    const shown = (await total.textContent()) ?? "";
+    expect(shown, "the estimate's figure was written to the total").toMatch(/0\.19/);
+    await page.locator("#gate-confirm").click();
+    await expectHeld(page, mock, 0, HS_Q);
+    await expect(total).not.toHaveText(shown);
+    await expect(total).not.toContainText("0.19");
+  });
+});

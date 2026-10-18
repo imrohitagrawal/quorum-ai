@@ -9317,8 +9317,9 @@
 
   // W100 (ADR-0173, CHG-063 (g)): the line under the buttons that says why a
   // run did not start. Only a hold or the click-time block shows it, and only
-  // while the acknowledgement is pending; tied to the box's description so a
-  // screen reader hears it with the focus move.
+  // while the acknowledgement is pending; tied to the box's description,
+  // intended to let a screen reader hear it with the focus move (not checked
+  // with a screen reader).
   function showHighStakesHeld() {
     if (!highStakesHeldLine || !highStakesAckPending()) return;
     highStakesHeldLine.hidden = false;
@@ -9333,6 +9334,27 @@
     if (!highStakesHeldLine || highStakesAckPending()) return;
     highStakesHeldLine.hidden = true;
     if (highStakesAckCheckbox) highStakesAckCheckbox.removeAttribute("aria-describedby");
+  }
+
+  // W100 round 1: set the tick from code (the create spends it; a refused
+  // create gives it back), keeping the box, the line and both buttons in step.
+  function setHighStakesTick(ticked) {
+    state.highStakesAck = ticked;
+    if (highStakesAckCheckbox) highStakesAckCheckbox.checked = ticked;
+    syncHighStakesHeld();
+    applyHighStakesGate();
+  }
+
+  // A create the server answered with its own 4xx error envelope (parsed
+  // JSON with a code): the server refused it, so no run was made.
+  function createRefusedByServer(error) {
+    return (
+      error instanceof ApiError &&
+      error.status >= 400 &&
+      error.status < 500 &&
+      !!error.partial &&
+      typeof error.code === "string"
+    );
   }
 
   // Show or hide the gate; hiding resets the acknowledgement so a later
@@ -9406,7 +9428,9 @@
   function highStakesGateSatisfied() {
     if (!state.highStakesRequired || state.highStakesAck) return true;
     toastHighStakesAck();
-    // W100: the click-time block shows the held line too (CHG-065 (d)).
+    // W100: the click-time block shows the held line too. That is this
+    // session's reading of "when a run is held" (CHG-063 (g)); the owner's
+    // CHG-065 (d) is "keep the toast and add the line".
     showHighStakesHeld();
     if (highStakesAckCheckbox) highStakesAckCheckbox.focus();
     return false;
@@ -9429,6 +9453,10 @@
   function holdForHighStakesAck() {
     state.currentEstimate = null;
     state.pricedRun = null;
+    // W100 round 1: and the running total beside the buttons stops showing
+    // the dropped estimate's figure. "—" is what the template ships; no other
+    // path resets this total today (Cancel and going home leave it too).
+    if (composerTotalEstimate) composerTotalEstimate.textContent = "—";
     setView("composer");
     setHighStakesRequired(true);
     toastHighStakesAck();
@@ -9607,6 +9635,7 @@
     // concurrent proceedWithRun bails at the guard above.
     state.creatingRun = true;
     setButtonLoading(confirmBtn, true);
+    let tickSent = false;
     try {
       const thresholdAction =
         state.currentEstimate.cost_estimate.threshold_action;
@@ -9637,6 +9666,12 @@
                 state.currentEstimate.cost_estimate.confirmation_token,
             }
           : null;
+      // W100 round 1 (CHG-065 (b)): the tick is spent as the create is sent,
+      // not when its answer parses, so a lost or garbled answer to a create
+      // the server took cannot leave it on for a retry (a second run). The
+      // catch below gives it back only for a refusal that proves no run.
+      tickSent = state.highStakesAck;
+      setHighStakesTick(false);
       // From here the create is on the wire and a run will exist, so going
       // home waits for it (goToNewQuestion checks ``createInFlight``) rather
       // than leaving a charged run nobody is watching.
@@ -9657,10 +9692,6 @@
         ),
       });
       state.currentRunId = created.query_run_id;
-      // W100 (CHG-065 (b)): a fresh tick per run. The tick clears once the run
-      // exists; the box itself stays as the background check says.
-      state.highStakesAck = false;
-      if (highStakesAckCheckbox) highStakesAckCheckbox.checked = false;
       // Slice 3 (04 Live run): capture the submitted question so the live-run
       // running-query band can echo it (the poll payload has no query_text),
       // and reset the live view's SR/elapsed state for a fresh run.
@@ -9714,6 +9745,13 @@
       toast({ message: "Run started. Tracking progress below.", tone: "info" });
       startPolling();
     } catch (error) {
+      // W100 round 1: give the tick back only when the server refused this
+      // create with its own parsed 4xx error envelope, which means no run was
+      // made (the expired-confirmation 402 below then needs no new tick). A
+      // network failure, a 5xx or a malformed answer leaves it cleared.
+      if (tickSent && generation === estimateGeneration && createRefusedByServer(error)) {
+        setHighStakesTick(true);
+      }
       // If the server reports the confirmation token expired (HTTP 402
       // with COST_CONFIRMATION_REQUIRED), auto-re-estimate so the user
       // sees fresh copy rather than a stale estimate.

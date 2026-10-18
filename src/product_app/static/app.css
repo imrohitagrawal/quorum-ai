@@ -5573,6 +5573,15 @@ main:focus { outline: none; }
   accent-color: var(--ink);
   cursor: pointer;
 }
+/* W100 round 1: a hold moves focus to this box, and the sheet-wide
+   input:focus rule (outline: none, a 6%-ink shadow) leaves that focus nearly
+   invisible. The id outranks that rule and touches no other control.
+   :focus, not :focus-visible: measured in Chromium, a focus moved by script
+   after a mouse press on "Run now" does not match :focus-visible. */
+#high-stakes-ack:focus {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
 
 /* ----- Model slots: 2x2 grid of cards -------------------------------- */
 .model-slot-grid {

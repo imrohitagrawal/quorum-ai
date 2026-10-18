@@ -88,7 +88,7 @@ Each: what goes wrong / trigger / test / design answer.
 
 ### F9. The background check and the final check fight over the box
 - **What:** probes are token-guarded (9321-9338) but the final check does not bump the token. After a hold, a background probe for DIFFERENT text in the box (the visitor kept typing during the estimate; the run used the priced text, 9505-9510) can answer `false` and hide the box and reset the tick (9296-9299), with the line still showing "Tick the box above" over no box.
-- **Design:** drop the estimate on hold (F6) so the next run prices the box's current text; tie the line's visibility to `highStakesAckPending()` (733) in ONE place, `setHighStakesRequired` and the tick's change listener (11195-11202), so whenever the box hides or is ticked the line hides too.
+- **Design:** drop the estimate on hold (F6) so the next run prices the box's current text; tie the line's visibility to `highStakesAckPending()` (732 at commit a839ba9) in ONE place, `setHighStakesRequired` and the tick's change listener (11195-11202), so whenever the box hides or is ticked the line hides too.
 - **Test:** e2e: hold, then type a non-high-stakes question; after the probe the box AND the line are both hidden.
 
 ### F10. A failed or slow final check
