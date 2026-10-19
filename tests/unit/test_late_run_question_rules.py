@@ -192,7 +192,7 @@ def test_an_account_identity_saves_an_account_entry() -> None:
 
 
 def test_a_positive_anonymous_identity_saves_an_anonymous_entry() -> None:
-    """Red when: the anonymous case saves nothing (the owner's answer 3 keeps
+    """Red when: the anonymous case saves nothing (CHG-073 (c) keeps
     the question), or loses its marker or the time it was saved."""
     got = _entry(accountId="", anonymous=True, pageIdentityChanged=False, nowMs=123456)
     assert got == {"anonymous": True, "saved_at": 123456, "question": "q"}
@@ -260,7 +260,7 @@ def test_an_anonymous_entry_without_a_saved_time_is_not_put_back() -> None:
 
 def test_a_signed_in_entry_is_put_back_only_for_its_own_account() -> None:
     """Red when: the same account loses its question, or another account gets
-    it, or another account is not told (owner answer 5)."""
+    it, or another account is not told (CHG-073 (a))."""
     same = _restore(SIGNED_IN_ENTRY, accountId="A", signedIn=True, nowMs=10**12)
     other = _restore(SIGNED_IN_ENTRY, accountId="B", signedIn=True, nowMs=1000)
     assert same == {"question": "typed as A", "notice": False}
@@ -339,7 +339,7 @@ def test_a_retry_that_turns_anonymous_saves_nothing() -> None:
 
 
 def test_anonymous_at_every_bootstrap_saves_the_anonymous_entry() -> None:
-    """Owner answer (3). Red when: an anonymous page load saves nothing, or
+    """CHG-073 (c). Red when: an anonymous page load saves nothing, or
     loses the marker or the time. Partner of the case above."""
     got = _page_load("anonymous", "anonymous")
     assert got["pageIdentity"] == "anonymous"

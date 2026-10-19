@@ -7,12 +7,12 @@ Accepted — 2026-10-20, board row W87, the second of its three pull requests (W
 W87 stays open until W87-3 lands. The owner's decisions it builds on are CHG-056 (d), CHG-063 (e)
 and (f)(1), CHG-066 (c) and CHG-073 (a) to (e).
 
-The product owner chose: a Google sign-in within the last 10 minutes before an account is deleted,
-"one click if still signed in to Google" (CHG-056 (d)); the refusal's words and its "Sign in again"
-button, after which the visitor comes back to the account panel and presses Delete again
-(CHG-063 (f)(1)); that another account coming back from that sign-in is an ordinary sign-in as that
-account, with a line saying nothing was deleted (CHG-066 (c)), in the words that match the button
-(CHG-073 (d)); a record that sign-in is single-factor plus one line near "Sign in" (CHG-063 (e)),
+The product owner chose: a Google sign-in within the last 10 minutes before an account is deleted
+(CHG-056 (d)); the refusal's words, which include "If you are still signed in to Google it takes
+one click.", and its "Sign in again" button, after which the visitor comes back to the account
+panel and presses Delete again (CHG-063 (f)(1)); that another account coming back from that
+sign-in is an ordinary sign-in as that account, with a line saying nothing was deleted
+(CHG-066 (c)), in the words that match the button (CHG-073 (d)); a record that sign-in is single-factor plus one line near "Sign in" (CHG-063 (e)),
 placed only near "Sign in" and on the capped sign-in page (CHG-073 (e)); keeping the signed-in
 account's id beside a late-run saved question, with a notice when another account comes back
 (CHG-073 (a)); the no-sign-in text for a signed-in visitor on a page with no sign-in (CHG-073 (b));
@@ -25,7 +25,9 @@ and the ones this pull request closes or records are published with it in
 `docs/analysis/2026-10-20-w87-2-recent-sign-in-failure-modes.md`. Codex reviewed the plan four
 times before any code (ADR-0168, decision 7); its reviews are kept outside the repository and none
 has a committed record. Its findings and what was done with each are summarised under Decision and
-Known limits. Codex did not review the code.
+Known limits. Codex reviewed the branch's code once (review round 1): one finding was fixed (a
+refused recovery wrote the account row back, decision 5) and one is recorded (Known limits,
+"Check to issue").
 
 ## Context
 
@@ -70,7 +72,8 @@ Facts the design rests on, read on `main` at `0f06765` unless marked:
    Google asked for a password or a second factor: Google decides that, and the app cannot see it.
 3. **Google is asked for nothing new.** No `max_age` and no `prompt` (FM-18). With `max_age=600`,
    Google would ask for the password whenever its own sign-in is older than 10 minutes, which
-   contradicts the owner's "one click if still signed in to Google" (CHG-056 (d)). `auth_time` is
+   contradicts the owner-approved words "If you are still signed in to Google it takes one click."
+   (CHG-063 (f)(1)). `auth_time` is
    not read. The Quorum session is independent of Google's: signing out of Google leaves Quorum
    signed in, and signing out of Quorum calls nothing at Google. Google is asked again at each
    sign-in, after the 12 hours (ADR-0174), and before a deletion more than 10 minutes after the
@@ -100,9 +103,13 @@ Facts the design rests on, read on `main` at `0f06765` unless marked:
    made: the row exists, no sign-out-everywhere cutoff on disk or in memory at or after its start,
    a lookup that worked says signed in, past 12 hours, the 12 hours before the idle end), and no
    deletion of the account is under way or done (`account_is_going`). `end_reason` now answers from
-   it, so the two cannot disagree. The callback asks it before the exchange and again after the
-   account row, right before issuing, so a session revoked, signed out everywhere or deleted during
-   the exchange is refused (Codex measured all three signed in without the second check). Not
+   it, so the two cannot disagree. The callback asks it before the exchange, again after the
+   exchange and before the account row is written (review round 1: a recovery refused for a
+   deletion during the exchange had already written the deleted account's row back, Codex measured
+   0 rows then 1), and again after the account row, right before issuing, so a session revoked,
+   signed out everywhere or deleted during the exchange is refused (Codex measured all three signed
+   in without the last check). A change in the few statements after the last check is not seen
+   (Known limits, "Check to issue"). Not
    recovered: an idle end (the start request touches the session and the shortest signed-in idle
    length, 15 minutes, outlasts the 10-minute pending entry), a sign-out, sign-out everywhere and
    deletion (the visitor or the owner chose them), and the anonymous 24 hours (Known limits).
@@ -185,16 +192,22 @@ Facts the design rests on, read on `main` at `0f06765` unless marked:
   seconds.
 - **A stale read** (Codex, re-check 1). `max_age_account` can read a row a moment before a revoke
   deletes it and still name the account.
-- **Check to issue** (Codex, re-check 1). A revocation that lands between the second recovery check
-  and `issue_signed_in_session` (a few statements, no network call) is not seen. That window is
-  narrower than the live path's, which has no check after the exchange at all (measured by the
+- **Check to issue** (Codex, re-check 1 and review round 1). A revocation or a sign-out everywhere
+  that lands between the last recovery check and `issue_signed_in_session` (a few statements, no
+  network call) is not seen: the person who has just signed in with Google as that account gets a
+  working new session. That is the same window the ordinary sign-in path has, and recovery does not
+  refuse it. That window is narrower than the live path's, which has no check after the exchange at
+  all (measured by the
   planner: a live session revoked during a stubbed exchange still gets `303 /ui` and a new cookie;
   `tests/integration/test_sign_in_recovery.py::test_the_live_path_is_unchanged_by_a_revoke_during_the_exchange`
   pins it). The same check on the live path is advisory, not built: the live path is W7's
   (ADR-0130), and it is left for the owner's backlog.
 - **Deletion during the live path's exchange** can let the account row step create a new account for
-  the same Google identity (Codex). For a recovered session the second check refuses it; on the live
-  path it is today's behaviour, unchanged.
+  the same Google identity (Codex). For a recovered session the check after the exchange refuses it
+  before the account row is written
+  (`tests/integration/test_sign_in_recovery_no_account_write.py`); a deletion in the few statements
+  between that check and the row step (by reading, not tested) still writes the row, and the check
+  after it refuses the sign-in. On the live path it is today's behaviour, unchanged.
 - **The anonymous question can be lost.** After 900 seconds (decision 14); when the bootstrap could
   not tell the session's kind (decision 12); and after any identity change in the page load, even
   for a draft typed after the change, until a reload (the cost is a retyped question, never a
@@ -217,8 +230,8 @@ Facts the design rests on, read on `main` at `0f06765` unless marked:
 - **`accounts.last_sign_in_at` as the proof.** Another browser's sign-in stamps it, so an old stolen
   cookie could delete within 10 minutes of the victim signing in elsewhere (FM-11).
 - **Sending `max_age` or `prompt=login`, or reading `auth_time`.** Google would ask for a password,
-  against CHG-056 (d)'s "one click"; and that Google returns `auth_time` without `max_age` was not
-  verified.
+  against CHG-063 (f)(1)'s "If you are still signed in to Google it takes one click."; and that
+  Google returns `auth_time` without `max_age` was not verified.
 - **Refusing the other account at the new sign-in.** The owner chose an ordinary sign-in with a line
   (CHG-066 (c)).
 - **A `/ui?account=delete-failed` path.** Every failure already has `/ui?sign_in=failed`, now shown on

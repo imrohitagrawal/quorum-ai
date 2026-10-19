@@ -413,9 +413,14 @@ def test_a_signed_in_bootstrap_whose_account_read_fails_is_not_called_anonymous(
     sign_in: SignIn, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The exact Codex case: the account row exists (``is_anonymous`` answers
-    ``False``) but ``account_for`` fails. Red when: ``anonymous`` comes from
-    anything but ``is_anonymous(...) is True``. Partner: a real bootstrap,
-    and the same session's healthy bootstrap names its account."""
+    ``False``) but ``account_for`` fails. Red when: that failed
+    ``account_for`` read makes the bootstrap say ``anonymous`` (for example
+    ``anonymous`` taken from the missing account rather than from
+    ``is_anonymous``). It does NOT catch ``is True`` changed to
+    ``is not False`` (a lookup answering ``None`` counted as anonymous):
+    the sibling ``test_a_bootstrap_that_cannot_read_the_account_names_neither``
+    catches that. Partner: a real bootstrap, and the same session's healthy
+    bootstrap names its account."""
     client = _signed_in_client(sign_in)
     assert "account_id" in client.get("/v1/session").json()
     monkeypatch.setattr(sign_in.store, "account_for", lambda _account: None)

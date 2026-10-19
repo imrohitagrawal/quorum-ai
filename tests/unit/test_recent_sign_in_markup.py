@@ -6,9 +6,9 @@ Three things, each through the function or the route that renders it:
   session's time left before deletion needs a new sign-in (600 just after
   sign-in, 0 once past 10 minutes, never negative);
 * on ``/ui?account=switched`` the signed-in panel says, in a ``role="status"``
-  line, the owner's answer (4) with the session's own email, escaped;
+  line, CHG-073 (d) with the session's own email, escaped;
 * the 2-Step line, CHG-063 (e), is beside "Sign in with Google" on the
-  anonymous top bar and on the capped page, and nowhere else (owner answer 6).
+  anonymous top bar and on the capped page, and nowhere else (CHG-073 (e)).
 
 The rendered pages come through the real sign-in flow (the sign-in suite's
 loopback Google stub) on the session code's stepped clock.
@@ -42,7 +42,7 @@ TEMPLATES = Path(main.__file__).resolve().parent / "templates"
 TWO_STEP = (
     "We sign you in with Google. Turn on 2-Step Verification in your Google account to protect it."
 )
-#: Owner answer (4), 2026-10-20 (CHG-073), with the email put in.
+#: CHG-073 (d), 2026-10-19, with the email put in.
 SWITCHED = (
     "You are now signed in as {email}. Nothing was deleted. "
     'To delete this account, press "Delete my account" again.'
@@ -160,7 +160,7 @@ def test_the_delete_block_carries_the_time_left_before_a_new_sign_in_is_needed(
 def test_the_switched_line_names_the_sessions_own_email_escaped(
     sign_in: SignIn,  # noqa: F811
 ) -> None:
-    """Owner answer (4). Red when: ``/ui?account=switched`` shows no
+    """CHG-073 (d). Red when: ``/ui?account=switched`` shows no
     ``role="status"`` line in the account panel, the words differ, or the
     email is written unescaped. Partner: the escaped email is on the page."""
     email = "a<b>@x.com"
@@ -210,7 +210,7 @@ def test_an_anonymous_page_with_the_marker_gives_no_switched_line(
 def test_the_two_step_line_is_beside_sign_in_on_the_anonymous_top_bar(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """CHG-063 (e), owner answer (6). Red when: the line is missing from the
+    """CHG-063 (e), CHG-073 (e). Red when: the line is missing from the
     anonymous sign-in branch, is there twice, or comes before the button.
     Partner: the branch rendered its "Sign in with Google" button."""
     _enable(monkeypatch)
@@ -224,7 +224,7 @@ def test_the_two_step_line_is_beside_sign_in_on_the_anonymous_top_bar(
 def test_the_two_step_line_is_absent_from_the_signed_in_top_bar(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Owner answer (6): only near "Sign in". Red when: the signed-in branch,
+    """CHG-073 (e): only near "Sign in". Red when: the signed-in branch,
     or the reminder in it, carries the line. Partner: the branch rendered the
     account's email and its reminder."""
     _enable(monkeypatch)

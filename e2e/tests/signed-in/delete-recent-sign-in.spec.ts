@@ -15,7 +15,7 @@ import { markHelpSeen } from "../../fixtures/help";
  *
  * The owner's words, verbatim:
  *   - CHG-063 (f)(1): the sentence before a deletion that needs a new sign-in;
- *   - CHG-073 answer (4): the line after another account came back;
+ *   - CHG-073 (d): the line after another account came back;
  *   - CHG-063 (e): the 2-Step line beside "Sign in with Google".
  */
 
@@ -219,7 +219,7 @@ test.describe("deleting an account needs a recent sign-in (W87-2)", () => {
     page,
     request,
   }) => {
-    // CHG-066 (c), CHG-073 answer (4). RED-IF: the other account is refused,
+    // CHG-066 (c), CHG-073 (d). RED-IF: the other account is refused,
     // the panel does not say (in the owner's words, with B's email) that
     // nothing was deleted, A is deleted or loses its history, or B is asked
     // to sign in again before deleting with B's own email. Partners: B is
@@ -305,7 +305,7 @@ test.describe("deleting an account needs a recent sign-in (W87-2)", () => {
   });
 
   test("the 2-Step line sits beside Sign in with Google at 1440 and 390 px", async ({ browser }) => {
-    // CHG-063 (e), owner answer (6). RED-IF: the line is missing from the
+    // CHG-063 (e), CHG-073 (e). RED-IF: the line is missing from the
     // anonymous top bar, is not in the header, makes the page scroll
     // sideways at either width, or fails axe there. Partner: axe judged some
     // nodes at each width.

@@ -543,7 +543,8 @@ jobs:
       # bootstrap; a signed-in page on a host that offers no sign-in), added
       # to the old floor. 35 -> 43 (W87-2, ADR-0175): delete-recent-sign-in.spec.ts
       # adds 8 tests, added to the old floor (written by the W87-2 test
-      # designer; the lane has not yet been run against a build).
+      # designer; the orchestrator's local run of the lane printed
+      # "43 passed" on 2026-10-20).
       - name: "signed-in History lane: floor on tests actually executed"
         run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 43 --lane "signed-in History lane"
 
