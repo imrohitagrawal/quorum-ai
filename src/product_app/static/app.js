@@ -10323,15 +10323,16 @@
 
     // W87-1 (ADR-0174; CHG-066 b, CHG-069, CHG-070): a run refused in the
     // session's last 12 minutes. The words are the server's, chosen by the
-    // session's kind and whether sign-in is on. A signed-in page offers
-    // "Sign in again" (which keeps the typed question for this tab); an
-    // anonymous page offers "Sign in" only where it offers sign-in at all.
+    // session's kind and whether this page offers sign-in. A signed-in page
+    // offers "Sign in again" (which keeps the typed question for this tab);
+    // an anonymous page offers the top bar's "Sign in with Google" only where
+    // it offers sign-in at all (COPY-015).
     if (code === "SESSION_ENDS_SOON") {
       let actions = [];
       if (el("account-email")) {
         actions = [{ label: "Sign in again", primary: true, action: signInAgainKeepingQuestion }];
       } else if (signInOffered()) {
-        actions = [{ label: "Sign in", primary: true, action: () => el("sign-in-google").click() }];
+        actions = [{ label: "Sign in with Google", primary: true, action: () => el("sign-in-google").click() }];
       }
       return { code, severity: "warning", message: error.message, actions };
     }
@@ -11441,13 +11442,25 @@
   // CHG-070 (b): "Sign in again" from the late-run refusal keeps the typed
   // question across the trip to Google, in this tab only (sessionStorage),
   // and the next load of the page puts it back once and clears it. Nothing
-  // else saves it, so a plain sign-in restores nothing.
+  // else saves it, so a plain sign-in restores nothing. The question is saved
+  // with the account it was typed under and put back only on that account's
+  // page: another Google account signing in gets an empty box (round 1).
   const LATE_RUN_QUESTION_KEY = "quorum.lateRunQuestion";
+
+  function pageAccountId() {
+    const email = el("account-email");
+    return (email && email.dataset.accountId) || "";
+  }
 
   async function signInAgainKeepingQuestion() {
     const question = queryTextarea ? queryTextarea.value : "";
     try {
-      if (question) window.sessionStorage.setItem(LATE_RUN_QUESTION_KEY, question);
+      if (question) {
+        window.sessionStorage.setItem(
+          LATE_RUN_QUESTION_KEY,
+          JSON.stringify({ account: pageAccountId(), question }),
+        );
+      }
     } catch (_) {
       // Storage refused (a private window): the sign-in still works.
     }
@@ -11462,14 +11475,25 @@
   }
 
   function restoreLateRunQuestion() {
-    let question = null;
+    let saved = null;
     try {
-      question = window.sessionStorage.getItem(LATE_RUN_QUESTION_KEY);
+      saved = window.sessionStorage.getItem(LATE_RUN_QUESTION_KEY);
       window.sessionStorage.removeItem(LATE_RUN_QUESTION_KEY);
     } catch (_) {
       return;
     }
-    if (!question || !queryTextarea) return;
+    if (!saved || !queryTextarea) return;
+    let question = "";
+    try {
+      const parsed = JSON.parse(saved);
+      const account = pageAccountId();
+      if (parsed && account && parsed.account === account && typeof parsed.question === "string") {
+        question = parsed.question;
+      }
+    } catch (_) {
+      return;
+    }
+    if (!question) return;
     queryTextarea.value = question;
     queryTextarea.dispatchEvent(new Event("input", { bubbles: true }));
   }

@@ -237,3 +237,90 @@ def test_with_sign_in_off_the_anonymous_refusal_does_not_offer_sign_in(
     assert refused.status_code == 409, refused.text
     assert refused.json()["detail"] == {"code": "SESSION_ENDS_SOON", "message": SIGN_IN_OFF_TEXT}
     assert _spend(account) == before
+
+
+# -- W87-1 round 1: the check is repeated just before the run is made ----------
+
+
+def _slow_estimate(monkeypatch: pytest.MonkeyPatch, during: Any) -> None:
+    """The run's cost estimate calls ``during()`` first: the time a slow
+    estimate takes, or something that happens to the session meanwhile."""
+    from product_app import query_runs
+    from product_app.costs import cost_estimation_service
+
+    assert vars(query_runs)["cost_estimation_service"] is cost_estimation_service, (
+        "partner: the run creation uses this very object"
+    )
+    real = cost_estimation_service.estimate
+
+    def slow(*args: Any, **kwargs: Any) -> Any:
+        during()
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(cost_estimation_service, "estimate", slow)
+
+
+def test_a_run_that_crosses_720_seconds_while_it_is_prepared_is_refused(
+    sign_in: SignIn, clock: Clock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex, round 1. 721 s left when the request arrives, and the estimate
+    takes 2 s: 719 s left when the run would be made. Red when: only the early
+    check runs (the run is created with 719 s left), or anything is spent first
+    (cardinality: no new feedback event, no cost event, no run). Partner: with
+    723 s left the same 2 s leave 721 s and the run is created."""
+    client, account = _signed_in_client(sign_in)
+    csrf = _boot(client)
+    _slow_estimate(monkeypatch, lambda: clock.advance(timedelta(seconds=2)))
+
+    _left(client, SIGNED_IN, 721, clock)
+    before = _spend(account)
+    refused = _post(client, CREATE, csrf)
+    assert refused.status_code == 409, refused.text
+    assert refused.json()["detail"] == {"code": "SESSION_ENDS_SOON", "message": SIGNED_IN_TEXT}
+    assert _spend(account) == before
+    assert before[2] is False
+
+    _left(client, SIGNED_IN, 723, clock)
+    created = _post(client, CREATE, csrf)
+    assert created.status_code == 202, created.text
+    assert _spend(account)[2] is True
+
+
+def test_a_session_that_ends_while_the_run_is_prepared_makes_no_run(
+    sign_in: SignIn, clock: Clock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex, round 1: the late check also asks whether the session still
+    exists. Signed out while the estimate runs, the request is answered 401
+    and nothing is spent. Red when: the run is created for a session that has
+    ended. Partner: the previous test's 202 shows the same path creates a run."""
+    client, account = _signed_in_client(sign_in)
+    csrf = _boot(client)
+    session_id = _sid(client)
+    _slow_estimate(monkeypatch, lambda: auth.session_repository.revoke(session_id))
+    before = _spend(account)
+    refused = _post(client, CREATE, csrf)
+    assert refused.status_code == 401, refused.text
+    assert refused.json()["detail"]["code"] == "SESSION_EXPIRED"
+    assert _spend(account) == before
+
+
+@pytest.mark.parametrize("path", [ESTIMATE, CREATE])
+def test_on_a_host_that_does_not_offer_sign_in_the_refusal_does_not_offer_it(
+    sign_in: SignIn, clock: Clock, path: str
+) -> None:
+    """Round 1 (journey + prose), CHG-070 (c): sign-in is on, but this host is
+    not the redirect URI's (``quorum-ai.fly.dev``), so the page offers no
+    sign-in and "Sign in to keep going" would be false. Red when: the text is
+    the CHG-069 one here. Partner: on the redirect URI's host the CHG-069 text
+    is given (the anonymous test above), and sign-in really is on."""
+    assert google_signin.sign_in_enabled() is True, "partner: sign-in is on"
+    client = TestClient(app, base_url="http://quorum-ai.fly.dev")
+    assert 'id="sign-in-google"' not in client.get("/ui").text, "partner: not offered here"
+    csrf = _boot(client)
+    account = auth.session_repository._sessions[_sid(client)].account_id
+    _left(client, ANONYMOUS, 719, clock)
+    before = _spend(account)
+    refused = _post(client, path, csrf)
+    assert refused.status_code == 409, refused.text
+    assert refused.json()["detail"] == {"code": "SESSION_ENDS_SOON", "message": SIGN_IN_OFF_TEXT}
+    assert _spend(account) == before

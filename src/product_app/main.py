@@ -1032,7 +1032,9 @@ def _account_controls_html(
     account = None if account_id is None else signed_in_account(account_id)
     if account is not None:
         return (
-            '<span class="account-email" id="account-email">'
+            '<span class="account-email" id="account-email" data-account-id="'
+            + escape(str(account.account_id))
+            + '">'
             + escape(account.email)
             + "</span>"
             + _history_html(account.account_id)

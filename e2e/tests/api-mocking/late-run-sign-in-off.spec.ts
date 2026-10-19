@@ -34,8 +34,8 @@ async function openWorkspace(page: Page) {
 test.describe("the late-run refusal with sign-in off (W87-1, CHG-070)", () => {
   test("the anonymous card has the owner's title and words and no Sign in action", async ({ page }) => {
     // RED-IF: the card's title is not "Your session ends soon" (today it
-    // would be "Something went wrong"), or the card offers "Sign in" /
-    // "Sign in again" on a server where nobody can sign in. Partners: the
+    // would be "Something went wrong"), or the card offers "Sign in with
+    // Google" / "Sign in" / "Sign in again" on a server where nobody can sign in. Partners: the
     // composer rendered, and the card itself is shown with the message, so
     // "no such button" is not true of an empty page.
     let refused = 0;
@@ -55,6 +55,7 @@ test.describe("the late-run refusal with sign-in off (W87-1, CHG-070)", () => {
     await expect(page.locator("#error-region-title")).toHaveText(LATE_RUN_TITLE);
     expect(refused).toBe(1);
     const actions = page.locator("#error-region-actions");
+    await expect(actions.getByRole("button", { name: "Sign in with Google", exact: true })).toHaveCount(0);
     await expect(actions.getByRole("button", { name: "Sign in", exact: true })).toHaveCount(0);
     await expect(actions.getByRole("button", { name: "Sign in again", exact: true })).toHaveCount(0);
   });

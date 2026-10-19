@@ -148,6 +148,40 @@ def test_a_session_that_ends_between_its_lookup_and_its_touch_is_refused(
     assert _detail(ended) == MAX_AGE_401
 
 
+def _step_after_lookup(monkeypatch: pytest.MonkeyPatch, clock: Clock, by: timedelta) -> None:
+    """Every repository lookup moves the clock on by ``by`` once it returns,
+    so a check that reads the clock again after its lookup sees a later time."""
+    real_get = auth.session_repository.get
+
+    def stepped(session_id: str) -> auth._Session | None:
+        found = real_get(session_id)
+        clock.advance(by)
+        return found
+
+    monkeypatch.setattr(auth.session_repository, "get", stepped)
+
+
+def test_the_touch_rechecks_the_12_hours_with_the_time_it_records(
+    sign_in: SignIn, clock: Clock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """W87-1 round 1 (Codex): the touch's own lookup sees the session at
+    exactly 12 h, and the clock steps 1 us before the touch records its last
+    use. Red when: the touch records that later time without checking the
+    12 hours against it (the request is served after the session ended), or
+    the 401 is the generic expiry. Partner: 1 s younger, the same step leaves
+    the session alive and the request is served."""
+    client = _signed_in_client(sign_in)
+    _step_after_lookup(monkeypatch, clock, US)
+
+    age(_sid(client), H12 - timedelta(seconds=1), now=clock.at)
+    assert client.get(ACTIVE).status_code == 200, "partner: alive after the step"
+
+    age(_sid(client), H12, now=clock.at)
+    ended = client.get(ACTIVE)
+    assert ended.status_code == 401, ended.text
+    assert _detail(ended) == MAX_AGE_401
+
+
 # -- the generic expiry stays for every other end (FM-25, FM-26) ---------------
 
 

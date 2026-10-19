@@ -18,7 +18,7 @@ from pathlib import Path
 from uuid import UUID, uuid4
 
 import pytest
-from tests.session_clock import Clock, freeze
+from tests.session_clock import Clock, age, freeze
 
 from product_app import auth, session_store
 from product_app.session_store import SessionStore, StoredSession
@@ -312,3 +312,107 @@ def test_with_no_store_the_reason_is_the_generic_expiry(clock: Clock) -> None:
     cached.created_at = clock.at - H12 - US
     assert auth.session_repository.get(issued.session_id) is None
     assert auth.session_repository.end_reason(issued.session_id) == "SESSION_EXPIRED"
+
+
+# -- W87-1 round 1: one clock reading per decision, and the freshest facts ----
+
+
+def _cached_signed_in(store: SessionStore, sub: str = "w87-round-1") -> str:
+    account = _signed_in_account(store, sub)
+    issued = auth.issue_signed_in_session("no-previous-session", account_id=account)
+    assert issued.session_id in auth.session_repository._sessions, "partner: cached"
+    return issued.session_id
+
+
+def _step_after_lookup(monkeypatch: pytest.MonkeyPatch, clock: Clock, by: timedelta) -> None:
+    real_get = auth.session_repository.get
+
+    def stepped(session_id: str) -> auth._Session | None:
+        found = real_get(session_id)
+        clock.advance(by)
+        return found
+
+    monkeypatch.setattr(auth.session_repository, "get", stepped)
+
+
+def test_rotating_the_csrf_token_rechecks_the_12_hours_with_the_time_it_records(
+    store: SessionStore, clock: Clock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex, round 1. The lookup sees the session at exactly 12 h; the clock
+    steps 1 us before the rotation records its last use. Red when: the
+    rotation hands out a new token for a session that has ended (a resumed
+    ``/v1/session`` after 12 h). Partner: 1 s younger, the same step gives a
+    new token."""
+    session_id = _cached_signed_in(store)
+    _step_after_lookup(monkeypatch, clock, US)
+    age(session_id, H12 - timedelta(seconds=1), now=clock.at)
+    before = auth.session_repository._sessions[session_id].csrf_token
+    rotated = auth.session_repository.rotate_csrf(session_id)
+    assert rotated is not None and rotated.csrf_token != before, "partner: alive, rotated"
+
+    age(session_id, H12, now=clock.at)
+    assert auth.session_repository.rotate_csrf(session_id) is None
+    assert session_id not in auth.session_repository._sessions
+
+
+@pytest.mark.parametrize("case", ["signed out everywhere before 12 h", "cutoff unreadable"])
+def test_a_revoked_session_is_never_told_12_hours(
+    store: SessionStore, clock: Clock, monkeypatch: pytest.MonkeyPatch, case: str
+) -> None:
+    """Codex + break-it F1, round 1. A signed-in row past 12 h whose account
+    ended its sessions after the row started (here a stale row written back
+    after the sign-out everywhere), or whose cutoff cannot be read, was not
+    ended by its 12 hours. Red when: ``end_reason`` says ``SESSION_MAX_AGE``
+    for either. Partner: the same row with no cutoff says ``SESSION_MAX_AGE``
+    (``test_the_reason_is_max_age_only_for_a_signed_in_row_past_12_hours``)."""
+    account = _signed_in_account(store)
+    created = clock.at - H12 - US
+    _row(store, "revoked", account_id=account, created_at=created, last_used_at=clock.at)
+    if case == "signed out everywhere before 12 h":
+        assert store.end_sessions_before(account, created + timedelta(minutes=5)) == "ended"
+        assert store.fetch("revoked", not_used_before=datetime(1970, 1, 1, tzinfo=UTC)) is None
+        _row(store, "revoked", account_id=account, created_at=created, last_used_at=clock.at)
+    else:
+        monkeypatch.setattr(store, "sessions_valid_after", lambda _account: (False, None))
+    _restarted()
+    assert auth.session_repository.get("revoked") is None
+    assert auth.session_repository.end_reason("revoked") == "SESSION_EXPIRED"
+
+
+def test_the_reason_uses_the_last_use_the_process_held_not_the_stale_row(
+    store: SessionStore, clock: Clock
+) -> None:
+    """Break-it F1, round 1. The touch throttle lets the row lag the last use
+    by up to 300 s. Here the process last saw the session 118 minutes ago (its
+    idle end, 2 minutes from now, is after its 12 hours, which ended 1 us ago)
+    while the row says 122 minutes (an idle end 2 minutes ago). The session
+    ended by its 12 hours. Red when: the reason is read from the stale row
+    alone and says ``SESSION_EXPIRED``. Partner: after a restart, with only the
+    row to go on, it is not guessed (``SESSION_EXPIRED``)."""
+    session_id = _cached_signed_in(store)
+    created = clock.at - H12 - US
+    fresh = clock.at - timedelta(minutes=118)
+    stale = clock.at - timedelta(minutes=122)
+    with auth.session_repository._lock:
+        cached = auth.session_repository._sessions[session_id]
+        cached.created_at = created
+        cached.last_used_at = fresh
+        cached.persisted_last_used_at = stale
+    with store._lock:
+        store._conn.execute(
+            "UPDATE sessions SET created_at = ?, last_used_at = ? WHERE session_digest = ?",
+            (created.isoformat(), stale.isoformat(), session_store._digest(session_id)),
+        )
+    assert auth.session_repository.get(session_id) is None
+    assert auth.session_repository.end_reason(session_id) == "SESSION_MAX_AGE"
+
+    auth.session_repository.clear()
+    other = _cached_signed_in(store, "w87-round-1-restart")
+    with store._lock:
+        store._conn.execute(
+            "UPDATE sessions SET created_at = ?, last_used_at = ? WHERE session_digest = ?",
+            (created.isoformat(), stale.isoformat(), session_store._digest(other)),
+        )
+    _restarted()
+    assert auth.session_repository.get(other) is None
+    assert auth.session_repository.end_reason(other) == "SESSION_EXPIRED"

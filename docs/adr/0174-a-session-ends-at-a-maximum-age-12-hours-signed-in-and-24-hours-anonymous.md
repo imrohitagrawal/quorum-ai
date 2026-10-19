@@ -5,7 +5,8 @@
 Accepted — 2026-10-19, board row W87, the first of its three pull requests (W87-1). Codex split W87
 into three: this maximum age, then a recent sign-in before deleting an account (W87-2), then an
 operator command to end sessions and the record of why sign-in is single-factor (W87-3). W87 stays
-open until W87-3 lands.
+open until W87-3 lands. The values and words this ADR builds on are the owner's (CHG-056 (c),
+CHG-063 (f)(2), CHG-066, CHG-069, CHG-070); the rest is the session's design.
 
 The product owner chose the values and the words: 12 hours signed in and 24 hours anonymous
 (CHG-056 (c)); the 12-hour note after the end (CHG-063 (f)(2)); a warning 5 minutes before the
@@ -47,7 +48,7 @@ Facts the design rests on, read on `main` at `8463a72` and re-checked where mark
 | The new tests fail without the fix | the test designer's red run on `19647a9` with only the test files added (log kept outside the repository) | pytest, the six new files: `9 failed, 7 passed, 37 errors in 10.92s`; the errors are the missing clock `auth._now`. With only that clock added and no behaviour: `40 failed, 10 passed in 10.91s`. The new signed-in spec: `4 failed` |
 | The CHG-070 tests fail without the fix | the same, for the tests added after CHG-070 | pytest: `3 failed, 10 deselected, 2 errors in 0.24s`; the signed-in spec: `5 failed`, `1 passed`; the sign-in-off spec on the main lane: `1 failed` |
 | The new tests with the fix | the builder's runs on the build commit | the designer's pytest files: `56 passed in 11.16s`; `make quality`: `7631 passed, 37 skipped`; `make api-contract`: `54 passed`, `EXIT=0` |
-| The e2e lanes | the four lanes the change touches, run as `.github/workflows/e2e.yml` runs them with the AGENTS.md rule 13 flags | `signed-in: 31 tests executed (floor 31), 0 skipped.`; `workspace: 52 tests executed (floor 52), 0 skipped.`; `invariants: 459 tests executed (floor 457), 0 skipped.`; `axe-parity: 133 tests executed (floor 117), 0 skipped.` |
+| The e2e lanes | the four lanes the change touches, run as `.github/workflows/e2e.yml` runs them with the AGENTS.md rule 13 flags | `signed-in: 31 tests executed (floor 31), 0 skipped.` (33 and floor 33 after review round 1); `workspace: 52 tests executed (floor 52), 0 skipped.`; `invariants: 459 tests executed (floor 457), 0 skipped.`; `axe-parity: 133 tests executed (floor 117), 0 skipped.` |
 | The visual baselines cannot move | `outerHTML` of the result and transcript views on `goldenCompletedResp()`, before and after | `result: byte-identical (27187 bytes)`, `transcript: byte-identical (17858 bytes)` |
 
 ## Decision
@@ -81,12 +82,18 @@ Facts the design rests on, read on `main` at `8463a72` and re-checked where mark
    `ends_because`, `"idle"` or `"max_age"`. The cookie's own `Max-Age` is unchanged; the server
    decides.
 8. **A failed touch is refused.** `require_session` uses what the touch returns, so a session that
-   passes its lookup and reaches its limit before its touch gets 401.
+   passes its lookup and reaches its limit before its touch gets 401. The touch and the CSRF
+   rotation check the limits again, under the lock, with the same clock reading they record as the
+   last use, and drop a session that has ended (review round 1, Codex: a clock step between the
+   lookup and the recorded use served a request one second after the 12 hours).
 9. **The 401 says why only when it knows.** It carries `SESSION_MAX_AGE` and the owner's sentence
-   (CHG-063 (f)(2)) only when the durable row still exists, a lookup that worked says the account is
+   (CHG-063 (f)(2)) only when the durable row still exists, its account did not end its sessions
+   after the row started and that cutoff could be read, a lookup that worked says the account is
    signed in, the 12 hours have passed, and the idle end did not come first. Every other end (no
-   store, no row, an anonymous row, a failed lookup, an idle end) keeps `SESSION_EXPIRED`, so nobody
-   is told "12 hours" when that is not why.
+   store, no row, a revoked session, an unreadable cutoff, an anonymous row, a failed lookup, an idle
+   end) keeps `SESSION_EXPIRED`, so nobody is told "12 hours" when that is not why. The idle end is
+   taken from the freshest last use known: the row's, or the one the process held when it dropped
+   the ended session, which the 300-second touch throttle can leave newer (review round 1).
 10. **The warning.** The signed-in reminder carries `data-max-age-seconds-left`, and the page
     schedules its first check from the nearer end. When `ends_because` is `"max_age"` it shows
     CHG-066 (a)'s sentence, with the minutes counted down as the idle reminder rounds them
@@ -97,18 +104,23 @@ Facts the design rests on, read on `main` at `8463a72` and re-checked where mark
 11. **The late-run refusal.** The estimate and the run creation refuse with 409 `SESSION_ENDS_SOON`
     when less than `LATE_RUN_REFUSAL_SECONDS` (720) are left before the maximum age: 720 seconds may
     run, 719 may not. The check comes after the anti-forgery check and before anything is recorded
-    or charged. The words are the owner's: CHG-066 (b) for a signed-in session, CHG-069 for an
-    anonymous one with sign-in on, CHG-070 (c) with sign-in off; the server picks the text. The card
-    is titled "Your session ends soon" (CHG-070 (a)). A signed-in page offers "Sign in again", which
-    keeps the typed question in this tab (`sessionStorage`) and puts it back once after the sign-in
-    (CHG-070 (b)); an anonymous page offers "Sign in" only where it offers sign-in at all. The 409 is
-    declared in the API description for both routes.
+    or charged. The run creation checks again just before the run is created and its spend
+    reserved, so time spent validating and estimating cannot carry a run across the boundary, and a
+    session that ended meanwhile gets its 401 (review round 1, Codex). The words are the owner's:
+    CHG-066 (b) for a signed-in session, CHG-069 for an anonymous one on a page that offers sign-in
+    (sign-in on, and this host is the sign-in host), CHG-070 (c) otherwise, including the fly.dev
+    host (review round 1); the server picks the text. The card is titled "Your session ends soon"
+    (CHG-070 (a)). A signed-in page offers "Sign in again", which keeps the typed question in this tab
+    (`sessionStorage`), saved with the page's account id, and puts it back once after the sign-in
+    only when the same account comes back; another account gets an empty box (CHG-070 (b); review
+    round 1). An anonymous page offers the top bar's "Sign in with Google" only where it offers
+    sign-in at all. The 409 is declared in the API description for both routes.
 12. **No early renewal of an anonymous session (CHG-069).** `/ui` and `/v1/session` resume a live
     session as before, however little of its 24 hours is left.
 13. **How many sessions one account may hold.** There is no count: each Google sign-in makes one
     more session for the account, and each ends 12 hours after that sign-in, or sooner when idle,
     signed out or signed out everywhere. This is the session's design, not an owner decision
-    (ASVS V7.1.2).
+    (ASVS V7.1.2). No test would fail if a count were added, so that item is CODE-ONLY.
 
 ## Consequences
 
@@ -116,7 +128,8 @@ Facts the design rests on, read on `main` at `8463a72` and re-checked where mark
   Google (CHG-056 (c)).
 - When a signed-in session ends at 12 hours and the page reloads, `/ui` mints an anonymous session
   that counts against the network's 2 a day. On a network that has used both, that is the
-  sign-in-only page, which still offers sign-in (ADR-0139). Accepted.
+  sign-in-only page, which still offers sign-in (ADR-0139). This is a cost of the design, not an
+  owner decision.
 - An anonymous visitor in the last 12 minutes of 24 hours cannot run a question until they sign in
   or the session ends; reaching 24 hours needs a request at least every 2 hours for a day.
 - The signed-in e2e lane's floor rises from 25 to 31 and the workspace lane's from 51 to 52, by
@@ -150,10 +163,11 @@ Facts the design rests on, read on `main` at `8463a72` and re-checked where mark
   kept alive past 24 hours by renewing it, and Codex's plan review showed that a renewal changes the
   account, so a run accepted just before it, or a finished result not yet read, is lost. The owner
   chose to refuse with new words instead.
-- **Read the adjustable run deadline as the refusal window.** The approved texts say "less than
-  12 minutes". With `quorum_run_deadline_seconds` at 3,600 the refusal would start with 1,800 seconds
-  left, so the text would be false (Codex, by an arithmetic probe). The window is its own constant,
-  720, pinned by literal; the cost is the overshoot recorded above.
+- **Read the adjustable run deadline as the refusal window.** The texts the owner chose (CHG-066 (b),
+  CHG-069, CHG-070 (c)) say "less than 12 minutes". With the refusal reading a `quorum_run_deadline_seconds` of 3,600, refusals would
+  start with 3,600 seconds left, so the text would be false (raised by Codex; this sentence said
+  "1,800 seconds" until review round 1 corrected it). The window is its own constant, 720, pinned by
+  literal; the cost is the overshoot recorded above.
 - **Reuse `SESSION_TTL` for the maximum age.** The restore, the purge, the cookie and the
   deleted-account mark already use it to mean the 2-hour idle lifetime (decision 1).
 - **Count the 12 hours from the account's last sign-in (`accounts.last_sign_in_at`).** It is per

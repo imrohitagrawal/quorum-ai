@@ -30,7 +30,7 @@ verdict stays PARTIAL, so the counts below do not change.
 
 **Updated by W87-1 (2026-10-19).** Rows V7.1.1, V7.1.2 and V7.3.2 were updated to the maximum
 session age W87-1 added (ADR-0174); each says so at the start of its Evidence. V7.1.2 and V7.3.2
-move from NOT IN PLACE to TESTED, and the counts below follow. V7.3.2's evidence, held back until
+move from NOT IN PLACE, V7.1.2 to CODE-ONLY and V7.3.2 to TESTED, and the counts below follow (V7.1.2 read TESTED until W87-1 review round 1). V7.3.2's evidence, held back until
 the fix was built (CHG-060), is restored in the past tense.
 
 **What the verdicts mean.**
@@ -56,7 +56,7 @@ says so at the start of its Evidence.
 | V4 API and Web Service | 10 | 1 | 0 | 1 | 0 | 1 | 1 | 6 |
 | V5 File Handling | 9 | 0 | 0 | 1 | 0 | 0 | 0 | 8 |
 | V6 Authentication | 35 | 1 | 0 | 1 | 3 | 2 | 0 | 28 |
-| V7 Session Management | 18 | 9 | 0 | 1 | 4 | 2 | 0 | 2 |
+| V7 Session Management | 18 | 8 | 0 | 2 | 4 | 2 | 0 | 2 |
 | V8 Authorization | 7 | 2 | 0 | 1 | 2 | 1 | 0 | 1 |
 | V9 Self-contained Tokens | 7 | 2 | 0 | 0 | 4 | 0 | 0 | 1 |
 | V10 OAuth and OIDC | 29 | 4 | 0 | 0 | 2 | 0 | 0 | 23 |
@@ -67,7 +67,7 @@ says so at the start of its Evidence.
 | V15 Secure Coding and Architecture | 13 | 3 | 0 | 2 | 7 | 1 | 0 | 0 |
 | V16 Security Logging and Error Handling | 16 | 0 | 0 | 0 | 15 | 1 | 0 | 0 |
 | V17 WebRTC | 7 | 0 | 0 | 0 | 0 | 0 | 0 | 7 |
-| **All** | **253** | **47** | **2** | **23** | **73** | **10** | **1** | **97** |
+| **All** | **253** | **46** | **2** | **24** | **73** | **10** | **1** | **97** |
 
 ## V1 Encoding and Sanitization
 
@@ -215,7 +215,7 @@ says so at the start of its Evidence.
 | Item | Level | Verdict | Evidence, as the agent read it at `2f13e22` | Row |
 |---|---|---|---|---|
 | V7.1.1 | 2 | PARTIAL | Updated by W87-1 (ADR-0174). Both lengths are now documented: the idle length in ADR-0138 decision 1 (120 min, owner-approved in CHG-026) and `config.py:862`, and the maximum age in ADR-0174 decisions 1 to 3 (12 hours signed in, 24 hours anonymous, owner-approved in CHG-056 (c)). Still missing: no session document compares them with NIST SP 800-63B's re-authentication requirements (`grep -rli 800-63 docs/adr` finds nothing on W87-1's branch). ADR-0174 leaves NIST out because the session that wrote it did not have the published text in front of it. Before W87-1 the agent read: no absolute lifetime was documented, because none existed; and `grep -rli 800-63 docs src` found only `docs/metrics/accuracy-pilot.md`, which is unrelated. | W87 |
-| V7.1.2 | 2 | TESTED | Updated by W87-1 (ADR-0174). Recorded as TESTED by the session (it was NOT IN PLACE). ADR-0174 decision 13 now says how many sessions one account may hold: there is no per-account count; each Google sign-in makes one more session for the account, and each ends 12 hours after that sign-in, or sooner when idle, signed out or signed out everywhere. With no maximum there is no behaviour at a maximum to describe. That is the session's design, not an owner decision. Tests: `tests/unit/test_session_max_age.py::test_a_signed_in_session_is_alive_at_12_hours_and_ended_one_microsecond_later`, `tests/integration/test_session_max_age_routes.py::test_a_signed_in_session_ends_12_hours_after_sign_in_with_the_owners_words`, and, for several sessions of one account at once, `tests/integration/test_session_safety.py::test_sign_out_everywhere_ends_every_session_of_the_account`. Before W87-1 the agent read: no document said how many sessions one account may have; a grep for concurrent, parallel or number-of-sessions wording found only a rejected alternative at ADR-0139:80; every Google sign-in mints one more session for the account (`auth.py:812-840`) and nothing counts them. | — |
+| V7.1.2 | 2 | CODE-ONLY | Updated by W87-1 (ADR-0174). Recorded as CODE-ONLY in W87-1 review round 1 (the session first wrote TESTED; it was NOT IN PLACE): none of the tests named below would fail if a per-account session count were added, so no test holds the documented behaviour. ADR-0174 decision 13 now says how many sessions one account may hold: there is no per-account count; each Google sign-in makes one more session for the account, and each ends 12 hours after that sign-in, or sooner when idle, signed out or signed out everywhere. With no maximum there is no behaviour at a maximum to describe. That is the session's design, not an owner decision. Tests: `tests/unit/test_session_max_age.py::test_a_signed_in_session_is_alive_at_12_hours_and_ended_one_microsecond_later`, `tests/integration/test_session_max_age_routes.py::test_a_signed_in_session_ends_12_hours_after_sign_in_with_the_owners_words`, and, for several sessions of one account at once, `tests/integration/test_session_safety.py::test_sign_out_everywhere_ends_every_session_of_the_account`. Before W87-1 the agent read: no document said how many sessions one account may have; a grep for concurrent, parallel or number-of-sessions wording found only a rejected alternative at ADR-0139:80; every Google sign-in mints one more session for the account (`auth.py:812-840`) and nothing counts them. | — |
 | V7.1.3 | 2 | PARTIAL | ADR-0130 documents the one identity provider (Google), the flow and the app's own sign-out; `docs/40-threat-model.md` T-015 covers sign-in threats. Nothing says that the Quorum session is independent of the Google session (signing out of Google leaves Quorum signed in). Nothing says when Google must be asked again: the authorization URL has no `max_age` and no `prompt` (`google_signin.py:312-324`). | W87 |
 | V7.2.1 | 1 | TESTED | `require_session` looks the cookie up in the server-side repository (`auth.py:1065-1091`). An id the browser presents is only looked up, never adopted (`auth.py:384-397`). `tests/security/test_durable_session_store.py::test_a_presented_session_id_is_never_adopted`: an attacker-chosen id resolves to nothing and writes no row. `tests/integration/test_google_sign_in.py::test_the_session_id_from_before_sign_in_stops_working`: a revoked id gets 401 `SESSION_EXPIRED`. | — |
 | V7.2.2 | 1 | TESTED | Opaque reference tokens are minted per session (`auth.py:372`). `tests/security/test_session_cookie_prefix_binding.py::test_unprefixed_cookie_alone_is_not_authenticated_when_deployed`. The static `X-Account-Id` test header is refused at startup outside local runs (`config.py:979`) and per request in production (`auth.py:902-905`). That refusal is CODE-ONLY: `grep -rn _legacy_path_allowed tests` finds 0 hits, and the tests that call startup validation set the flag to False rather than checking that it trips. | W98 |

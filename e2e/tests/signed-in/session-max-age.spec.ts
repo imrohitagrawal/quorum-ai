@@ -37,6 +37,12 @@ const LONG_QUESTION =
 const ANONYMOUS_LATE_RUN =
   "This session ends in less than 12 minutes, so this question cannot run now. " +
   "Sign in to keep going, or reload the page after the session ends.";
+/** CHG-070 (c): the anonymous text where this page offers no sign-in. */
+const NO_SIGN_IN_LATE_RUN =
+  "This session ends in less than 12 minutes, so this question cannot run now. " +
+  "Reload the page after the session ends.";
+/** The top bar's own label (COPY-015): the card's action uses the same words. */
+const SIGN_IN_LABEL = "Sign in with Google";
 
 let counter = 0;
 /** A Google subject and email no other test in the run uses. */
@@ -90,11 +96,26 @@ async function ageSession(page: Page, request: APIRequestContext, ageSeconds: nu
   expect((await aged.json()).cached, "the running app's own copy was aged").toBe(true);
 }
 
-/** Every value this tab holds in sessionStorage. */
-async function sessionStorageValues(page: Page): Promise<string[]> {
-  return page.evaluate(() =>
-    Object.keys(window.sessionStorage).map((key) => window.sessionStorage.getItem(key) ?? ""),
+/** Whether any value this tab holds in sessionStorage contains `text`. */
+async function sessionStorageHolds(page: Page, text: string): Promise<boolean> {
+  return page.evaluate(
+    (wanted) =>
+      Object.keys(window.sessionStorage).some((key) => (window.sessionStorage.getItem(key) ?? "").includes(wanted)),
+    text,
   );
+}
+
+/**
+ * Click a button that leaves for Google and comes back, and wait for the
+ * page that comes back to finish loading. The page before the click already
+ * shows the same email, so checking the email alone can pass before the
+ * navigation and the next `page.evaluate` then dies with it (round 1: 2 of 9
+ * runs, "Execution context was destroyed").
+ */
+async function clickThenNextPage(page: Page, button: ReturnType<Page["locator"]>) {
+  const loaded = page.waitForEvent("load");
+  await button.click();
+  await loaded;
 }
 
 async function pressRun(page: Page, question: string) {
@@ -190,10 +211,13 @@ test.describe("a session ends at a maximum age (W87-1)", () => {
     await pressRun(page, LONG_QUESTION);
     await expect(page.locator("#query-text")).toHaveValue(LONG_QUESTION);
     await expect(page.locator("#error-region-message")).toHaveText(SIGNED_IN_LATE_RUN);
-    await page.locator("#error-region-actions").getByRole("button", { name: "Sign in again", exact: true }).click();
+    await clickThenNextPage(
+      page,
+      page.locator("#error-region-actions").getByRole("button", { name: "Sign in again", exact: true }),
+    );
     await expect(page.locator("#account-email")).toHaveText(account.email);
     await expect(page.locator("#query-text")).toHaveValue(LONG_QUESTION);
-    expect(await sessionStorageValues(page)).not.toContain(LONG_QUESTION);
+    expect(await sessionStorageHolds(page, LONG_QUESTION)).toBe(false);
 
     await page.goto("/ui", { waitUntil: "domcontentloaded" });
     await expect(page.locator("#account-email")).toHaveText(account.email);
@@ -215,7 +239,34 @@ test.describe("a session ends at a maximum age (W87-1)", () => {
     await expect(page.locator("#account-email")).toHaveText(account.email);
     await expect(page.locator("#query-text")).toBeVisible();
     await expect(page.locator("#query-text")).toHaveValue("");
-    expect(await sessionStorageValues(page)).not.toContain(LONG_QUESTION);
+    expect(await sessionStorageHolds(page, LONG_QUESTION)).toBe(false);
+  });
+
+  test("Sign in again as a different Google account does not put the first account's question back", async ({
+    page,
+    request,
+  }) => {
+    // Round 1 (journey E38). RED-IF: the question saved by account A's "Sign
+    // in again" is restored on account B's page, or a copy of it is left in
+    // sessionStorage. Partner: B really is signed in, and the same-account
+    // round trip above does restore it.
+    test.setTimeout(120000);
+    const first = freshAccount("max-age-first-account");
+    const second = freshAccount("max-age-second-account");
+    await signIn(page, first);
+    await ageSession(page, request, 12 * HOUR - 600);
+    await pressRun(page, LONG_QUESTION);
+    await expect(page.locator("#error-region-message")).toHaveText(SIGNED_IN_LATE_RUN);
+    await page.unroute("https://accounts.google.com/**");
+    await routeGoogle(page, second);
+    await clickThenNextPage(
+      page,
+      page.locator("#error-region-actions").getByRole("button", { name: "Sign in again", exact: true }),
+    );
+    await expect(page.locator("#account-email")).toHaveText(second.email);
+    await expect(page.locator("#query-text")).toBeVisible();
+    await expect(page.locator("#query-text")).toHaveValue("");
+    expect(await sessionStorageHolds(page, LONG_QUESTION)).toBe(false);
   });
 
   test("an anonymous run in the last 12 minutes is refused with its own words, and sign-in lets it run", async ({
@@ -224,8 +275,8 @@ test.describe("a session ends at a maximum age (W87-1)", () => {
   }) => {
     // RED-IF: an anonymous session with 10 minutes left starts a run (its
     // result would be lost when the session ends), the words differ from
-    // CHG-069, the action is not "Sign in", or signing in does not let the
-    // question run.
+    // CHG-069, the action is not the top bar's "Sign in with Google"
+    // (COPY-015), or signing in does not let the question run.
     test.setTimeout(120000);
     const context = await browser.newContext();
     const page = await context.newPage();
@@ -238,11 +289,38 @@ test.describe("a session ends at a maximum age (W87-1)", () => {
     await pressRun(page, question);
     await expect(page.locator("#error-region-title")).toHaveText(LATE_RUN_TITLE);
     await expect(page.locator("#error-region-message")).toHaveText(ANONYMOUS_LATE_RUN);
-    const signInAction = page.locator("#error-region-actions").getByRole("button", { name: "Sign in", exact: true });
+    const signInAction = page.locator("#error-region-actions").getByRole("button", { name: SIGN_IN_LABEL, exact: true });
     await expect(signInAction).toBeVisible();
     await signInAction.click();
     await expect(page.locator("#account-email")).toHaveText(account.email);
     await runQuestion(page, question);
+    await context.close();
+  });
+
+  test("on a host that does not offer sign-in, the anonymous refusal does not offer it either", async ({
+    browser,
+    request,
+  }) => {
+    // Round 1, CHG-070 (c). Sign-in is on, but this page is served on
+    // `localhost`, not the redirect URI's `127.0.0.1`, so the top bar offers
+    // no sign-in (as on the fly.dev host in production). RED-IF: the card
+    // says "Sign in to keep going" here, or offers a sign-in action.
+    // Partners: the composer rendered and the card shows its message, so "no
+    // such button" is not true of an empty page.
+    const context = await browser.newContext({ baseURL: "http://localhost:18096" });
+    const page = await context.newPage();
+    await openWorkspace(page);
+    await expect(page.locator("#query-text")).toBeVisible(); // partner: the composer rendered
+    await expect(page.locator("#sign-in-google")).toHaveCount(0); // not offered on this host
+    await ageSession(page, request, 24 * HOUR - 600);
+    await pressRun(page, "How many moons does Mars have?");
+    await expect(page.locator("#error-region-title")).toHaveText(LATE_RUN_TITLE);
+    await expect(page.locator("#error-region-message")).toHaveText(NO_SIGN_IN_LATE_RUN);
+    await expect(page.locator("#error-region-actions")).toBeAttached(); // partner: the card's action row exists
+    const actions = page.locator("#error-region-actions");
+    for (const name of [SIGN_IN_LABEL, "Sign in", "Sign in again"]) {
+      await expect(actions.getByRole("button", { name, exact: true })).toHaveCount(0);
+    }
     await context.close();
   });
 });

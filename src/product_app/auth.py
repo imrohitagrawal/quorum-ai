@@ -426,6 +426,13 @@ class SessionRepository:
         #: after it, by the next sign-in, works. The durable copy is
         #: ``accounts.sessions_valid_after``, read when a session is restored.
         self._valid_after: dict[UUID, datetime] = {}
+        #: W87-1 round 1: session id -> the last use this process held for a
+        #: signed-in session it dropped because it had ended. The durable row
+        #: can lag that by up to ``SESSION_TOUCH_PERSIST_INTERVAL_S`` (the
+        #: touch throttle), and :meth:`end_reason` must decide from the
+        #: freshest time it has. An entry goes once its last use is older than
+        #: ``SESSION_TTL``, the idle age at which the GC purge deletes the row.
+        self._ended_last_used: dict[str, datetime] = {}
         self._lock = RLock()
 
     def create(
@@ -494,12 +501,29 @@ class SessionRepository:
             ]:
                 self._sessions.pop(session_id, None)
 
+    def _use_locked(self, session: _Session) -> bool:
+        """Record a use of ``session`` now, unless it has ended by now.
+
+        W87-1 round 1 (Codex): ONE clock reading both decides that the
+        session is still alive and becomes its last use. :meth:`get` checked
+        the time before; reading the clock again to record the use without
+        checking it let a session one microsecond past its 12 hours be served.
+        A session that has ended here is dropped as the purge drops it."""
+        now = _now()
+        if session.is_expired(now=now):
+            if self._sessions.get(session.session_id) is session:
+                self._drop_ended_locked(session)
+            return False
+        session.last_used_at = now
+        return True
+
     def touch(self, session_id: str) -> _Session | None:
         session = self.get(session_id)
         if session is None:
             return None
         with self._lock:
-            session.last_used_at = _now()
+            if not self._use_locked(session):
+                return None
         self._persist_touch(session)
         return session
 
@@ -508,8 +532,9 @@ class SessionRepository:
         if session is None:
             return None
         with self._lock:
+            if not self._use_locked(session):
+                return None
             session.csrf_token = secrets.token_urlsafe(24)
-            session.last_used_at = _now()
         # UNCONDITIONAL, not throttled like :meth:`touch`. The token the
         # client is about to be handed must be the one on disk: a restart
         # that restored a superseded CSRF token would 403 every mutating
@@ -660,21 +685,44 @@ class SessionRepository:
 
         Called only after :meth:`get` or :meth:`touch` found nothing, and read
         from the durable row, never guessed: ``SESSION_MAX_AGE`` only when the
-        row still exists, its account is signed in by a lookup that worked,
-        it is past the 12 hours, and its idle end did not come first. Every
-        other case (no store, no row, an anonymous row, a failed lookup, an
-        idle end) is the generic ``SESSION_EXPIRED``, so the page never tells
-        anyone they were signed out after 12 hours when they were not."""
+        row still exists, its account did not end its sessions after the row
+        started (sign out everywhere, or account deletion) and that cutoff
+        could be read, its account is signed in by a lookup that worked, it
+        is past the 12 hours, and its idle end did not come first. Every
+        other case (no store, no row, a revoked session, an unreadable
+        cutoff, an anonymous row, a failed lookup, an idle end) is the
+        generic ``SESSION_EXPIRED``, so the page never tells anyone they were
+        signed out after 12 hours when they were not.
+
+        The idle end is taken from the freshest last use known: the row's, or
+        the one this process held when it dropped the ended session, which
+        the touch throttle can leave up to 300 s newer (round 1, break-it F1)."""
         expired = AuthError.SESSION_EXPIRED.value
         store = session_store.get_store()
         if store is None:
             return expired
         # Any row, however old: the time conditions are applied below.
         stored = store.fetch(session_id, not_used_before=datetime(1970, 1, 1, tzinfo=UTC))
-        if stored is None or store.is_anonymous(stored.account_id) is not False:
+        if stored is None:
             return expired
+        # Round 1 (Codex + break-it F1): a revoked session first, as the
+        # restore checks it. A stale row written back after a sign-out
+        # everywhere, or a cutoff that cannot be read, is not a 12-hour end.
+        read, cutoff = store.sessions_valid_after(stored.account_id)
+        if not read or (cutoff is not None and stored.created_at <= cutoff):
+            return expired
+        with self._lock:
+            memory_cutoff = self._valid_after.get(stored.account_id)
+            if self.account_was_deleted(stored.account_id) or (
+                memory_cutoff is not None and stored.created_at <= memory_cutoff
+            ):
+                return expired
+            held = self._ended_last_used.get(session_id)
+        if store.is_anonymous(stored.account_id) is not False:
+            return expired
+        last_used = stored.last_used_at if held is None else max(stored.last_used_at, held)
         max_age_end = stored.created_at + SIGNED_IN_MAX_AGE
-        idle_end = stored.last_used_at + signed_in_idle_limit()
+        idle_end = last_used + signed_in_idle_limit()
         if _now() > max_age_end and max_age_end <= idle_end:
             return AuthError.SESSION_MAX_AGE.value
         return expired
@@ -753,15 +801,22 @@ class SessionRepository:
                 return
         self._persist(session)
 
+    def _drop_ended_locked(self, session: _Session) -> None:
+        """Drop a session that has ended from the cache, keeping a signed-in
+        one's last use for :meth:`end_reason` (round 1, break-it F1)."""
+        self._sessions.pop(session.session_id, None)
+        if session.max_age != ANONYMOUS_MAX_AGE:
+            self._ended_last_used[session.session_id] = session.last_used_at
+
     def _purge_expired_locked(self) -> int:
         now = _now()
-        expired = [
-            session_id
-            for session_id, session in self._sessions.items()
-            if session.is_expired(now=now)
-        ]
-        for session_id in expired:
-            self._sessions.pop(session_id, None)
+        expired = [session for session in self._sessions.values() if session.is_expired(now=now)]
+        for session in expired:
+            self._drop_ended_locked(session)
+        for lapsed in [
+            sid for sid, used in self._ended_last_used.items() if now - used > SESSION_TTL
+        ]:
+            del self._ended_last_used[lapsed]
         return len(expired)
 
     def clear(self) -> None:
@@ -776,6 +831,7 @@ class SessionRepository:
         with self._lock:
             self._sessions.clear()
             self._valid_after.clear()
+            self._ended_last_used.clear()
             if store is not None:
                 store.delete_all()
 
@@ -1097,7 +1153,9 @@ def refuse_sign_in_only(session: SessionContext) -> None:
         )
 
 
-def refuse_if_session_ends_soon(session: SessionContext, *, sign_in_offered: bool) -> None:
+def refuse_if_session_ends_soon(
+    session: SessionContext, *, sign_in_offered: bool, ended_refuses: bool = False
+) -> None:
     """Refuse a run, or its estimate, with 409 ``SESSION_ENDS_SOON`` when the
     session has less than ``LATE_RUN_REFUSAL_SECONDS`` left before its
     maximum age (W87-1, ADR-0174; CHG-066 b, CHG-069, CHG-070 c).
@@ -1109,14 +1167,19 @@ def refuse_if_session_ends_soon(session: SessionContext, *, sign_in_offered: boo
     before anything is recorded or charged. The words are the owner's: the
     signed-in text for a signed-in session (or one whose kind a restore
     could not read: "Sign in again" works for both), and for an anonymous
-    one the text that offers sign-in only when ``sign_in_offered``. The
-    legacy header has no server-side session, and a session that has
-    already ended is refused by its own 401 further on.
+    one the text that offers sign-in only when ``sign_in_offered`` (sign-in
+    is on AND this request's page offers it). The legacy header has no
+    server-side session. A session that has already ended is refused by its
+    own 401 further on, or, with ``ended_refuses`` (the run creation's second
+    check, made just before the run is created, when nothing further on
+    would), here.
     """
     if session.legacy:
         return
     live = session_repository.get(session.session_id)
     if live is None:
+        if ended_refuses:
+            raise session_ended(session.session_id)
         return
     left = live.max_age_end() - _now()
     if left >= timedelta(seconds=LATE_RUN_REFUSAL_SECONDS):

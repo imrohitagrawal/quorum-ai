@@ -534,9 +534,12 @@ jobs:
       # 700 px): against b552d37's code the lane gave "12 passed", "2 failed",
       # red by design until their fix. Re-measure when that fix lands.
       # 25 -> 31 (W87-1, ADR-0174): session-max-age.spec.ts adds 6 tests,
-      # added to the old floor.
+      # added to the old floor. 31 -> 33 (W87-1 review round 1): two more in
+      # the same spec (a different account after "Sign in again"; a host that
+      # offers no sign-in), added to the old floor; the lane printed
+      # "33 passed" locally.
       - name: "signed-in History lane: floor on tests actually executed"
-        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 31 --lane "signed-in History lane"
+        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 33 --lane "signed-in History lane"
 
       - name: Clear the previous lane's JUnit report
         # Adversarial review (#162/#166): without this, a Playwright run that

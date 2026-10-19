@@ -61,7 +61,7 @@ Codex added four points in its plan reviews (kept outside the repository):
 |---|---|---|---|
 | C1 | `require_session` ignored what the touch returned, so a session that passed its lookup and reached its limit before its touch was still let through | A failed touch is a 401 | `tests/integration/test_session_max_age_routes.py::test_a_session_that_ends_between_its_lookup_and_its_touch_is_refused` |
 | C2 | The idle status route answered the generic expiry, so the last reminder poll lost the 12-hour reason | The route gives the same reason as every other route | `tests/integration/test_session_max_age_routes.py::test_the_idle_status_route_gives_the_same_reason` |
-| C3 | Reading the adjustable run deadline as the refusal window makes the approved "less than 12 minutes" false at a higher deadline (at 3,600 seconds the refusal would start with 1,800 left) | The window is its own constant, 720, pinned by literal | `tests/unit/test_session_max_age.py::test_the_maximum_ages_and_the_late_run_window_are_pinned_by_literal` |
+| C3 | Reading the adjustable run deadline as the refusal window makes the approved "less than 12 minutes" false at a higher deadline (with the refusal reading a 3,600-second deadline, refusals would start with 3,600 seconds left) | The window is its own constant, 720, pinned by literal | `tests/unit/test_session_max_age.py::test_the_maximum_ages_and_the_late_run_window_are_pinned_by_literal` |
 | C4 | Adding the two new error codes breaks a pin that lists every `AuthError` member | The pin was moved with the code | `tests/unit/test_enum_membership_pins.py` |
 
 ## 3. Limits recorded, not built

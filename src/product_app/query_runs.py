@@ -682,13 +682,24 @@ CREATE_RESPONSES: dict[int | str, dict[str, Any]] = {
 }
 
 
-def _refuse_late_run(session: SessionContext) -> None:
+def _refuse_late_run(session: SessionContext, request: Request, *, again: bool = False) -> None:
     """W87-1 (ADR-0174): no run, or estimate, in the session's last 12
     minutes. Imported here, not at the top: ``google_signin`` imports this
-    module."""
-    from product_app.google_signin import sign_in_enabled
+    module.
 
-    refuse_if_session_ends_soon(session, sign_in_offered=sign_in_enabled())
+    Sign-in is offered only when it is on AND this request reached the
+    sign-in host: elsewhere (the fly.dev host) the page shows no sign-in, so
+    the text must not offer it (round 1, CHG-070 c). ``again`` is the run
+    creation's second check, just before the run is created (round 1,
+    Codex): the time spent validating and estimating can cross the 720 s
+    boundary, and the session can end meanwhile."""
+    from product_app.google_signin import on_sign_in_host, sign_in_enabled
+
+    refuse_if_session_ends_soon(
+        session,
+        sign_in_offered=sign_in_enabled() and on_sign_in_host(request),
+        ended_refuses=again,
+    )
 
 
 # -- routes ------------------------------------------------------------------
@@ -709,7 +720,7 @@ def estimate_query_run(
     # action — it must enforce CSRF like the create and delete routes.
     enforce_csrf(request, session)
     # W87-1 (ADR-0174): after CSRF, before anything is recorded.
-    _refuse_late_run(session)
+    _refuse_late_run(session, request)
     # SEC-C3: per-account rate limit to prevent rapid-fire estimate spam
     _enforce_account_rate_limit(request, session)
     # W7 (ADR-0136): the key the per-account spend rails read; W47
@@ -772,7 +783,7 @@ def create_query_run(
 ) -> QueryRunCreateResponse:
     enforce_csrf(request, session)
     # W87-1 (ADR-0174): after CSRF, before anything is recorded or charged.
-    _refuse_late_run(session)
+    _refuse_late_run(session, request)
     # SEC-C3: per-account rate limit to prevent rapid-fire run creation
     _enforce_account_rate_limit(request, session)
     # W7 (ADR-0136): read once, stored on the run, so its charge, void and
@@ -867,6 +878,11 @@ def create_query_run(
                 "cost_estimate": cost_estimate.model_dump(mode="json"),
             },
         )
+
+    # W87-1 round 1 (Codex): the late-run check again, now, just before the
+    # run is created and its spend reserved. The early one above still
+    # refuses before any work; this one sees the time the work took.
+    _refuse_late_run(session, request, again=True)
 
     # C9 + F-01: reserve the in-flight run slot BEFORE anything that charges
     # the account or claims the account's single active-run slot. The capacity
