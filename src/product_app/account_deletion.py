@@ -14,11 +14,19 @@ transaction, and only then are its sessions refused and any row written back
 in between deleted again. A session being restored from disk on another
 device is checked against the refusal before it is cached, so it cannot come
 back (the race promised a test on 2026-09-25).
+
+W87-2 (ADR-0175, CHG-056 d, CHG-063 f): the session must have been made by a
+Google sign-in within the last 10 minutes. Every Google sign-in makes a new
+session (``auth.issue_signed_in_session``), so the session's own start IS
+the sign-in; the account's ``last_sign_in_at`` is never read, because
+another browser's sign-in stamps it (failure mode FM-11). Failure modes:
+``docs/analysis/2026-10-20-w87-2-recent-sign-in-failure-modes.md``.
 """
 
 from __future__ import annotations
 
 import logging
+from datetime import timedelta
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Request, status
@@ -29,6 +37,24 @@ from product_app import account_history, auth, run_history_store, session_store
 from product_app.request_limits import refuse_unknown_fields
 
 _log = logging.getLogger(__name__)
+
+#: W87-2 (ADR-0175): how recent the sign-in behind a session must be for it
+#: to delete the account. Strict, like the maximum age (ADR-0174): allowed at
+#: exactly 10 minutes, refused one microsecond later. Longer lets a stolen
+#: cookie delete the account for longer.
+RECENT_SIGN_IN_FOR_DELETION = timedelta(minutes=10)
+
+
+def recent_sign_in_seconds_left(session_id: str) -> int:
+    """Whole seconds before this session is too old to delete the account,
+    never below 0; a session that does not resolve has 0 left. The page
+    carries it so "Delete my account…" asks for a new sign-in once it runs
+    out (the server still decides, :func:`delete_signed_in_account`)."""
+    session = auth.session_repository.get(session_id)
+    if session is None:
+        return 0
+    left = session.created_at + RECENT_SIGN_IN_FOR_DELETION - auth._now()
+    return max(0, int(left.total_seconds()))
 
 
 def delete_account(account_id: UUID) -> bool:
@@ -82,6 +108,19 @@ def delete_signed_in_account(body: AccountDeleteRequest, request: Request) -> JS
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail={"code": "NOT_SIGNED_IN", "message": "Sign in to delete your account."},
+        )
+    # W87-2 (ADR-0175): before the email comparison, so a stale session is
+    # told what would help (a new sign-in), not that its email is wrong.
+    started = session.session_created_at
+    if started is None or auth._now() - started > RECENT_SIGN_IN_FOR_DELETION:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "RECENT_SIGN_IN_REQUIRED",
+                # CHG-063 (f)(1), verbatim.
+                "message": "For your safety, sign in with Google again before deleting "
+                "your account. If you are still signed in to Google it takes one click.",
+            },
         )
     if body.confirm_email.strip().casefold() != account.email.strip().casefold():
         raise HTTPException(

@@ -335,6 +335,30 @@ a { color: var(--accent); text-underline-offset: 2px; }
   white-space: nowrap;
 }
 
+/* W87-2 (ADR-0175, CHG-063 e): the 2-Step line beside "Sign in with Google",
+   on the anonymous page only. Narrow and small beside the button; on a phone
+   it takes a row of its own under the buttons (the 600px rule below). */
+.sign-in-2sv-note {
+  max-width: 30ch;
+  font-size: 0.75rem;
+  line-height: 1.3;
+  color: var(--text-secondary);
+}
+
+/* W87-2: the panel's line after a sign-in for deletion came back as another
+   account (CHG-073 d), and the line above the question box after a question
+   typed as another account was not kept (CHG-073 a). Both wrap. */
+.account-switched {
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.question-not-kept {
+  margin: 0 0 var(--space-2);
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
 /* W7 (ADR-0135): a signed-in account's history, a disclosure in the top bar.
    The summary reuses the ghost-button look; the panel drops below it and
    stays inside the viewport on a phone. */
@@ -5232,6 +5256,14 @@ main:focus { outline: none; }
   .topbar-actions:has(#sign-in-google, #sign-out) {
     flex-wrap: wrap;
     justify-content: flex-end;
+  }
+  /* W87-2: the 2-Step line goes last, on a row of its own, so it wraps under
+     the buttons and never pushes the page sideways. */
+  .sign-in-2sv-note {
+    order: 1;
+    flex-basis: 100%;
+    max-width: none;
+    text-align: right;
   }
 }
 

@@ -32,6 +32,15 @@ The flow is the OpenID Connect authorization code flow with PKCE:
    sent to ``/ui``. Any failure sends it to ``/ui?sign_in=failed`` and
    changes nothing.
 
+W87-2 (ADR-0175) adds a second start, ``POST
+/v1/auth/google/start-for-deletion``: the same checks, for a signed-in
+account only, and the same Google URL. Its callback sends the browser to
+``/ui?account=delete`` when the same account came back and to
+``/ui?account=switched`` when another one did (an ordinary sign-in as that
+account, CHG-066 c). A sign-in that crossed the signed-in 12 hours on its
+way through Google still completes (``SessionRepository.max_age_account``);
+no other ended session does.
+
 The hard stop "storing a provider key, a password, or any Google token
 beyond the sign-in exchange" is NOT in CHG-012 D7: it is section 2 of the
 2026-09-24 prompt (``CONTINUE-BACKLOG-2026-09-24-ULTRACODE-PROMPT.md``),
@@ -130,6 +139,12 @@ ID_TOKEN_CLOCK_SKEW_S: Final = 300
 #: there is no redirect parameter to abuse (failure mode 12).
 AFTER_SIGN_IN_PATH: Final = "/ui"
 SIGN_IN_FAILED_PATH: Final = "/ui?sign_in=failed"
+#: W87-2 (ADR-0175): where a sign-in started for deleting the account ends,
+#: when the same account came back and when another one did. Fixed too: the
+#: four paths are the whole set (``tests/integration/
+#: test_recent_sign_in_for_deletion.py`` reads them from the real header).
+ACCOUNT_DELETE_PATH: Final = "/ui?account=delete"
+ACCOUNT_SWITCHED_PATH: Final = "/ui?account=switched"
 
 #: The callback route. The configured redirect URI must end in exactly this.
 CALLBACK_PATH: Final = "/v1/auth/google/callback"
@@ -227,6 +242,11 @@ class PendingSignIn:
     state: str
     code_verifier: str
     started_at: datetime
+    #: W87-2 (ADR-0175): why the sign-in was started, and for a deletion the
+    #: account that started it, so the callback can tell "the same account
+    #: came back" from "another account did".
+    purpose: Literal["sign_in", "delete_account"] = "sign_in"
+    expected_account_id: UUID | None = None
 
 
 class PendingSignIns:
@@ -246,11 +266,20 @@ class PendingSignIns:
         self._entries: dict[str, PendingSignIn] = {}
         self._lock = threading.Lock()
 
-    def begin(self, session_id: str, *, now: datetime) -> PendingSignIn:
+    def begin(
+        self,
+        session_id: str,
+        *,
+        now: datetime,
+        purpose: Literal["sign_in", "delete_account"] = "sign_in",
+        expected_account_id: UUID | None = None,
+    ) -> PendingSignIn:
         pending = PendingSignIn(
             state=secrets.token_urlsafe(32),
             code_verifier=secrets.token_urlsafe(64),
             started_at=now,
+            purpose=purpose,
+            expected_account_id=expected_account_id,
         )
         with self._lock:
             self._purge_locked(now)
@@ -625,8 +654,14 @@ def _require_cookie_session(request: Request) -> auth.SessionContext:
     return session
 
 
-def start_google_sign_in(request: Request) -> SignInStartResponse:
-    """Begin a sign-in: returns the Google URL the browser should open."""
+def _start(
+    request: Request, *, purpose: Literal["sign_in", "delete_account"]
+) -> SignInStartResponse:
+    """Both starts, one set of checks in one order (W87-2, ADR-0175): on
+    (404), a cookie session with its CSRF token (401/403), the redirect URI's
+    host (409), for a deletion a signed-in account (403), then the ONE
+    per-address limiter (429). The Google URL is the same for both: no
+    ``prompt`` and no ``max_age`` (CHG-056 d, "one click")."""
     _require_enabled()
     session = _require_cookie_session(request)
     if not on_sign_in_host(request):
@@ -639,6 +674,16 @@ def start_google_sign_in(request: Request) -> SignInStartResponse:
                 + ". Open Quorum there to sign in.",
             },
         )
+    expected_account_id = None
+    if purpose == "delete_account":
+        # Before the limiter, so a refused start spends nothing.
+        account = signed_in_account(session.account_id)
+        if account is None:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={"code": "NOT_SIGNED_IN", "message": "Sign in to delete your account."},
+            )
+        expected_account_id = account.account_id
     if not sign_in_start_limiter.allow(
         ip=auth.client_ip_of(request) or "unknown", now_epoch=time.time()
     ):
@@ -653,8 +698,25 @@ def start_google_sign_in(request: Request) -> SignInStartResponse:
                 "Retry-After": str(math.ceil(60 / settings.sign_in_starts_per_address_per_minute))
             },
         )
-    pending = pending_sign_ins.begin(session.session_id, now=datetime.now(UTC))
+    pending = pending_sign_ins.begin(
+        session.session_id,
+        now=datetime.now(UTC),
+        purpose=purpose,
+        expected_account_id=expected_account_id,
+    )
     return SignInStartResponse(authorization_url=authorization_url(pending))
+
+
+def start_google_sign_in(request: Request) -> SignInStartResponse:
+    """Begin a sign-in: returns the Google URL the browser should open."""
+    return _start(request, purpose="sign_in")
+
+
+def start_google_sign_in_for_deletion(request: Request) -> SignInStartResponse:
+    """W87-2 (ADR-0175): begin the new sign-in that deleting the account
+    needs once the session's own sign-in is more than 10 minutes old. Hidden
+    from the schema, like the deletion route; no body."""
+    return _start(request, purpose="delete_account")
 
 
 def _failed(reason: str) -> RedirectResponse:
@@ -670,9 +732,19 @@ def google_sign_in_callback(request: Request) -> RedirectResponse:
     top-level navigation from Google cannot carry."""
     _require_enabled()
     session_id = auth.get_session_cookie_from_request(request)
-    if not session_id or auth.session_repository.get(session_id) is None:
+    if not session_id:
         return _failed("no_session")
+    # W87-2 (ADR-0175): taken FIRST, on every attempt, so a ``state`` is good
+    # for one attempt even when the session has ended.
     pending = pending_sign_ins.take(session_id, now=datetime.now(UTC))
+    # An ended session is accepted only when it ended by the signed-in 12
+    # hours during this round trip ("recovered"); every other end (sign-out,
+    # sign-out everywhere, deletion, idle, the anonymous 24 hours) fails.
+    recovered = None
+    if auth.session_repository.get(session_id) is None:
+        recovered = auth.session_repository.max_age_account(session_id)
+        if recovered is None:
+            return _failed("no_session")
     if pending is None:
         return _failed("no_pending_sign_in")
     presented_state = request.query_params.get("state") or ""
@@ -694,6 +766,12 @@ def google_sign_in_callback(request: Request) -> RedirectResponse:
     )
     if account_id is None:
         return _failed("account_not_recorded")
+    if recovered is not None and auth.session_repository.max_age_account(session_id) != recovered:
+        # W87-2: the recovery condition again, after the exchange, for a
+        # session revoked, signed out everywhere or deleted DURING it (Codex
+        # measured all three accepted without this). The live path has no
+        # such re-check; ADR-0175 records it as advisory.
+        return _failed("no_session")
     # W7 (ADR-0135): read the signing-in session's id BEFORE the rotation
     # revokes it, so an ANONYMOUS session's runs can join the account's
     # history (carry_over refuses a session already signed in).
@@ -710,7 +788,13 @@ def google_sign_in_callback(request: Request) -> RedirectResponse:
         auth.session_repository.revoke(session.session_id)
         account_history.forget_account(account_id)
         return _failed("account_not_recorded")
-    response = RedirectResponse(AFTER_SIGN_IN_PATH, status_code=status.HTTP_303_SEE_OTHER)
+    location = AFTER_SIGN_IN_PATH
+    if pending.purpose == "delete_account":
+        # W87-2: another account coming back is an ordinary sign-in as that
+        # account (CHG-066 c); nothing of the first account is touched.
+        same = account_id == pending.expected_account_id
+        location = ACCOUNT_DELETE_PATH if same else ACCOUNT_SWITCHED_PATH
+    response = RedirectResponse(location, status_code=status.HTTP_303_SEE_OTHER)
     response.headers["Cache-Control"] = "no-store"
     auth.attach_session_cookie(response, session)
     _record_event(account_id, "signed_in")
@@ -865,6 +949,12 @@ router.add_api_route(
     responses=_DOCUMENTED_ERRORS,
 )
 router.add_api_route(
+    "/v1/auth/google/start-for-deletion",
+    start_google_sign_in_for_deletion,
+    methods=["POST"],
+    include_in_schema=False,
+)
+router.add_api_route(
     CALLBACK_PATH, google_sign_in_callback, methods=["GET"], include_in_schema=False
 )
 router.add_api_route(
@@ -892,6 +982,8 @@ def signed_in_account(account_id: UUID) -> session_store.StoredAccount | None:
 
 
 __all__ = [
+    "ACCOUNT_DELETE_PATH",
+    "ACCOUNT_SWITCHED_PATH",
     "AFTER_SIGN_IN_PATH",
     "CALLBACK_PATH",
     "GOOGLE_AUTHORIZATION_ENDPOINT",

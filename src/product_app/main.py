@@ -1012,6 +1012,8 @@ def _account_controls_html(
     sign_in_failed: bool,
     on_sign_in_host: bool = True,
     max_age_seconds_left: int = 12 * 3600,
+    recent_sign_in_seconds_left: int = 0,
+    account_switched: bool = False,
 ) -> tuple[str, bool]:
     """The top bar's account controls, and whether they show an account.
 
@@ -1028,25 +1030,16 @@ def _account_controls_html(
     caller then marks the response ``Cache-Control: no-store``.
     ``max_age_seconds_left`` is the session's time left before its maximum
     age, for the reminder (W87-1, ADR-0174).
+
+    W87-2 (ADR-0175): the failure notice shows signed in too (a visitor who
+    cancels a sign-in for deletion at Google is still signed in);
+    ``recent_sign_in_seconds_left`` is the time left before deleting the
+    account needs a new sign-in; ``account_switched`` (``?account=switched``)
+    puts CHG-073 (d)'s line in the panel; and the anonymous sign-in branch
+    carries the 2-Step line (CHG-063 e, CHG-073 e). With sign-in off the
+    anonymous page still gets the empty string.
     """
     account = None if account_id is None else signed_in_account(account_id)
-    if account is not None:
-        # W87-1 round 2: whether this page offers sign-in, for the late-run
-        # card's "Sign in again" (CHG-070 c). The top bar has no sign-in
-        # button for a signed-in account, so it cannot say.
-        offered = "true" if sign_in_enabled() and on_sign_in_host else "false"
-        return (
-            '<span class="account-email" id="account-email" data-sign-in-offered="'
-            + offered
-            + '">'
-            + escape(account.email)
-            + "</span>"
-            + _history_html(account.account_id)
-            + '<button id="sign-out" class="topbar-howitworks" type="button">Sign out</button>'
-            + _idle_reminder_html(max_age_seconds_left)
-        ), True
-    if not sign_in_enabled() or not on_sign_in_host:
-        return "", False
     notice = (
         '<span class="account-notice" id="sign-in-notice" role="status">'
         + SIGN_IN_FAILED_NOTICE
@@ -1054,10 +1047,41 @@ def _account_controls_html(
         if sign_in_failed
         else ""
     )
+    if account is not None:
+        # W87-1 round 2: whether this page offers sign-in, for the late-run
+        # card's "Sign in again" (CHG-070 c). The top bar has no sign-in
+        # button for a signed-in account, so it cannot say.
+        offered = "true" if sign_in_enabled() and on_sign_in_host else "false"
+        return (
+            notice
+            + '<span class="account-email" id="account-email" data-sign-in-offered="'
+            + offered
+            + '">'
+            + escape(account.email)
+            + "</span>"
+            + _history_html(
+                account.account_id,
+                recent_sign_in_seconds_left=recent_sign_in_seconds_left,
+                switched_email=account.email if account_switched else None,
+            )
+            + '<button id="sign-out" class="topbar-howitworks" type="button">Sign out</button>'
+            + _idle_reminder_html(max_age_seconds_left)
+        ), True
+    if not sign_in_enabled() or not on_sign_in_host:
+        return "", False
+    # W87-2 (ADR-0175): CHG-063 (e), verbatim, placed by CHG-073 (e): here and
+    # below the capped page's button only. The app cannot see or require
+    # 2-Step Verification; Google decides how it signs a person in.
+    two_step = (
+        '<span class="sign-in-2sv-note" id="sign-in-2sv-note">'
+        "We sign you in with Google. Turn on 2-Step Verification in your Google "
+        "account to protect it.</span>"
+    )
     return (
         notice
         + '<button id="sign-in-google" class="topbar-howitworks" type="button">'
         + "Sign in with Google</button>"
+        + two_step
     ), False
 
 
@@ -1108,11 +1132,30 @@ def _history_list_html(entries: list[HistoryEntry] | None) -> str:
     return '<ol class="history-list" id="account-history-list">' + items + "</ol>"
 
 
-def _history_html(account_id: UUID) -> str:
+def _history_html(
+    account_id: UUID,
+    *,
+    recent_sign_in_seconds_left: int = 0,
+    switched_email: str | None = None,
+) -> str:
     """The signed-in account's history, as a disclosure in the top bar (W7,
     ADR-0135): the note, the shared list (:func:`_history_list_html`) and the
     account controls. ``app.js`` replaces only the list when the panel opens
-    (ADR-0142)."""
+    (ADR-0142).
+
+    W87-2 (ADR-0175): ``switched_email`` is the session's own email after a
+    sign-in for deletion came back as another account; the panel then says,
+    in CHG-073 (d)'s words, that nothing was deleted. A hand-made
+    ``?account=switched`` shows a visitor their own email and true words."""
+    switched = (
+        ""
+        if switched_email is None
+        else '<p class="history-note account-switched" id="account-switched" role="status">'
+        + "You are now signed in as "
+        + escape(switched_email)
+        + '. Nothing was deleted. To delete this account, press "Delete my account" again.'
+        + "</p>"
+    )
     return (
         '<details class="account-history" id="account-history">'
         '<summary class="topbar-howitworks">History</summary>'
@@ -1126,8 +1169,9 @@ def _history_html(account_id: UUID) -> str:
             f"{settings.history_keep_days} days. Answers are not kept."
         )
         + "</p>"
+        + switched
         + _history_list_html(account_history.history_for(account_id))
-        + _account_delete_html()
+        + _account_delete_html(recent_sign_in_seconds_left=recent_sign_in_seconds_left)
         + "</div></details>"
     )
 
@@ -1222,13 +1266,20 @@ def _idle_reminder_html(max_age_seconds_left: int) -> str:
     )
 
 
-def _account_delete_html() -> str:
+def _account_delete_html(*, recent_sign_in_seconds_left: int = 0) -> str:
     """W7 (ADR-0136): deleting the account, in three steps the owner asked
     for (CHG-021 f): a reminder of what goes, typing the email address to
     confirm, and a last "Delete permanently". ``app.js`` moves between them;
-    the server checks the typed email and the CSRF token."""
+    the server checks the typed email and the CSRF token.
+
+    W87-2 (ADR-0175, CHG-056 d, CHG-063 f): the block carries the session's
+    time left before deleting needs a new Google sign-in, read by ``app.js``
+    at load; past it, "Delete my account…" shows the last, hidden step
+    instead of the reminder: CHG-063 (f)(1)'s sentence and "Sign in again".
+    The server refuses a stale session whatever the page shows."""
     return (
-        '<div class="account-delete" id="account-delete">'
+        '<div class="account-delete" id="account-delete" '
+        f'data-recent-sign-in-seconds-left="{int(recent_sign_in_seconds_left)}">'
         '<p class="history-note account-delete-heading">Your account</p>'
         # W7 part 3 (ADR-0137, CHG-021 c): one action ends every session of
         # the account, this one included.
@@ -1253,6 +1304,12 @@ def _account_delete_html() -> str:
         '<button type="button" id="account-delete-confirm" class="account-delete-danger">'
         "Delete permanently</button>"
         '<button type="button" id="account-delete-back">Keep my account</button>'
+        "</div></div>"
+        '<div id="account-delete-reauth-step" hidden>'
+        "<p>For your safety, sign in with Google again before deleting your account. "
+        "If you are still signed in to Google it takes one click.</p>"
+        '<div class="account-delete-actions">'
+        '<button type="button" id="account-delete-reauth">Sign in again</button>'
         "</div></div>"
         '<p id="account-delete-error" class="account-delete-error" role="alert" hidden></p>'
         "</div>"
@@ -2016,7 +2073,7 @@ def browser_session(
             },
             headers=_retry_after_header(exc.retry_after_seconds),
         )
-    body = {
+    body: dict[str, str | bool] = {
         "csrf_token": session.csrf_token,
         "expires_at": session.expires_at.isoformat(),
     }
@@ -2024,9 +2081,17 @@ def browser_session(
     # page puts a question kept across "Sign in again" back only on the
     # account it was saved under. Never from the HTML, which another tab's
     # sign-in can make stale. An anonymous session gets no such field.
+    # W87-2 (ADR-0175): anonymity is stated POSITIVELY, ``anonymous: true``
+    # only when the store answers that the id is certainly in no accounts row.
+    # A lookup that fails (or no store) gives NEITHER field, so the page never
+    # reads a failed read as "anonymous" and saves nothing (Codex re-check).
     account = signed_in_account(session.account_id)
     if account is not None:
         body["account_id"] = str(account.account_id)
+    else:
+        store = session_store.get_store()
+        if store is not None and store.is_anonymous(session.account_id) is True:
+            body["anonymous"] = True
     response = JSONResponse(body)
     attach_session_cookie(response, session)
     return response
@@ -2189,6 +2254,13 @@ def browser_ui(request: Request) -> HTMLResponse:
         sign_in_failed=request.query_params.get("sign_in") == "failed",
         on_sign_in_host=on_sign_in_host(request),
         max_age_seconds_left=max_age_seconds_left(session.session_id),
+        # W87-2 (ADR-0175): the time left before deleting needs a new sign-in,
+        # and the line after a sign-in for deletion came back as another
+        # account. A fixed marker; nothing from the request reaches the page.
+        recent_sign_in_seconds_left=account_deletion.recent_sign_in_seconds_left(
+            session.session_id
+        ),
+        account_switched=request.query_params.get("account") == "switched",
     )
     response = HTMLResponse(_render_workspace_html(controls, signed_in=shows_account))
     if shows_account:
