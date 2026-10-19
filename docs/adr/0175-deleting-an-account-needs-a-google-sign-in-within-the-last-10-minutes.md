@@ -4,7 +4,8 @@
 
 Accepted — 2026-10-20, board row W87, the second of its three pull requests (W87-2). W87-1
 (ADR-0174) built the maximum session age; W87-3 builds the operator command that ends sessions.
-W87 stays open until W87-3 lands.
+W87 stays open until W87-3 lands. The owner's decisions it builds on are CHG-056 (d), CHG-063 (e)
+and (f)(1), CHG-066 (c) and CHG-073 (a) to (e).
 
 The product owner chose: a Google sign-in within the last 10 minutes before an account is deleted,
 "one click if still signed in to Google" (CHG-056 (d)); the refusal's words and its "Sign in again"
@@ -83,7 +84,7 @@ Facts the design rests on, read on `main` at `0f06765` unless marked:
    It is registered with `add_api_route`, so the decorated count stays 55.
 5. **The callback, in order.** No cookie fails. The pending entry is taken first, on every attempt,
    so a `state` is good for one attempt even when the session has ended. A session that no longer
-   resolves is accepted only when it ended by the signed-in 12 hours (decision 7). Then the state,
+   resolves goes on only when it ended by the signed-in 12 hours (decision 7). Then the state,
    the code, the exchange and the account row as before; for a recovered session the recovery
    condition is checked again; the new session is issued (the old id revoked, FM-12); the
    deleted-while-signing-in check as before.
@@ -101,7 +102,7 @@ Facts the design rests on, read on `main` at `0f06765` unless marked:
    deletion of the account is under way or done (`account_is_going`). `end_reason` now answers from
    it, so the two cannot disagree. The callback asks it before the exchange and again after the
    account row, right before issuing, so a session revoked, signed out everywhere or deleted during
-   the exchange is refused (Codex measured all three accepted without the second check). Not
+   the exchange is refused (Codex measured all three signed in without the second check). Not
    recovered: an idle end (the start request touches the session and the shortest signed-in idle
    length, 15 minutes, outlasts the 10-minute pending entry), a sign-out, sign-out everywhere and
    deletion (the visitor or the owner chose them), and the anonymous 24 hours (Known limits).
