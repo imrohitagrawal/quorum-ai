@@ -1,7 +1,7 @@
 # Session Handoff
 
 ## Date/time
-2026-10-18T05:23:41+05:30
+2026-10-19T23:24:07+05:30
 
 ## Open work
 `docs/65-open-work.md` — the source of truth for what is open, what blocks what,
@@ -11,25 +11,25 @@ line further down this file is the factory router's view of the lifecycle, not a
 work status.
 
 ## Latest narrative handoff
-`docs/analysis/2026-10-18-session-handoff.md` — read this for full context before editing. (today)
+`docs/analysis/2026-10-19-session-handoff.md` — read this for full context before editing. (today)
 
 This file is a mechanical snapshot (branch/git-status/skill-route/live state) —
 regenerated fresh every `make handoff`. The narrative above (what happened,
 what's next, the traps) lives in the dated doc it points to, not here.
 
 ## Current branch/worktree
-handoff/2026-10-18-w28
+docs/handoff-2026-10-19
 
 ## Live state (measured fresh by this run, not hand-carried)
 Run `make handoff` again for current numbers instead of trusting this file
 once it ages -- every value below is read from git/gh/`/status` at
 generation time, per #134.
 
-- **`origin/main` tip:** `5ae015ef1d5d`
-- **Last commit touching `src/`:** `a839ba972cdf`
-- **Production vs. last `src/` commit:** production build_sha 5ae015e is in sync: it is `origin/main`'s tip, which holds the last src/ commit a839ba9
-- **pytest collected (no execution):** 7544
-- **e2e lane spec counts:** invariants: 26, ops: 2, degraded: 1
+- **`origin/main` tip:** `5e8676df7401`
+- **Last commit touching `src/`:** `5e8676df7401`
+- **Production vs. last `src/` commit:** production build_sha 5e8676d is in sync with last src/ commit
+- **pytest collected (no execution):** 7683
+- **e2e lane spec counts:** invariants: 27, ops: 2, degraded: 1
 - **Open issues:** 2
 - **Changed-lines coverage:** not computed here -- `make diff-cover` shares
   coverage data with every pytest-invoking target and races with them if run
@@ -44,7 +44,7 @@ product readiness: verdict Not ready, written to docs/product-readiness.md
 
 ## Board and GitHub
 From `make board-github-check`: DONE rows whose issue is still open, and open issues no row cites.
-board vs GitHub: 102 board rows, 2 open issues
+board vs GitHub: 107 board rows, 2 open issues
   the board and GitHub agree
 
 ## Root prompt check
@@ -67,15 +67,14 @@ There are 2 validly named root prompts; only one should be left for the next ses
 The lines of those that pass:
 ```text
 Read CONTINUE-BYOK-BUILD-W28-PROMPT.md in the repo root and follow it exactly.
-Read CONTINUE-SECURITY-W85-W76-PROMPT.md in the repo root and follow it exactly.
+Read CONTINUE-SECURITY-W87-W76-PROMPT.md in the repo root and follow it exactly.
 ```
 
 ## Leftovers
 From `make session-clean`, which reports and never deletes.
 ```text
 Feature branches and worktrees:
-- `worktree ~/Projects/quorum-ai-w86` — remove with 'git worktree remove' once its branch is merged
-- `worktree ~/Projects/quorum-ai-wt-w28h` — remove with 'git worktree remove' once its branch is merged
+- `worktree ~/Projects/quorum-ai-handoff` — remove with 'git worktree remove' once its branch is merged
 ```
 
 ## Current phase
@@ -133,10 +132,7 @@ Operate, learn, and improve
 
 ## Git status
 ```text
-M  docs/65-open-work.md
-A  docs/analysis/2026-10-18-session-handoff.md
-A  docs/archive/2026-10/CONTINUE-BYOK-RESEARCH-FINISH-W28-PROMPT.md
-R  CONTINUE-BYOK-RESEARCH-W28-PROMPT.md -> docs/archive/2026-10/CONTINUE-BYOK-RESEARCH-W28-PROMPT.md
+clean
 ```
 
 ## Diff stat
