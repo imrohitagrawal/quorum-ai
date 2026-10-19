@@ -85,4 +85,4 @@ CHG-060 still holds W87's remaining parts and W88 back.
 - **Disk filled twice** from other work on the Mac. The owner chose deleting Codex sessions older than
   30 days (9.1 GB) and pruning unused Docker images and build cache (about 9 GB reclaimed).
 - **The stop rule's count mattered.** W85, W86, W100 and W87-1 each reached one failed fix (a fix that
-  added a defect or was incomplete); each following fix was narrow and Codex's re-check approved it.
+  added a defect or was incomplete); each following fix was narrow, and Codex's narrow re-check found no defect in it (#575, #578, #579, #580).
