@@ -49,6 +49,9 @@ _RENDERED_ONLY_WITH_SIGN_IN = frozenset(
         "account-delete-confirm",
         "account-delete-back",
         "account-delete-error",
+        # W87-2 (ADR-0175): the step that asks for a new sign-in first.
+        "account-delete-reauth-step",
+        "account-delete-reauth",
         # W7 part 3 (ADR-0137): sign out everywhere.
         "sign-out-everywhere",
         # W7 part 3 (ADR-0138): the idle reminder.
