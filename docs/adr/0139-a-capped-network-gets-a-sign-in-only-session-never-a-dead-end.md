@@ -11,6 +11,11 @@ account). The shape below — a sign-in-only session held in memory — is the
 session's design. Three points the plan raised are taken as assumptions, not
 decisions, and are listed under Consequences.
 
+**Amended by ADR-0174 (2026-10-19):** a sign-in-only session now ends 24 hours after it began, like
+any anonymous session; it is no longer resumed without limit. A signed-in session that ends at its
+12 hours is followed, on reload, by a counted anonymous mint, so on a network that has used its 2
+the visitor gets this decision's sign-in-only page, which still offers sign-in.
+
 ## Context
 
 The per-network daily cap (`SESSION_MINT_CAP_PER_IP = 2`, ADR-0073) counts each

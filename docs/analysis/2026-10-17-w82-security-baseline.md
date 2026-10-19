@@ -49,10 +49,11 @@ owner's instruction, between 05:16 and 06:00 UTC (CHG-057).
   is priced before any spend, and W94's limits still wait on the owner.
 
 **What this public file holds back.** The repository is public. For the live gaps not yet fixed
-(W87, W88), this file says what the gap is and which row fixes it, but not how to
-reproduce it; the full evidence is kept outside the repository until each fix ships (CHG-060).
-W85's detail was restored here when its fix was built (fixed by W85), and W100's when its fix was
-built (fixed by W100).
+(W87's recent sign-in before deletion, W88), this file says what the gap is and which row fixes it,
+but not how to reproduce it; the full evidence is kept outside the repository until each fix ships
+(CHG-060). W85's detail was restored here when its fix was built (fixed by W85), W100's when its fix
+was built (fixed by W100), and W87's maximum-age detail when W87-1 built that part (fixed by
+W87-1).
 
 ## 1. What the session ran
 
@@ -72,7 +73,7 @@ built (fixed by W100).
 | TLS versions | `openssl s_client -connect quorum-ai.fly.dev:443 -tls1_2` (and `-tls1_3`; `-tls1` and `-tls1_1` with `-cipher 'DEFAULT:@SECLEVEL=0'`) | TLS 1.2: `ECDHE-ECDSA-AES256-GCM-SHA384`; TLS 1.3: `TLS_AES_256_GCM_SHA384`; TLS 1.0 and 1.1: `Cipher is (NONE)`. Only one cipher per version was seen; the full list was not enumerated |
 | Certificates | `openssl s_client … \| openssl x509 -noout -issuer -subject -dates` | `quorum-ai.fly.dev`: `*.fly.dev`, Let's Encrypt, valid to 2026-11-19, `Verify return code: 0 (ok)`; `quorum.stackclimb.com`: its own name, valid to 2026-12-19, `Verify return code: 0 (ok)` |
 | GitHub's security settings | `gh api repos/:owner/:repo` (`.security_and_analysis`), `…/vulnerability-alerts`, `…/private-vulnerability-reporting`, `…/branches/main/protection`, `…/actions/permissions` | secret scanning `enabled`, push protection `enabled`, validity checks `disabled`; Dependabot alerts `404` (off); private vulnerability reporting `{"enabled":false}`; 0 required approvals; `sha_pinning_required: true`; default workflow permissions `read`; 0 repository secrets; the `production` environment with a branch rule |
-| A session has no maximum age | read `src/product_app/auth.py:308-309` and `:1083`, `src/product_app/session_store.py:862` | confirmed: expiry looks only at the last use (details held back until the fix ships (CHG-060)) |
+| A session had no maximum age (fixed by W87-1) | read `src/product_app/auth.py:308-309` and `:1083`, `src/product_app/session_store.py:862` (line numbers as the session read them, before W87-1) | expiry compared now with the last use only, and every request that passed `require_session` renewed the last use (`auth.py:1083`); reading the idle status did not |
 | A crash inside a run is not logged | read `src/product_app/query_run_orchestration.py:1122-1140` | the `except BaseException` marks the run failed with the error's class name; no log call, no Sentry call |
 | Another site can open counted sessions for a visitor | read `src/product_app/main.py` | confirmed by reading; details held back until the fix ships (CHG-060) |
 | History is deleted by age only on a write | `grep -n "DELETE FROM history" src/product_app/session_store.py` | three hits: `:702` (by age) and `:706` (by count), both inside `record_history` and only for the account being written; `:979`, account deletion. Reads already leave out rows past 30 days (`tests/unit/test_account_history_store.py::test_rows_older_than_30_days_are_dropped_and_never_shown`), so old rows are kept on disk, not shown |
@@ -94,13 +95,17 @@ The session checked their test citations (section 1) and the claims behind the n
 ## 3. Section 9 of the 2026-10-13 review, answered
 
 **A stolen session.** By the agents' reading, confirmed by the session where marked.
-- A session has no maximum age, and deleting an account needs no recent sign-in (row W87; details held back until the fix ships (CHG-060)).
+- A stolen signed-in cookie never expired while it was used at least once every 2 hours (read by the
+  session, section 1). Fixed by W87-1: a signed-in session now ends 12 hours after the sign-in that
+  made it, however much it is used (ADR-0174). Deleting an account needs no recent sign-in (row W87;
+  details held back until the fix ships (CHG-060)).
   A thief holding a signed-in cookie can read the account's email and last 5 questions.
 - Nothing ties a session to an address or a browser, nothing shows a user their sessions, and using
   a stolen cookie writes no event.
 - What stops a thief: the victim's sign-out (it revokes the shared session id), sign out everywhere
   (ADR-0137), deletion, and 2 hours idle.
-- Row W87: a maximum age, a fresh sign-in before deletion, and an operator command to end sessions.
+- Row W87: a maximum age (built by W87-1, ADR-0174), a fresh sign-in before deletion, and an operator
+  command to end sessions.
 - A record of where a session was used from is the owner's decision: sign-in events may never hold
   an address under their approved keep rule (`docs/48-data-retention.md`). W89 adds no identifier.
 
@@ -145,7 +150,7 @@ asked for three splits, a narrower W89 and corrected wording; those changes are 
 |---|---|---|---|---|
 | W85 | Refuse a request body over a size limit before it is read, and refuse unknown fields and over-long lists in the request models | V2.4.1, V15.2.2, V2.2.1, V15.3.3, V5.2.1 | was live, fixed by W85: production is one machine with 512 MB (`fly.toml:195-197`), and its process used about 76 MB when read (`/metrics` `process_resident_memory_bytes 7.57e7`). A reviewer's probe of the server alone (not re-run by the session) read all of a 200 MB body sent with no cookie and raised peak memory by about 600 MB. Whether Fly's proxy limits the size is UNVERIFIED | measured |
 | W86 | Delete signed-in history older than 30 days for every account, not only the one saving a question, and turn on `secure_delete` in the session store | V14.2.4; section-9 agent | was live: old questions stayed on disk, though they were not shown, against the approved keep rule (`docs/48-data-retention.md`, CHG-023). Fixed by W86 (ADR-0172). The `python:3.12-slim` image tag defaults `secure_delete` to on (measured by W86's failure-modes role, finding F21); the running machine is UNVERIFIED | read by the session; that deleted text stays in the file is an agent's probe, not re-run |
-| W87 | A session ends at a maximum age; deleting an account needs a recent sign-in; an operator can end one account's or every session; record why sign-in is single-factor | V7.1.1 to V7.1.3, V7.3.2, V7.6.1, V7.4.5, V7.5.2, V6.3.3, V6.8.4 | live; details held back until the fix ships (CHG-060). The owner set the values on 2026-10-17: 12 hours signed in, 24 hours anonymous, and a sign-in within 10 minutes before deletion (CHG-056 (c), (d)) | read by the session |
+| W87 | A session ends at a maximum age; deleting an account needs a recent sign-in; an operator can end one account's or every session; record why sign-in is single-factor | V7.1.1 to V7.1.3, V7.3.2, V7.6.1, V7.4.5, V7.5.2, V6.3.3, V6.8.4 | live in part: the maximum age was fixed by W87-1 (ADR-0174); the rest is live, details held back until the fix ships (CHG-060). The owner set the values on 2026-10-17: 12 hours signed in, 24 hours anonymous, and a sign-in within 10 minutes before deletion (CHG-056 (c), (d)) | read by the session |
 | W88 | Check where a request comes from before opening a counted session or replacing a visitor's anti-forgery token | V3.5.3 | live: another site can affect a visitor's sessions; details held back until the fix ships (CHG-060) | read by the session |
 | W89 | A crash inside a run is logged and reaches Sentry; refusals (401, 403, anti-forgery, 429, 422) are counted apart in `/metrics`; uvicorn logs in the app's JSON format. No new identifier is recorded: adding an address or a network to sign-in events would change their approved keep rule (`docs/48-data-retention.md`, which says "never … an address"), so that is the owner's decision | V15.3.4, V16.2.1, V16.2.2, V16.2.4, V16.3.1 to V16.3.4, V16.4.1 | live: today a crash marks the run failed with the error's class name and nothing more, and refusals are counted only as `4xx`. Sign-in, sign-out and sign-out everywhere already write events | crash: read by the session; the rest agents' report |
 | W90 | The browser keeps no private data: `Cache-Control: no-store` on every `/v1/` answer, `Clear-Site-Data` at sign-out and deletion, the page cleared at idle expiry or a failed sign-out, and "Sign out" visible on every view | V14.2.2, V14.3.1, V14.3.2, V7.4.4 | live, on a shared computer | missing header measured on `/status`; the rest agents' report |
@@ -209,7 +214,7 @@ because it moves the screenshot baselines (ADR-0149).
 | 1 | W85 | Was live, measured, open to anyone with no session; a size limit is a small change. Fixed by W85 |
 | 2 | W86 | Was live; kept question text past the 30 days the owner approved. Fixed by W86 |
 | 3 | W100 | Was live; the server recorded a consent the user did not give. Fixed by W100 |
-| 4 | W87 | Live; sessions have no maximum age. The owner set its values on 2026-10-17 (CHG-056 (c), (d)) |
+| 4 | W87 | Live in part; the maximum age was fixed by W87-1 (ADR-0174). The owner set its values on 2026-10-17 (CHG-056 (c), (d)) |
 | 5 | W88 | Live; another site can affect a visitor's sessions |
 | 6 | W80 | Live: a cross-site link cancels a sign-in in progress. `/feedback/audit` answers any session, though production has no report to serve (`/status` `latest_audit: null`) |
 | 7 | W90 | Live on shared computers |
