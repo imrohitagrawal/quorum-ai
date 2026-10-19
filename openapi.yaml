@@ -34,6 +34,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/RequestTooLargeResponse'
+        '409':
+          description: 'SESSION_ENDS_SOON: the session ends in less than 12 minutes.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunRefusedResponse'
         '422':
           description: Validation Error
           content:
@@ -65,6 +71,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/RequestTooLargeResponse'
+        '409':
+          description: 'SESSION_ENDS_SOON: the session ends in less than 12 minutes; or ACTIVE_QUERY_EXISTS: the account already has a run in progress.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunRefusedResponse'
         '422':
           description: Validation Error
           content:
@@ -1885,6 +1897,30 @@ components:
       - agreement
       - position_movements
       title: ResultProjection
+    RunRefusedDetail:
+      properties:
+        code:
+          type: string
+          title: Code
+        message:
+          type: string
+          title: Message
+      type: object
+      required:
+      - code
+      - message
+      title: RunRefusedDetail
+    RunRefusedResponse:
+      properties:
+        detail:
+          $ref: '#/components/schemas/RunRefusedDetail'
+      type: object
+      required:
+      - detail
+      title: RunRefusedResponse
+      description: 'A 409: the same ``{"detail": {"code", "message"}}`` envelope as every
+
+        other refusal.'
     SafetyAcknowledgement:
       properties:
         warning_type:

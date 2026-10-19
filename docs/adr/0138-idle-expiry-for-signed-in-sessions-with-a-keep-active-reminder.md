@@ -15,6 +15,13 @@ building session proposes them as settings."* Both values below were
 when this record was written. The reminder's wording and how it works are
 the session's choice.
 
+**Amended by ADR-0174 (2026-10-19):** a session now also ends at a maximum age, 12 hours after
+sign-in and 24 hours after an anonymous mint, however much it is used. Decision 1's "lifetime" is
+still the 2-hour idle lifetime (`SESSION_TTL`); the maximum age is two new limits beside it. The
+status route answers the nearer end and says which (`ends_because`). Decision 3 gains a second
+warning, 5 minutes before the 12 hours end, in the owner's words and without "Stay signed in",
+and a 12-hour note after that end (CHG-063 (f)(2), CHG-066 (a), CHG-070 (d)).
+
 ## Context
 
 Failure modes first: section (b) of

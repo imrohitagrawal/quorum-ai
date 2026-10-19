@@ -928,13 +928,14 @@ class SessionStore:
         """Empty the table. Test isolation depends on this actually working."""
         return self._write("DELETE FROM sessions", ())
 
-    def purge_expired(self, *, cutoff: datetime) -> int:
-        """Delete rows last used STRICTLY before ``cutoff``; return how many.
+    def purge_expired(self, *, cutoff: datetime, created_cutoff: datetime | None = None) -> int:
+        """Delete rows last used STRICTLY before ``cutoff``, or (W87-1,
+        ADR-0174) created STRICTLY before ``created_cutoff``; return how many.
 
-        The exact complement of :meth:`fetch`'s ``>=`` -- see the note there on
-        why the boundary instant counts as alive. Returns the count rather than
-        nothing so the caller can say what it counted instead of asserting a
-        silent success.
+        The exact complement of :meth:`fetch`'s ``>=`` on both columns -- see
+        the note there on why the boundary instant counts as alive. Returns the
+        count rather than nothing so the caller can say what it counted instead
+        of asserting a silent success.
         """
         with self._lock:
             if self._closed:
@@ -943,14 +944,18 @@ class SessionStore:
                 # Both ends. A row from the FUTURE is never reached by the
                 # cutoff and would otherwise sit on the volume forever, so the
                 # purge that exists to bound this table has to be able to
-                # remove it -- see :func:`_is_implausibly_future`.
+                # remove it -- see :func:`_is_implausibly_future`. Since W87-1
+                # that holds for ``created_at`` too: a start in the future
+                # never reaches any maximum age.
                 now = datetime.now(UTC)
+                future = (now + (now - cutoff.astimezone(UTC))).isoformat()
+                created = (
+                    "" if created_cutoff is None else created_cutoff.astimezone(UTC).isoformat()
+                )
                 cursor = self._conn.execute(
-                    "DELETE FROM sessions WHERE last_used_at < ? OR last_used_at > ?",
-                    (
-                        cutoff.astimezone(UTC).isoformat(),
-                        (now + (now - cutoff.astimezone(UTC))).isoformat(),
-                    ),
+                    "DELETE FROM sessions WHERE last_used_at < ? OR last_used_at > ? "
+                    "OR created_at < ? OR created_at > ?",
+                    (cutoff.astimezone(UTC).isoformat(), future, created, future),
                 )
             except sqlite3.Error as exc:
                 self._warn("purge expired sessions", exc)
@@ -970,8 +975,20 @@ class SessionStore:
 
     # -- reads ---------------------------------------------------------------
 
-    def fetch(self, session_id: str, *, not_used_before: datetime) -> StoredSession | None:
+    def fetch(
+        self,
+        session_id: str,
+        *,
+        not_used_before: datetime,
+        not_created_before: datetime | None = None,
+    ) -> StoredSession | None:
         """Return the stored session, or ``None``.
+
+        W87-1 (ADR-0174): with ``not_created_before``, a row created before it
+        is refused too (``created_at >= not_created_before``, inclusive like
+        the ``last_used_at`` condition, and :meth:`purge_expired`'s
+        ``created_cutoff`` is its exact complement). A row whose
+        ``created_at`` is implausibly in the future is refused either way.
 
         Expiry is enforced HERE, in the query, not only by
         :meth:`purge_expired`. A durable row outlives the process that would
@@ -998,8 +1015,15 @@ class SessionStore:
                 return None
             try:
                 row = self._conn.execute(
-                    "SELECT * FROM sessions WHERE session_digest = ? AND last_used_at >= ?",
-                    (_digest(session_id), not_used_before.astimezone(UTC).isoformat()),
+                    "SELECT * FROM sessions WHERE session_digest = ? AND last_used_at >= ? "
+                    "AND created_at >= ?",
+                    (
+                        _digest(session_id),
+                        not_used_before.astimezone(UTC).isoformat(),
+                        ""
+                        if not_created_before is None
+                        else not_created_before.astimezone(UTC).isoformat(),
+                    ),
                 ).fetchone()
             except sqlite3.Error as exc:
                 self._warn("read a session", exc)
@@ -1008,14 +1032,13 @@ class SessionStore:
             return None
         now = datetime.now(UTC)
         try:
-            if _is_implausibly_future(
-                _require_aware(row["last_used_at"]),
-                now=now,
-                tolerance=now - not_used_before,
-            ):
-                raise ValueError(
-                    f"session row last_used_at {row['last_used_at']!r} is in the future"
-                )
+            for column in ("last_used_at", "created_at"):
+                if _is_implausibly_future(
+                    _require_aware(row[column]),
+                    now=now,
+                    tolerance=now - not_used_before,
+                ):
+                    raise ValueError(f"session row {column} {row[column]!r} is in the future")
         except (TypeError, ValueError) as exc:
             _log.warning("session_store: discarding an unusable session row: %s", exc)
             return None

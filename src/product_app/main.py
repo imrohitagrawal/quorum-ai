@@ -53,6 +53,7 @@ from product_app.auth import (
     get_session_cookie_from_request,
     issue_or_resume_session,
     issue_sign_in_only_session,
+    max_age_seconds_left,
     require_session,
     resume_sign_in_only_session,
 )
@@ -1006,7 +1007,11 @@ SIGN_IN_FAILED_NOTICE = "Sign-in did not complete. Please try again."
 
 
 def _account_controls_html(
-    account_id: UUID | None, *, sign_in_failed: bool, on_sign_in_host: bool = True
+    account_id: UUID | None,
+    *,
+    sign_in_failed: bool,
+    on_sign_in_host: bool = True,
+    max_age_seconds_left: int = 12 * 3600,
 ) -> tuple[str, bool]:
     """The top bar's account controls, and whether they show an account.
 
@@ -1021,16 +1026,24 @@ def _account_controls_html(
 
     The boolean is ``True`` when the markup carries the account's email; the
     caller then marks the response ``Cache-Control: no-store``.
+    ``max_age_seconds_left`` is the session's time left before its maximum
+    age, for the reminder (W87-1, ADR-0174).
     """
     account = None if account_id is None else signed_in_account(account_id)
     if account is not None:
+        # W87-1 round 2: whether this page offers sign-in, for the late-run
+        # card's "Sign in again" (CHG-070 c). The top bar has no sign-in
+        # button for a signed-in account, so it cannot say.
+        offered = "true" if sign_in_enabled() and on_sign_in_host else "false"
         return (
-            '<span class="account-email" id="account-email">'
+            '<span class="account-email" id="account-email" data-sign-in-offered="'
+            + offered
+            + '">'
             + escape(account.email)
             + "</span>"
             + _history_html(account.account_id)
             + '<button id="sign-out" class="topbar-howitworks" type="button">Sign out</button>'
-            + _idle_reminder_html()
+            + _idle_reminder_html(max_age_seconds_left)
         ), True
     if not sign_in_enabled() or not on_sign_in_host:
         return "", False
@@ -1184,18 +1197,21 @@ app.add_api_route(
 )
 
 
-def _idle_reminder_html() -> str:
+def _idle_reminder_html(max_age_seconds_left: int) -> str:
     """W7 part 3 (ADR-0138, CHG-021 b): the reminder shown before a signed-in
     session ends for want of activity, and the note shown after. Hidden until
     ``app.js`` needs it; ``app.js`` moves it out of the top bar (hidden on the
     result and transcript views) so it shows on every view. The two values
-    are the settings, in seconds, for the page's timer."""
+    are the settings, in seconds, for the page's timer. W87-1 (ADR-0174):
+    the third is the session's time left before its maximum age, so the
+    first check is due from the nearer end; the same box warns before it."""
     idle = settings.signed_in_idle_minutes * 60
     warning = settings.signed_in_idle_warning_minutes * 60
     return (
         '<div class="idle-reminder" id="idle-reminder" role="region" '
         'aria-label="Staying signed in" hidden '
-        f'data-idle-seconds="{idle}" data-warning-seconds="{warning}">'
+        f'data-idle-seconds="{idle}" data-warning-seconds="{warning}" '
+        f'data-max-age-seconds-left="{int(max_age_seconds_left)}">'
         '<p class="idle-reminder-text" id="idle-reminder-text" aria-live="polite"></p>'
         '<div class="idle-reminder-actions">'
         '<button type="button" id="idle-stay" class="topbar-howitworks">Stay signed in</button>'
@@ -2000,12 +2016,18 @@ def browser_session(
             },
             headers=_retry_after_header(exc.retry_after_seconds),
         )
-    response = JSONResponse(
-        {
-            "csrf_token": session.csrf_token,
-            "expires_at": session.expires_at.isoformat(),
-        },
-    )
+    body = {
+        "csrf_token": session.csrf_token,
+        "expires_at": session.expires_at.isoformat(),
+    }
+    # W87-1 round 2 (ADR-0174): the signed-in account, from the server, so the
+    # page puts a question kept across "Sign in again" back only on the
+    # account it was saved under. Never from the HTML, which another tab's
+    # sign-in can make stale. An anonymous session gets no such field.
+    account = signed_in_account(session.account_id)
+    if account is not None:
+        body["account_id"] = str(account.account_id)
+    response = JSONResponse(body)
     attach_session_cookie(response, session)
     return response
 
@@ -2166,6 +2188,7 @@ def browser_ui(request: Request) -> HTMLResponse:
         session.account_id,
         sign_in_failed=request.query_params.get("sign_in") == "failed",
         on_sign_in_host=on_sign_in_host(request),
+        max_age_seconds_left=max_age_seconds_left(session.session_id),
     )
     response = HTMLResponse(_render_workspace_html(controls, signed_in=shows_account))
     if shows_account:

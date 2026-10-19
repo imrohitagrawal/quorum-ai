@@ -25,13 +25,15 @@ APP_JS = Path(__file__).resolve().parents[2] / "src" / "product_app" / "static" 
 
 def test_the_reminder_markup_is_exact(monkeypatch: pytest.MonkeyPatch) -> None:
     """Turns red if the reminder loses its polite announcement, a button, the
-    hidden start, or the two values the page schedules from."""
+    hidden start, or the three values the page schedules from (W87-1 added
+    the time left before the maximum age, ADR-0174)."""
     monkeypatch.setattr(settings, "signed_in_idle_minutes", 45)
     monkeypatch.setattr(settings, "signed_in_idle_warning_minutes", 4)
-    assert main._idle_reminder_html() == (
+    assert main._idle_reminder_html(1234) == (
         '<div class="idle-reminder" id="idle-reminder" role="region" '
         'aria-label="Staying signed in" hidden '
-        'data-idle-seconds="2700" data-warning-seconds="240">'
+        'data-idle-seconds="2700" data-warning-seconds="240" '
+        'data-max-age-seconds-left="1234">'
         '<p class="idle-reminder-text" id="idle-reminder-text" aria-live="polite"></p>'
         '<div class="idle-reminder-actions">'
         '<button type="button" id="idle-stay" class="topbar-howitworks">Stay signed in</button>'

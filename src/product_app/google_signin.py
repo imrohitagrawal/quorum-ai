@@ -63,7 +63,7 @@ import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
-from typing import Final
+from typing import Final, Literal
 from urllib.error import HTTPError
 from urllib.parse import urlencode, urlsplit
 from urllib.request import Request as UrlRequest
@@ -753,7 +753,9 @@ def sign_out_everywhere(request: Request) -> JSONResponse:
     )
     if store is None:
         raise not_signed_in
-    cutoff = datetime.now(UTC)
+    # The session code's clock (W87-1): the cutoff is compared with session
+    # start times that clock wrote.
+    cutoff = auth._now()
     outcome = store.end_sessions_before(session.account_id, cutoff)
     if outcome == "no_account":
         # An anonymous session, or an account deleted in the meantime.
@@ -781,10 +783,16 @@ def sign_out_everywhere(request: Request) -> JSONResponse:
 
 
 class SessionIdleResponse(BaseModel):
-    """W7 part 3 (ADR-0138): how long this browser's session has left."""
+    """W7 part 3 (ADR-0138): how long this browser's session has left.
+
+    W87-1 (ADR-0174): ``idle_seconds_left`` is the smaller of the time left
+    before the idle end and before the maximum age, and ``ends_because`` says
+    which one it is, so the page warns in the right words and does not offer
+    "Stay signed in" when staying cannot help."""
 
     signed_in: bool
     idle_seconds_left: int
+    ends_because: Literal["idle", "max_age"]
 
 
 def _idle_response(session_id: str) -> JSONResponse:
@@ -794,18 +802,15 @@ def _idle_response(session_id: str) -> JSONResponse:
     the last use is written through so the answer survives a restart."""
     session = auth.session_repository.get(session_id)
     if session is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail={
-                "code": auth.AuthError.SESSION_EXPIRED.value,
-                "message": "Browser session expired and must be renewed.",
-            },
-        )
+        # W87-1: the same reason any other route gives (ADR-0174).
+        raise auth.session_ended(session_id)
     auth.session_repository.flush(session.session_id)
-    ends = session.last_used_at + session.idle_limit
-    left = max(0, int((ends - datetime.now(UTC)).total_seconds()))
+    ends = session.ends_at()
+    left = max(0, int((ends - auth._now()).total_seconds()))
     body = SessionIdleResponse(
-        signed_in=signed_in_account(session.account_id) is not None, idle_seconds_left=left
+        signed_in=signed_in_account(session.account_id) is not None,
+        idle_seconds_left=left,
+        ends_because="max_age" if session.ends_by_max_age() else "idle",
     )
     response = JSONResponse(body.model_dump())
     response.headers["Cache-Control"] = "no-store"

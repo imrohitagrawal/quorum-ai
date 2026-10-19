@@ -35,7 +35,7 @@ import contextlib
 import logging
 import time as _time_module
 from collections import OrderedDict
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeoutError
 from dataclasses import dataclass, field, replace
@@ -650,8 +650,14 @@ class InMemoryQueryRunRepository:
         context: dict[str, Any] | None = None,
         mode: RunMode = MODE_PANEL,
         spend_key: UUID | None = None,
+        admit: Callable[[], None] | None = None,
     ) -> QueryRun:
+        """``admit`` runs once the lock is held, before anything is stored,
+        and refuses by raising (W87-1 round 2: the late-run re-check, so the
+        time spent waiting for the lock counts)."""
         with self._lock:
+            if admit is not None:
+                admit()
             self._purge_expired_locked()
             if self.get_active_for_account(account_id) is not None:
                 raise ActiveQueryRunExistsError

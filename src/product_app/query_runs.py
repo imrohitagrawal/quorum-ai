@@ -13,8 +13,9 @@ from __future__ import annotations
 
 import logging
 import time as _time_module
+from collections.abc import Callable
 from threading import BoundedSemaphore, RLock, Thread
-from typing import Annotated, Literal, Self
+from typing import Annotated, Any, Literal, Self
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -24,6 +25,7 @@ from product_app import account_history
 from product_app.auth import (
     SessionContext,
     enforce_csrf,
+    refuse_if_session_ends_soon,
     refuse_sign_in_only,
     require_session,
     spend_meter_for,
@@ -644,13 +646,71 @@ def _enforce_account_rate_limit(request: Request, session: SessionContext) -> No
         )
 
 
+class RunRefusedDetail(BaseModel):
+    code: str
+    message: str
+
+
+class RunRefusedResponse(BaseModel):
+    """A 409: the same ``{"detail": {"code", "message"}}`` envelope as every
+    other refusal."""
+
+    detail: RunRefusedDetail
+
+
+#: W87-1 (ADR-0174): the estimate's declared refusals. A 409
+#: ``SESSION_ENDS_SOON`` when the session has less than 12 minutes left
+#: before its maximum age.
+ESTIMATE_RESPONSES: dict[int | str, dict[str, Any]] = {
+    **REQUEST_TOO_LARGE_RESPONSES,
+    409: {
+        "model": RunRefusedResponse,
+        "description": "SESSION_ENDS_SOON: the session ends in less than 12 minutes.",
+    },
+}
+
+#: The run creation's: the same 409, and ``ACTIVE_QUERY_EXISTS`` when the
+#: account already has a run in progress.
+CREATE_RESPONSES: dict[int | str, dict[str, Any]] = {
+    **REQUEST_TOO_LARGE_RESPONSES,
+    409: {
+        "model": RunRefusedResponse,
+        "description": (
+            "SESSION_ENDS_SOON: the session ends in less than 12 minutes; or "
+            "ACTIVE_QUERY_EXISTS: the account already has a run in progress."
+        ),
+    },
+}
+
+
+def _refuse_late_run(session: SessionContext, request: Request, *, again: bool = False) -> None:
+    """W87-1 (ADR-0174): no run, or estimate, in the session's last 12
+    minutes. Imported here, not at the top: ``google_signin`` imports this
+    module.
+
+    Sign-in is offered only when it is on AND this request reached the
+    sign-in host: elsewhere (the fly.dev host) the page shows no sign-in, so
+    the text must not offer it (round 1, CHG-070 c). ``again`` is the run
+    creation's second check, made inside the run store's lock just before the
+    run is stored (rounds 1 and 2, Codex): the time spent validating,
+    estimating and waiting for the lock can cross the 720 s boundary, and the
+    session can end meanwhile."""
+    from product_app.google_signin import on_sign_in_host, sign_in_enabled
+
+    refuse_if_session_ends_soon(
+        session,
+        sign_in_offered=sign_in_enabled() and on_sign_in_host(request),
+        ended_refuses=again,
+    )
+
+
 # -- routes ------------------------------------------------------------------
 
 
 @router.post(
     "/estimate",
     response_model=QueryRunEstimateResponse,
-    responses=REQUEST_TOO_LARGE_RESPONSES,
+    responses=ESTIMATE_RESPONSES,
 )
 def estimate_query_run(
     payload: QueryRunEstimateRequest,
@@ -661,6 +721,8 @@ def estimate_query_run(
     # (``record_guardrail_event``) and is therefore a state-mutating
     # action — it must enforce CSRF like the create and delete routes.
     enforce_csrf(request, session)
+    # W87-1 (ADR-0174): after CSRF, before anything is recorded.
+    _refuse_late_run(session, request)
     # SEC-C3: per-account rate limit to prevent rapid-fire estimate spam
     _enforce_account_rate_limit(request, session)
     # W7 (ADR-0136): the key the per-account spend rails read; W47
@@ -714,7 +776,7 @@ def estimate_query_run(
     "",
     response_model=QueryRunCreateResponse,
     status_code=status.HTTP_202_ACCEPTED,
-    responses=REQUEST_TOO_LARGE_RESPONSES,
+    responses=CREATE_RESPONSES,
 )
 def create_query_run(
     payload: QueryRunCreateRequest,
@@ -722,6 +784,8 @@ def create_query_run(
     session: Annotated[SessionContext, Depends(require_session)],
 ) -> QueryRunCreateResponse:
     enforce_csrf(request, session)
+    # W87-1 (ADR-0174): after CSRF, before anything is recorded or charged.
+    _refuse_late_run(session, request)
     # SEC-C3: per-account rate limit to prevent rapid-fire run creation
     _enforce_account_rate_limit(request, session)
     # W7 (ADR-0136): read once, stored on the run, so its charge, void and
@@ -865,6 +929,11 @@ def create_query_run(
             capacity_permit=capacity_permit,
             spend_key=spend.key,
             shared_by_network=spend.shared_by_network,
+            # W87-1 rounds 1 and 2 (Codex): the late-run check again, inside
+            # the run store's lock, just before the run is stored and charged.
+            # The early one above still refuses before any work; this one sees
+            # the time the work, and the wait for the lock, took.
+            admit=lambda: _refuse_late_run(session, request, again=True),
             # W56 (ADR-0163): no visitor address is passed down. The
             # global-ceiling Sentry alert carries the spend key only; it used
             # to carry the address too, which paired the two in Sentry.
@@ -928,6 +997,7 @@ def _start_reserved_query_run(
     capacity_permit: BoundedSemaphore | None,
     spend_key: UUID,
     shared_by_network: bool,
+    admit: Callable[[], None] | None = None,
 ) -> QueryRunCreateResponse:
     """Create, bill and launch a run whose capacity permit is already held.
 
@@ -949,6 +1019,7 @@ def _start_reserved_query_run(
             context=payload.context,
             mode=payload.mode,
             spend_key=spend_key,
+            admit=admit,
         )
     except ActiveQueryRunExistsError as exc:
         raise HTTPException(
