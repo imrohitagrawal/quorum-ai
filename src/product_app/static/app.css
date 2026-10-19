@@ -5258,12 +5258,15 @@ main:focus { outline: none; }
     justify-content: flex-end;
   }
   /* W87-2: the 2-Step line goes last, on a row of its own, so it wraps under
-     the buttons and never pushes the page sideways. */
+     the buttons and never pushes the page sideways. Review round 1: the top
+     bar is a pill, so on a phone it is an ellipse, narrowest at this last
+     row; inset and centred, the text stays inside its outline. */
   .sign-in-2sv-note {
     order: 1;
     flex-basis: 100%;
     max-width: none;
-    text-align: right;
+    padding-inline: 2.5rem;
+    text-align: center;
   }
 }
 

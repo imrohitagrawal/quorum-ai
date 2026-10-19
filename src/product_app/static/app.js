@@ -11569,6 +11569,12 @@
     if (question) {
       queryTextarea.value = question;
       queryTextarea.dispatchEvent(new Event("input", { bubbles: true }));
+      // W87-2 review round 1: at 390 px the box is below the fold after the
+      // return, so bring it into view. Scroll only, never focus: focus stays
+      // where the account panel's return markers put it.
+      if (typeof queryTextarea.scrollIntoView === "function") {
+        queryTextarea.scrollIntoView({ behavior: "auto", block: "center" });
+      }
       return;
     }
     if (notice) await showQuestionNotKeptNotice();

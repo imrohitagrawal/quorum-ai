@@ -661,7 +661,8 @@ def _start(
     (404), a cookie session with its CSRF token (401/403), the redirect URI's
     host (409), for a deletion a signed-in account (403), then the ONE
     per-address limiter (429). The Google URL is the same for both: no
-    ``prompt`` and no ``max_age`` (CHG-056 d, "one click")."""
+    ``prompt`` and no ``max_age``, so Google keeps the owner-approved "If you
+    are still signed in to Google it takes one click." (CHG-063 (f)(1))."""
     _require_enabled()
     session = _require_cookie_session(request)
     if not on_sign_in_host(request):
@@ -758,6 +759,12 @@ def google_sign_in_callback(request: Request) -> RedirectResponse:
         identity = exchange_code(code, pending.code_verifier)
     except SignInFailed as exc:
         return _failed(exc.reason)
+    if recovered is not None and auth.session_repository.max_age_account(session_id) != recovered:
+        # W87-2 review round 1: the recovery condition again, after the
+        # exchange and BEFORE the account row is written, so a recovery
+        # refused because the account was deleted during the exchange does
+        # not write that account's row back (Codex measured 0 rows -> 1).
+        return _failed("no_session")
     store = session_store.get_store()
     if store is None:
         return _failed("account_not_recorded")
