@@ -79,8 +79,9 @@ CHG-060 still holds W87's remaining parts and W88 back.
   pipe write, identically on clean `main` (now row W107). Count non-w54 failures before blaming a diff.
 - **A production check must never request `/ui` or `/v1/session` without a cookie**: each spends one of
   the owner's network's two daily sessions. One such check was stopped before it ran.
-- **Text written mid-turn before a tool call is not in the transcript**, so the owner may not have seen it
-  (CHG-069, CHG-071, CHG-072). Put reasoning and corrections the owner needs inside the question itself.
+- **Three explanations the session believed it gave the owner have no visible record in the transcript**
+  (CHG-069, CHG-071, CHG-072), though other text written just before a tool call is recorded. Whether the
+  owner saw them is unknown. Put reasoning and corrections the owner needs inside the question itself.
 - **Two gaps in the checks, found by this handoff's falsification lens:** a board row's TEXT can claim
   "DONE, merged and in production" and nothing fails (row W78 covers false DONE), and a CHG row can be
   deleted while the handoff and prompt still cite it, with every gate green.
