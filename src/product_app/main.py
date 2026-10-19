@@ -1031,9 +1031,13 @@ def _account_controls_html(
     """
     account = None if account_id is None else signed_in_account(account_id)
     if account is not None:
+        # W87-1 round 2: whether this page offers sign-in, for the late-run
+        # card's "Sign in again" (CHG-070 c). The top bar has no sign-in
+        # button for a signed-in account, so it cannot say.
+        offered = "true" if sign_in_enabled() and on_sign_in_host else "false"
         return (
-            '<span class="account-email" id="account-email" data-account-id="'
-            + escape(str(account.account_id))
+            '<span class="account-email" id="account-email" data-sign-in-offered="'
+            + offered
             + '">'
             + escape(account.email)
             + "</span>"
@@ -2012,12 +2016,18 @@ def browser_session(
             },
             headers=_retry_after_header(exc.retry_after_seconds),
         )
-    response = JSONResponse(
-        {
-            "csrf_token": session.csrf_token,
-            "expires_at": session.expires_at.isoformat(),
-        },
-    )
+    body = {
+        "csrf_token": session.csrf_token,
+        "expires_at": session.expires_at.isoformat(),
+    }
+    # W87-1 round 2 (ADR-0174): the signed-in account, from the server, so the
+    # page puts a question kept across "Sign in again" back only on the
+    # account it was saved under. Never from the HTML, which another tab's
+    # sign-in can make stale. An anonymous session gets no such field.
+    account = signed_in_account(session.account_id)
+    if account is not None:
+        body["account_id"] = str(account.account_id)
+    response = JSONResponse(body)
     attach_session_cookie(response, session)
     return response
 

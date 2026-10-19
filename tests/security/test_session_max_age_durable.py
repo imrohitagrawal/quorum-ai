@@ -416,3 +416,32 @@ def test_the_reason_uses_the_last_use_the_process_held_not_the_stale_row(
     _restarted()
     assert auth.session_repository.get(other) is None
     assert auth.session_repository.end_reason(other) == "SESSION_EXPIRED"
+
+
+@pytest.mark.parametrize("case", ["ended in this process only", "account deleted"])
+def test_a_session_this_process_ended_is_never_told_12_hours(
+    store: SessionStore, clock: Clock, case: str
+) -> None:
+    """Falsification M4b, round 2. The process's own marks, with no durable
+    cutoff to read: a sign out everywhere it recorded in memory only, or an
+    account it deleted. The row is a signed-in row past 12 h, so without the
+    marks ``end_reason`` says ``SESSION_MAX_AGE``. Red when: the in-memory
+    cutoff or the deleted-account check is removed from ``end_reason`` (it
+    would then tell a visitor whose sessions were ended that 12 hours had
+    passed). Partner: the same row with no mark says ``SESSION_MAX_AGE``,
+    asserted first."""
+    account = _signed_in_account(store, f"w87-m4b-{case}")
+    created = clock.at - H12 - US
+    _row(store, "marked", account_id=account, created_at=created, last_used_at=clock.at)
+    _restarted()
+    assert auth.session_repository.get("marked") is None
+    assert auth.session_repository.end_reason("marked") == "SESSION_MAX_AGE", "partner: unmarked"
+    assert store.sessions_valid_after(account) == (True, None), "partner: no durable cutoff"
+    try:
+        if case == "ended in this process only":
+            auth.session_repository.end_sessions_of(account, created + timedelta(minutes=5))
+        else:
+            auth.session_repository.revoke_account(account)
+        assert auth.session_repository.end_reason("marked") == "SESSION_EXPIRED"
+    finally:
+        auth.session_repository.forget_deleted_accounts()

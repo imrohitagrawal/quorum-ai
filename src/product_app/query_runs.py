@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import time as _time_module
+from collections.abc import Callable
 from threading import BoundedSemaphore, RLock, Thread
 from typing import Annotated, Any, Literal, Self
 from uuid import UUID, uuid4
@@ -690,9 +691,10 @@ def _refuse_late_run(session: SessionContext, request: Request, *, again: bool =
     Sign-in is offered only when it is on AND this request reached the
     sign-in host: elsewhere (the fly.dev host) the page shows no sign-in, so
     the text must not offer it (round 1, CHG-070 c). ``again`` is the run
-    creation's second check, just before the run is created (round 1,
-    Codex): the time spent validating and estimating can cross the 720 s
-    boundary, and the session can end meanwhile."""
+    creation's second check, made inside the run store's lock just before the
+    run is stored (rounds 1 and 2, Codex): the time spent validating,
+    estimating and waiting for the lock can cross the 720 s boundary, and the
+    session can end meanwhile."""
     from product_app.google_signin import on_sign_in_host, sign_in_enabled
 
     refuse_if_session_ends_soon(
@@ -879,11 +881,6 @@ def create_query_run(
             },
         )
 
-    # W87-1 round 1 (Codex): the late-run check again, now, just before the
-    # run is created and its spend reserved. The early one above still
-    # refuses before any work; this one sees the time the work took.
-    _refuse_late_run(session, request, again=True)
-
     # C9 + F-01: reserve the in-flight run slot BEFORE anything that charges
     # the account or claims the account's single active-run slot. The capacity
     # check used to sit after ``query_run_repository.create`` and after the
@@ -932,6 +929,11 @@ def create_query_run(
             capacity_permit=capacity_permit,
             spend_key=spend.key,
             shared_by_network=spend.shared_by_network,
+            # W87-1 rounds 1 and 2 (Codex): the late-run check again, inside
+            # the run store's lock, just before the run is stored and charged.
+            # The early one above still refuses before any work; this one sees
+            # the time the work, and the wait for the lock, took.
+            admit=lambda: _refuse_late_run(session, request, again=True),
             # W56 (ADR-0163): no visitor address is passed down. The
             # global-ceiling Sentry alert carries the spend key only; it used
             # to carry the address too, which paired the two in Sentry.
@@ -995,6 +997,7 @@ def _start_reserved_query_run(
     capacity_permit: BoundedSemaphore | None,
     spend_key: UUID,
     shared_by_network: bool,
+    admit: Callable[[], None] | None = None,
 ) -> QueryRunCreateResponse:
     """Create, bill and launch a run whose capacity permit is already held.
 
@@ -1016,6 +1019,7 @@ def _start_reserved_query_run(
             context=payload.context,
             mode=payload.mode,
             spend_key=spend_key,
+            admit=admit,
         )
     except ActiveQueryRunExistsError as exc:
         raise HTTPException(

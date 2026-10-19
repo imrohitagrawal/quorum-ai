@@ -324,3 +324,90 @@ def test_on_a_host_that_does_not_offer_sign_in_the_refusal_does_not_offer_it(
     assert refused.status_code == 409, refused.text
     assert refused.json()["detail"] == {"code": "SESSION_ENDS_SOON", "message": SIGN_IN_OFF_TEXT}
     assert _spend(account) == before
+
+
+# -- W87-1 round 2: the re-check is inside the run creation's lock -------------
+
+
+class _LockWaitAdvancesClock:
+    """The run store's lock, where waiting to enter it from ``create`` takes
+    ``wait`` on the session clock: the time another request held the lock.
+    Every other use of the lock is the real lock, untouched."""
+
+    def __init__(self, real: Any, clock: Clock, wait: timedelta) -> None:
+        self._real = real
+        self._clock = clock
+        self._wait = wait
+        self.waits = 0
+
+    def __enter__(self) -> Any:
+        import sys
+
+        if sys._getframe(1).f_code.co_name == "create" and self.waits == 0:
+            self.waits += 1
+            self._clock.advance(self._wait)
+        return self._real.__enter__()
+
+    def __exit__(self, *exc: object) -> Any:
+        return self._real.__exit__(*exc)
+
+
+def test_a_run_whose_creation_waits_on_the_lock_past_720_seconds_is_refused(
+    sign_in: SignIn, clock: Clock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex, round 2. 721 s left when the request arrives; the run store's
+    lock is held by another request for 2 s, so the run would be made with
+    719 s left. Red when: the re-check runs before the lock is taken (the run
+    is created: 202, one run, one cost event), or the refusal leaves anything
+    behind (cardinality: no new feedback event, no cost event, no run) or
+    keeps the capacity permit. Partner: with 723 s left the same 2 s wait
+    leaves 721 s and the run is created, so the lock wait really is reached."""
+    from tests.helpers import isolated_run_semaphore
+
+    client, account = _signed_in_client(sign_in)
+    csrf = _boot(client)
+    real_lock = query_run_repository._lock
+    with isolated_run_semaphore(1) as permits:
+        slow = _LockWaitAdvancesClock(real_lock, clock, timedelta(seconds=2))
+        monkeypatch.setattr(query_run_repository, "_lock", slow)
+        _left(client, SIGNED_IN, 721, clock)
+        before = _spend(account)
+        refused = _post(client, CREATE, csrf)
+        assert slow.waits == 1, "partner: the creation waited on the lock"
+        assert refused.status_code == 409, refused.text
+        assert refused.json()["detail"] == {"code": "SESSION_ENDS_SOON", "message": SIGNED_IN_TEXT}
+        assert _spend(account) == before
+        assert before[2] is False
+        assert permits.acquire(blocking=False) is True, "the permit was given back"
+        permits.release()
+
+        slow = _LockWaitAdvancesClock(real_lock, clock, timedelta(seconds=2))
+        monkeypatch.setattr(query_run_repository, "_lock", slow)
+        _left(client, SIGNED_IN, 723, clock)
+        created = _post(client, CREATE, csrf)
+        assert slow.waits == 1
+        assert created.status_code == 202, created.text
+        assert _spend(account)[2] is True
+        monkeypatch.setattr(query_run_repository, "_lock", real_lock)
+
+
+@pytest.mark.parametrize("path", [ESTIMATE, CREATE])
+def test_a_signed_in_session_on_a_page_without_sign_in_is_not_told_to_sign_in(
+    sign_in: SignIn, clock: Clock, monkeypatch: pytest.MonkeyPatch, path: str
+) -> None:
+    """Break-it F2, round 2; CHG-070 (c). Signed in, then sign-in is switched
+    off: "Sign in again" would send the visitor to a start route that answers
+    404. Red when: the signed-in text is given while this page offers no
+    sign-in, or anything is recorded first. Partner: the same session with
+    sign-in on gets the signed-in text
+    (``test_a_signed_in_session_with_719_seconds_left_is_refused_and_spends_nothing``)."""
+    client, account = _signed_in_client(sign_in)
+    csrf = _boot(client)
+    monkeypatch.setattr(settings, "google_oauth_client_id", "")
+    assert google_signin.sign_in_enabled() is False, "positive partner: sign-in is now off"
+    _left(client, SIGNED_IN, 719, clock)
+    before = _spend(account)
+    refused = _post(client, path, csrf)
+    assert refused.status_code == 409, refused.text
+    assert refused.json()["detail"] == {"code": "SESSION_ENDS_SOON", "message": SIGN_IN_OFF_TEXT}
+    assert _spend(account) == before

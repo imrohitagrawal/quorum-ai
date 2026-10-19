@@ -136,7 +136,8 @@ A signed-in person keeps one tab open and keeps using it for most of a day, so t
 
 - The page never says "nothing has happened on this page" when the 12 hours are the reason, and never says "12 hours" when they are not.
 - No run starts with less than 12 minutes of session left; a refused run spends nothing.
-- The typed question survives "Sign in again" once, in this tab only; a plain sign-in puts nothing back.
+- The typed question survives "Sign in again" once, in this tab only, and only when the same Google account comes back; a plain sign-in puts nothing back.
+- Where the page offers no sign-in (sign-in off, or the fly.dev host), a signed-in visitor's card has the sign-in-off text and no "Sign in again" (review round 2).
 - An anonymous visitor in the last 12 minutes of 24 hours is refused with "This session ends in less than 12 minutes, so this question cannot run now. Sign in to keep going, or reload the page after the session ends." (without the sign-in part when sign-in is off).
 - Decided by the product owner on 2026-10-17 and 2026-10-18 (CHG-056 (c), CHG-063 (f)(2), CHG-066, CHG-069, CHG-070); design ADR-0174.
 - Known limit: "Sign in again" pressed seconds before the 12 hours end can come back to a failed sign-in; signing in once more works. W87-2, not yet built, adds the recovery path (ADR-0174).

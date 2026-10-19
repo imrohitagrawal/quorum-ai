@@ -346,3 +346,26 @@ def test_signing_in_from_an_old_anonymous_session_starts_a_fresh_12_hours(
     session = auth.session_repository._sessions[signed]
     assert session.created_at == clock.at
     assert session.max_age == timedelta(hours=12)
+
+
+# -- W87-1 round 2: the page learns its account from the session bootstrap ----
+
+
+def test_the_session_bootstrap_names_the_signed_in_account_and_no_other(
+    sign_in: SignIn,
+) -> None:
+    """Round 2 (break-it + Codex): the page puts a saved question back only
+    when the account the SERVER reports at ``/v1/session`` is the one the
+    question was saved under, never from HTML another tab may have made
+    stale. Red when: a signed-in bootstrap does not carry its account id, or
+    carries another account's, or an anonymous bootstrap carries one (an
+    anonymous session has no account to match). Partner: the anonymous body
+    is a real bootstrap (it carries a CSRF token)."""
+    client = _signed_in_client(sign_in)
+    body = client.get("/v1/session").json()
+    assert body["account_id"] == str(auth.session_repository._sessions[_sid(client)].account_id)
+
+    anonymous = sign_in.client()
+    plain = anonymous.get("/v1/session").json()
+    assert plain["csrf_token"], "partner: a real bootstrap"
+    assert "account_id" not in plain

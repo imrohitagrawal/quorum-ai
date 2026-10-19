@@ -204,7 +204,12 @@ test.describe("a session ends at a maximum age (W87-1)", () => {
     // then be untrue for a long question), the saved copy is left in
     // sessionStorage, or a later fresh load of the page fills the box again.
     // Partner: the question really was in the box before the round trip.
+    // Round 2 (break-it): RED-IF the question is put back before the model
+    // slots exist (a page error, "Cannot read properties of undefined", and
+    // the four per-model costs left at "—"). Partner: four cost cells exist.
     test.setTimeout(120000);
+    const pageErrors: string[] = [];
+    page.on("pageerror", (error) => pageErrors.push(error.message));
     const account = freshAccount("max-age-keep-question");
     await signIn(page, account);
     await ageSession(page, request, 12 * HOUR - 600);
@@ -215,9 +220,16 @@ test.describe("a session ends at a maximum age (W87-1)", () => {
       page,
       page.locator("#error-region-actions").getByRole("button", { name: "Sign in again", exact: true }),
     );
+    await expect(page.locator("html")).toHaveAttribute("data-app-state", "ready");
     await expect(page.locator("#account-email")).toHaveText(account.email);
     await expect(page.locator("#query-text")).toHaveValue(LONG_QUESTION);
     expect(await sessionStorageHolds(page, LONG_QUESTION)).toBe(false);
+    const costs = page.locator(".model-slot-estimate");
+    await expect(costs).toHaveCount(4);
+    for (const cost of await costs.all()) {
+      await expect(cost).not.toHaveText("—");
+    }
+    expect(pageErrors).toEqual([]);
 
     await page.goto("/ui", { waitUntil: "domcontentloaded" });
     await expect(page.locator("#account-email")).toHaveText(account.email);
@@ -318,6 +330,101 @@ test.describe("a session ends at a maximum age (W87-1)", () => {
     await expect(page.locator("#error-region-message")).toHaveText(NO_SIGN_IN_LATE_RUN);
     await expect(page.locator("#error-region-actions")).toBeAttached(); // partner: the card's action row exists
     const actions = page.locator("#error-region-actions");
+    for (const name of [SIGN_IN_LABEL, "Sign in", "Sign in again"]) {
+      await expect(actions.getByRole("button", { name, exact: true })).toHaveCount(0);
+    }
+    await context.close();
+  });
+
+  test("a question saved under one account is not put back when another tab has switched the account", async ({
+    browser,
+    page,
+    request,
+  }) => {
+    // Round 2 (Codex). Account A's "Sign in again" saves the question and
+    // comes back as A, so the HTML shows A; but before the page's session
+    // bootstrap answers, another tab has signed the browser in as B. RED-IF
+    // the question is put back (it could then be run as B), or a copy is
+    // left in sessionStorage. Partners: the page's HTML really is A's, and
+    // the bootstrap really answered as B (the account id B's own bootstrap
+    // gives). The same-account round trip above does restore the question.
+    test.setTimeout(120000);
+    const first = freshAccount("max-age-switch-a");
+    const second = freshAccount("max-age-switch-b");
+    const otherTab = await browser.newContext();
+    const otherPage = await otherTab.newPage();
+    await signIn(otherPage, second);
+    const secondCookie = (await otherTab.cookies()).find(
+      (c) => c.name === "quorum_session" || c.name === "__Host-quorum_session",
+    );
+    expect(secondCookie, "B holds a session cookie").toBeTruthy();
+    const secondAccount = (await (await otherPage.request.get("/v1/session")).json()).account_id;
+    expect(secondAccount, "B's bootstrap names B").toBeTruthy();
+
+    await signIn(page, first);
+    await ageSession(page, request, 12 * HOUR - 600);
+    await pressRun(page, LONG_QUESTION);
+    await expect(page.locator("#error-region-message")).toHaveText(SIGNED_IN_LATE_RUN);
+    let bootstrapAccount = "";
+    let switched = 0;
+    await page.route("**/v1/session", async (route) => {
+      if (switched > 0) {
+        await route.continue();
+        return;
+      }
+      switched += 1;
+      const origin = new URL(route.request().url()).origin;
+      await page.context().addCookies([{ name: secondCookie!.name, value: secondCookie!.value, url: origin }]);
+      const headers = { ...(await route.request().allHeaders()) };
+      headers["cookie"] = `${secondCookie!.name}=${secondCookie!.value}`;
+      const response = await route.fetch({ headers });
+      const body = await response.json();
+      bootstrapAccount = String(body.account_id ?? "");
+      await route.fulfill({ response, json: body });
+    });
+    await clickThenNextPage(
+      page,
+      page.locator("#error-region-actions").getByRole("button", { name: "Sign in again", exact: true }),
+    );
+    await expect(page.locator("html")).toHaveAttribute("data-app-state", "ready");
+    await expect(page.locator("#query-text")).toHaveValue("");
+    expect(await sessionStorageHolds(page, LONG_QUESTION)).toBe(false);
+    await expect(page.locator("#account-email")).toHaveText(first.email); // partner: A's HTML
+    expect(switched).toBe(1);
+    expect(bootstrapAccount).toBe(secondAccount); // partner: the bootstrap answered as B
+    await otherTab.close();
+  });
+
+  test("a signed-in page that does not offer sign-in is not told to sign in again", async ({
+    browser,
+    page,
+    request,
+  }) => {
+    // Round 2 (break-it F2), CHG-070 (c). A signed-in session used on a host
+    // that offers no sign-in (`localhost`, not the redirect URI's
+    // `127.0.0.1`, as the fly.dev host in production): "Sign in again" would
+    // reach a sign-in start that answers 404. RED-IF the card says "Sign in
+    // again" or offers any sign-in action here. Partners: the page really is
+    // signed in (its email shows), offers no sign-in, and the card shows its
+    // message.
+    const account = freshAccount("max-age-signed-in-no-sign-in");
+    await signIn(page, account);
+    const cookie = (await page.context().cookies()).find(
+      (c) => c.name === "quorum_session" || c.name === "__Host-quorum_session",
+    );
+    expect(cookie, "the page holds a session cookie").toBeTruthy();
+    const context = await browser.newContext({ baseURL: "http://localhost:18096" });
+    await context.addCookies([{ name: cookie!.name, value: cookie!.value, url: "http://localhost:18096" }]);
+    const other = await context.newPage();
+    await openWorkspace(other);
+    await expect(other.locator("#account-email")).toHaveText(account.email); // partner: signed in here
+    await expect(other.locator("#sign-in-google")).toHaveCount(0); // not offered on this host
+    await ageSession(other, request, 12 * HOUR - 600);
+    await pressRun(other, "How many moons does Mars have?");
+    await expect(other.locator("#error-region-title")).toHaveText(LATE_RUN_TITLE);
+    await expect(other.locator("#error-region-message")).toHaveText(NO_SIGN_IN_LATE_RUN);
+    await expect(other.locator("#error-region-actions")).toBeAttached();
+    const actions = other.locator("#error-region-actions");
     for (const name of [SIGN_IN_LABEL, "Sign in", "Sign in again"]) {
       await expect(actions.getByRole("button", { name, exact: true })).toHaveCount(0);
     }

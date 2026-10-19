@@ -1164,11 +1164,13 @@ def refuse_if_session_ends_soon(
     so a run started later could outlive its session and its result would be
     lost (ADR-0174 records that a run can still overshoot its deadline).
     Called by the estimate and the run creation after the CSRF check and
-    before anything is recorded or charged. The words are the owner's: the
-    signed-in text for a signed-in session (or one whose kind a restore
-    could not read: "Sign in again" works for both), and for an anonymous
-    one the text that offers sign-in only when ``sign_in_offered`` (sign-in
-    is on AND this request's page offers it). The legacy header has no
+    before anything is recorded or charged. The words are the owner's: where
+    this request's page offers no sign-in (``sign_in_offered`` is false:
+    sign-in is off, or this is not its host), the CHG-070 (c) text, signed
+    in or not (round 2); otherwise the signed-in text for a signed-in
+    session (or one whose kind a restore could not read: "Sign in again"
+    works for both), and the CHG-069 text for an anonymous one. The legacy
+    header has no
     server-side session. A session that has already ended is refused by its
     own 401 further on, or, with ``ended_refuses`` (the run creation's second
     check, made just before the run is created, when nothing further on
@@ -1184,12 +1186,14 @@ def refuse_if_session_ends_soon(
     left = live.max_age_end() - _now()
     if left >= timedelta(seconds=LATE_RUN_REFUSAL_SECONDS):
         return
-    if live.max_age != ANONYMOUS_MAX_AGE:
-        message = SESSION_ENDS_SOON_SIGNED_IN_MESSAGE
-    elif sign_in_offered:
-        message = SESSION_ENDS_SOON_ANONYMOUS_MESSAGE
-    else:
+    if not sign_in_offered:
+        # Round 2 (break-it F2): signed in or not, a page that offers no
+        # sign-in is not told to sign in (CHG-070 c).
         message = SESSION_ENDS_SOON_NO_SIGN_IN_MESSAGE
+    elif live.max_age != ANONYMOUS_MAX_AGE:
+        message = SESSION_ENDS_SOON_SIGNED_IN_MESSAGE
+    else:
+        message = SESSION_ENDS_SOON_ANONYMOUS_MESSAGE
     raise HTTPException(
         status_code=status.HTTP_409_CONFLICT,
         detail={"code": AuthError.SESSION_ENDS_SOON.value, "message": message},

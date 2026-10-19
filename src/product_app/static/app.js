@@ -418,6 +418,8 @@
     // W5 (ADR-0128): the composer's quick-answer control.
     quickMode: false,
     csrfToken: "",
+    // W87-1 round 2: the signed-in account ``/v1/session`` names, or "".
+    sessionAccountId: "",
     currentEstimate: null,
     currentRunId: null,
     pollingTimer: null,
@@ -8387,6 +8389,8 @@
       }
       const session = await response.json();
       state.csrfToken = session.csrf_token;
+      // W87-1 round 2: the signed-in account the server names ("" anonymous).
+      state.sessionAccountId = typeof session.account_id === "string" ? session.account_id : "";
       el("session-meta").textContent = "Managed by secure cookie";
       setConnectionPill("connected", connectedPillLabel());
     } catch (error) {
@@ -10329,8 +10333,12 @@
     // it offers sign-in at all (COPY-015).
     if (code === "SESSION_ENDS_SOON") {
       let actions = [];
-      if (el("account-email")) {
-        actions = [{ label: "Sign in again", primary: true, action: signInAgainKeepingQuestion }];
+      const accountEmail = el("account-email");
+      if (accountEmail) {
+        // Round 2 (break-it F2): only where this page offers sign-in.
+        if (accountEmail.dataset.signInOffered === "true") {
+          actions = [{ label: "Sign in again", primary: true, action: signInAgainKeepingQuestion }];
+        }
       } else if (signInOffered()) {
         actions = [{ label: "Sign in with Google", primary: true, action: () => el("sign-in-google").click() }];
       }
@@ -11443,22 +11451,20 @@
   // question across the trip to Google, in this tab only (sessionStorage),
   // and the next load of the page puts it back once and clears it. Nothing
   // else saves it, so a plain sign-in restores nothing. The question is saved
-  // with the account it was typed under and put back only on that account's
-  // page: another Google account signing in gets an empty box (round 1).
+  // with the account it was typed under and put back only when the session
+  // bootstrap names that same account: another Google account signing in,
+  // here or in another tab, gets an empty box (rounds 1 and 2). The account
+  // is the one ``/v1/session`` reported (``state.sessionAccountId``), never
+  // the HTML's, which another tab's sign-in can make stale.
   const LATE_RUN_QUESTION_KEY = "quorum.lateRunQuestion";
-
-  function pageAccountId() {
-    const email = el("account-email");
-    return (email && email.dataset.accountId) || "";
-  }
 
   async function signInAgainKeepingQuestion() {
     const question = queryTextarea ? queryTextarea.value : "";
     try {
-      if (question) {
+      if (question && state.sessionAccountId) {
         window.sessionStorage.setItem(
           LATE_RUN_QUESTION_KEY,
-          JSON.stringify({ account: pageAccountId(), question }),
+          JSON.stringify({ account: state.sessionAccountId, question }),
         );
       }
     } catch (_) {
@@ -11486,7 +11492,7 @@
     let question = "";
     try {
       const parsed = JSON.parse(saved);
-      const account = pageAccountId();
+      const account = state.sessionAccountId;
       if (parsed && account && parsed.account === account && typeof parsed.question === "string") {
         question = parsed.question;
       }
@@ -11986,8 +11992,6 @@
     initReadinessBannerToggle();
     initWorkflowKeyboard();
     initAccountControls();
-    // CHG-070 (b): the question kept across "Sign in again", put back once.
-    restoreLateRunQuestion();
     // W48 (ADR-0145): the one-time hints and the optional tour.
     initHelpHints();
     initHelpTour();
@@ -12190,6 +12194,10 @@
     try {
       await initSession();
       await refreshDefaults();
+      // CHG-070 (b): the question kept across "Sign in again", put back once,
+      // only now (round 2): the model slots exist, so its costs can be shown,
+      // and the bootstrap has named the account it must match.
+      restoreLateRunQuestion();
       renderProgress(null);
       renderDebateAndSynthesis(null);
       renderNotices(null);

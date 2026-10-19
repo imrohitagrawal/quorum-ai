@@ -48,7 +48,7 @@ Facts the design rests on, read on `main` at `8463a72` and re-checked where mark
 | The new tests fail without the fix | the test designer's red run on `19647a9` with only the test files added (log kept outside the repository) | pytest, the six new files: `9 failed, 7 passed, 37 errors in 10.92s`; the errors are the missing clock `auth._now`. With only that clock added and no behaviour: `40 failed, 10 passed in 10.91s`. The new signed-in spec: `4 failed` |
 | The CHG-070 tests fail without the fix | the same, for the tests added after CHG-070 | pytest: `3 failed, 10 deselected, 2 errors in 0.24s`; the signed-in spec: `5 failed`, `1 passed`; the sign-in-off spec on the main lane: `1 failed` |
 | The new tests with the fix | the builder's runs on the build commit | the designer's pytest files: `56 passed in 11.16s`; `make quality`: `7631 passed, 37 skipped`; `make api-contract`: `54 passed`, `EXIT=0` |
-| The e2e lanes | the four lanes the change touches, run as `.github/workflows/e2e.yml` runs them with the AGENTS.md rule 13 flags | `signed-in: 31 tests executed (floor 31), 0 skipped.` (33 and floor 33 after review round 1); `workspace: 52 tests executed (floor 52), 0 skipped.`; `invariants: 459 tests executed (floor 457), 0 skipped.`; `axe-parity: 133 tests executed (floor 117), 0 skipped.` |
+| The e2e lanes | the four lanes the change touches, run as `.github/workflows/e2e.yml` runs them with the AGENTS.md rule 13 flags | `signed-in: 31 tests executed (floor 31), 0 skipped.` (33 and floor 33 after review round 1; 35 and floor 35 after review round 2); `workspace: 52 tests executed (floor 52), 0 skipped.`; `invariants: 459 tests executed (floor 457), 0 skipped.`; `axe-parity: 133 tests executed (floor 117), 0 skipped.` |
 | The visual baselines cannot move | `outerHTML` of the result and transcript views on `goldenCompletedResp()`, before and after | `result: byte-identical (27187 bytes)`, `transcript: byte-identical (17858 bytes)` |
 
 ## Decision
@@ -104,23 +104,30 @@ Facts the design rests on, read on `main` at `8463a72` and re-checked where mark
 11. **The late-run refusal.** The estimate and the run creation refuse with 409 `SESSION_ENDS_SOON`
     when less than `LATE_RUN_REFUSAL_SECONDS` (720) are left before the maximum age: 720 seconds may
     run, 719 may not. The check comes after the anti-forgery check and before anything is recorded
-    or charged. The run creation checks again just before the run is created and its spend
-    reserved, so time spent validating and estimating cannot carry a run across the boundary, and a
-    session that ended meanwhile gets its 401 (review round 1, Codex). The words are the owner's:
-    CHG-066 (b) for a signed-in session, CHG-069 for an anonymous one on a page that offers sign-in
-    (sign-in on, and this host is the sign-in host), CHG-070 (c) otherwise, including the fly.dev
-    host (review round 1); the server picks the text. The card is titled "Your session ends soon"
-    (CHG-070 (a)). A signed-in page offers "Sign in again", which keeps the typed question in this tab
-    (`sessionStorage`), saved with the page's account id, and puts it back once after the sign-in
-    only when the same account comes back; another account gets an empty box (CHG-070 (b); review
-    round 1). An anonymous page offers the top bar's "Sign in with Google" only where it offers
-    sign-in at all. The 409 is declared in the API description for both routes.
+    or charged. The run creation checks again inside the run store's lock, just before the run is
+    stored and its spend reserved, so time spent validating, estimating or waiting for the lock
+    cannot carry a run across the boundary, and a session that ended meanwhile gets its 401 (review
+    rounds 1 and 2, Codex). The words are the owner's: on a page that offers no sign-in (sign-in
+    off, or a host that is not the sign-in host, such as fly.dev) CHG-070 (c), signed in or not
+    (review rounds 1 and 2); otherwise CHG-066 (b) for a signed-in session and CHG-069 for an
+    anonymous one. The server picks the text. The card is titled "Your session ends soon"
+    (CHG-070 (a)). A signed-in page that offers sign-in offers "Sign in again", which keeps the typed
+    question in this tab (`sessionStorage`), saved with the account `/v1/session` named, and puts it
+    back once, after `/v1/session` has answered and the model list has loaded, only when
+    `/v1/session` names the same account; another account, signed in here or in another tab, gets
+    an empty box (CHG-070 (b); review rounds 1 and 2). `/v1/session` names the account only for a
+    signed-in session. An anonymous page offers the top bar's "Sign in with Google" only where it
+    offers sign-in at all. The 409 is declared in the API description for both routes.
 12. **No early renewal of an anonymous session (CHG-069).** `/ui` and `/v1/session` resume a live
     session as before, however little of its 24 hours is left.
 13. **How many sessions one account may hold.** There is no count: each Google sign-in makes one
     more session for the account, and each ends 12 hours after that sign-in, or sooner when idle,
     signed out or signed out everywhere. This is the session's design, not an owner decision
-    (ASVS V7.1.2). No test would fail if a count were added, so that item is CODE-ONLY.
+    (ASVS V7.1.2). A limit of one would break
+    `tests/integration/test_session_safety.py::test_sign_out_everywhere_ends_every_session_of_the_account`,
+    which signs one account in on two clients and needs both sessions alive (lines 88-96). Whether
+    any test would catch a limit of two or more was not measured, so no test holds "no count" and
+    that item stays CODE-ONLY.
 
 ## Consequences
 
@@ -132,7 +139,7 @@ Facts the design rests on, read on `main` at `8463a72` and re-checked where mark
   owner decision.
 - An anonymous visitor in the last 12 minutes of 24 hours cannot run a question until they sign in
   or the session ends; reaching 24 hours needs a request at least every 2 hours for a day.
-- The signed-in e2e lane's floor rises from 25 to 31 and the workspace lane's from 51 to 52, by
+- The signed-in e2e lane's floor rises from 25 to 35 and the workspace lane's from 51 to 52, by
   the new tests only.
 - **Known limit: a run can still end after its session.** The refusal guarantees 720 seconds of
   session at admission, not that the run ends in time. The run deadline is checked at three points
