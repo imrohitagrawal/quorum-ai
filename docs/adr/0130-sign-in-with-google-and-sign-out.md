@@ -28,6 +28,12 @@ second pull request. The "Results are ephemeral" copy is unchanged here: with
 no history yet, it is still true for every user; the second pull request
 rewrites it for signed-in users when history exists.
 
+**Amended by ADR-0175 (2026-10-20):** the callback now takes the pending sign-in first, accepts a
+session that ended by the signed-in 12 hours during the round trip (and checks that again after the
+exchange), and ends on one of four fixed paths: `/ui`, `/ui?sign_in=failed`, and, for the new
+hidden start for deleting an account, `/ui?account=delete` or `/ui?account=switched`. The failure
+notice shows on signed-in pages too, and the anonymous top bar carries the 2-Step line.
+
 ## Context
 
 Every browser has an anonymous account id (a uuid4) held by a server-side

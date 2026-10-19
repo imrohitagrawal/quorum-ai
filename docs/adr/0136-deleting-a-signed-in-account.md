@@ -15,6 +15,10 @@ from User before permanently deleting the account."*
 
 **Amended by ADR-0144 (2026-10-04):** an anonymous session's spend key is now its network's; every anonymous session on one network shares one $0.40 a day.
 
+**Amended by ADR-0175 (2026-10-20):** deletion also needs a Google sign-in within the last 10 minutes
+(CHG-056 (d)): a session whose own start is older is refused with 403 `RECENT_SIGN_IN_REQUIRED`
+before the email is compared, and the panel asks for that sign-in itself.
+
 Two further owner decisions, both on 2026-09-27, each choosing an option the
 session had drafted:
 
