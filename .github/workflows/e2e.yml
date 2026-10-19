@@ -516,6 +516,7 @@ jobs:
           tests/signed-in/shared-allowance.spec.ts
           tests/signed-in/help-history-hint.spec.ts
           tests/signed-in/session-max-age.spec.ts
+          tests/signed-in/delete-recent-sign-in.spec.ts
           --config=playwright.signed-in.config.ts
           --project=chromium
           --retries=0
@@ -540,9 +541,11 @@ jobs:
       # "33 passed" locally. 33 -> 35 (W87-1 review round 2): two more in the
       # same spec (another tab switches the account before the page's session
       # bootstrap; a signed-in page on a host that offers no sign-in), added
-      # to the old floor.
+      # to the old floor. 35 -> 43 (W87-2, ADR-0175): delete-recent-sign-in.spec.ts
+      # adds 8 tests, added to the old floor (written by the W87-2 test
+      # designer; the lane has not yet been run against a build).
       - name: "signed-in History lane: floor on tests actually executed"
-        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 35 --lane "signed-in History lane"
+        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 43 --lane "signed-in History lane"
 
       - name: Clear the previous lane's JUnit report
         # Adversarial review (#162/#166): without this, a Playwright run that

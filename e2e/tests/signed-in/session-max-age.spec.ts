@@ -41,6 +41,9 @@ const ANONYMOUS_LATE_RUN =
 const NO_SIGN_IN_LATE_RUN =
   "This session ends in less than 12 minutes, so this question cannot run now. " +
   "Reload the page after the session ends.";
+/** CHG-073 answer (5), W87-2: another account came back from "Sign in again". */
+const OTHER_ACCOUNT_NOTICE = (email: string) =>
+  `You are now signed in as ${email}. Your question was not kept because it was typed while signed in as another account.`;
 /** The top bar's own label (COPY-015): the card's action uses the same words. */
 const SIGN_IN_LABEL = "Sign in with Google";
 
@@ -279,6 +282,11 @@ test.describe("a session ends at a maximum age (W87-1)", () => {
     await expect(page.locator("#query-text")).toBeVisible();
     await expect(page.locator("#query-text")).toHaveValue("");
     expect(await sessionStorageHolds(page, LONG_QUESTION)).toBe(false);
+    // W87-2 (CHG-073 answer 5): B is told why the box is empty, with B's own
+    // email. RED-IF the notice is missing, its words differ, or it names A.
+    const notice = page.getByRole("status").filter({ hasText: "Your question was not kept" });
+    await expect(notice).toHaveCount(1);
+    await expect(notice).toHaveText(OTHER_ACCOUNT_NOTICE(second.email));
   });
 
   test("an anonymous run in the last 12 minutes is refused with its own words, and sign-in lets it run", async ({
@@ -305,6 +313,12 @@ test.describe("a session ends at a maximum age (W87-1)", () => {
     await expect(signInAction).toBeVisible();
     await signInAction.click();
     await expect(page.locator("#account-email")).toHaveText(account.email);
+    // W87-2 (CHG-073 answer 3): the anonymous question is kept across the
+    // sign-in, once. RED-IF the box is empty after signing in, or a copy is
+    // left in sessionStorage.
+    await expect(page.locator("html")).toHaveAttribute("data-app-state", "ready");
+    await expect(page.locator("#query-text")).toHaveValue(question);
+    expect(await sessionStorageHolds(page, question)).toBe(false);
     await runQuestion(page, question);
     await context.close();
   });
