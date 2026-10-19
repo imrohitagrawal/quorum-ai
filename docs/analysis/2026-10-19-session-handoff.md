@@ -20,8 +20,8 @@ Production checks, run by this session:
   `REQUEST_TOO_LARGE` envelope (curl took over two minutes to finish; why is UNVERIFIED), a small one `401`.
 - #578: the Deploy job of run 39092019131 succeeded; `build_sha` `8463a72`. The sweep cannot be seen from
   outside: the last 100 log lines held only health checks.
-- #579: the first three Deploy runs were skipped because main's E2E run failed in the signed-in lane on
-  its first attempt; after `gh run rerun --failed` it passed, and the Deploy job of run 39155055508
+- #579: the first three Deploy runs failed at their Gate job, so their Deploy jobs were skipped, because
+  main's E2E run had failed in the signed-in lane on its first attempt; after `gh run rerun --failed` it passed, and the Deploy job of run 39155055508
   succeeded; `build_sha` `19647a9`; the served `app.js` contains `safetyAcknowledgementsFor`.
 - #580: the E2E run on the merge passed at once; the Deploy job of run 39296617736 succeeded (two earlier
   runs for the same commit were cancelled); `build_sha` `5e8676d`; `/ready` 200; the served `app.js` contains
@@ -35,7 +35,8 @@ CHG-068 (W100's acknowledgements), CHG-066, CHG-069 and CHG-070 (W87's warning, 
 row for page loads that never count, now W106), CHG-071 (tabs share a renewed token, now W105), CHG-072
 (hand off after W87-1). Two of the session's own records were corrected by review: CHG-069 no longer
 says the session explained itself before its next question (the transcript holds no such text), and
-CHG-070 (d) records that its question wrongly said today's idle warning counts down. CHG-072's question
+CHG-070 (d) records that its question wrongly said today's idle warning counts down. CHG-071 and CHG-072
+now say the transcript shows no explanation or correction given to the owner mid-turn. CHG-072's question
 wrongly said W80's plan had been reviewed by Codex; only W80's failure modes exist.
 
 ## Left for the next session
@@ -54,7 +55,7 @@ CHG-060 still holds W87's remaining parts and W88 back.
 - W104's three small follow-ups need words.
 - W102 (many large bodies at once) needs an owner value.
 
-## Advisory leftovers, recorded in the ADRs
+## Advisory leftovers (in the ADRs; W100's in the body of PR #579)
 
 - W85 (ADR-0171): a request that declares a body it never sends waits for it on every route; no counter of
   its own for 413s; no per-string bounds on model ids, versions and tokens; what Fly's proxy shows on an
@@ -78,8 +79,11 @@ CHG-060 still holds W87's remaining parts and W88 back.
   pipe write, identically on clean `main` (now row W107). Count non-w54 failures before blaming a diff.
 - **A production check must never request `/ui` or `/v1/session` without a cookie**: each spends one of
   the owner's network's two daily sessions. One such check was stopped before it ran.
-- **Text written mid-turn before a question tool call is not in the transcript**, so the owner may not
-  have seen it (CHG-069). Put reasoning the owner needs inside the question.
+- **Text written mid-turn before a tool call is not in the transcript**, so the owner may not have seen it
+  (CHG-069, CHG-071, CHG-072). Put reasoning and corrections the owner needs inside the question itself.
+- **Two gaps in the checks, found by this handoff's falsification lens:** a board row's TEXT can claim
+  "DONE, merged and in production" and nothing fails (row W78 covers false DONE), and a CHG row can be
+  deleted while the handoff and prompt still cite it, with every gate green.
 - **Codex sometimes cites rules from its own instructions** ("make intervals configurable"); check the
   repository before acting (`git grep`), and record the rejection.
 - **Disk filled twice** from other work on the Mac. The owner chose deleting Codex sessions older than
