@@ -56,6 +56,7 @@ Facts the design rests on, read on `main` at `0f06765` unless marked:
 | The new tests with the fix | the same eight files on the build | `256 passed, 1 warning in 45.11s` |
 | The suites beside them | `test_google_sign_in.py`, `test_account_deletion.py`, `test_account_history_route.py`, `test_session_safety.py`, `test_session_cap_sign_in.py`, `test_session_cap_page.py`, `test_durable_sessions.py`, `test_google_signin_units.py`, `test_account_delete_message.py`, `test_capped_page_sign_in_block.py`, `test_session_max_age.py`, with the eight above, on the code commit | `1 failed, 522 passed` before `docs/41` gained SC-103 (the one failure was that check) |
 | `make quality` | the builder's run on the build | `2 failed, 7681 passed, 78 skipped` in 12 min 36 s: two pins this change moves (`test_browser_ui_advanced_contract.py` lists the new step's two ids as sign-in-only hooks; `test_idle_reminder_page.py` stubs `_history_html` with its new keywords). Moved, they give `24 passed`; the moved hooks pin goes red when the button's id is renamed in `main.py` (mutation, restored from a copy). The run on the head after that and a wording fix to this file: `7683 passed, 78 skipped` in 12 min 31 s, exit 0 |
+| `make quality` on head `52e7807` (review round 3's code) | the fixer's run | `7743 passed, 37 skipped` in 13 min 1 s, total coverage 97.46%, exit 0 |
 | The OpenAPI document does not move | `make openapi-check` | `openapi contract validation passed (openapi.yaml == app.openapi())`, exit 0 |
 
 ## Decision
@@ -71,11 +72,14 @@ Facts the design rests on, read on `main` at `0f06765` unless marked:
    most 10 minutes before, for this browser's session. That needs the browser that holds the
    victim's Google session; a stolen Quorum cookie alone cannot get one. It does not prove that
    Google asked for a password or a second factor: Google decides that, and the app cannot see it.
-3. **Google is asked for nothing new.** No `max_age` and no `prompt` (FM-18). With `max_age=600`,
-   Google would ask for the password whenever its own sign-in is older than 10 minutes, which
-   contradicts the owner-approved words "If you are still signed in to Google it takes one click."
-   (CHG-063 (f)(1)). `auth_time` is
-   not read. The Quorum session is independent of Google's: signing out of Google leaves Quorum
+3. **Google is asked for nothing new.** No `max_age` and no `prompt` (FM-18). UNVERIFIED (never
+   tried against Google): with `max_age=600`, Google would ask for the password whenever its own
+   sign-in is older than 10 minutes, which would contradict the owner-approved words "If you are
+   still signed in to Google it takes one click." (CHG-063 (f)(1)). Google's discovery document,
+   fetched 2026-10-20 (`https://accounts.google.com/.well-known/openid-configuration`), lists
+   `claims_supported` as aud, email, email_verified, exp, family_name, given_name, iat, iss, name,
+   picture and sub, with no `auth_time`, and has no `max_age` or `prompt_values_supported` key.
+   `auth_time` is not read. The Quorum session is independent of Google's: signing out of Google leaves Quorum
    signed in, and signing out of Quorum calls nothing at Google. Google is asked again at each
    sign-in, after the 12 hours (ADR-0174), and before a deletion more than 10 minutes after the
    sign-in that made the session; no ending of a session is passed between the two.
@@ -98,9 +102,13 @@ Facts the design rests on, read on `main` at `0f06765` unless marked:
    `tests/integration/test_sign_in_recovery_no_account_write.py`,
    `tests/integration/test_sign_in_recovery_lock.py`). With the lock the callback can still
    redirect to `/ui`; the deletion that follows still leaves no account row and no session (the
-   lock test asserts both). For a recovered session the recovery condition is checked once more
-   after the row; the new session is issued (the old id revoked, FM-12); the
-   deleted-while-signing-in check as before.
+   lock test asserts both). The lock holds only within one process. Production runs one
+   (`Dockerfile:92`, `"--workers", "1"`); a second worker process or a second machine would reopen
+   the race. For a recovered session the recovery condition is checked once more after the row;
+   the new session is issued (the old id revoked, FM-12); the deleted-while-signing-in check as
+   before. Taking the pending entry first is kept for every sign-in, the deletion one included, so
+   the sign-in gap that board row W80 records (a cross-site link can cancel a sign-in) is not
+   changed by W87-2.
 6. **Four fixed return paths.** `/ui` (a plain sign-in), `/ui?sign_in=failed` (every failure, any
    purpose, a cancel included), `/ui?account=delete` (a deletion sign-in, the same account back) and
    `/ui?account=switched` (a deletion sign-in, another account back). All four are module constants
@@ -161,7 +169,8 @@ Facts the design rests on, read on `main` at `0f06765` unless marked:
     once for whichever session the tab now has, signed in as any account or anonymous again after a
     cancel (the session's choice), within 900 seconds of `saved_at` (the session's choice). An
     anonymous entry with no `saved_at` is not put back. The entry is removed at the first read.
-    A question put back is kept in view (review rounds 1 to 3; the design is the session's): a
+    A question put back is kept in view (review rounds 1 to 3; the owner approved the third round,
+    past the stop rule, in CHG-074; the design is the session's): a
     watch starts first thing in `boot()`, before any wait; the restore and every readiness paint
     after it (`confirmReadiness`, which also paints the drift banner) scroll the box with
     `block: "nearest"` when it is not fully visible, and never focus it. The sign-in failure notice
@@ -248,7 +257,8 @@ Facts the design rests on, read on `main` at `0f06765` unless marked:
   contract and tests. The separate route needs none of them.
 - **`accounts.last_sign_in_at` as the proof.** Another browser's sign-in stamps it, so an old stolen
   cookie could delete within 10 minutes of the victim signing in elsewhere (FM-11).
-- **Sending `max_age` or `prompt=login`, or reading `auth_time`.** Google would ask for a password,
+- **Sending `max_age` or `prompt=login`, or reading `auth_time`.** Google would ask for a password
+  (UNVERIFIED for `max_age`; decision 3),
   against CHG-063 (f)(1)'s "If you are still signed in to Google it takes one click."; and that
   Google returns `auth_time` without `max_age` was not verified.
 - **Refusing the other account at the new sign-in.** The owner chose an ordinary sign-in with a line
