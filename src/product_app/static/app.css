@@ -988,6 +988,13 @@ textarea:focus, input:focus, select:focus {
    :focus ring, so without this the field gives no visible cue that the question
    landed there. Applied by goToComposer() and removed after ~1.4s. The id+class
    selector wins over the neutral .question-field textarea border. */
+/* W87-2 review round 3: a question put back after sign-in is scrolled into
+   view with block "nearest"; without a margin it stops flush with the
+   viewport's edge (measured: bottom 844.09 in an 844 px window). */
+#query-text {
+  scroll-margin-block: var(--space-4);
+}
+
 #query-text.question-handoff-focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-soft);

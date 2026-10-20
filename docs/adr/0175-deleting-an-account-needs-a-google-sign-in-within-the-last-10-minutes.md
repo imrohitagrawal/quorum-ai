@@ -161,6 +161,14 @@ Facts the design rests on, read on `main` at `0f06765` unless marked:
     once for whichever session the tab now has, signed in as any account or anonymous again after a
     cancel (the session's choice), within 900 seconds of `saved_at` (the session's choice). An
     anonymous entry with no `saved_at` is not put back. The entry is removed at the first read.
+    A question put back is kept in view (review rounds 1 to 3; the design is the session's): a
+    watch starts first thing in `boot()`, before any wait; the restore and every readiness paint
+    after it (`confirmReadiness`, which also paints the drift banner) scroll the box with
+    `block: "nearest"` when it is not fully visible, and never focus it. The sign-in failure notice
+    (`#sign-in-notice`) and focus placed elsewhere (the deletion return) win. The watch ends once,
+    "cancelled" at the person's first wheel, touch, pointer or key, a scroll the page did not make,
+    a typed change or an error box, or "settled" after the boot's last paint; the outcome is
+    written to `html[data-restore-scroll]`, which changes no pixels.
 14. **Why 900 seconds** (the session's choice). `saved_at` is taken before the start request. The
     callback accepts a pending entry up to 600 seconds after it began, and checks that before the
     exchange, which can then take up to 10 seconds (`TOKEN_EXCHANGE_TIMEOUT_S`). After it come the
@@ -188,7 +196,8 @@ Facts the design rests on, read on `main` at `0f06765` unless marked:
   and the 12 hours start again (FM-17, intended: it is a fresh Google sign-in).
 - A visitor who presses "Sign in again" seconds before the 12 hours end now comes back signed in,
   with the question they typed (ADR-0174's known limit, fixed).
-- The signed-in e2e lane's floor rises from 35 to 43, by the new spec's 8 tests.
+- The signed-in e2e lane's floor rises from 35 to 46: the new spec's 8 tests and 3 in
+  `session-max-age.spec.ts` for the restored question box (review round 3).
 - `docs/48-data-retention.md` lists the anonymous saved question; the signed-in id row is approved
   (CHG-073 (a)).
 
@@ -213,6 +222,11 @@ Facts the design rests on, read on `main` at `0f06765` unless marked:
   the same Google identity (Codex). For a recovered session the locked check and write refuses it,
   or the deletion waits for the write and then removes the row (decision 5). On the live path it is
   today's behaviour, unchanged.
+- **A script scroll of 8 px or less is treated as layout noise** (review round 3). The watch on a
+  restored question cancels on a scroll the page did not make only when the box moved more than
+  8 px from where its last check left it, because the browser's own scroll anchoring was measured
+  making 2 px scrolls. 8 px is chosen, not derived. A person's scroll always comes with a wheel,
+  touch, pointer or key event, and those cancel whatever the distance.
 - **The anonymous question can be lost.** After 900 seconds (decision 14); when the bootstrap could
   not tell the session's kind (decision 12); and after any identity change in the page load, even
   for a draft typed after the change, until a reload (the cost is a retyped question, never a

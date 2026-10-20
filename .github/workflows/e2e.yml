@@ -544,9 +544,14 @@ jobs:
       # to the old floor. 35 -> 43 (W87-2, ADR-0175): delete-recent-sign-in.spec.ts
       # adds 8 tests, added to the old floor (written by the W87-2 test
       # designer; the orchestrator's local run of the lane printed
-      # "43 passed" on 2026-10-20).
+      # "43 passed" on 2026-10-20). 43 -> 46 (W87-2 review round 3, CHG-074):
+      # three more in session-max-age.spec.ts (the restored question box ends
+      # in view; a wheel before the restore stops the page moving; the
+      # sign-in failure notice stays on screen), added to the old floor;
+      # `playwright test --list` counts 46; the lane has not been run on them
+      # by this commit's author.
       - name: "signed-in History lane: floor on tests actually executed"
-        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 43 --lane "signed-in History lane"
+        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 46 --lane "signed-in History lane"
 
       - name: Clear the previous lane's JUnit report
         # Adversarial review (#162/#166): without this, a Playwright run that

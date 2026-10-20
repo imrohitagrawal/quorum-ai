@@ -445,3 +445,146 @@ test.describe("a session ends at a maximum age (W87-1)", () => {
     await context.close();
   });
 });
+
+/**
+ * W87-2 review round 3 (ADR-0175, CHG-074): the question put back after
+ * "Sign in again" ends fully in view at 390x844, even when the readiness and
+ * drift banners paint above it late; a person's action before the restore
+ * stops the page from moving; the sign-in failure notice wins. Every test
+ * waits for `html[data-restore-scroll]`, the page's own end signal, before
+ * it asserts, so nothing passes before the page's decision is final.
+ */
+test.describe("the restored question box ends in view (W87-2 round 3)", () => {
+  test.skip(({ browserName }) => browserName !== "chromium", "the lane runs on the reference engine only");
+
+  const F1 = "Sign-in did not complete. Please try again.";
+
+  /** Signed in at 390x844, aged to the last 12 minutes, the refusal shown. */
+  async function refusedLateRun(page: Page, request: APIRequestContext, label: string) {
+    await page.setViewportSize({ width: 390, height: 844 });
+    const account = freshAccount(label);
+    await signIn(page, account);
+    await ageSession(page, request, 12 * HOUR - 600);
+    await pressRun(page, LONG_QUESTION);
+    await expect(page.locator("#error-region-message")).toHaveText(SIGNED_IN_LATE_RUN);
+    return account;
+  }
+
+  /** True once the main frame has committed the page that comes back. */
+  function watchReturn(page: Page): () => boolean {
+    let returned = false;
+    page.on("framenavigated", (frame) => {
+      if (frame === page.mainFrame() && new URL(frame.url()).pathname === "/ui") returned = true;
+    });
+    return () => returned;
+  }
+
+  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+  const signInAgain = (page: Page) =>
+    page.locator("#error-region-actions").getByRole("button", { name: "Sign in again", exact: true });
+
+  test("X1: late readiness and drift banners do not leave the box out of view", async ({ page, request }) => {
+    // RED-IF: the box is checked only at the restore (measured 831-987 in an
+    // 844 px window), or not after the drift paint (914-1070); red on
+    // fce3011. Partners: both late banners really painted, and the question
+    // is back.
+    test.setTimeout(120000);
+    await refusedLateRun(page, request, "max-age-x1");
+    const returned = watchReturn(page);
+    await page.route("**/ready", async (route) => {
+      if (returned()) await sleep(1500);
+      await route.continue();
+    });
+    let defaultsOnReturn = 0;
+    await page.route("**/v1/models/defaults", async (route) => {
+      if (!returned()) {
+        await route.continue();
+        return;
+      }
+      defaultsOnReturn += 1;
+      if (defaultsOnReturn < 2) {
+        await route.continue();
+        return;
+      }
+      await sleep(800);
+      const response = await route.fetch();
+      const body = await response.json();
+      body.stale_model_ids = (body.model_slots ?? []).map((slot: { model_id: string }) => slot.model_id);
+      await route.fulfill({ response, json: body });
+    });
+    await clickThenNextPage(page, signInAgain(page));
+    await expect(page.locator("html")).toHaveAttribute("data-restore-scroll", "settled", { timeout: 15000 });
+    await expect(page.locator("#readiness-banner")).toBeVisible();
+    await expect(page.locator("#drift-region")).toBeVisible();
+    expect(defaultsOnReturn).toBe(2);
+    await expect(page.locator("#query-text")).toHaveValue(LONG_QUESTION);
+    await expect(page.locator("#query-text")).toBeInViewport({ ratio: 1 });
+    expect(await page.evaluate(() => document.activeElement === document.body)).toBe(true);
+  });
+
+  test("X2: a wheel before the question is put back stops the page from moving", async ({ page, request }) => {
+    // RED-IF: the watch starts after the boot's awaits (measured: the page
+    // is yanked back to the box and ends "settled"). The bootstrap is held
+    // until the page reports the wheel's cancellation, so the order is
+    // forced, not timed. Partner: the question is still put back.
+    test.setTimeout(120000);
+    await refusedLateRun(page, request, "max-age-x2");
+    const returned = watchReturn(page);
+    let release!: () => void;
+    const released = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let held = 0;
+    await page.route("**/v1/session", async (route) => {
+      if (returned() && route.request().method() === "GET" && held === 0) {
+        held += 1;
+        await released;
+      }
+      await route.continue();
+    });
+    // The boot asks for the defaults twice: once before the restore, once at
+    // the end of readiness (the drift list). Counted when each body is in.
+    let defaultsFinished = 0;
+    page.on("requestfinished", (finished) => {
+      if (returned() && new URL(finished.url()).pathname === "/v1/models/defaults") defaultsFinished += 1;
+    });
+    await clickThenNextPage(page, signInAgain(page));
+    await expect.poll(() => held, { message: "the return page's bootstrap is held" }).toBe(1);
+    await page.mouse.move(195, 422);
+    await page.mouse.wheel(0, 120);
+    await expect(page.locator("html")).toHaveAttribute("data-restore-scroll", "cancelled");
+    const before = await page.evaluate(() => window.scrollY);
+    expect(before, "the wheel scrolled the page").toBeGreaterThan(0);
+    release();
+    // The rest of the boot: the bootstrap, the defaults, the restore, then
+    // readiness. Wait for its last request, then two frames after it.
+    await expect(page.locator("html")).toHaveAttribute("data-app-state", "ready");
+    await expect(page.locator("#query-text")).toHaveValue(LONG_QUESTION);
+    await expect.poll(() => defaultsFinished, { message: "both defaults requests finished" }).toBe(2);
+    await expect(page.locator("#readiness-banner")).toBeVisible();
+    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    expect(await page.evaluate(() => window.scrollY)).toBe(before);
+    await expect(page.locator("html")).toHaveAttribute("data-restore-scroll", "cancelled");
+  });
+
+  test("X3: when Google cancels, the failure notice stays on screen", async ({ page, request }) => {
+    // Journey E37/E48 partner. RED-IF: the notice guard is removed (measured:
+    // the notice at -30 to -9 px). Partner: the question is back.
+    test.setTimeout(120000);
+    await refusedLateRun(page, request, "max-age-x3");
+    await page.unroute("https://accounts.google.com/**");
+    await page.route("https://accounts.google.com/**", async (route) => {
+      const asked = new URL(route.request().url());
+      const back = new URL(asked.searchParams.get("redirect_uri") ?? "");
+      back.searchParams.set("error", "access_denied");
+      back.searchParams.set("state", asked.searchParams.get("state") ?? "");
+      await route.fulfill({ status: 302, headers: { location: back.href } });
+    });
+    await clickThenNextPage(page, signInAgain(page));
+    await expect(page.locator("html")).toHaveAttribute("data-restore-scroll", "settled", { timeout: 15000 });
+    await expect(page.locator("#sign-in-notice")).toHaveText(F1);
+    await expect(page.locator("#sign-in-notice")).toBeInViewport({ ratio: 1 });
+    expect(await page.evaluate(() => window.scrollY)).toBe(0);
+    await expect(page.locator("#query-text")).toHaveValue(LONG_QUESTION);
+  });
+});

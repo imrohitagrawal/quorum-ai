@@ -469,6 +469,9 @@
     //: the first paint waits for the real answer.
     readinessConfirmed: false,
     lastStaleModelIds: null,
+    // W87-2 review round 3: the restored question's scroll watch (see
+    // ``watchRestoredQuestionScroll``); ``null`` until ``boot()`` starts it.
+    restoreScroll: null,
     // Track if user has attempted to submit (gates inline error display)
     submissionAttempted: false,
     // Slice 3 (04 Live run): live-run view state.
@@ -960,6 +963,8 @@
     footer,
     actions,
   } = {}) {
+    // W87-2 review round 3: the error box wins over the restored question.
+    endRestoredQuestionScroll("cancelled");
     // ``title`` lets an edge state word its heading from the response (W33
     // slice C: a COST_LIMIT_EXCEEDED is not always the hard cap).
     const title = titleOverride || (code && ERROR_TITLES[code]) || "Something went wrong";
@@ -1419,6 +1424,9 @@
   function confirmReadiness() {
     state.readinessConfirmed = true;
     applyReadinessState();
+    // W87-2 review round 3: a readiness or drift banner painted above the
+    // restored question box pushes it down; bring it back into view.
+    bringRestoredQuestionIntoView();
   }
 
   /**
@@ -11551,6 +11559,76 @@
     }
   }
 
+  // W87-2 review round 3 (ADR-0175, CHG-074): keep a question put back after
+  // sign-in in view while the boot is still painting banners above it, and
+  // stop for good at the person's first action. ``state.restoreScroll`` is
+  // the watch: ``boot()`` starts it before any await, the restore names the
+  // question, every readiness paint re-checks the box, and the end is
+  // written once to ``data-restore-scroll`` on <html> ("cancelled" or
+  // "settled"; no pixels change).
+  //
+  // A scroll the page did not make cancels too (a scrollbar drag, a
+  // script, assistive technology): the box's top moved more than this from
+  // where the last check left it. JUDGMENT CALL: 8 px is chosen, above the
+  // 2 px the browser's own scroll anchoring was measured to make and below
+  // any scroll measured from a real input. A script scroll of 8 px or less
+  // is treated as layout noise; a person's scroll always comes with a
+  // wheel, touch, pointer or key event, and those cancel.
+  const RESTORE_SCROLL_TOLERANCE_PX = 8;
+
+  function watchRestoredQuestionScroll() {
+    const controller = new AbortController();
+    const watch = { question: null, done: false, ourTop: null, controller };
+    state.restoreScroll = watch;
+    const cancel = () => endRestoredQuestionScroll("cancelled");
+    const options = { capture: true, passive: true, signal: controller.signal };
+    for (const type of ["wheel", "touchstart", "pointerdown", "keydown"]) {
+      window.addEventListener(type, cancel, options);
+    }
+    window.addEventListener(
+      "scroll",
+      () => {
+        if (watch.done) return;
+        if (watch.ourTop === null || !queryTextarea) {
+          cancel();
+          return;
+        }
+        const top = queryTextarea.getBoundingClientRect().top;
+        if (Math.abs(top - watch.ourTop) > RESTORE_SCROLL_TOLERANCE_PX) cancel();
+      },
+      options,
+    );
+  }
+
+  // Idempotent: the first outcome stands, and the listeners go once.
+  function endRestoredQuestionScroll(outcome) {
+    const watch = state.restoreScroll;
+    if (!watch || watch.done) return;
+    watch.done = true;
+    watch.controller.abort();
+    document.documentElement.dataset.restoreScroll = outcome;
+  }
+
+  function bringRestoredQuestionIntoView() {
+    const watch = state.restoreScroll;
+    if (!watch || watch.done || watch.question === null || !queryTextarea) return;
+    if (queryTextarea.value !== watch.question) {
+      endRestoredQuestionScroll("cancelled");
+      return;
+    }
+    // The sign-in failure notice wins (round 2): it stays on screen.
+    if (el("sign-in-notice")) return;
+    // Focus placed elsewhere wins (the deletion return's "Delete my
+    // account…"): never scroll it away, and never focus the box.
+    const active = document.activeElement;
+    if (active && active !== document.body) return;
+    const box = queryTextarea.getBoundingClientRect();
+    if (box.top < 0 || box.bottom > window.innerHeight) {
+      queryTextarea.scrollIntoView({ behavior: "auto", block: "nearest" });
+    }
+    watch.ourTop = queryTextarea.getBoundingClientRect().top;
+  }
+
   async function restoreLateRunQuestion() {
     let saved = null;
     try {
@@ -11569,14 +11647,14 @@
     if (question) {
       queryTextarea.value = question;
       queryTextarea.dispatchEvent(new Event("input", { bubbles: true }));
-      // W87-2 review rounds 1 and 2: at 390 px the box is below the fold
-      // after the return, so bring it into view, only as far as needed
-      // ("nearest"). Not when the server rendered the sign-in failure notice
-      // (``#sign-in-notice``): that notice wins and stays on screen. Scroll
-      // only, never focus: focus stays where the account panel's return
-      // markers put it.
-      if (!el("sign-in-notice") && typeof queryTextarea.scrollIntoView === "function") {
-        queryTextarea.scrollIntoView({ behavior: "auto", block: "nearest" });
+      // W87-2 review rounds 1 to 3 (ADR-0175, CHG-074): the box is brought
+      // into view now and after every later readiness paint, through the
+      // watch ``boot()`` started first thing. This never creates or resets
+      // the watch, so an action taken before the restore still counts.
+      const watch = state.restoreScroll;
+      if (watch && !watch.done) {
+        watch.question = question;
+        bringRestoredQuestionIntoView();
       }
       return;
     }
@@ -12136,6 +12214,9 @@
     // already reads from the top, and forcing focus would paint a stray outline
     // on the h1. (View-switch focus management lives in ``enterLanding``, which
     // fires only on the user-initiated "How it works" click.)
+    // W87-2 review round 3: before any await, so a person's action taken
+    // before the question is put back still ends the restore scroll.
+    watchRestoredQuestionScroll();
     setView(hasSeenWorkspace() ? "composer" : "landing");
     // Hand view control back to the normal ``hidden`` mechanism now that
     // setView has applied the correct initial view. The pre-paint gate (inline
@@ -12403,6 +12484,9 @@
     } catch (error) {
       handleError(error);
     }
+    // W87-2 review round 3: the boot's last paint has run, and with it the
+    // last check of the restored question box.
+    endRestoredQuestionScroll("settled");
   }
 
   // Last-resort readiness stamp. ``boot()`` stamps ``data-app-state`` around
