@@ -484,10 +484,10 @@ test.describe("the restored question box ends in view (W87-2 round 3)", () => {
     page.locator("#error-region-actions").getByRole("button", { name: "Sign in again", exact: true });
 
   test("X1: late readiness and drift banners do not leave the box out of view", async ({ page, request }) => {
-    // RED-IF: the box is checked only at the restore (measured 831-987 in an
-    // 844 px window), or not after the drift paint (914-1070); red on
-    // fce3011. Partners: both late banners really painted, and the question
-    // is back.
+    // RED-IF: the box is not checked again after the late paints. Shown red
+    // on fce3011's app.js by the falsification lens (2026-10-20): the box's
+    // viewport ratio was 0 at the in-view check. Partners: both late banners
+    // really painted, and the question is back.
     test.setTimeout(120000);
     await refusedLateRun(page, request, "max-age-x1");
     const returned = watchReturn(page);
@@ -523,9 +523,11 @@ test.describe("the restored question box ends in view (W87-2 round 3)", () => {
   });
 
   test("X2: a wheel before the question is put back stops the page from moving", async ({ page, request }) => {
-    // RED-IF: the watch starts after the boot's awaits (measured: the page
-    // is yanked back to the box and ends "settled"). The bootstrap is held
-    // until the page reports the wheel's cancellation, so the order is
+    // RED-IF: the watch starts late (after the restore), or both the wheel
+    // cancel and the scroll cancel are removed. Removing the wheel cancel
+    // alone stays green: the wheel's scroll then cancels through the scroll
+    // listener. The bootstrap is held until the page reports the
+    // cancellation and the wheel's scroll has come to rest, so the order is
     // forced, not timed. Partner: the question is still put back.
     test.setTimeout(120000);
     await refusedLateRun(page, request, "max-age-x2");
@@ -553,8 +555,26 @@ test.describe("the restored question box ends in view (W87-2 round 3)", () => {
     await page.mouse.move(195, 422);
     await page.mouse.wheel(0, 120);
     await expect(page.locator("html")).toHaveAttribute("data-restore-scroll", "cancelled");
-    const before = await page.evaluate(() => window.scrollY);
-    expect(before, "the wheel scrolled the page").toBeGreaterThan(0);
+    // Codex round 3: "cancelled" is set by the wheel event, which can come
+    // before the wheel's scroll ends. Still held: wait until two reads one
+    // animation frame apart agree and are not 0, and take that as the base.
+    let before = -1;
+    await expect
+      .poll(
+        async () => {
+          before = await page.evaluate(
+            () =>
+              new Promise<number>((resolve) => {
+                const first = window.scrollY;
+                requestAnimationFrame(() => resolve(first === window.scrollY && first > 0 ? first : -1));
+              }),
+          );
+          return before;
+        },
+        { message: "the wheel's scroll has come to rest", timeout: 10000 },
+      )
+      .toBeGreaterThan(0);
+    expect(held, "the bootstrap is still held").toBe(1);
     release();
     // The rest of the boot: the bootstrap, the defaults, the restore, then
     // readiness. Wait for its last request, then two frames after it.
@@ -568,8 +588,9 @@ test.describe("the restored question box ends in view (W87-2 round 3)", () => {
   });
 
   test("X3: when Google cancels, the failure notice stays on screen", async ({ page, request }) => {
-    // Journey E37/E48 partner. RED-IF: the notice guard is removed (measured:
-    // the notice at -30 to -9 px). Partner: the question is back.
+    // Journey E37/E48 partner. RED-IF: the notice guard is removed (measured
+    // by the falsification lens on 2026-10-20: the notice's viewport ratio
+    // was 0). Partner: the question is back.
     test.setTimeout(120000);
     await refusedLateRun(page, request, "max-age-x3");
     await page.unroute("https://accounts.google.com/**");

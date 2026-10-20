@@ -982,12 +982,6 @@ textarea:focus, input:focus, select:focus {
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
-/* Transient highlight when the composer question is filled + focused via a
-   hand-off (example chip, follow-up "Review & run", or the landing). Programmatic
-   focus does not trigger :focus-visible and the composer suppresses the plain
-   :focus ring, so without this the field gives no visible cue that the question
-   landed there. Applied by goToComposer() and removed after ~1.4s. The id+class
-   selector wins over the neutral .question-field textarea border. */
 /* W87-2 review round 3: a question put back after sign-in is scrolled into
    view with block "nearest"; without a margin it stops flush with the
    viewport's edge (measured: bottom 844.09 in an 844 px window). */
@@ -995,6 +989,12 @@ textarea:focus, input:focus, select:focus {
   scroll-margin-block: var(--space-4);
 }
 
+/* Transient highlight when the composer question is filled + focused via a
+   hand-off (example chip, follow-up "Review & run", or the landing). Programmatic
+   focus does not trigger :focus-visible and the composer suppresses the plain
+   :focus ring, so without this the field gives no visible cue that the question
+   landed there. Applied by goToComposer() and removed after ~1.4s. The id+class
+   selector wins over the neutral .question-field textarea border. */
 #query-text.question-handoff-focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-soft);

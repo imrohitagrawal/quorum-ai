@@ -78,8 +78,8 @@ Facts the design rests on, read on `main` at `0f06765` unless marked:
    still signed in to Google it takes one click." (CHG-063 (f)(1)). Google's discovery document,
    fetched 2026-10-20 (`https://accounts.google.com/.well-known/openid-configuration`), lists
    `claims_supported` as aud, email, email_verified, exp, family_name, given_name, iat, iss, name,
-   picture and sub, with no `auth_time`, and has no `max_age` or `prompt_values_supported` key.
-   `auth_time` is not read. The Quorum session is independent of Google's: signing out of Google leaves Quorum
+   picture and sub, with no `auth_time`. The document cannot settle how Google treats `max_age`:
+   OpenID Connect Discovery 1.0 defines no metadata for it. `auth_time` is not read. The Quorum session is independent of Google's: signing out of Google leaves Quorum
    signed in, and signing out of Quorum calls nothing at Google. Google is asked again at each
    sign-in, after the 12 hours (ADR-0174), and before a deletion more than 10 minutes after the
    sign-in that made the session; no ending of a session is passed between the two.
@@ -231,11 +231,13 @@ Facts the design rests on, read on `main` at `0f06765` unless marked:
   the same Google identity (Codex). For a recovered session the locked check and write refuses it,
   or the deletion waits for the write and then removes the row (decision 5). On the live path it is
   today's behaviour, unchanged.
-- **A script scroll of 8 px or less is treated as layout noise** (review round 3). The watch on a
-  restored question cancels on a scroll the page did not make only when the box moved more than
-  8 px from where its last check left it, because the browser's own scroll anchoring was measured
-  making 2 px scrolls. 8 px is chosen, not derived. A person's scroll always comes with a wheel,
-  touch, pointer or key event, and those cancel whatever the distance.
+- **A scroll of 8 px or less that the page did not make is treated as layout noise** (review round
+  3). The watch on a restored question cancels on such a scroll only when the box moved more than
+  8 px from where its last check left it, because a 2 px scroll with no input was measured (scroll
+  anchoring or the font swap; not separated). 8 px is chosen, not derived: above that 2 px and
+  below the one wheel scroll measured (120 px). A script, a scrollbar drag or assistive
+  technology can scroll with no wheel, touch, pointer or key event, so a scroll of 8 px or less
+  from them does not cancel; a wheel, touch, pointer or key event cancels at any distance.
 - **The anonymous question can be lost.** After 900 seconds (decision 14); when the bootstrap could
   not tell the session's kind (decision 12); and after any identity change in the page load, even
   for a draft typed after the change, until a reload (the cost is a retyped question, never a

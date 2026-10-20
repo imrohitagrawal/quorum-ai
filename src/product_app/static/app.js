@@ -11569,11 +11569,12 @@
   //
   // A scroll the page did not make cancels too (a scrollbar drag, a
   // script, assistive technology): the box's top moved more than this from
-  // where the last check left it. JUDGMENT CALL: 8 px is chosen, above the
-  // 2 px the browser's own scroll anchoring was measured to make and below
-  // any scroll measured from a real input. A script scroll of 8 px or less
-  // is treated as layout noise; a person's scroll always comes with a
-  // wheel, touch, pointer or key event, and those cancel.
+  // where the last check left it. JUDGMENT CALL: 8 px is chosen, above a
+  // 2 px scroll measured with no input (scroll anchoring or the font swap;
+  // not separated) and below the one wheel scroll measured (120 px). Such a
+  // scroll of 8 px or less is treated as layout noise, whether a script, a
+  // scrollbar drag or assistive technology made it; a wheel, touch, pointer
+  // or key event cancels at any distance.
   const RESTORE_SCROLL_TOLERANCE_PX = 8;
 
   function watchRestoredQuestionScroll() {
