@@ -759,18 +759,25 @@ def google_sign_in_callback(request: Request) -> RedirectResponse:
         identity = exchange_code(code, pending.code_verifier)
     except SignInFailed as exc:
         return _failed(exc.reason)
-    if recovered is not None and auth.session_repository.max_age_account(session_id) != recovered:
-        # W87-2 review round 1: the recovery condition again, after the
-        # exchange and BEFORE the account row is written, so a recovery
-        # refused because the account was deleted during the exchange does
-        # not write that account's row back (Codex measured 0 rows -> 1).
-        return _failed("no_session")
     store = session_store.get_store()
     if store is None:
         return _failed("account_not_recorded")
-    account_id = store.upsert_google_account(
-        google_sub=identity.google_sub, email=identity.email, now=datetime.now(UTC)
-    )
+
+    def upsert() -> UUID | None:
+        return store.upsert_google_account(
+            google_sub=identity.google_sub, email=identity.email, now=datetime.now(UTC)
+        )
+
+    if recovered is None:
+        account_id = upsert()
+    else:
+        # W87-2 review rounds 1 and 2: the recovery condition again after
+        # the exchange, and the account row written under the same lock as
+        # that check, so a deletion cannot land between them and have its
+        # row written back (Codex measured 0 rows -> 1 both times).
+        account_id = auth.session_repository.upsert_if_recoverable(session_id, recovered, upsert)
+        if account_id is None:
+            return _failed("no_session")
     if account_id is None:
         return _failed("account_not_recorded")
     if recovered is not None and auth.session_repository.max_age_account(session_id) != recovered:

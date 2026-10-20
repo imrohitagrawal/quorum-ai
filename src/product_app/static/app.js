@@ -11569,11 +11569,14 @@
     if (question) {
       queryTextarea.value = question;
       queryTextarea.dispatchEvent(new Event("input", { bubbles: true }));
-      // W87-2 review round 1: at 390 px the box is below the fold after the
-      // return, so bring it into view. Scroll only, never focus: focus stays
-      // where the account panel's return markers put it.
-      if (typeof queryTextarea.scrollIntoView === "function") {
-        queryTextarea.scrollIntoView({ behavior: "auto", block: "center" });
+      // W87-2 review rounds 1 and 2: at 390 px the box is below the fold
+      // after the return, so bring it into view, only as far as needed
+      // ("nearest"). Not when the server rendered the sign-in failure notice
+      // (``#sign-in-notice``): that notice wins and stays on screen. Scroll
+      // only, never focus: focus stays where the account panel's return
+      // markers put it.
+      if (!el("sign-in-notice") && typeof queryTextarea.scrollIntoView === "function") {
+        queryTextarea.scrollIntoView({ behavior: "auto", block: "nearest" });
       }
       return;
     }

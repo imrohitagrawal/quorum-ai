@@ -25,9 +25,10 @@ and the ones this pull request closes or records are published with it in
 `docs/analysis/2026-10-20-w87-2-recent-sign-in-failure-modes.md`. Codex reviewed the plan four
 times before any code (ADR-0168, decision 7); its reviews are kept outside the repository and none
 has a committed record. Its findings and what was done with each are summarised under Decision and
-Known limits. Codex reviewed the branch's code once (review round 1): one finding was fixed (a
-refused recovery wrote the account row back, decision 5) and one is recorded (Known limits,
-"Check to issue").
+Known limits. Codex reviewed the branch's code twice. Round 1 found that a refused recovery wrote
+the deleted account's row back, and round 2 that a deletion landing between the new check and the
+row step still could; both are fixed (decision 5). One finding is recorded (Known limits, "Check to
+issue").
 
 ## Context
 
@@ -88,8 +89,17 @@ Facts the design rests on, read on `main` at `0f06765` unless marked:
 5. **The callback, in order.** No cookie fails. The pending entry is taken first, on every attempt,
    so a `state` is good for one attempt even when the session has ended. A session that no longer
    resolves goes on only when it ended by the signed-in 12 hours (decision 7). Then the state,
-   the code, the exchange and the account row as before; for a recovered session the recovery
-   condition is checked again; the new session is issued (the old id revoked, FM-12); the
+   the code and the Google exchange. Then the account row: on the live path as before; for a
+   recovered session, `SessionRepository.upsert_if_recoverable` checks the recovery condition again
+   and writes the row while holding the session repository's lock, the lock a deletion takes
+   (`begin_deletion`) before it removes any row. So a deletion either comes first, and the sign-in
+   is refused with nothing written, or waits until the row is written and then removes it (review
+   rounds 1 and 2: Codex measured a deleted account's row written back, 0 rows then 1, both times;
+   `tests/integration/test_sign_in_recovery_no_account_write.py`,
+   `tests/integration/test_sign_in_recovery_lock.py`). With the lock the callback can still
+   redirect to `/ui`; the deletion that follows still leaves no account row and no session (the
+   lock test asserts both). For a recovered session the recovery condition is checked once more
+   after the row; the new session is issued (the old id revoked, FM-12); the
    deleted-while-signing-in check as before.
 6. **Four fixed return paths.** `/ui` (a plain sign-in), `/ui?sign_in=failed` (every failure, any
    purpose, a cancel included), `/ui?account=delete` (a deletion sign-in, the same account back) and
@@ -104,9 +114,8 @@ Facts the design rests on, read on `main` at `0f06765` unless marked:
    a lookup that worked says signed in, past 12 hours, the 12 hours before the idle end), and no
    deletion of the account is under way or done (`account_is_going`). `end_reason` now answers from
    it, so the two cannot disagree. The callback asks it before the exchange, again after the
-   exchange and before the account row is written (review round 1: a recovery refused for a
-   deletion during the exchange had already written the deleted account's row back, Codex measured
-   0 rows then 1), and again after the account row, right before issuing, so a session revoked,
+   exchange together with the account row write under one lock (decision 5), and again after the
+   account row, right before issuing, so a session revoked,
    signed out everywhere or deleted during the exchange is refused (Codex measured all three signed
    in without the last check). A change in the few statements after the last check is not seen
    (Known limits, "Check to issue"). Not
@@ -192,22 +201,18 @@ Facts the design rests on, read on `main` at `0f06765` unless marked:
   seconds.
 - **A stale read** (Codex, re-check 1). `max_age_account` can read a row a moment before a revoke
   deletes it and still name the account.
-- **Check to issue** (Codex, re-check 1 and review round 1). A revocation or a sign-out everywhere
+- **Check to issue** (Codex, re-check 1 and review rounds 1 and 2). A revocation or a sign-out everywhere
   that lands between the last recovery check and `issue_signed_in_session` (a few statements, no
   network call) is not seen: the person who has just signed in with Google as that account gets a
-  working new session. That is the same window the ordinary sign-in path has, and recovery does not
-  refuse it. That window is narrower than the live path's, which has no check after the exchange at
-  all (measured by the
-  planner: a live session revoked during a stubbed exchange still gets `303 /ui` and a new cookie;
+  working new session. The result is the same as an ordinary sign-in, and recovery does not refuse
+  it. The live path has no check after the exchange at all (measured by the planner: a live session revoked during a stubbed exchange still gets `303 /ui` and a new cookie;
   `tests/integration/test_sign_in_recovery.py::test_the_live_path_is_unchanged_by_a_revoke_during_the_exchange`
   pins it). The same check on the live path is advisory, not built: the live path is W7's
   (ADR-0130), and it is left for the owner's backlog.
 - **Deletion during the live path's exchange** can let the account row step create a new account for
-  the same Google identity (Codex). For a recovered session the check after the exchange refuses it
-  before the account row is written
-  (`tests/integration/test_sign_in_recovery_no_account_write.py`); a deletion in the few statements
-  between that check and the row step (by reading, not tested) still writes the row, and the check
-  after it refuses the sign-in. On the live path it is today's behaviour, unchanged.
+  the same Google identity (Codex). For a recovered session the locked check and write refuses it,
+  or the deletion waits for the write and then removes the row (decision 5). On the live path it is
+  today's behaviour, unchanged.
 - **The anonymous question can be lost.** After 900 seconds (decision 14); when the bootstrap could
   not tell the session's kind (decision 12); and after any identity change in the page load, even
   for a draft typed after the change, until a reload (the cost is a retyped question, never a

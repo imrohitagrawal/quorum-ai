@@ -40,6 +40,7 @@ import logging
 import secrets
 import threading
 import time as _time_module
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
@@ -741,6 +742,25 @@ class SessionRepository:
         if _now() > max_age_end and max_age_end <= idle_end:
             return stored.account_id
         return None
+
+    def upsert_if_recoverable(
+        self, session_id: str, account_id: UUID, upsert: Callable[[], UUID | None]
+    ) -> UUID | None:
+        """Run ``upsert`` only while the ended session behind ``session_id``
+        is still recoverable for ``account_id`` (:meth:`max_age_account`,
+        deletion under way or done included), holding ``self._lock`` across
+        the check AND the write (W87-2 review round 2, ADR-0175). ``None``
+        when refused: nothing is written.
+
+        A deletion marks itself (:meth:`begin_deletion`) under this lock
+        before it removes any row, so it either comes first and the check
+        refuses, or waits until the write is done and then removes the row
+        it wrote. The store never calls back into this repository, so the
+        repository-then-store lock order cannot deadlock."""
+        with self._lock:
+            if self.max_age_account(session_id) != account_id:
+                return None
+            return upsert()
 
     def _persist(self, session: _Session) -> None:
         """Mirror ``session`` to the durable sink, if it is still the live one.
