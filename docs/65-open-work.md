@@ -6,7 +6,7 @@ original, because a gate and an offline agent can read it and cannot read `gh`.
 
 Verified at: `4ba35cec0ce40f9dd48b9c1bf0b9aefeb862a28c`
 
-The board holds **107** rows, **56** of them unpinned.
+The board holds **109** rows, **58** of them unpinned.
 
 `scripts/check_open_work.py --check` reads every row's evidence off disk and
 refuses if a claim is false. It runs inside `make validate`, and
@@ -203,6 +203,8 @@ caught by any automated check and 10 of 16 by adversarial review
 | W106 | Page loads never count (CHG-067): `/ui` serves the page without opening a session, and only the page's own same-origin script opens one, so no load of the page from another site can spend one of a network's daily sessions. Weigh ADR-0139's sign-in from the capped page and the test that a first visit starts a session | UNPINNED | `—` | — | — |
 | W107 | The PDF reader's child-process write catches only `BrokenPipeError` (`source_fetcher.py`, the non-blocking stdin write): on a heavily loaded Mac the write raised `BlockingIOError` though `select` said writable, failing 58 to 59 `tests/unit/test_w54_*` locally, identically on a clean `main` copy (measured 2026-10-18; CI's Linux runner passes). Catch it and keep selecting, with a test that forces a short write | UNPINNED | `—` | — | — |
 | W110 | The circle that can deploy, which every design for keeping users' keys relies on staying small (ADR-0180, Consequences; CHG-082): the two app-scoped Fly deploy tokens expire in 2046 (`fly tokens list -a quorum-ai`, 2026-10-17); the `production` environment's only rule is the `main` branch policy, with no required reviewer, and the repository has 2 collaborators, one admin and one write (`gh api`, 2026-10-18); 2-step login is on for the owner's GitHub account (`docs/41-security-controls.md`) and unchecked for Fly and for the write collaborator; organisation-scoped Fly tokens are not listed (U12 in `docs/analysis/2026-10-17-w28-key-storage-research.md`). Mostly the owner's own settings: shorter-lived Fly tokens, 2-step login, a required reviewer on `production`, and whether the write collaborator still needs it. W79 keeps the disclosure route and the key-replacement steps; this row is who can deploy. Numbered W110 to leave W103 to W109 to the parallel security session | UNPINNED | `—` | — | — |
+| W111 | The ordinary sign-in path checks the session only before the Google exchange: a deletion that completes during that exchange lets the sign-in create a new account row for the same Google identity, and a sign-out everywhere during it leaves a working session (by reading and by the W87-2 break-it matrix, 2026-10-20; ADR-0175 Known limits). Re-check after the exchange and hold the account write under the repository lock, as W87-2 does for a recovered session | UNPINNED | `—` | — | — |
+| W112 | Doc claims no check reads: a number in an ADR or docs/41 that restates a constant (SC-103's 600 seconds), a CHG-NNN (x) letter that does not exist, docs/41's bare file.py:NNN citations (test_cited_paths_resolve reads only paths that start with a folder), and e2e.yml's measured-run comments; each survived a planted change in W87-2's falsification rounds (2026-10-20). Pin what can be derived offline, as tests/test_doc_gate_consistency.py Part D does | UNPINNED | `—` | — | — |
 
 **STOP** marks a row that cannot be finished without a human decision — a money,
 cost or safety guardrail value that only real measurement could justify. Do not
