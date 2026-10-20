@@ -130,9 +130,16 @@ def test_times_are_stored_in_utc() -> None:
 
 def test_the_delete_account_steps_are_exact() -> None:
     """W7 (ADR-0136). Pinned with a literal: turns red if a step, a word, an
-    id or the hidden state of a step changes."""
-    assert main._account_delete_html() == (
-        '<div class="account-delete" id="account-delete">'
+    id or the hidden state of a step changes.
+
+    W87-2 (ADR-0175) moved this pin: the block carries the time left before
+    deletion needs a new sign-in (``data-recent-sign-in-seconds-left``, given
+    as ``recent_sign_in_seconds_left``), and a hidden step with the CHG-063
+    (f)(1) sentence and "Sign in again" sits after the last check. Red when:
+    the attribute is missing or not the value given, or a word, id or the
+    hidden state of the new step changes."""
+    assert main._account_delete_html(recent_sign_in_seconds_left=600) == (
+        '<div class="account-delete" id="account-delete" data-recent-sign-in-seconds-left="600">'
         '<p class="history-note account-delete-heading">Your account</p>'
         '<button type="button" id="sign-out-everywhere" class="account-delete-link">'
         "Sign out everywhere</button>"
@@ -156,6 +163,23 @@ def test_the_delete_account_steps_are_exact() -> None:
         "Delete permanently</button>"
         '<button type="button" id="account-delete-back">Keep my account</button>'
         "</div></div>"
+        '<div id="account-delete-reauth-step" hidden>'
+        "<p>For your safety, sign in with Google again before deleting your account. "
+        "If you are still signed in to Google it takes one click.</p>"
+        '<div class="account-delete-actions">'
+        '<button type="button" id="account-delete-reauth">Sign in again</button>'
+        "</div></div>"
         '<p id="account-delete-error" class="account-delete-error" role="alert" hidden></p>'
         "</div>"
     )
+
+
+def test_the_time_left_is_written_as_given() -> None:
+    """W87-2. Red when: the attribute is a constant rather than the value
+    given (0 and 137 are written as 0 and 137)."""
+    for left in (0, 137):
+        html = main._account_delete_html(recent_sign_in_seconds_left=left)
+        assert html.startswith(
+            '<div class="account-delete" id="account-delete" '
+            f'data-recent-sign-in-seconds-left="{left}">'
+        )

@@ -40,6 +40,7 @@ import logging
 import secrets
 import threading
 import time as _time_module
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
@@ -687,7 +688,8 @@ class SessionRepository:
         from the durable row, never guessed: ``SESSION_MAX_AGE`` only when the
         row still exists, its account did not end its sessions after the row
         started (sign out everywhere, or account deletion) and that cutoff
-        could be read, its account is signed in by a lookup that worked, it
+        could be read, no deletion of its account is under way (W87-2,
+        ADR-0175), its account is signed in by a lookup that worked, it
         is past the 12 hours, and its idle end did not come first. Every
         other case (no store, no row, a revoked session, an unreadable
         cutoff, an anonymous row, a failed lookup, an idle end) is the
@@ -696,36 +698,69 @@ class SessionRepository:
 
         The idle end is taken from the freshest last use known: the row's, or
         the one this process held when it dropped the ended session, which
-        the touch throttle can leave up to 300 s newer (round 1, break-it F1)."""
-        expired = AuthError.SESSION_EXPIRED.value
+        the touch throttle can leave up to 300 s newer (round 1, break-it F1).
+        The checks themselves are :meth:`max_age_account`'s (W87-2)."""
+        if self.max_age_account(session_id) is not None:
+            return AuthError.SESSION_MAX_AGE.value
+        return AuthError.SESSION_EXPIRED.value
+
+    def max_age_account(self, session_id: str) -> UUID | None:
+        """The account of the ended session behind ``session_id`` when it
+        ended by the signed-in 12 hours and nothing else, else ``None``
+        (W87-2, ADR-0175). :meth:`end_reason` answers from this, so the two
+        never disagree; the sign-in callback asks it to let a sign-in that
+        crossed the 12 hours finish (and asks again after the exchange).
+
+        On top of the checks :meth:`end_reason` describes, it refuses an
+        account whose deletion is under way or done
+        (:meth:`account_is_going`, not only :meth:`account_was_deleted`)."""
         store = session_store.get_store()
         if store is None:
-            return expired
+            return None
         # Any row, however old: the time conditions are applied below.
         stored = store.fetch(session_id, not_used_before=datetime(1970, 1, 1, tzinfo=UTC))
         if stored is None:
-            return expired
+            return None
         # Round 1 (Codex + break-it F1): a revoked session first, as the
         # restore checks it. A stale row written back after a sign-out
         # everywhere, or a cutoff that cannot be read, is not a 12-hour end.
         read, cutoff = store.sessions_valid_after(stored.account_id)
         if not read or (cutoff is not None and stored.created_at <= cutoff):
-            return expired
+            return None
         with self._lock:
             memory_cutoff = self._valid_after.get(stored.account_id)
-            if self.account_was_deleted(stored.account_id) or (
+            if self.account_is_going(stored.account_id) or (
                 memory_cutoff is not None and stored.created_at <= memory_cutoff
             ):
-                return expired
+                return None
             held = self._ended_last_used.get(session_id)
         if store.is_anonymous(stored.account_id) is not False:
-            return expired
+            return None
         last_used = stored.last_used_at if held is None else max(stored.last_used_at, held)
         max_age_end = stored.created_at + SIGNED_IN_MAX_AGE
         idle_end = last_used + signed_in_idle_limit()
         if _now() > max_age_end and max_age_end <= idle_end:
-            return AuthError.SESSION_MAX_AGE.value
-        return expired
+            return stored.account_id
+        return None
+
+    def upsert_if_recoverable(
+        self, session_id: str, account_id: UUID, upsert: Callable[[], UUID | None]
+    ) -> UUID | None:
+        """Run ``upsert`` only while the ended session behind ``session_id``
+        is still recoverable for ``account_id`` (:meth:`max_age_account`,
+        deletion under way or done included), holding ``self._lock`` across
+        the check AND the write (W87-2 review round 2, ADR-0175). ``None``
+        when refused: nothing is written.
+
+        A deletion marks itself (:meth:`begin_deletion`) under this lock
+        before it removes any row, so it either comes first and the check
+        refuses, or waits until the write is done and then removes the row
+        it wrote. The store never calls back into this repository, so the
+        repository-then-store lock order cannot deadlock."""
+        with self._lock:
+            if self.max_age_account(session_id) != account_id:
+                return None
+            return upsert()
 
     def _persist(self, session: _Session) -> None:
         """Mirror ``session`` to the durable sink, if it is still the live one.

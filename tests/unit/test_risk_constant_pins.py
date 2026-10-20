@@ -98,6 +98,7 @@ from datetime import timedelta
 from decimal import Decimal
 
 from product_app import (
+    account_deletion,
     auth,
     catalog_fetcher,
     costs,
@@ -171,6 +172,9 @@ RISK_TIER_MODULES = (
     # whom: the issuers and audience an ID token must carry, how long a
     # started sign-in stays valid, and where the client secret may be sent.
     "google_signin.py",
+    # Added 2026-10-20 with ADR-0175 (W87-2). It decides whether an account
+    # may be deleted: how recent the sign-in must be.
+    "account_deletion.py",
 )
 
 #: A wrong value here is silently harmful and nothing else constrains it.
@@ -193,6 +197,13 @@ BUCKET_A_LITERAL_PIN = (
     "google_signin.AFTER_SIGN_IN_PATH",
     "google_signin.SIGN_IN_FAILED_PATH",
     "google_signin.CALLBACK_PATH",
+    # W87-2 (ADR-0175): the two further fixed return paths of a sign-in for
+    # deletion. Like the two above, they are the whole open-redirect defence.
+    "google_signin.ACCOUNT_DELETE_PATH",
+    "google_signin.ACCOUNT_SWITCHED_PATH",
+    # W87-2 (ADR-0175, CHG-056 d, CHG-063 f): how recent a sign-in deletion
+    # needs. Longer lets a stolen cookie delete the account for longer.
+    "account_deletion.RECENT_SIGN_IN_FOR_DELETION",
     # The ports a browser leaves out of ``Host``. A wrong entry makes the
     # host rule refuse the one host sign-in can finish on, or accept a
     # different port as the same origin (round-2 review).
@@ -1510,6 +1521,17 @@ def test_auth_and_transport_constants_are_pinned() -> None:
     assert auth._SESSION_COOKIE_NAME_PREFIXED == "__Host-quorum_session"
     assert auth.CSRF_HEADER_NAME == "X-CSRF-Token"
     assert main._HSTS_HEADER == "max-age=31536000; includeSubDomains"
+
+
+def test_the_recent_sign_in_constants_are_pinned() -> None:
+    """Turns red if: the time a deletion allows since sign-in, or either
+    return path of a sign-in for deletion, moves (W87-2, ADR-0175).
+
+    Literals on both sides (rule 7a).
+    """
+    assert timedelta(minutes=10) == account_deletion.RECENT_SIGN_IN_FOR_DELETION
+    assert google_signin.ACCOUNT_DELETE_PATH == "/ui?account=delete"
+    assert google_signin.ACCOUNT_SWITCHED_PATH == "/ui?account=switched"
 
 
 def test_the_google_sign_in_constants_are_pinned() -> None:

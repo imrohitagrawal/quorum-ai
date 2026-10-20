@@ -360,12 +360,84 @@ def test_the_session_bootstrap_names_the_signed_in_account_and_no_other(
     stale. Red when: a signed-in bootstrap does not carry its account id, or
     carries another account's, or an anonymous bootstrap carries one (an
     anonymous session has no account to match). Partner: the anonymous body
-    is a real bootstrap (it carries a CSRF token)."""
+    is a real bootstrap (it carries a CSRF token).
+
+    W87-2 (ADR-0175, item 4a) extends it: anonymity is stated POSITIVELY.
+    Red when: the anonymous bootstrap lacks ``"anonymous": true``, or the
+    signed-in one carries ``anonymous`` at all."""
     client = _signed_in_client(sign_in)
     body = client.get("/v1/session").json()
     assert body["account_id"] == str(auth.session_repository._sessions[_sid(client)].account_id)
+    assert "anonymous" not in body
 
     anonymous = sign_in.client()
     plain = anonymous.get("/v1/session").json()
     assert plain["csrf_token"], "partner: a real bootstrap"
     assert "account_id" not in plain
+    assert plain.get("anonymous") is True
+
+
+# -- W87-2 (ADR-0175, item 4a): a bootstrap that cannot tell says neither -----
+
+
+def _failing_account_reads(monkeypatch: pytest.MonkeyPatch, store: Any, how: str) -> None:
+    """The accounts read failing, as a read error leaves it: ``account_for``
+    and ``is_anonymous`` both answer ``None`` (fail closed)."""
+    if how == "accounts not ready":
+        monkeypatch.setattr(store, "_accounts_ready", False)
+    else:
+        monkeypatch.setattr(store, "account_for", lambda _account: None)
+        monkeypatch.setattr(store, "is_anonymous", lambda _account: None)
+
+
+@pytest.mark.parametrize("how", ["accounts not ready", "read error"])
+@pytest.mark.parametrize("kind", ["anonymous", "signed in"])
+def test_a_bootstrap_that_cannot_read_the_account_names_neither(
+    sign_in: SignIn, monkeypatch: pytest.MonkeyPatch, how: str, kind: str
+) -> None:
+    """Codex re-check, CRITICAL_BLOCKER: a missing ``account_id`` is not proof
+    of anonymity. Red when: ``/v1/session`` writes ``anonymous: true`` for an
+    account it could not read (the page would then label account B's question
+    anonymous), or names an account. Partner: the body is a real bootstrap
+    (it carries a CSRF token); the healthy cases above carry the fields."""
+    client = _signed_in_client(sign_in) if kind == "signed in" else sign_in.client()
+    _boot(client)
+    _failing_account_reads(monkeypatch, sign_in.store, how)
+    body = client.get("/v1/session").json()
+    assert body["csrf_token"], "partner: a real bootstrap"
+    assert "account_id" not in body
+    assert "anonymous" not in body
+
+
+def test_a_signed_in_bootstrap_whose_account_read_fails_is_not_called_anonymous(
+    sign_in: SignIn, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The exact Codex case: the account row exists (``is_anonymous`` answers
+    ``False``) but ``account_for`` fails. Red when: that failed
+    ``account_for`` read makes the bootstrap say ``anonymous`` (for example
+    ``anonymous`` taken from the missing account rather than from
+    ``is_anonymous``). It does NOT catch ``is True`` changed to
+    ``is not False`` (a lookup answering ``None`` counted as anonymous):
+    the sibling ``test_a_bootstrap_that_cannot_read_the_account_names_neither``
+    catches that. Partner: a real bootstrap, and the same session's healthy
+    bootstrap names its account."""
+    client = _signed_in_client(sign_in)
+    assert "account_id" in client.get("/v1/session").json()
+    monkeypatch.setattr(sign_in.store, "account_for", lambda _account: None)
+    body = client.get("/v1/session").json()
+    assert body["csrf_token"]
+    assert "account_id" not in body
+    assert "anonymous" not in body
+
+
+def test_a_bootstrap_with_no_store_names_neither(sign_in: SignIn) -> None:
+    """Red when: with no session store the bootstrap says ``anonymous: true``
+    (nothing confirmed it). Partner: the same anonymous browser's bootstrap
+    says ``anonymous: true`` while the store is there, so the field exists."""
+    client = sign_in.client()
+    assert client.get("/v1/session").json().get("anonymous") is True
+    session_store.configure(None)
+    body = client.get("/v1/session").json()
+    assert body["csrf_token"], "partner: a real bootstrap"
+    assert "account_id" not in body
+    assert "anonymous" not in body

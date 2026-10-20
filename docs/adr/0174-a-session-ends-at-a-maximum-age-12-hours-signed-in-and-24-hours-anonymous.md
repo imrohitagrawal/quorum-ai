@@ -152,7 +152,7 @@ Facts the design rests on, read on `main` at `8463a72` and re-checked where mark
   address of its own, so the page offers no way back to it after signing in again (the journey
   tester, by reading; UNVERIFIED by running). The overshoot past the deadline is an NFR-004 concern
   of its own and is not on the board yet.
-- **Known limit, to be fixed in W87-2: signing in across the end.** The sign-in callback refuses a return
+- **Known limit, to be fixed in W87-2 (fixed by W87-2, ADR-0175): signing in across the end.** The sign-in callback refuses a return
   whose original session has meanwhile ended (`google_signin.py`, the `no_session` failure), so a
   visitor who presses "Sign in again" seconds before the 12 hours end can come back to
   `sign_in=failed` (Codex, by executing the callback). They then sign in once more from the

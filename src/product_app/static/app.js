@@ -420,6 +420,15 @@
     csrfToken: "",
     // W87-1 round 2: the signed-in account ``/v1/session`` names, or "".
     sessionAccountId: "",
+    // W87-2 (ADR-0175): ``true`` only when ``/v1/session`` said
+    // ``anonymous: true``; neither field means the server could not tell.
+    sessionAnonymous: false,
+    // W87-2 (the final save rule): the FIRST identity this page load saw
+    // (an account id, "anonymous", or "" for unknown; ``null`` before the
+    // first bootstrap), and whether a later bootstrap named another or an
+    // unknown one. Neither is cleared for the page load.
+    pageIdentity: null,
+    pageIdentityChanged: false,
     currentEstimate: null,
     currentRunId: null,
     pollingTimer: null,
@@ -460,6 +469,9 @@
     //: the first paint waits for the real answer.
     readinessConfirmed: false,
     lastStaleModelIds: null,
+    // W87-2 review round 3: the restored question's scroll watch (see
+    // ``watchRestoredQuestionScroll``); ``null`` until ``boot()`` starts it.
+    restoreScroll: null,
     // Track if user has attempted to submit (gates inline error display)
     submissionAttempted: false,
     // Slice 3 (04 Live run): live-run view state.
@@ -951,6 +963,8 @@
     footer,
     actions,
   } = {}) {
+    // W87-2 review round 3: the error box wins over the restored question.
+    endRestoredQuestionScroll("cancelled");
     // ``title`` lets an edge state word its heading from the response (W33
     // slice C: a COST_LIMIT_EXCEEDED is not always the hard cap).
     const title = titleOverride || (code && ERROR_TITLES[code]) || "Something went wrong";
@@ -1410,6 +1424,9 @@
   function confirmReadiness() {
     state.readinessConfirmed = true;
     applyReadinessState();
+    // W87-2 review round 3: a readiness or drift banner painted above the
+    // restored question box pushes it down; bring it back into view.
+    bringRestoredQuestionIntoView();
   }
 
   /**
@@ -8391,6 +8408,17 @@
       state.csrfToken = session.csrf_token;
       // W87-1 round 2: the signed-in account the server names ("" anonymous).
       state.sessionAccountId = typeof session.account_id === "string" ? session.account_id : "";
+      // W87-2 (ADR-0175): anonymity only when the server says so; a missing
+      // ``account_id`` alone is not proof (a failed read gives neither).
+      state.sessionAnonymous = !state.sessionAccountId && session.anonymous === true;
+      const identity = state.sessionAccountId || (state.sessionAnonymous ? "anonymous" : "");
+      if (state.pageIdentity === null || state.pageIdentity === undefined) {
+        state.pageIdentity = identity;
+      } else if (!identity || identity !== state.pageIdentity) {
+        // A retry (``retrySession``) that brings another account, anonymity
+        // or an unknown answer: nothing is saved on this page load again.
+        state.pageIdentityChanged = true;
+      }
       el("session-meta").textContent = "Managed by secure cookie";
       setConnectionPill("connected", connectedPillLabel());
     } catch (error) {
@@ -10340,7 +10368,9 @@
           actions = [{ label: "Sign in again", primary: true, action: signInAgainKeepingQuestion }];
         }
       } else if (signInOffered()) {
-        actions = [{ label: "Sign in with Google", primary: true, action: () => el("sign-in-google").click() }];
+        // W87-2 (CHG-073 c): the same save as "Sign in again", so the
+        // question is kept across this sign-in too.
+        actions = [{ label: "Sign in with Google", primary: true, action: signInAgainKeepingQuestion }];
       }
       return { code, severity: "warning", message: error.message, actions };
     }
@@ -11438,8 +11468,10 @@
   // page. Sign-out asks the server to end the session, then reloads /ui.
   const GOOGLE_CONSENT_HOST = "accounts.google.com";
 
-  async function startGoogleSignIn() {
-    const started = await api("/v1/auth/google/start", { method: "POST" });
+  // W87-2 (ADR-0175): the delete step's "Sign in again" uses the start for
+  // deletion; everything else the plain start. Both answer the same URL.
+  async function startGoogleSignIn(route = "/v1/auth/google/start") {
+    const started = await api(route, { method: "POST" });
     const target = new URL(started.authorization_url);
     if (target.protocol !== "https:" || target.host !== GOOGLE_CONSENT_HOST) {
       throw new Error("unexpected sign-in address");
@@ -11456,16 +11488,63 @@
   // here or in another tab, gets an empty box (rounds 1 and 2). The account
   // is the one ``/v1/session`` reported (``state.sessionAccountId``), never
   // the HTML's, which another tab's sign-in can make stale.
+  //
+  // W87-2 (ADR-0175; CHG-073 a and c): the anonymous card's "Sign in with
+  // Google" keeps the question too, marked anonymous with the time it was
+  // saved, and it is put back once within 15 minutes for whichever session
+  // the tab then has. Both cards' buttons call the ONE save below, which
+  // classifies the entry by the bootstrap's identity, never by the markup.
+  // Nothing is saved once this page load's identity has changed, or when the
+  // server could not tell who the session belongs to: the question is then
+  // lost, never shown to another account. Another signed-in account gets an
+  // empty box and a line saying why (CHG-073 a).
   const LATE_RUN_QUESTION_KEY = "quorum.lateRunQuestion";
+  const LATE_RUN_ANONYMOUS_KEEP_MS = 900 * 1000;
+
+  // What the save writes, or ``null`` for nothing.
+  function lateRunQuestionEntry({ accountId, anonymous, pageIdentityChanged, question, nowMs }) {
+    if (!question || pageIdentityChanged) return null;
+    if (accountId) return { account: accountId, question };
+    if (anonymous === true) return { anonymous: true, saved_at: nowMs, question };
+    return null;
+  }
+
+  // What the next load puts back from the raw saved string: the question
+  // ("" for none), and whether to say another account's question was not kept.
+  function lateRunQuestionToRestore(saved, { accountId, signedIn, nowMs }) {
+    const nothing = { question: "", notice: false };
+    let parsed = null;
+    try {
+      parsed = JSON.parse(saved);
+    } catch (_) {
+      return nothing;
+    }
+    if (!parsed || typeof parsed.question !== "string" || !parsed.question) return nothing;
+    if (typeof parsed.account === "string" && parsed.account) {
+      if (accountId && parsed.account === accountId) return { question: parsed.question, notice: false };
+      return { question: "", notice: Boolean(signedIn && accountId) };
+    }
+    if (parsed.anonymous === true && typeof parsed.saved_at === "number") {
+      const age = nowMs - parsed.saved_at;
+      if (age >= 0 && age <= LATE_RUN_ANONYMOUS_KEEP_MS) return { question: parsed.question, notice: false };
+    }
+    return nothing;
+  }
 
   async function signInAgainKeepingQuestion() {
     const question = queryTextarea ? queryTextarea.value : "";
     try {
-      if (question && state.sessionAccountId) {
-        window.sessionStorage.setItem(
-          LATE_RUN_QUESTION_KEY,
-          JSON.stringify({ account: state.sessionAccountId, question }),
-        );
+      const entry = lateRunQuestionEntry({
+        accountId: state.sessionAccountId,
+        anonymous: state.sessionAnonymous === true,
+        pageIdentityChanged: state.pageIdentityChanged === true,
+        question,
+        nowMs: Date.now(),
+      });
+      if (entry) {
+        window.sessionStorage.setItem(LATE_RUN_QUESTION_KEY, JSON.stringify(entry));
+      } else {
+        window.sessionStorage.removeItem(LATE_RUN_QUESTION_KEY);
       }
     } catch (_) {
       // Storage refused (a private window): the sign-in still works.
@@ -11480,7 +11559,78 @@
     }
   }
 
-  function restoreLateRunQuestion() {
+  // W87-2 review round 3 (ADR-0175, CHG-074): keep a question put back after
+  // sign-in in view while the boot is still painting banners above it, and
+  // stop for good at the person's first action. ``state.restoreScroll`` is
+  // the watch: ``boot()`` starts it before any await, the restore names the
+  // question, every readiness paint re-checks the box, and the end is
+  // written once to ``data-restore-scroll`` on <html> ("cancelled" or
+  // "settled"; no pixels change).
+  //
+  // A scroll the page did not make cancels too (a scrollbar drag, a
+  // script, assistive technology): the box's top moved more than this from
+  // where the last check left it. JUDGMENT CALL: 8 px is chosen, above a
+  // 2 px scroll measured with no input (scroll anchoring or the font swap;
+  // not separated) and below the one wheel scroll measured (120 px). Such a
+  // scroll of 8 px or less is treated as layout noise, whether a script, a
+  // scrollbar drag or assistive technology made it; a wheel, touch, pointer
+  // or key event cancels at any distance.
+  const RESTORE_SCROLL_TOLERANCE_PX = 8;
+
+  function watchRestoredQuestionScroll() {
+    const controller = new AbortController();
+    const watch = { question: null, done: false, ourTop: null, controller };
+    state.restoreScroll = watch;
+    const cancel = () => endRestoredQuestionScroll("cancelled");
+    const options = { capture: true, passive: true, signal: controller.signal };
+    for (const type of ["wheel", "touchstart", "pointerdown", "keydown"]) {
+      window.addEventListener(type, cancel, options);
+    }
+    window.addEventListener(
+      "scroll",
+      () => {
+        if (watch.done) return;
+        if (watch.ourTop === null || !queryTextarea) {
+          cancel();
+          return;
+        }
+        const top = queryTextarea.getBoundingClientRect().top;
+        if (Math.abs(top - watch.ourTop) > RESTORE_SCROLL_TOLERANCE_PX) cancel();
+      },
+      options,
+    );
+  }
+
+  // Idempotent: the first outcome stands, and the listeners go once.
+  function endRestoredQuestionScroll(outcome) {
+    const watch = state.restoreScroll;
+    if (!watch || watch.done) return;
+    watch.done = true;
+    watch.controller.abort();
+    document.documentElement.dataset.restoreScroll = outcome;
+  }
+
+  function bringRestoredQuestionIntoView() {
+    const watch = state.restoreScroll;
+    if (!watch || watch.done || watch.question === null || !queryTextarea) return;
+    if (queryTextarea.value !== watch.question) {
+      endRestoredQuestionScroll("cancelled");
+      return;
+    }
+    // The sign-in failure notice wins (round 2): it stays on screen.
+    if (el("sign-in-notice")) return;
+    // Focus placed elsewhere wins (the deletion return's "Delete my
+    // account…"): never scroll it away, and never focus the box.
+    const active = document.activeElement;
+    if (active && active !== document.body) return;
+    const box = queryTextarea.getBoundingClientRect();
+    if (box.top < 0 || box.bottom > window.innerHeight) {
+      queryTextarea.scrollIntoView({ behavior: "auto", block: "nearest" });
+    }
+    watch.ourTop = queryTextarea.getBoundingClientRect().top;
+  }
+
+  async function restoreLateRunQuestion() {
     let saved = null;
     try {
       saved = window.sessionStorage.getItem(LATE_RUN_QUESTION_KEY);
@@ -11489,19 +11639,70 @@
       return;
     }
     if (!saved || !queryTextarea) return;
-    let question = "";
-    try {
-      const parsed = JSON.parse(saved);
-      const account = state.sessionAccountId;
-      if (parsed && account && parsed.account === account && typeof parsed.question === "string") {
-        question = parsed.question;
+    const accountId = state.sessionAccountId;
+    const { question, notice } = lateRunQuestionToRestore(saved, {
+      accountId,
+      signedIn: Boolean(accountId),
+      nowMs: Date.now(),
+    });
+    if (question) {
+      queryTextarea.value = question;
+      queryTextarea.dispatchEvent(new Event("input", { bubbles: true }));
+      // W87-2 review rounds 1 to 3 (ADR-0175, CHG-074): the box is brought
+      // into view now and after every later readiness paint, through the
+      // watch ``boot()`` started first thing. This never creates or resets
+      // the watch, so an action taken before the restore still counts.
+      const watch = state.restoreScroll;
+      if (watch && !watch.done) {
+        watch.question = question;
+        bringRestoredQuestionIntoView();
       }
+      return;
+    }
+    if (notice) await showQuestionNotKeptNotice();
+  }
+
+  // CHG-073 (a): the line above the question box when a question typed as
+  // another account was not put back. The email is the one the history route
+  // answers for this cookie's own session, never the HTML's (another tab can
+  // make that stale), and it goes in as text. If the route fails, no line.
+  async function showQuestionNotKeptNotice() {
+    let email = "";
+    try {
+      const answer = await api(HISTORY_ROUTE, { method: "GET" });
+      email = answer && typeof answer.email === "string" ? answer.email : "";
     } catch (_) {
       return;
     }
-    if (!question) return;
-    queryTextarea.value = question;
-    queryTextarea.dispatchEvent(new Event("input", { bubbles: true }));
+    const field = queryTextarea && queryTextarea.closest(".question-field");
+    if (!email || !field || !field.parentNode) return;
+    const line = document.createElement("p");
+    line.className = "question-not-kept";
+    line.id = "question-not-kept";
+    line.setAttribute("role", "status");
+    line.textContent =
+      "You are now signed in as " +
+      email +
+      ". Your question was not kept because it was typed while signed in as another account.";
+    field.parentNode.insertBefore(line, field);
+  }
+
+  // W87-2 (ADR-0175): back from a sign-in started by "Delete my account…"
+  // (``?account=delete``, or ``?account=switched`` when another account came
+  // back): open the account panel, put focus on "Delete my account…", and
+  // drop the marker so a reload does not do it again. No new words for the
+  // same account (CHG-063 f); the server wrote the switched line.
+  function openAccountPanelAfterReturn() {
+    const url = new URL(window.location.href);
+    const marker = url.searchParams.get("account");
+    if (marker !== "delete" && marker !== "switched") return;
+    url.searchParams.delete("account");
+    window.history.replaceState(window.history.state, "", url.pathname + url.search + url.hash);
+    const panel = el("account-history");
+    const deleteStart = el("account-delete-start");
+    if (!panel || !deleteStart) return;
+    panel.open = true;
+    deleteStart.focus();
   }
 
   function initAccountControls() {
@@ -11678,17 +11879,45 @@
     if (deleteStart) {
       const reminder = el("account-delete-reminder");
       const final = el("account-delete-final");
+      const reauth = el("account-delete-reauth-step");
+      const reauthButton = el("account-delete-reauth");
       const email = el("account-delete-email");
       const error = el("account-delete-error");
+      // W87-2 (ADR-0175, CHG-056 d): the time left at load before deleting
+      // needs a new Google sign-in. Only for the visitor: the server refuses
+      // a stale session whatever this says (FM-14).
+      const block = el("account-delete");
+      const recentSecondsLeft = Number(block && block.dataset.recentSignInSecondsLeft);
+      const loadedAt = Date.now();
       const show = (step) => {
         deleteStart.hidden = step !== "start";
         reminder.hidden = step !== "reminder";
         final.hidden = step !== "final";
+        reauth.hidden = step !== "reauth";
         if (step !== "final") error.hidden = true;
       };
+      const askForSignIn = () => {
+        show("reauth");
+        reauthButton.focus();
+      };
       deleteStart.addEventListener("click", () => {
+        if (!recentSignInFresh(recentSecondsLeft, loadedAt, Date.now())) {
+          askForSignIn();
+          return;
+        }
         show("reminder");
         email.focus();
+      });
+      reauthButton.addEventListener("click", async () => {
+        reauthButton.disabled = true;
+        try {
+          await startGoogleSignIn("/v1/auth/google/start-for-deletion");
+        } catch (err) {
+          reauthButton.disabled = false;
+          error.textContent = signInStartMessage(err);
+          error.hidden = false;
+          reauthButton.focus();
+        }
       });
       // Focus goes back to the step's own control, never to the page.
       const restart = () => {
@@ -11725,6 +11954,10 @@
           window.location.assign("/ui");
         } catch (err) {
           confirm.disabled = false;
+          if (err && err.code === "RECENT_SIGN_IN_REQUIRED") {
+            askForSignIn();
+            return;
+          }
           show("reminder");
           error.textContent = accountDeleteMessage(err);
           error.hidden = false;
@@ -11911,6 +12144,13 @@
     return "Sign-in could not start. Please try again.";
   }
 
+  // W87-2 (ADR-0175): whether the session's sign-in is still recent enough
+  // to delete, from the seconds it had left when the page loaded. Fresh up to
+  // and including the deadline; a missing value is never fresh.
+  function recentSignInFresh(secondsLeft, loadedAtMs, nowMs) {
+    return nowMs <= loadedAtMs + secondsLeft * 1000;
+  }
+
   // W7 (ADR-0136): the delete step's error line. "Try again" for a store
   // failure (503 DELETION_FAILED, nothing was changed) or a dropped
   // connection; everything else is told to reload first, which is what a
@@ -11924,6 +12164,13 @@
     }
     if (code === "DELETION_FAILED" || code === "NETWORK_UNREACHABLE" || (err && err.status === 0)) {
       return "Your account could not be deleted just now. Please try again.";
+    }
+    if (code === "RECENT_SIGN_IN_REQUIRED") {
+      // W87-2 (ADR-0175): CHG-063 (f)(1); reloading would not help.
+      return (
+        "For your safety, sign in with Google again before deleting your account. " +
+        "If you are still signed in to Google it takes one click."
+      );
     }
     return "Your session changed. Reload the page, then try again.";
   }
@@ -11968,6 +12215,9 @@
     // already reads from the top, and forcing focus would paint a stray outline
     // on the h1. (View-switch focus management lives in ``enterLanding``, which
     // fires only on the user-initiated "How it works" click.)
+    // W87-2 review round 3: before any await, so a person's action taken
+    // before the question is put back still ends the restore scroll.
+    watchRestoredQuestionScroll();
     setView(hasSeenWorkspace() ? "composer" : "landing");
     // Hand view control back to the normal ``hidden`` mechanism now that
     // setView has applied the correct initial view. The pre-paint gate (inline
@@ -12196,8 +12446,11 @@
       await refreshDefaults();
       // CHG-070 (b): the question kept across "Sign in again", put back once,
       // only now (round 2): the model slots exist, so its costs can be shown,
-      // and the bootstrap has named the account it must match.
-      restoreLateRunQuestion();
+      // and the bootstrap has named the account it must match. W87-2: only
+      // its other-account line waits on a request, so the boot does not.
+      restoreLateRunQuestion().catch(() => {});
+      // W87-2: back from a sign-in for deletion, the account panel opens.
+      openAccountPanelAfterReturn();
       renderProgress(null);
       renderDebateAndSynthesis(null);
       renderNotices(null);
@@ -12232,6 +12485,9 @@
     } catch (error) {
       handleError(error);
     }
+    // W87-2 review round 3: the boot's last paint has run, and with it the
+    // last check of the restored question box.
+    endRestoredQuestionScroll("settled");
   }
 
   // Last-resort readiness stamp. ``boot()`` stamps ``data-app-state`` around

@@ -49,6 +49,12 @@ _RENDERED_ONLY_WITH_SIGN_IN = frozenset(
         "account-delete-confirm",
         "account-delete-back",
         "account-delete-error",
+        # W87-2 (ADR-0175): the step that asks for a new sign-in first.
+        "account-delete-reauth-step",
+        "account-delete-reauth",
+        # W87-2 review round 2: the failed-sign-in notice, rendered only on
+        # ``/ui?sign_in=failed``; the question restore does not scroll under it.
+        "sign-in-notice",
         # W7 part 3 (ADR-0137): sign out everywhere.
         "sign-out-everywhere",
         # W7 part 3 (ADR-0138): the idle reminder.
@@ -95,7 +101,8 @@ def _sign_in_markup(monkeypatch: pytest.MonkeyPatch) -> str:
         main, "signed_in_account", lambda _id: StoredAccount(account_id=account_id, email="a@b.c")
     )
     signed_in, _ = main._account_controls_html(account_id, sign_in_failed=False)
-    return anonymous + signed_in
+    failed, _ = main._account_controls_html(None, sign_in_failed=True)
+    return anonymous + signed_in + failed
 
 
 def test_workspace_html_contains_all_dom_hooks_used_by_javascript(

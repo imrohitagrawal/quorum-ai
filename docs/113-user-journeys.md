@@ -136,8 +136,29 @@ A signed-in person keeps one tab open and keeps using it for most of a day, so t
 
 - The page never says "nothing has happened on this page" when the 12 hours are the reason, and never says "12 hours" when they are not.
 - No run starts with less than 12 minutes of session left; a refused run spends nothing.
-- The typed question survives "Sign in again" once, in this tab only, and only when the same Google account comes back; a plain sign-in puts nothing back.
+- The typed question survives "Sign in again" once, in this tab only, and only when the same Google account comes back; another account gets an empty box and the line "You are now signed in as <email>. Your question was not kept because it was typed while signed in as another account." (CHG-073 (a), W87-2); a plain sign-in puts nothing back.
 - Where the page offers no sign-in (sign-in off, or the fly.dev host), a signed-in visitor's card has the sign-in-off text and no "Sign in again" (review round 2).
-- An anonymous visitor in the last 12 minutes of 24 hours is refused with "This session ends in less than 12 minutes, so this question cannot run now. Sign in to keep going, or reload the page after the session ends." (without the sign-in part when sign-in is off).
-- Decided by the product owner on 2026-10-17 and 2026-10-18 (CHG-056 (c), CHG-063 (f)(2), CHG-066, CHG-069, CHG-070); design ADR-0174.
-- Known limit: "Sign in again" pressed seconds before the 12 hours end can come back to a failed sign-in; signing in once more works. W87-2, not yet built, adds the recovery path (ADR-0174).
+- An anonymous visitor in the last 12 minutes of 24 hours is refused with "This session ends in less than 12 minutes, so this question cannot run now. Sign in to keep going, or reload the page after the session ends." (without the sign-in part when sign-in is off). Since W87-2 their "Sign in with Google" keeps the typed question too, and puts it back once within 15 minutes (CHG-073 (c); ADR-0175).
+- Decided by the product owner on 2026-10-17, 2026-10-18 and 2026-10-19 (CHG-056 (c), CHG-063 (f)(2), CHG-066, CHG-069, CHG-070, CHG-073 (a) to (c)); design ADR-0174 and ADR-0175.
+- "Sign in again" pressed seconds before the 12 hours end comes back signed in, with the question in the box. Until W87-2 it came back to a failed sign-in (ADR-0174's known limit, fixed by W87-2, ADR-0175).
+
+## Journey J-008: Deleting an account a while after signing in
+
+### Trigger
+
+A signed-in person opens History and presses "Delete my account…" more than 10 minutes after the sign-in that made their session.
+
+### Steps
+
+1. Instead of the reminder, the panel says "For your safety, sign in with Google again before deleting your account. If you are still signed in to Google it takes one click." with one button, "Sign in again", which has the focus.
+2. They press it and complete Google's sign-in, one click when still signed in to Google. They come back to the workspace with the account panel open and the focus on "Delete my account…".
+3. They press it again, see the reminder, type their email, press "Continue" and then "Delete permanently". The account is deleted.
+4. If Google signs them in as another account, they come back signed in as that account, and the panel says "You are now signed in as <email>. Nothing was deleted. To delete this account, press "Delete my account" again." The first account is untouched. If they cancel at Google, they stay signed in and the top bar says "Sign-in did not complete. Please try again."
+
+### Success Criteria
+
+- No session whose own sign-in is more than 10 minutes old can delete an account, whatever the page shows; the refusal deletes nothing.
+- A sign-in on another browser never makes an old session fresh, and the new sign-in replaces this browser's session, so a copied cookie stops working.
+- Google is asked for nothing new: no password prompt is forced.
+- Decided by the product owner on 2026-10-17 to 2026-10-19 (CHG-056 (d), CHG-063 (f)(1), CHG-066 (c), CHG-073 (d)); design ADR-0175.
+- Known limit: typing for more than 10 minutes after the new sign-in is refused again, and the visitor signs in again.

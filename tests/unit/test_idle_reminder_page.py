@@ -56,7 +56,9 @@ def test_the_reminder_is_rendered_only_for_a_signed_in_account(
     account = uuid4()
     stored = StoredAccount(account_id=account, email="ada@example.com")
     monkeypatch.setattr(main, "signed_in_account", lambda a: stored if a == account else None)
-    monkeypatch.setattr(main, "_history_html", lambda _a: "")
+    # W87-2 (ADR-0175): the panel also takes the deletion time and the
+    # switched line, as keywords.
+    monkeypatch.setattr(main, "_history_html", lambda _a, **_kw: "")
     signed, _ = main._account_controls_html(account, sign_in_failed=False)
     anonymous, _ = main._account_controls_html(uuid4(), sign_in_failed=False)
     assert signed.count('id="idle-reminder"') == 1
