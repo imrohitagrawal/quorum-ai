@@ -29,9 +29,12 @@ WHAT THE PARSER IS ALLOWED (decision 4)
     external ``jbig2dec`` program. At most 20 pages and 50,000 characters are
     extracted. ``/90msp-RKSJ-H`` is read as cp932, as pypdf already reads
     ``/90ms-RKSJ-H``. Text more than 20% of whose characters are in
-    U+0080-U+00FF is garbled (:func:`is_garbled`; the parent refuses it).
+    U+0080-U+00FF or are U+FFFD is garbled (:func:`is_garbled`; the parent
+    refuses it).
 
-A password or a parser exception of any kind comes back as "". Nothing here
+A page with a font whose encoding pypdf reports it cannot decode, and so
+guesses, is left out (:data:`GUESSED_ENCODING`). A password or a parser
+exception of any kind comes back as "". Nothing here
 raises into the parent: the parent reads a JSON object, or nothing, through
 :func:`read_reply` (which drops lone surrogates), and itself decides whether
 the text is usable (at least 200 characters, and not garbled by
@@ -43,6 +46,7 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import logging
 import os
 import re
 import resource
@@ -76,7 +80,31 @@ MAX_REPLY_BYTES = 1_048_576
 #: research reported ``/90msp-RKSJ-H`` read exactly with cp932 (NOTES.md; its
 #: outputs were not kept); the tests show it on a PDF built for the purpose.
 EXTRA_CMAP_CODECS = {"/90msp-RKSJ-H": "cp932"}
+#: pypdf's logger for font encodings, and how the message starts that it logs
+#: when it cannot decode a font's encoding and guesses one instead (6.21.1
+#: guesses UTF-16 for a Type0 font, which reads as plausible CJK characters;
+#: 6.19.0 guessed single bytes). ADR-0153, amendment of 2026-10-23.
+CMAP_LOGGER = "pypdf._cmap"
+GUESSED_ENCODING = "Advanced encoding "
 
+
+class _GuessedEncoding(logging.Handler):
+    """Records whether pypdf guessed a font encoding since ``seen`` was reset."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.seen = False
+
+    def emit(self, record: logging.LogRecord) -> None:
+        if str(record.msg).startswith(GUESSED_ENCODING):
+            self.seen = True
+
+
+#: What ``surrogateescape`` makes of a byte a codec cannot decode: pypdf 6.21.1
+#: falls back to it, without logging, for bytes a font's named encoding does
+#: not map. The child turns each into U+FFFD, so the garble rule counts it
+#: instead of the parent stripping it as a lone surrogate.
+_ESCAPED_BYTE = re.compile("[\udc80-\udcff]")
 
 #: UTF-16 surrogates (Unicode category Cs). In the PARENT, after JSON decoding
 #: has joined every valid escaped pair into one character above U+FFFF, any
@@ -92,11 +120,12 @@ def strip_lone_surrogates(text: str) -> str:
 
 
 def is_garbled(text: str) -> bool:
-    """More than 20% of the characters in U+0080-U+00FF (exactly 20% is not):
-    what a font read with the wrong single-byte table looks like. Characters
-    above U+00FF (curly quotes, dashes, CJK) are not counted."""
-    latin1 = sum(1 for char in text if "\x80" <= char <= "\xff")
-    return 5 * latin1 > len(text)
+    """More than 20% of the characters in U+0080-U+00FF or U+FFFD (exactly 20%
+    is not): what a font read with the wrong single-byte table looks like, or
+    a font pypdf cannot read at all (one U+FFFD for each character). Other
+    characters above U+00FF (curly quotes, dashes, CJK) are not counted."""
+    garbled = sum(1 for char in text if "\x80" <= char <= "\xff" or char == "\ufffd")
+    return 5 * garbled > len(text)
 
 
 def extract_text(data: bytes) -> str:
@@ -121,18 +150,28 @@ def extract_text(data: bytes) -> str:
     )
     pages: list[str] = []
     length = 0
+    guessed = _GuessedEncoding()
+    cmap_log = logging.getLogger(CMAP_LOGGER)
+    cmap_log.addHandler(guessed)
     try:
         with pypdf.apply_configuration(limits):
             reader = pypdf.PdfReader(io.BytesIO(data))
             for number in range(min(MAX_PAGES, len(reader.pages))):
+                guessed.seen = False
                 page = reader.pages[number].extract_text() or ""
+                if guessed.seen:
+                    # A font on this page was read with a guessed encoding, so
+                    # its text is not the document's: the page is left out.
+                    continue
                 pages.append(page)
                 length += len(page) + 1
                 if length > MAX_CHARS:
                     break
     except Exception:  # noqa: BLE001 - any parser failure is "no text" (failure mode 12)
         return ""
-    return "\n".join(pages)[:MAX_CHARS]
+    finally:
+        cmap_log.removeHandler(guessed)
+    return _ESCAPED_BYTE.sub("\ufffd", "\n".join(pages)[:MAX_CHARS])
 
 
 def read_reply(out: bytes) -> str:

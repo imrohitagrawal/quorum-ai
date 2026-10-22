@@ -57,7 +57,7 @@ def _stream_of(total: int) -> bytes:
 
 
 # ---------------------------------------------------------------------------
-# is_garbled: more than 20% of characters in U+0080-U+00FF
+# is_garbled: more than 20% of characters in U+0080-U+00FF or U+FFFD
 # ---------------------------------------------------------------------------
 
 
@@ -76,6 +76,29 @@ def test_the_garble_range_is_u0080_to_u00ff_inclusive() -> None:
     assert pdf_text.is_garbled("\x7f" * 10) is False
     assert pdf_text.is_garbled("Ā" * 10) is False
     assert pdf_text.is_garbled("") is False
+
+
+def test_the_replacement_character_counts_as_garbled() -> None:
+    """U+FFFD is what pypdf gives for each character of a font it cannot
+    read. RED IF: U+FFFD is not counted (25% is then accepted), or it
+    is counted twice (exactly 20% is then refused). Literals on both sides;
+    U+FFFE beside it is not counted."""
+    assert pdf_text.is_garbled("A" * 200 + "\ufffd" * 50) is False
+    assert pdf_text.is_garbled("A" * 150 + "\ufffd" * 50) is True
+    assert pdf_text.is_garbled("\ufffd" * 10) is True
+    assert pdf_text.is_garbled("\ufffe" * 10) is False
+
+
+def test_a_font_the_parser_cannot_read_comes_back_garbled() -> None:
+    """pypdf 6.21.1 no longer raises on ``/Font 7``; it returns U+FFFD for
+    every character, 588 of them here, past the parent's 200-character floor.
+    RED IF: ``is_garbled`` stops counting U+FFFD, so a page of replacement
+    characters would reach the judge as a source. Partner: the same builder's
+    length is above the floor, so only the garble rule refuses it."""
+    text = pdf_text.extract_text(pdfs.type_error_pdf(pdfs.EVIDENCE * 4))
+    assert len(text) == 588
+    assert set(text) == {"\ufffd"}
+    assert pdf_text.is_garbled(text) is True
 
 
 # ---------------------------------------------------------------------------
@@ -125,16 +148,58 @@ def test_90msp_rksj_h_is_read_as_cp932() -> None:
     assert pdf_text.extract_text(pdfs.rksj_pdf()) == pdfs.JAPANESE
 
 
+@pytest.mark.parametrize("encoding", pdfs.UNREADABLE_CMAPS)
+def test_a_cmap_the_parser_cannot_read_gives_no_text(encoding: bytes) -> None:
+    """pypdf 6.21.1 reads these CMaps as UTF-16: 216 CJK characters that look
+    like text and are not (measured), which no character-range rule can
+    refuse. RED IF: a page whose font pypdf reports it cannot decode keeps its
+    text. Partner: the next test, the two CMaps that are mapped."""
+    assert pdf_text.extract_text(pdfs.rksj_pdf(encoding=encoding)) == ""
+
+
+@pytest.mark.parametrize("encoding", [b"/90msp-RKSJ-H", b"/90ms-RKSJ-H"])
+def test_a_mapped_rksj_cmap_still_reads_exactly(encoding: bytes) -> None:
+    """RED IF: the guard above refuses a CMap pypdf can read, so Japanese
+    documents in Shift-JIS stop being read."""
+    assert pdf_text.extract_text(pdfs.rksj_pdf(encoding=encoding)) == pdfs.JAPANESE
+
+
+@pytest.mark.parametrize("encoding", [b"/90msp-RKSJ-H", b"/90ms-RKSJ-H"])
+def test_bytes_a_mapped_cmap_cannot_decode_come_back_as_u_fffd(encoding: bytes) -> None:
+    """pypdf 6.21.1 decodes them with ``surrogateescape`` and says nothing;
+    the parent strips lone surrogates, which left 240 characters, half of
+    them control characters, accepted as a source (measured). RED IF: U+DC80-U+DCFF reach the parent
+    as surrogates, so the garble rule cannot see them. Partner:
+    ``test_a_mapped_rksj_cmap_still_reads_exactly``."""
+    text = pdf_text.extract_text(pdfs.invalid_rksj_pdf(encoding))
+    assert not any("\udc80" <= char <= "\udcff" for char in text)
+    assert text.count("\ufffd") == 240
+    assert pdf_text.is_garbled(text) is True
+
+
+def test_only_the_page_with_the_unreadable_cmap_is_dropped() -> None:
+    """RED IF: the whole document is dropped (``""``), the unreadable page's
+    text is kept, or the guard carries over to later pages (the second
+    document puts the unreadable page first). Partner: with a mapped CMap
+    both pages are read."""
+    assert pdf_text.extract_text(pdfs.mixed_font_pdf(b"/90pv-RKSJ-H")) == pdfs.EVIDENCE
+    unreadable_first = pdfs.mixed_font_pdf(b"/90pv-RKSJ-H", japanese_first=True)
+    assert pdf_text.extract_text(unreadable_first) == pdfs.EVIDENCE
+    assert (
+        pdf_text.extract_text(pdfs.mixed_font_pdf(b"/90msp-RKSJ-H"))
+        == pdfs.EVIDENCE + "\n" + pdfs.JAPANESE
+    )
+
+
 @pytest.mark.parametrize(
     "make",
     [
         pdfs.encrypted_pdf,
         pdfs.recursion_error_pdf,
-        pdfs.type_error_pdf,
         lambda: b"%PDF-1.7 x",
         lambda: b"",
     ],
-    ids=["encrypted", "recursion", "type-error", "not-a-pdf", "empty"],
+    ids=["encrypted", "recursion", "not-a-pdf", "empty"],
 )
 def test_a_parser_failure_is_empty_text_and_never_raises(make: Any) -> None:
     """RED IF: any parser exception escapes ``extract_text`` (the test then

@@ -8,7 +8,8 @@ point.
 
 Every fixture was checked against pypdf 6.19.0 by the test designer on
 2026-10-08 (the numbers in the docstrings are those measurements, macOS,
-Python 3.12.13).
+Python 3.12.13). On 2026-10-23 every fixture's extracted text was compared
+under pypdf 6.19.0 and 6.21.1: only :func:`type_error_pdf` changed.
 
 Also here: :class:`ChildLaunches`, a spy on ``subprocess.Popen`` that records
 every launch of ``product_app.pdf_text`` and can swap the child's program for a
@@ -205,11 +206,14 @@ def recursion_error_pdf() -> bytes:
     return _one_page(b"BT /F1 12 Tf 72 700 Td " + b"[" * depth + b"(x)" + b"]" * depth + b" TJ ET")
 
 
-def type_error_pdf() -> bytes:
-    """``/Font 7`` where a dictionary belongs: pypdf 6.19.0 raises
-    ``TypeError: 'NumberObject' object is not iterable`` (measured)."""
+def type_error_pdf(text: str = EVIDENCE) -> bytes:
+    """``/Font 7`` where a dictionary belongs: pypdf 6.19.0 raised
+    ``TypeError: 'NumberObject' object is not iterable`` (measured). pypdf
+    6.21.1 reads it instead, one U+FFFD for each character (147 for
+    ``EVIDENCE``; measured 2026-10-23), so it is now a font the parser cannot
+    read, not a parser failure."""
     return _one_page(
-        b"BT /F1 12 Tf 72 700 Td (" + EVIDENCE.encode() + b") Tj ET",
+        b"BT /F1 12 Tf 72 700 Td (" + text.encode() + b") Tj ET",
         resources=b"/Resources << /Font 7 >>",
     )
 
@@ -303,17 +307,74 @@ def rksj_pdf(text: str = JAPANESE, *, encoding: bytes = b"/90msp-RKSJ-H") -> byt
     6.19.0: with ``/90msp-RKSJ-H`` unmapped the 216 characters extract as 432
     characters, 91% of them in U+0080-U+00FF; with it mapped to cp932 (as
     ``/90ms-RKSJ-H`` already is) the extraction equals ``text`` exactly."""
-    shift_jis = text.encode("cp932")
+    return rksj_pdf_with_codes(text.encode("cp932"), encoding=encoding)
+
+
+def rksj_pdf_with_codes(codes: bytes, *, encoding: bytes = b"/90msp-RKSJ-H") -> bytes:
+    """:func:`rksj_pdf` showing the raw bytes ``codes``."""
     return build(
         [
             b"<< /Type /Catalog /Pages 2 0 R >>",
             b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
             b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R "
             b"/Resources << /Font << /F1 5 0 R >> >> >>",
-            stream(b"BT /F1 12 Tf 72 700 Td <" + shift_jis.hex().encode() + b"> Tj ET"),
+            stream(b"BT /F1 12 Tf 72 700 Td <" + codes.hex().encode() + b"> Tj ET"),
             b"<< /Type /Font /Subtype /Type0 /BaseFont /MS-PGothic /Encoding "
             + encoding
             + b" /DescendantFonts [6 0 R] >>",
+            b"<< /Type /Font /Subtype /CIDFontType2 /BaseFont /MS-PGothic /CIDSystemInfo "
+            b"<< /Registry (Adobe) /Ordering (Japan1) /Supplement 2 >> /DW 1000 >>",
+        ]
+    )
+
+
+def invalid_rksj_pdf(encoding: bytes = b"/90msp-RKSJ-H") -> bytes:
+    """:func:`rksj_pdf`'s font showing 240 two-byte codes that are not
+    Shift-JIS: lead bytes 0x81-0x9F with trail bytes 0x00-0x3F. pypdf 6.21.1
+    decodes them with ``surrogateescape``, one U+DC80-U+DCFF per high byte,
+    and logs nothing; 6.19.0 fell back to single bytes (measured 2026-10-23)."""
+    codes = b"".join(bytes([0x81 + n % 31, (n * 7) % 64]) for n in range(240))
+    return rksj_pdf_with_codes(codes, encoding=encoding)
+
+
+#: CMaps pypdf 6.21.1 cannot read: for a Type0 font it falls back to UTF-16
+#: and logs "Advanced encoding ... not implemented yet" (measured 2026-10-23).
+#: 6.19.0 fell back to single bytes instead, which ``is_garbled`` refused.
+UNREADABLE_CMAPS = (
+    b"/90pv-RKSJ-H",
+    b"/90msp-RKSJ-V",
+    b"/B5pc-H",
+    b"/KSCms-UHC-H",
+    b"/Nonexistent-H",
+)
+
+
+def mixed_font_pdf(encoding: bytes, text: str = EVIDENCE, *, japanese_first: bool = False) -> bytes:
+    """Two pages: ``text`` in Helvetica and :data:`JAPANESE` in a Type0 font
+    with the predefined CMap ``encoding`` (as :func:`rksj_pdf`), in that
+    order unless ``japanese_first``."""
+    shift_jis = JAPANESE.encode("cp932")
+    latin = (
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R "
+        b"/Resources << /Font << /F1 7 0 R >> >> >>"
+    )
+    cjk = (
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 6 0 R "
+        b"/Resources << /Font << /F2 8 0 R >> >> >>"
+    )
+    kids = b"[5 0 R 3 0 R]" if japanese_first else b"[3 0 R 5 0 R]"
+    return build(
+        [
+            b"<< /Type /Catalog /Pages 2 0 R >>",
+            b"<< /Type /Pages /Kids " + kids + b" /Count 2 >>",
+            latin,
+            stream(b"BT /F1 12 Tf 72 700 Td (" + _escape(text.encode("cp1252")) + b") Tj ET"),
+            cjk,
+            stream(b"BT /F2 12 Tf 72 700 Td <" + shift_jis.hex().encode() + b"> Tj ET"),
+            HELVETICA,
+            b"<< /Type /Font /Subtype /Type0 /BaseFont /MS-PGothic /Encoding "
+            + encoding
+            + b" /DescendantFonts [9 0 R] >>",
             b"<< /Type /Font /Subtype /CIDFontType2 /BaseFont /MS-PGothic /CIDSystemInfo "
             b"<< /Registry (Adobe) /Ordering (Japan1) /Supplement 2 >> /DW 1000 >>",
         ]

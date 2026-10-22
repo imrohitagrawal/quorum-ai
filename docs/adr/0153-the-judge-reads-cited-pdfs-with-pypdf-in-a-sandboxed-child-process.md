@@ -7,7 +7,8 @@ to read PDFs (CHG-033 (a)) and chose pypdf in a sandboxed process (CHG-034). The
 are the session's, from the research in `docs/analysis/2026-10-08-w54-pdf-research/`; the owner
 may overturn any. `quorum_source_fetch_enabled` stays False in code and `fly.toml`. Failure modes,
 written before the code: `docs/analysis/2026-10-08-w54-step3-pdf-reading-failure-modes.md`. Decisions 1 and 4 are amended by ADR-0154
-(encrypted PDFs and PDFs served as binary downloads, 2026-10-09).
+(encrypted PDFs and PDFs served as binary downloads, 2026-10-09). Decision 4's garble rule is
+amended on 2026-10-23 (see "Amendment of 2026-10-23" below).
 
 ## Context
 
@@ -75,7 +76,8 @@ download cap). At most 20 pages and 50,000 characters are extracted. The `/90msp
 encoding is mapped to `cp932` (the research reported that this made pypdf's output on a Japanese
 government PDF match the other libraries; its output files were not kept, so that is
 UNVERIFIED here; the tests show it on a small built file). Text whose characters are more than
-20% in U+0080–U+00FF is treated as garbled; that check is measured only on the built file.
+20% in U+0080–U+00FF, or U+FFFD since 2026-10-23, is treated as garbled; that check is measured
+only on built files.
 pypdf's own limits do not bound memory from a font map that expands each byte into many
 characters; only the child's memory limit does.
 
@@ -86,6 +88,47 @@ cut exactly as a web page's does (ADR-0150), so the price reserve is unchanged. 
 text, a password-protected file, a parser failure, a child that could not start, a busy sandbox:
 `unusable`. A child killed by its time limit: `timeout`. In each unread case the search preview
 reaches the judge (ADR-0152). Nothing raises into the run.
+
+### Amendment of 2026-10-23: U+FFFD counts as garbled
+
+pypdf moved from 6.19.0 to 6.21.1 because advisories against 6.19.0 blocked every merge
+(ADR-0164's audit: five when it first failed, eight listed by api.osv.dev on 2026-10-23, all fixed
+by 6.21.1; the owner chose to update first, CHG-085). Every PDF fixture's extracted text was
+compared under both versions: 21 of 22 are byte-identical. The one that changed is a page whose
+`/Font` is not a dictionary: 6.19.0 raised `TypeError`, so the child returned no text, and 6.21.1
+reads it as one U+FFFD for each character (147 for that fixture). U+FFFD is what pypdf gives for
+each character of a font it cannot read, in both versions, and it is above U+00FF, so the old rule
+did not count it: a built page of 588 of them, past the 200-character floor, was `fetched` and
+would have reached the judge as a source (measured before this change). The rule now counts U+FFFD
+with U+0080–U+00FF, at the same 20% threshold. Rejected: making the child drop U+FFFD, which would let a
+page that is mostly unreadable pass on its few readable characters.
+
+Codex then found a second change the fixtures did not cover. For a Type0 font whose predefined
+CMap pypdf does not support (`/90pv-RKSJ-H`, `/90msp-RKSJ-V`, `/B5pc-H`, `/KSCms-UHC-H`, or any
+unknown name), 6.19.0 fell back to single bytes, which the garble rule refused; 6.21.1 falls back
+to UTF-16, which reads as 216 plausible CJK characters for the 216-character test page, and the
+page was `fetched` (measured under both versions). No character-range rule can tell those from
+real text. pypdf logs `Advanced encoding ... not implemented yet` on the `pypdf._cmap` logger
+whenever it guesses, so the child now leaves out any page during whose extraction that is logged;
+pages that log nothing are kept. `/90msp-RKSJ-H` and `/90ms-RKSJ-H`, which are mapped, read
+exactly as before. Rejected: refusing the whole document whenever one page logs; mapping more
+CMaps, which fixes only the names listed and not the unknown ones.
+
+The guard is broader than the gap, and errs toward refusing (the review's re-check, measured).
+pypdf logs per font, not per character, so a page is also left out when its resources list a bad
+font it does not use, when only a few of its characters use one, or when its font is an ordinary
+single-byte font with an unknown `/BaseEncoding` or `/MacExpertEncoding`. Pages that inherit one
+set of resources are all left out together. Main reads those pages today. A refused PDF falls back
+to its search preview, as any unread source does. The guard also depends on pypdf's log message,
+which a later version may reword, and on the logger staying enabled; the tests pin the message,
+so an update that rewords it fails them.
+
+The break-it review found a third: bytes that a mapped CMap's codec cannot decode (including
+`/90msp-RKSJ-H`). 6.19.0 fell back to single bytes, refused as garbled; 6.21.1 decodes them with
+`surrogateescape`, one U+DC80–U+DCFF for each high byte, and logs nothing. The parent strips lone
+surrogates, which left 240 characters, half of them control characters, `fetched` for a built page
+of 240 such codes. The child now turns U+DC80–U+DCFF into U+FFFD before replying, so the garble rule counts them. The 13
+unsupported CMaps that review listed are all refused again, as under 6.19.0.
 
 ## Rejected alternatives
 
