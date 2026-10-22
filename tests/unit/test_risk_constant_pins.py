@@ -217,6 +217,12 @@ BUCKET_A_LITERAL_PIN = (
     # W86 (ADR-0172): the same reason; renaming it re-runs the VACUUM, a
     # rewrite of the whole file, on every database.
     "session_store.SECURE_DELETE_VACUUM_MARKER",
+    # W87-3 (ADR-0176): how long a signed-in cache hit waits for the store
+    # lock before its cutoff counts as unread and the request is refused
+    # (CHG-083 (a)). Longer makes a busy request wait; shorter signs people
+    # out under routine holds the plan measured. Pinned in tests/security/
+    # test_signed_in_cutoff_on_cache_hits.py.
+    "session_store.SIGNED_IN_CUTOFF_LOCK_TIMEOUT_S",
     # W86 (ADR-0172): how often the daemon sweeps history for every account.
     # Longer keeps a question past history_keep_days for longer, the direction
     # the approved keep rule forbids; pinned in tests/unit/test_history_sweep.py.
@@ -777,6 +783,17 @@ BUCKET_C_NO_PIN = {
     ),
     "session_store.SessionStore._SIGN_IN_EVENTS_INDEX_DDL": (
         "an index for the per-account newest-first prune; it changes no result"
+    ),
+    # --- Added 2026-10-22 with W87-3 (ADR-0176) ---
+    "session_store.RAISE_SESSIONS_CUTOFF_SQL": (
+        "SQL, not a value; shared with the operator command, and pinned by "
+        "tests/integration/test_end_sessions_command.py::"
+        "test_the_command_and_sign_out_everywhere_share_one_copy_of_the_sql, "
+        "with its effect pinned by the cutoff tests in test_session_safety.py"
+    ),
+    "session_store.DELETE_SESSIONS_BEFORE_SQL": (
+        "SQL, not a value; shared with the operator command and pinned as "
+        "session_store.RAISE_SESSIONS_CUTOFF_SQL is"
     ),
     "session_store.SessionStore._SPEND_KEY_CARRY_DDL": (
         "the spend-key pointer table's shape; its use is pinned by "

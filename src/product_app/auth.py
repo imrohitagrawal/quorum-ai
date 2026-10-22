@@ -473,8 +473,44 @@ class SessionRepository:
             self._purge_expired_locked()
             cached = self._sessions.get(session_id)
         if cached is not None:
+            if self._refused_by_durable_cutoff(cached):
+                return None
             return cached
         return self._restore(session_id)
+
+    def _refused_by_durable_cutoff(self, session: _Session) -> bool:
+        """Whether a signed-in cache hit must be refused by its account's
+        DURABLE cutoff (W87-3, ADR-0176), read on the request thread.
+
+        The in-memory cutoff covers only sign-outs made in this process. The
+        operator command (``product_app.end_sessions``), or a sign-out
+        everywhere in another process, writes only the file, so a cache hit
+        reads it. Called outside ``self._lock`` (the lock order stays this
+        repository's first, then the store's).
+
+        An anonymous session (the anonymous maximum age, the test
+        :meth:`_drop_ended_locked` uses) never reads the store; a restore
+        whose kind lookup failed carries the signed-in age, so it is checked.
+        With no store no one can sign in. A cutoff at or after the session's
+        start ends the account's cached sessions here as sign-out everywhere
+        does. A cutoff that cannot be read (the store not ready, its lock not
+        acquired within ``session_store.SIGNED_IN_CUTOFF_LOCK_TIMEOUT_S``,
+        closed, or a failed read) refuses this request and leaves the cached
+        copy, so the next request checks again (CHG-083 (a))."""
+        if session.max_age == ANONYMOUS_MAX_AGE:
+            return False
+        store = session_store.get_store()
+        if store is None:
+            return False
+        read, cutoff = store.sessions_valid_after(
+            session.account_id, lock_timeout=session_store.SIGNED_IN_CUTOFF_LOCK_TIMEOUT_S
+        )
+        if not read:
+            return True
+        if cutoff is not None and session.created_at <= cutoff:
+            self.end_sessions_of(session.account_id, cutoff)
+            return True
+        return False
 
     def _before_cutoff_locked(self, session: _Session) -> bool:
         cutoff = self._valid_after.get(session.account_id)
@@ -645,16 +681,30 @@ class SessionRepository:
         )
         if stored is None:
             return None
-        # W7 part 3 (ADR-0137): the durable sessions cutoff, read AFTER the
-        # session row; one that cannot be read refuses the session.
-        read, cutoff = store.sessions_valid_after(stored.account_id)
-        if not read or (cutoff is not None and stored.created_at <= cutoff):
-            return None
         # W7 part 3 (ADR-0138): the row does not say whether the session is
         # signed in, so ask once, here; a lookup that fails gets the signed-in
         # limits, the shorter ones (the closed side): the idle limit and,
-        # since W87-1 (ADR-0174), the 12-hour maximum age.
-        anonymous = store.is_anonymous(stored.account_id)
+        # since W87-1 (ADR-0174), the 12-hour maximum age. W87-3 (ADR-0176):
+        # asked the way :func:`spend_meter_for` asks, so a latched accounts
+        # flag (``is_anonymous`` then answers ``None`` for every id) still
+        # tells an anonymous row by its missing account row; and asked ONCE,
+        # this answer deciding both the refusal below and the lifetime.
+        anonymous = (
+            store.is_anonymous(stored.account_id)
+            if store.accounts_available()
+            else store.has_no_account_row(stored.account_id)
+        )
+        if anonymous is not True:
+            # W87-3 (CHG-083 (a)): with the session-safety tables not ready no
+            # cutoff can be read, so a signed-in row, or one whose kind is
+            # unknown, is refused. An id in no accounts row has no cutoff.
+            if not store.cutoffs_available():
+                return None
+            # W7 part 3 (ADR-0137): the durable sessions cutoff, read AFTER
+            # the session row; one that cannot be read refuses the session.
+            read, cutoff = store.sessions_valid_after(stored.account_id)
+            if not read or (cutoff is not None and stored.created_at <= cutoff):
+                return None
         session = _Session(
             session_id=stored.session_id,
             account_id=stored.account_id,
@@ -809,8 +859,9 @@ class SessionRepository:
         page scheduled from that answer would find less time than it was told.
         Changes the durable copy and, like any write, restarts the touch
         throttle's interval; never the session's last use."""
-        with self._lock:
-            session = self._sessions.get(session_id)
+        # W87-3 (ADR-0176): through :meth:`get`, so the durable cutoff is
+        # read first and an ended session is never written back.
+        session = self.get(session_id)
         if session is not None and session.persisted_last_used_at != session.last_used_at:
             self._persist(session)
 
@@ -937,6 +988,16 @@ def _gc_tick(
         session_repository.purge_expired()
     except Exception:  # noqa: BLE001 - the daemon must not die
         logging.getLogger(__name__).warning("session-gc: purge tick failed", exc_info=True)
+    # W87-3 (ADR-0176): re-validate a store that opened not ready, with its
+    # own ``try``, before the sweep's throttle can return. Looked up by name
+    # at call time, so a test can stand the daemon's step down and drive the
+    # real one itself.
+    try:
+        _refresh_store_readiness(session_store.get_store())
+    except Exception as exc:  # noqa: BLE001 - the daemon must not die
+        logging.getLogger(__name__).warning(
+            "session-gc: readiness check failed: %s", type(exc).__name__
+        )
     state = _HISTORY_SWEEP_STATE if sweep_state is None else sweep_state
     now = _time_module.monotonic() if now_monotonic is None else now_monotonic
     try:
@@ -957,6 +1018,16 @@ def _gc_tick(
         logging.getLogger(__name__).warning(
             "session-gc: history sweep tick failed: %s", type(exc).__name__
         )
+
+
+def _refresh_store_readiness(store: session_store.SessionStore | None) -> None:
+    """The GC tick's readiness step (W87-3, ADR-0176): while the store is
+    not ready it refuses every signed-in session and every sign-in
+    (CHG-083 (a)); this re-checks it, read-only, at most once a tick
+    (:data:`SESSION_GC_INTERVAL_S`). A stalled daemon only delays that
+    recovery, on the closed side; it never lets a session through."""
+    if store is not None:
+        store.refresh_readiness()
 
 
 def _start_gc_thread() -> threading.Thread:
