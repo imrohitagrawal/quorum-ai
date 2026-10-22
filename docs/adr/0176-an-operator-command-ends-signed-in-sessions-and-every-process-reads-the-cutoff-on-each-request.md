@@ -33,7 +33,7 @@ V7.4.5). Facts the design rests on, read on `main` at `27ad8e4` unless marked:
 - **A latched readiness flag read as "no cutoff".** Measured by the planner after Codex found it:
   with the session-safety migration failing at open on a file that already held its marker, the
   store had `_safety_ready = False` and `sessions_valid_after` answered `(True, None)`, so the guard
-  this ADR adds would have accepted every signed-in session while the command, which checks only
+  this ADR adds would have let every signed-in session through while the command, which checks only
   the file's marker, exited 0.
 - **Importing `product_app.auth` starts the `session-gc` thread**, and building a `SessionStore`
   migrates, sweeps history and may `VACUUM` the file (ADR-0172).
