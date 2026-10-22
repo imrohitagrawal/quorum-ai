@@ -167,8 +167,8 @@ def test_a_mapped_rksj_cmap_still_reads_exactly(encoding: bytes) -> None:
 @pytest.mark.parametrize("encoding", [b"/90msp-RKSJ-H", b"/90ms-RKSJ-H"])
 def test_bytes_a_mapped_cmap_cannot_decode_come_back_as_u_fffd(encoding: bytes) -> None:
     """pypdf 6.21.1 decodes them with ``surrogateescape`` and says nothing;
-    the parent strips lone surrogates, which left 240 control characters
-    accepted as a source (measured). RED IF: U+DC80-U+DCFF reach the parent
+    the parent strips lone surrogates, which left 240 characters, half of
+    them control characters, accepted as a source (measured). RED IF: U+DC80-U+DCFF reach the parent
     as surrogates, so the garble rule cannot see them. Partner:
     ``test_a_mapped_rksj_cmap_still_reads_exactly``."""
     text = pdf_text.extract_text(pdfs.invalid_rksj_pdf(encoding))

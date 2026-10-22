@@ -110,17 +110,24 @@ to UTF-16, which reads as 216 plausible CJK characters for the 216-character tes
 page was `fetched` (measured under both versions). No character-range rule can tell those from
 real text. pypdf logs `Advanced encoding ... not implemented yet` on the `pypdf._cmap` logger
 whenever it guesses, so the child now leaves out any page during whose extraction that is logged;
-the other pages are kept. `/90msp-RKSJ-H` and `/90ms-RKSJ-H`, which are mapped, read exactly as
-before. Rejected: refusing the whole document, which would lose readable pages beside one bad
-font; mapping more CMaps, which fixes only the names listed and not the unknown ones. The guard
-depends on pypdf's log message, which a later version may reword; the tests pin it, so an update
-that rewords it fails them.
+pages that log nothing are kept. `/90msp-RKSJ-H` and `/90ms-RKSJ-H`, which are mapped, read
+exactly as before. Rejected: refusing the whole document whenever one page logs; mapping more
+CMaps, which fixes only the names listed and not the unknown ones.
+
+The guard is broader than the gap, and errs toward refusing (the review's re-check, measured).
+pypdf logs per font, not per character, so a page is also left out when its resources list a bad
+font it does not use, when only a few of its characters use one, or when its font is an ordinary
+single-byte font with an unknown `/BaseEncoding` or `/MacExpertEncoding`. Pages that inherit one
+set of resources are all left out together. Main reads those pages today. A refused PDF falls back
+to its search preview, as any unread source does. The guard also depends on pypdf's log message,
+which a later version may reword, and on the logger staying enabled; the tests pin the message,
+so an update that rewords it fails them.
 
 The break-it review found a third: bytes that a mapped CMap's codec cannot decode (including
 `/90msp-RKSJ-H`). 6.19.0 fell back to single bytes, refused as garbled; 6.21.1 decodes them with
 `surrogateescape`, one U+DC80–U+DCFF for each high byte, and logs nothing. The parent strips lone
-surrogates, which left 240 control characters `fetched` for a built page of 240 such codes. The
-child now turns U+DC80–U+DCFF into U+FFFD before replying, so the garble rule counts them. The 13
+surrogates, which left 240 characters, half of them control characters, `fetched` for a built page
+of 240 such codes. The child now turns U+DC80–U+DCFF into U+FFFD before replying, so the garble rule counts them. The 13
 unsupported CMaps that review listed are all refused again, as under 6.19.0.
 
 ## Rejected alternatives
