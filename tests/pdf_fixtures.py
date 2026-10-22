@@ -324,6 +324,50 @@ def rksj_pdf(text: str = JAPANESE, *, encoding: bytes = b"/90msp-RKSJ-H") -> byt
     )
 
 
+#: CMaps pypdf 6.21.1 cannot read: for a Type0 font it falls back to UTF-16
+#: and logs "Advanced encoding ... not implemented yet" (measured 2026-10-23).
+#: 6.19.0 fell back to single bytes instead, which ``is_garbled`` refused.
+UNREADABLE_CMAPS = (
+    b"/90pv-RKSJ-H",
+    b"/90msp-RKSJ-V",
+    b"/B5pc-H",
+    b"/KSCms-UHC-H",
+    b"/Nonexistent-H",
+)
+
+
+def mixed_font_pdf(encoding: bytes, text: str = EVIDENCE, *, japanese_first: bool = False) -> bytes:
+    """Two pages: ``text`` in Helvetica and :data:`JAPANESE` in a Type0 font
+    with the predefined CMap ``encoding`` (as :func:`rksj_pdf`), in that
+    order unless ``japanese_first``."""
+    shift_jis = JAPANESE.encode("cp932")
+    latin = (
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R "
+        b"/Resources << /Font << /F1 7 0 R >> >> >>"
+    )
+    cjk = (
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 6 0 R "
+        b"/Resources << /Font << /F2 8 0 R >> >> >>"
+    )
+    kids = b"[5 0 R 3 0 R]" if japanese_first else b"[3 0 R 5 0 R]"
+    return build(
+        [
+            b"<< /Type /Catalog /Pages 2 0 R >>",
+            b"<< /Type /Pages /Kids " + kids + b" /Count 2 >>",
+            latin,
+            stream(b"BT /F1 12 Tf 72 700 Td (" + _escape(text.encode("cp1252")) + b") Tj ET"),
+            cjk,
+            stream(b"BT /F2 12 Tf 72 700 Td <" + shift_jis.hex().encode() + b"> Tj ET"),
+            HELVETICA,
+            b"<< /Type /Font /Subtype /Type0 /BaseFont /MS-PGothic /Encoding "
+            + encoding
+            + b" /DescendantFonts [9 0 R] >>",
+            b"<< /Type /Font /Subtype /CIDFontType2 /BaseFont /MS-PGothic /CIDSystemInfo "
+            b"<< /Registry (Adobe) /Ordering (Japan1) /Supplement 2 >> /DW 1000 >>",
+        ]
+    )
+
+
 # ---------------------------------------------------------------------------
 # The child-launch spy
 # ---------------------------------------------------------------------------

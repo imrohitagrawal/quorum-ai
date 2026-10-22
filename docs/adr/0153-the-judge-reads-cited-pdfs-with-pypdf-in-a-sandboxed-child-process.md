@@ -101,6 +101,19 @@ have reached the judge as a source (measured before this change). The rule now c
 U+0080–U+00FF, at the same 20% threshold. Rejected: making the child drop U+FFFD, which would let a
 page that is mostly unreadable pass on its few readable characters.
 
+Codex then found a second change the fixtures did not cover. For a Type0 font whose predefined
+CMap pypdf does not support (`/90pv-RKSJ-H`, `/90msp-RKSJ-V`, `/B5pc-H`, `/KSCms-UHC-H`, or any
+unknown name), 6.19.0 fell back to single bytes, which the garble rule refused; 6.21.1 falls back
+to UTF-16, which reads as 216 plausible CJK characters for the 216-character test page, and the
+page was `fetched` (measured under both versions). No character-range rule can tell those from
+real text. pypdf logs `Advanced encoding ... not implemented yet` on the `pypdf._cmap` logger
+whenever it guesses, so the child now leaves out any page during whose extraction that is logged;
+the other pages are kept. `/90msp-RKSJ-H` and `/90ms-RKSJ-H`, which are mapped, read exactly as
+before. Rejected: refusing the whole document, which would lose readable pages beside one bad
+font; mapping more CMaps, which fixes only the names listed and not the unknown ones. The guard
+depends on pypdf's log message, which a later version may reword; the tests pin it, so an update
+that rewords it fails them.
+
 ## Rejected alternatives
 
 - **Parse in the app's process with a timeout thread.** A CPython thread cannot be stopped, and

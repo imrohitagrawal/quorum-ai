@@ -430,6 +430,10 @@ UNREAD: dict[str, tuple[str, Any]] = {
         "unusable",
         lambda: _pdf(pdfs.type_error_pdf(pdfs.EVIDENCE * 4)),
     ),
+    "a CMap the parser cannot read": (
+        "unusable",
+        lambda: _pdf(pdfs.rksj_pdf(encoding=b"/90pv-RKSJ-H")),
+    ),
 }
 
 

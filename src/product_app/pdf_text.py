@@ -32,7 +32,9 @@ WHAT THE PARSER IS ALLOWED (decision 4)
     U+0080-U+00FF or are U+FFFD is garbled (:func:`is_garbled`; the parent
     refuses it).
 
-A password or a parser exception of any kind comes back as "". Nothing here
+A page with a font whose encoding pypdf reports it cannot decode, and so
+guesses, is left out (:data:`GUESSED_ENCODING`). A password or a parser
+exception of any kind comes back as "". Nothing here
 raises into the parent: the parent reads a JSON object, or nothing, through
 :func:`read_reply` (which drops lone surrogates), and itself decides whether
 the text is usable (at least 200 characters, and not garbled by
@@ -44,6 +46,7 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import logging
 import os
 import re
 import resource
@@ -77,6 +80,24 @@ MAX_REPLY_BYTES = 1_048_576
 #: research reported ``/90msp-RKSJ-H`` read exactly with cp932 (NOTES.md; its
 #: outputs were not kept); the tests show it on a PDF built for the purpose.
 EXTRA_CMAP_CODECS = {"/90msp-RKSJ-H": "cp932"}
+#: pypdf's logger for font encodings, and how the message starts that it logs
+#: when it cannot decode a font's encoding and guesses one instead (6.21.1
+#: guesses UTF-16 for a Type0 font, which reads as plausible CJK characters;
+#: 6.19.0 guessed single bytes). ADR-0153, amendment of 2026-10-23.
+CMAP_LOGGER = "pypdf._cmap"
+GUESSED_ENCODING = "Advanced encoding "
+
+
+class _GuessedEncoding(logging.Handler):
+    """Records whether pypdf guessed a font encoding since ``seen`` was reset."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.seen = False
+
+    def emit(self, record: logging.LogRecord) -> None:
+        if str(record.msg).startswith(GUESSED_ENCODING):
+            self.seen = True
 
 
 #: UTF-16 surrogates (Unicode category Cs). In the PARENT, after JSON decoding
@@ -124,17 +145,27 @@ def extract_text(data: bytes) -> str:
     )
     pages: list[str] = []
     length = 0
+    guessed = _GuessedEncoding()
+    cmap_log = logging.getLogger(CMAP_LOGGER)
+    cmap_log.addHandler(guessed)
     try:
         with pypdf.apply_configuration(limits):
             reader = pypdf.PdfReader(io.BytesIO(data))
             for number in range(min(MAX_PAGES, len(reader.pages))):
+                guessed.seen = False
                 page = reader.pages[number].extract_text() or ""
+                if guessed.seen:
+                    # A font on this page was read with a guessed encoding, so
+                    # its text is not the document's: the page is left out.
+                    continue
                 pages.append(page)
                 length += len(page) + 1
                 if length > MAX_CHARS:
                     break
     except Exception:  # noqa: BLE001 - any parser failure is "no text" (failure mode 12)
         return ""
+    finally:
+        cmap_log.removeHandler(guessed)
     return "\n".join(pages)[:MAX_CHARS]
 
 

@@ -148,6 +148,36 @@ def test_90msp_rksj_h_is_read_as_cp932() -> None:
     assert pdf_text.extract_text(pdfs.rksj_pdf()) == pdfs.JAPANESE
 
 
+@pytest.mark.parametrize("encoding", pdfs.UNREADABLE_CMAPS)
+def test_a_cmap_the_parser_cannot_read_gives_no_text(encoding: bytes) -> None:
+    """pypdf 6.21.1 reads these CMaps as UTF-16: 216 CJK characters that look
+    like text and are not (measured), which no character-range rule can
+    refuse. RED IF: a page whose font pypdf reports it cannot decode keeps its
+    text. Partner: the next test, the two CMaps that are mapped."""
+    assert pdf_text.extract_text(pdfs.rksj_pdf(encoding=encoding)) == ""
+
+
+@pytest.mark.parametrize("encoding", [b"/90msp-RKSJ-H", b"/90ms-RKSJ-H"])
+def test_a_mapped_rksj_cmap_still_reads_exactly(encoding: bytes) -> None:
+    """RED IF: the guard above refuses a CMap pypdf can read, so Japanese
+    documents in Shift-JIS stop being read."""
+    assert pdf_text.extract_text(pdfs.rksj_pdf(encoding=encoding)) == pdfs.JAPANESE
+
+
+def test_only_the_page_with_the_unreadable_cmap_is_dropped() -> None:
+    """RED IF: the whole document is dropped (``""``), the unreadable page's
+    text is kept, or the guard carries over to later pages (the second
+    document puts the unreadable page first). Partner: with a mapped CMap
+    both pages are read."""
+    assert pdf_text.extract_text(pdfs.mixed_font_pdf(b"/90pv-RKSJ-H")) == pdfs.EVIDENCE
+    unreadable_first = pdfs.mixed_font_pdf(b"/90pv-RKSJ-H", japanese_first=True)
+    assert pdf_text.extract_text(unreadable_first) == pdfs.EVIDENCE
+    assert (
+        pdf_text.extract_text(pdfs.mixed_font_pdf(b"/90msp-RKSJ-H"))
+        == pdfs.EVIDENCE + "\n" + pdfs.JAPANESE
+    )
+
+
 @pytest.mark.parametrize(
     "make",
     [
