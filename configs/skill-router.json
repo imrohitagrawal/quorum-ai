@@ -623,6 +623,7 @@
           "src/product_app/logging_config.py",
           "src/product_app/account_deletion.py",
           "src/product_app/account_history.py",
+          "src/product_app/end_sessions.py",
           "src/product_app/store_reconnect.py",
           "src/product_app/request_id.py"
         ],

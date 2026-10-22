@@ -38,6 +38,7 @@ from tests.end_sessions_harness import plant_account, plant_row
 from tests.session_clock import Clock, freeze
 
 from product_app import auth, session_store
+from product_app.config import settings
 from product_app.main import app
 from product_app.session_store import SessionStore, StoredSession
 
@@ -479,19 +480,25 @@ def test_the_legacy_shape_on_a_writable_file_opens_ready(db: Path) -> None:
         store.close()
 
 
+@pytest.mark.parametrize(
+    "removed",
+    ["DROP TABLE sign_in_events", "ALTER TABLE accounts DROP COLUMN sessions_valid_after"],
+)
 def test_the_constructor_uses_the_same_validation_and_refuses_a_marker_without_its_table(
-    db: Path, monkeypatch: pytest.MonkeyPatch
+    removed: str, db: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Row 11: the constructor and refresh cannot diverge, because the
     constructor calls ``_readiness_from_schema`` too (exactly once). A file
     whose ``w7_session_safety`` marker is recorded but whose ``sign_in_events``
-    table is gone opens with ``_safety_ready`` ``False`` (accounts still
-    ready); before W87-3 the marker alone made it ready. Red when: the
-    constructor trusts the marker without the validation."""
+    table, or whose ``sessions_valid_after`` column, is gone opens with
+    ``_safety_ready`` ``False`` (accounts still ready); before W87-3 the
+    marker alone made it ready. Red when: the constructor trusts the marker
+    without the validation, or the validation stops checking the column
+    (falsifier M26: only the table case was tested)."""
     SessionStore(str(db)).close()
     connection = sqlite3.connect(str(db))
     try:
-        connection.execute("DROP TABLE sign_in_events")
+        connection.execute(removed)
         connection.commit()
     finally:
         connection.close()
@@ -561,9 +568,14 @@ def test_one_kind_determination_per_restore_and_its_answer_is_used(
     """Test 21, the sequence Codex probed (final notes, row 12). The account
     lookup answers ``True`` (anonymous) the first time and ``None`` (unknown)
     after. With ONE determination per restore, a 1-hour anonymous row
-    restores with the 24-hour lifetime and the lookup ran exactly once.
+    restores with the 24-hour lifetime and the anonymous idle limit, and
+    the lookup ran exactly once. The signed-in idle limit is set to 30
+    minutes, so the two idle limits differ (both are 2 hours by default).
     Red when: the restore asks twice (it then refuses the row, or gives it
-    the 12-hour lifetime, as Codex measured)."""
+    the 12-hour lifetime, as Codex measured), or asks ``is_anonymous`` again
+    for the idle limit (falsifier M09: it answers ``None`` while the accounts
+    flag is down, so the row got the 30-minute limit)."""
+    monkeypatch.setattr(settings, "signed_in_idle_minutes", 30)
     store, _person = _both_not_ready(db, monkeypatch)
     try:
         _rows(db, clock, _person)
@@ -578,6 +590,8 @@ def test_one_kind_determination_per_restore_and_its_answer_is_used(
         restored = auth.session_repository.get("anon-1h")
         assert restored is not None, calls
         assert restored.max_age == timedelta(hours=24)
+        assert auth.signed_in_idle_limit() == timedelta(minutes=30), "partner: they differ"
+        assert restored.idle_limit == auth.SESSION_TTL == timedelta(hours=2)
         assert len(calls) == 1, calls
     finally:
         store.close()

@@ -26,7 +26,7 @@ import sqlite3
 import threading
 import time
 from collections.abc import Callable, Iterator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -529,3 +529,35 @@ def test_an_unreadable_cutoff_on_a_cache_hit_refuses_it(
         connection.close()
     assert auth.session_repository.get(signed_in) is None
     assert auth.session_repository.get(anonymous) is not None
+
+
+def test_a_cutoff_exactly_at_a_cached_sessions_start_refuses_it(
+    db: Path, live: SessionStore
+) -> None:
+    """Falsifier M23, the boundary ``_refused_by_durable_cutoff`` states ("a
+    cutoff at or after the session's start"). Another connection writes the
+    durable cutoff only (the in-memory one stays empty). One microsecond
+    before the cached session's start: the cache hit is served. Exactly at
+    its start: refused, and the cached copy dropped. Red when: the
+    cache-hit comparison is ``<`` instead of ``<=``."""
+    person = _account(db, "boundary")
+    session_id = _signed_in_session(person)
+    started = auth.session_repository._sessions[session_id].created_at
+
+    def durable_cutoff(at: datetime) -> None:
+        connection = sqlite3.connect(str(db))
+        try:
+            connection.execute(
+                "UPDATE accounts SET sessions_valid_after = ? WHERE account_id = ?",
+                (at.astimezone(UTC).isoformat(), str(person)),
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+    durable_cutoff(started - timedelta(microseconds=1))
+    assert auth.session_repository.get(session_id) is not None, "just before: served"
+    assert person not in auth.session_repository._valid_after, "only the durable cutoff"
+    durable_cutoff(started)
+    assert auth.session_repository.get(session_id) is None, "exactly at its start: refused"
+    assert session_id not in auth.session_repository._sessions

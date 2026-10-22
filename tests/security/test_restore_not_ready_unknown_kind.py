@@ -4,7 +4,7 @@ refused, and the store is not asked a second time.
 
 Added by the builder: with ``_restore``'s ``cutoffs_available()`` refusal
 deleted, every test of the test designer's commit stayed green (a mutation
-run, 114 passed), because the cutoff read's own not-ready branch asks the
+run), because the cutoff read's own not-ready branch asks the
 account row again and, on a lookup that keeps failing, refuses anyway. It
 does not refuse when the second lookup answers differently from the first.
 This test makes the lookup fail once and then answer "anonymous".

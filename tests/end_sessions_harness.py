@@ -130,25 +130,28 @@ def _strip_imported(stderr: str) -> str:
 
 
 def run_python(
-    script: str, db_path: Path, *args: str, timeout: float = 60.0
+    script: str, db_path: Path, *args: str, timeout: float = 60.0, stdout: int | None = None
 ) -> subprocess.CompletedProcess[str]:
     """Run ``script`` with ``-I`` in the database's directory; this tree's
-    ``src`` is ``sys.argv[1]``."""
+    ``src`` is ``sys.argv[1]``. ``stdout``: a file descriptor for the
+    child's standard output instead of a captured pipe (then ``stdout`` of
+    the result is ``None``)."""
     return subprocess.run(
         [sys.executable, "-I", "-c", script, str(SRC), *args],
         cwd=str(db_path.parent),
         env=env_without_coverage({"PATH": "/usr/bin:/bin"}, SESSION_DB_PATH=str(db_path)),
-        capture_output=True,
+        stdout=subprocess.PIPE if stdout is None else stdout,
+        stderr=subprocess.PIPE,
         text=True,
         timeout=timeout,
         check=False,
     )
 
 
-def run_command(db_path: Path, *args: str, timeout: float = 60.0) -> Ran:
+def run_command(db_path: Path, *args: str, timeout: float = 60.0, stdout: int | None = None) -> Ran:
     """``python -m product_app.end_sessions <args>``, through the bootstrap."""
-    done = run_python(BOOTSTRAP, db_path, *args, timeout=timeout)
-    return Ran(done.returncode, done.stdout, _strip_imported(done.stderr))
+    done = run_python(BOOTSTRAP, db_path, *args, timeout=timeout, stdout=stdout)
+    return Ran(done.returncode, done.stdout or "", _strip_imported(done.stderr))
 
 
 def run_probe(script: str, db_path: Path, *args: str, timeout: float = 60.0) -> Ran:

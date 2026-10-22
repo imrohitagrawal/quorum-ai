@@ -97,10 +97,11 @@ SECURE_DELETE_VACUUM_MARKER = "w86_secure_delete_vacuum"
 #: "not read" and the request is refused as an expired session (CHG-083 (a):
 #: "while the database is busy"). It bounds that one read's lock wait, not the
 #: request. Why 1.0 s: above every routine hold measured for the plan (the
-#: first history sweep 116-297 ms, ADR-0172; the operator command's whole
-#: 10,000-account transaction 68 ms; 205 ms behind a 0.3 s outside write
-#: lock), and well under the 5 s busy timeout a stuck write can take. A
-#: constant, not a setting, like ``_CLOSE_LOCK_TIMEOUT_S``. Read at call time.
+#: first history sweep 297 ms with ``secure_delete`` on, which this store
+#: always sets, ADR-0172; the operator command's whole 10,000-account
+#: transaction 68 ms; 205 ms behind a 0.3 s outside write lock), and well
+#: under the 5 s busy timeout a stuck write can take. A constant, not a
+#: setting, like ``_CLOSE_LOCK_TIMEOUT_S``. Read at call time.
 SIGNED_IN_CUTOFF_LOCK_TIMEOUT_S = 1.0
 
 #: W7 part 3 (ADR-0137), shared since W87-3 (ADR-0176): the two statements of

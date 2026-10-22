@@ -10,13 +10,16 @@ app's own machine::
 
 It writes only what sign-out everywhere already writes: it raises
 ``accounts.sessions_valid_after`` for the matched accounts and deletes their
-session rows created at or before that cutoff, with the same SQL
-(:data:`product_app.session_store.RAISE_SESSIONS_CUTOFF_SQL` and
-:data:`~product_app.session_store.DELETE_SESSIONS_BEFORE_SQL`), in one short
-transaction, then reads back in a second. Every app process on the machine
-reads that cutoff on each signed-in request (``auth.SessionRepository.get``),
-so the sessions end from their next request. ``--all`` ends signed-in
-sessions only: anonymous sessions have no account row and keep running.
+session rows created at or before that cutoff, in one short transaction,
+then reads back in a second. ``--email`` runs the statements sign-out
+everywhere runs (:data:`product_app.session_store.RAISE_SESSIONS_CUTOFF_SQL`
+and :data:`~product_app.session_store.DELETE_SESSIONS_BEFORE_SQL`), once per
+matched account; ``--all`` runs its own two (:data:`RAISE_ALL_CUTOFFS_SQL`
+and :data:`DELETE_ALL_SIGNED_IN_BEFORE_SQL`), for every account at once.
+Every app process on the machine reads that cutoff on each signed-in request
+(``auth.SessionRepository.get``), so the sessions end from their next
+request. ``--all`` ends signed-in sessions only: anonymous sessions have no
+account row and keep running.
 
 What it never does, on purpose:
 
@@ -30,7 +33,8 @@ What it never does, on purpose:
   type only;
 * keep a record of its runs (CHG-083 (b)): it prints counts and the cutoff.
 
-Exit codes: 0 done and read back; 1 no account has that email; 2 usage;
+Exit codes: 0 done and read back (``--help`` also exits 0, and changes
+nothing); 1 no account has that email; 2 usage (a repeated ``--email`` too);
 3 nothing changed (no file, not writable, locked past the busy timeout, not
 migrated, or not run as the file's owner); 4 the cutoff is written but the
 read-back found a row put back, a lower cutoff, or could not run: run it
@@ -46,6 +50,7 @@ import sys
 from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TextIO
 
 from product_app import session_store
 from product_app.session_store import DELETE_SESSIONS_BEFORE_SQL, RAISE_SESSIONS_CUTOFF_SQL
@@ -103,8 +108,12 @@ def _parser() -> _Parser:
         exit_on_error=False,
     )
     which = parser.add_mutually_exclusive_group(required=True)
+    # ``append``, so a repeated ``--email`` is seen and refused: argparse
+    # otherwise keeps the last value and the first account named would be
+    # skipped while the run exits 0 (break-it F1).
     which.add_argument(
         "--email",
+        action="append",
         metavar="ADDRESS",
         help="end the sessions of every account with this email address as of its last sign-in",
     )
@@ -116,8 +125,24 @@ def _plural(count: int, word: str) -> str:
     return f"{count} {word}" if count == 1 else f"{count} {word}s"
 
 
+def _write(stream: TextIO, message: str) -> None:
+    """Print one line. A reader that has gone away (``BrokenPipeError``)
+    changes nothing: the exit code still says what the run did to the file
+    (break-it F4). The stream's descriptor is then pointed at ``os.devnull``,
+    so Python's own flush at exit cannot fail and exit 120 instead."""
+    try:
+        print(message, file=stream, flush=True)
+    except BrokenPipeError:
+        with suppress(OSError, ValueError):
+            devnull = os.open(os.devnull, os.O_WRONLY)
+            try:
+                os.dup2(devnull, stream.fileno())
+            finally:
+                os.close(devnull)
+
+
 def _say(message: str) -> None:
-    print(message, file=sys.stderr)
+    _write(sys.stderr, message)
 
 
 def main(argv: list[str] | None = None, *, now: datetime | None = None) -> int:
@@ -131,8 +156,8 @@ def main(argv: list[str] | None = None, *, now: datetime | None = None) -> int:
         return 2
     wanted: str | None = None
     if args.email is not None:
-        wanted = str(args.email).strip().casefold()
-        if wanted.count("@") != 1:
+        wanted = str(args.email[0]).strip().casefold()
+        if len(args.email) != 1 or wanted.count("@") != 1:
             _say(USAGE)
             return 2
     cutoff = (datetime.now(UTC) if now is None else now).astimezone(UTC)
@@ -236,17 +261,19 @@ def _end(connection: sqlite3.Connection, *, wanted: str | None, cutoff: datetime
             + ". Run the command again."
         )
         return 4
-    print(
+    _write(
+        sys.stdout,
         f"Ended the signed-in sessions of {_plural(len(matched), 'account')} "
         f"({_plural(ended, 'session')}) created at or before {stamp}. Every app process on "
-        "this machine refuses them from its next request."
+        "this machine refuses them from its next request.",
     )
-    print(
+    _write(
+        sys.stdout,
         "Anyone who signs in again after this keeps working. "
-        "This does not secure the Google account itself."
+        "This does not secure the Google account itself.",
     )
     if wanted is None:
-        print("Anonymous sessions keep running.")
+        _write(sys.stdout, "Anonymous sessions keep running.")
     return 0
 
 

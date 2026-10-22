@@ -38,8 +38,10 @@ V7.4.5). Facts the design rests on, read on `main` at `27ad8e4` unless marked:
 - **Importing `product_app.auth` starts the `session-gc` thread**, and building a `SessionStore`
   migrates, sweeps history and may `VACUUM` the file (ADR-0172).
 - **Production runs one process on one machine with one volume**: the `Dockerfile` CMD passes
-  `"--workers", "1"` and `fly.toml` has one `[[mounts]]` at `/data`. No test pinned either before
-  this change.
+  `"--workers", "1"` and `fly.toml` has one `[[mounts]]` at `/data`. No test pinned the worker
+  count before this change (`git grep -e '--workers' origin/main -- 'tests/*.py'` finds nothing);
+  the one mount was already pinned, for the telemetry sink, by
+  `tests/unit/test_telemetry_sink.py::test_fly_toml_points_the_telemetry_sink_at_the_persistent_volume`.
 
 ## Measured
 
@@ -49,7 +51,7 @@ V7.4.5). Facts the design rests on, read on `main` at `27ad8e4` unless marked:
 | The same files with the fix, plus `test_risk_constant_pins.py` and `test_skill_router_work_item.py` | the builder's run on the code commit | `246 passed` |
 | The three timing-sensitive files, ten times | the builder's run, load average 4.8 to 10 | `30 passed` in each of the 10 runs |
 | The command's transaction | the planner's probe: `--all` on 10,000 accounts, 10,000 signed-in rows and 10,000 anonymous rows | 68.4 ms; 10,000 rows deleted, the 10,000 anonymous rows left |
-| The cutoff read, **uncontended** | the planner's probes, 20,000 calls per run, SQLite 3.50.4, load average 4 to 6.6 | 3.87 to 4.25 µs per call; a cache-hit `touch` 0.87 to 0.90 µs before, 5.10 to 5.24 µs with the read. A request calls `get` one to four times, so about 17 to 25 µs, against about 1,035 µs for the cheapest `TestClient` request measured |
+| The cutoff read, **uncontended** | the planner's probes, 20,000 calls per run, SQLite 3.50.4, load average 4 to 6.6 | 3.87 to 4.25 µs per call; a cache-hit `touch` 0.87 to 0.90 µs before, 5.10 to 5.24 µs with the read. A request calls `get` one to four times, so about 4 to 25 µs (one call at 3.87 µs; four at up to 6.23 µs, the planner's prototype with the lock bound), against about 1,035 µs for the cheapest `TestClient` request measured |
 | The cutoff read, **contended** | the planner's probe: another connection holds the write lock while an app write waits on it inside the store lock | 205 ms behind a 0.3 s hold; 922 ms behind 1.0 s; 5,156 ms behind 6.0 s (the app save gave up after its 5 s busy timeout). With no app write waiting, a read against a held write lock took 0.1 ms |
 | The bound | the same probe with a 0.25 s bound behind the 1.0 s hold | `(False, None)` after 255 ms: refused, not waited |
 | A whole request under contention | the planner's probe, a 0.05 s bound, the cutoff written | store lock held 0.35 s: 401 after 0.330 s; repository lock held by a save waiting 1.0 s: 401 after 1.030 s; another account, no contention: 200 |
@@ -65,23 +67,26 @@ The planner's figures are inherited by this ADR, not re-measured by the build.
    (ADR-0172), refuses a file without the `w7_session_safety` marker or not owned by the effective
    user, and never migrates. In one `BEGIN IMMEDIATE` transaction it raises
    `sessions_valid_after` (never lowers it) and deletes the matched accounts' rows created at or
-   before the cutoff, with the SQL sign-out everywhere runs (`session_store.RAISE_SESSIONS_CUTOFF_SQL`
-   and `DELETE_SESSIONS_BEFORE_SQL`, the same objects). `--email` matches after `strip()` and
-   `casefold()` on both sides, as account deletion does, and ends every match. `--all` raises every
-   account's cutoff and deletes only rows whose account id is in an accounts row, so anonymous
-   sessions keep running (CHG-066 (d)). The cutoff is `isoformat()` of the UTC time, because the
+   before the cutoff. `--email` runs the SQL sign-out everywhere runs
+   (`session_store.RAISE_SESSIONS_CUTOFF_SQL` and `DELETE_SESSIONS_BEFORE_SQL`, the same objects),
+   once per matched account; it matches after `strip()` and `casefold()` on both sides, as account
+   deletion does, and ends every match. `--all` runs its own two statements
+   (`RAISE_ALL_CUTOFFS_SQL` and `DELETE_ALL_SIGNED_IN_BEFORE_SQL`): it raises every account's cutoff
+   and deletes only rows whose account id is in an accounts row, so anonymous sessions keep running
+   (CHG-066 (d)). The cutoff is `isoformat()` of the UTC time, because the
    app compares cutoffs as text.
 2. **A read-back**, in a second short transaction: it deletes again any matched row created at or
    before the cutoff (a request in flight can have written one) and checks every matched account's
    stored cutoff is not lower. A row found, a lower cutoff, or a read-back that could not run is
    exit 4; running again is safe.
-3. **Exit codes.** 0 written and read back; 1 no account has that email as of its last sign-in,
-   nothing changed; 2 usage (neither flag, both, an extra argument, or an email without exactly one
-   `@`), nothing changed; 3 no file, not writable, locked past the busy timeout, not migrated, or
+3. **Exit codes.** 0 written and read back, or `--help`, which changes nothing; 1 no account has
+   that email as of its last sign-in, nothing changed; 2 usage (neither flag, both, `--email` given
+   twice, an extra argument, or an email without exactly one `@`), nothing changed; 3 no file, not writable, locked past the busy timeout, not migrated, or
    not run as the file's owner, nothing changed; 4 the cutoff is written but the read-back found
    or could not check something.
 4. **What it prints.** Counts and the cutoff only, and that it does not secure the Google account
-   itself. Usage errors print one fixed sentence: argparse's own `error()` echoed the arguments
+   itself. A reader that has gone away (`BrokenPipeError`) does not change the exit code: it still
+   says what the run did to the file. Usage errors print one fixed sentence: argparse's own `error()` echoed the arguments
    (Codex; the planner reproduced `unrecognized arguments: person@example.invalid`). Other errors
    name the exception type only. It stores no record of its runs (CHG-083 (b)).
 5. **Every process reads the cutoff on each signed-in request.** `SessionRepository.get`'s
@@ -98,7 +103,7 @@ The planner's figures are inherited by this ADR, not re-measured by the build.
    account row (Codex's blocker): no row `(True, None)`, a row or a failed read `(False, None)`.
 7. **The 1.0 s bound** (`session_store.SIGNED_IN_CUTOFF_LOCK_TIMEOUT_S`) covers the cutoff read's
    wait for the store lock only. It is above every routine hold measured (the first history sweep
-   116 to 297 ms, ADR-0172; the command's 68 ms; 205 ms behind a 0.3 s outside write lock) and
+   297 ms with `secure_delete` on, which the store always sets, ADR-0172; the command's 68 ms; 205 ms behind a 0.3 s outside write lock) and
    well under the 5 s a stuck write can take. A module constant, not a setting, like
    `_CLOSE_LOCK_TIMEOUT_S`: no repository rule asks for a setting, and nothing measured needs one.
 8. **`save` is conditional and truthful.** One `INSERT OR REPLACE ... SELECT ... WHERE NOT EXISTS
@@ -145,6 +150,11 @@ The planner's figures are inherited by this ADR, not re-measured by the build.
 ## Known limits
 
 - **Another machine** is not reached: its volume is separate. The two pins above hold the layout.
+- **Matching can end look-alike addresses.** `casefold()` folds some distinct characters together,
+  for example the Kelvin sign (U+212A) to `k` and `ß` to `ss`, so `--email` can also end an account
+  whose stored address differs from the typed one in such a character. It is the rule account
+  deletion uses (`account_deletion.py`), it errs toward ending too many, and the output gives only
+  a count, so it does not show which accounts matched.
 - **The email stays in the operator's shell history**, and in `ps` inside the machine while the
   command runs. That is the owner's form (CHG-063 (d)).
 - **Anonymous sessions are affected in one case.** CHG-083 (a)'s option text said "Anonymous

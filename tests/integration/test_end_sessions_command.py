@@ -2,11 +2,12 @@
 ``python -m product_app.end_sessions --email ADDRESS | --all``.
 
 It raises ``accounts.sessions_valid_after`` and deletes the cut-off signed-in
-rows, with the SQL sign-out everywhere uses, in one short transaction, then
-reads back. It never builds a ``SessionStore`` (that would migrate, sweep and
-maybe ``VACUUM``), never imports ``product_app.auth`` (that starts the
-``session-gc`` thread), never echoes what the operator typed, and keeps no
-record of its runs (CHG-083 b).
+rows (``--email`` with the SQL sign-out everywhere uses, ``--all`` with its
+own two statements), in one short transaction, then reads back. It never
+builds a ``SessionStore`` (that would migrate, sweep and maybe ``VACUUM``),
+never imports ``product_app.auth`` (that starts the ``session-gc`` thread),
+never echoes what the operator typed, and keeps no record of its runs
+(CHG-083 b).
 
 Most cases call ``main(argv, now=...)`` in this process, so coverage sees the
 module; the ``-I`` subprocess harness (``tests/end_sessions_harness.py``) is
@@ -22,6 +23,7 @@ import json
 import os
 import sqlite3
 import stat
+import sys
 import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -37,6 +39,7 @@ import pytest
 from fastapi.testclient import TestClient
 from tests.end_sessions_harness import (
     IMPORT_PROBE,
+    OTHER_EMAIL,
     PERSON_EMAIL,
     Seeded,
     anonymous_rows,
@@ -171,12 +174,38 @@ def _scenario(case: str, path: Path, monkeypatch: pytest.MonkeyPatch) -> Scenari
     email = ["--email", PERSON_EMAIL]
     if case == "missing file":
         return Scenario(email, 3, None, now)
+    if case == "missing file past the owner check":
+        # Falsifier M20: the owner check's ``os.stat`` refuses a missing file
+        # first, so only a file gone between that check and the open meets
+        # ``mode=rw``. Here ``os.stat`` answers for the absent file.
+        real_stat = os.stat
+
+        def stat_then_gone(target: Any, *args: Any, **kwargs: Any) -> os.stat_result:
+            if os.fspath(target) == str(path):
+                return real_stat(path.parent)
+            return real_stat(target, *args, **kwargs)
+
+        monkeypatch.setattr(os, "stat", stat_then_gone)
+        return Scenario(email, 3, None, now)
     if case == "no marker":
         with monkeypatch.context() as patch:
             patch.setattr(SessionStore, "_migrate_session_safety", lambda self: False)
             seeded = seed(path, created_at=created)
         return Scenario(email, 3, seeded, now)
     seeded = seed(path, created_at=created)
+    if case == "marker deleted":
+        # Falsifier M22: every table and column is there, only the marker is
+        # gone, so nothing but the marker check refuses the file.
+        connection = sqlite3.connect(str(path))
+        try:
+            connection.execute(
+                "DELETE FROM schema_migrations WHERE name = ?",
+                (SessionStore._SESSION_SAFETY_MIGRATION,),
+            )
+            connection.commit()
+        finally:
+            connection.close()
+        return Scenario(email, 3, seeded, now)
     if case == "ok email":
         return Scenario(email, 0, seeded, now)
     if case == "ok all":
@@ -189,6 +218,9 @@ def _scenario(case: str, path: Path, monkeypatch: pytest.MonkeyPatch) -> Scenari
         "usage no at sign": ["--email", "nobody"],
         "usage two at signs": ["--email", "a@@b.invalid"],
         "usage extra argument": ["--all", PERSON_EMAIL],
+        # Break-it F1: argparse keeps the LAST of a repeated option, so the
+        # first account named would be skipped while the run exits 0.
+        "usage repeated email": ["--email", PERSON_EMAIL, f"--email={OTHER_EMAIL}"],
     }
     if case in usage:
         return Scenario(usage[case], 2, seeded, now)
@@ -222,9 +254,12 @@ EXIT_CASES = [
     "usage no at sign",
     "usage two at signs",
     "usage extra argument",
+    "usage repeated email",
     "missing file",
+    "missing file past the owner check",
     "read-only file",
     "no marker",
+    "marker deleted",
     "lock held past the busy timeout",
     "not the file's owner",
 ]
@@ -239,9 +274,11 @@ def test_each_exit_code_and_nothing_changes_unless_it_is_0(
     ``accounts`` and ``sessions`` as it was; a missing file is not created.
     Partner: exit 0 changes them. Red when: any branch's return value changes,
     argparse's own ``error()`` exits, a refusal writes anything, ``mode=rw`` is
-    dropped (the missing file appears), the busy-timeout constant is not the
-    one read (the locked case takes 5 s, past its 3 s bound), or the owner
-    check reads anything but ``os.geteuid()``."""
+    dropped (``[missing file past the owner check]``: the file appears; the
+    plain ``[missing file]`` case cannot show it, because the owner check's
+    ``os.stat`` refuses first), the busy-timeout constant is not the one read
+    (the locked case takes 5 s, past its 3 s bound), or the owner check reads
+    anything but ``os.geteuid()``."""
     scenario = _scenario(case, db, monkeypatch)
     before = snapshot(db) if scenario.seeded is not None else None
     started = time.monotonic()
@@ -251,8 +288,9 @@ def test_each_exit_code_and_nothing_changes_unless_it_is_0(
         scenario.cleanup()
     took = time.monotonic() - started
     assert code == scenario.expected, (code, out, err)
-    if case == "missing file":
-        assert not db.exists(), "mode=rw must never create the file"
+    if case.startswith("missing file"):
+        # ``listdir``, not ``exists()``: one case patches ``os.stat``.
+        assert db.name not in os.listdir(db.parent), "the command must never create the file"
         return
     assert before is not None
     after = snapshot(db)
@@ -547,6 +585,91 @@ def test_all_leaves_anonymous_sessions_and_the_mint_count_untouched(
     assert _mint_count() == 1
 
 
+# -- a later sign-in keeps working, and a cutoff never moves back ---------------------
+
+
+def _set_cutoff(path: Path, account: UUID, stamp: str | None) -> None:
+    connection = sqlite3.connect(str(path), timeout=5.0)
+    try:
+        connection.execute(
+            "UPDATE accounts SET sessions_valid_after = ? WHERE account_id = ?",
+            (stamp, str(account)),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+
+@pytest.mark.parametrize("how", ["--email", "--all", "sign-out everywhere"])
+def test_a_session_created_after_the_cutoff_survives_and_a_later_cutoff_stays(
+    how: str, db: Path, live: SessionStore, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Falsifiers M19a, M19b and M18a. The person has a session created an
+    hour before the cutoff, one exactly at it, and one a minute after it (a
+    sign-in again). ``--email``, ``--all`` and the SQL sign-out everywhere
+    runs (``SessionStore.end_sessions_before``) each delete the first two
+    and keep the third, which is still served: the printed "Anyone who signs
+    in again after this keeps working". Another account's cutoff, already
+    later than the command's time, is not lowered. Red when: a DELETE
+    removes rows created after the cutoff (M19a on the shared SQL, M19b on
+    ``--all``'s own), keeps the row exactly at it, or ``--all`` overwrites a
+    cutoff instead of raising it (M18a)."""
+    cutoff = datetime.now(UTC).replace(microsecond=0) - timedelta(minutes=10)
+    person = plant_account(db, google_sub="sub-later-1", email=PERSON_EMAIL, at=cutoff)
+    ahead = plant_account(db, google_sub="sub-ahead-2", email="ahead@example.invalid", at=cutoff)
+    later_cutoff = (cutoff + timedelta(minutes=5)).isoformat()
+    _set_cutoff(db, ahead, later_cutoff)
+    used = datetime.now(UTC)
+    for session_id, created in (
+        ("w873-before", cutoff - timedelta(hours=1)),
+        ("w873-at", cutoff),
+        ("w873-after", cutoff + timedelta(minutes=1)),
+    ):
+        plant_row(db, session_id, person, created_at=created, last_used_at=used)
+    if how == "sign-out everywhere":
+        assert live.end_sessions_before(person, cutoff) == "ended"
+    else:
+        argv = ["--email", PERSON_EMAIL] if how == "--email" else ["--all"]
+        code, out, err = _run(argv, capsys, now=cutoff)
+        assert code == 0, (out, err)
+    assert rows_of(db, person) == 1, "only the session created after the cutoff is left"
+    assert cutoff_of(db, person) == cutoff.isoformat(), "partner: the cutoff is written"
+    assert cutoff_of(db, ahead) == later_cutoff, "a later cutoff is never lowered"
+    assert auth.session_repository.get("w873-before") is None
+    assert auth.session_repository.get("w873-at") is None
+    assert _client("w873-after").get(ACTIVE).status_code == 200, "a later sign-in keeps working"
+
+
+def test_exit_4_when_the_read_back_finds_a_lower_cutoff(
+    db: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Falsifier M32. Between the write and the read-back another writer
+    (no app writer does; an operator's ``sqlite3`` could) clears the
+    person's cutoff. The read-back counts it and exits 4 (run it again).
+    Partner: a rerun raises it again and exits 0. Red when: the read-back
+    does not compare the stored cutoffs (exit 0 with the cutoff gone)."""
+    now = _cutoff()
+    seeded = seed(db, created_at=now - timedelta(hours=1))
+    begun = 0
+
+    def lower(seen: list[str], sql: str) -> None:
+        nonlocal begun
+        if _is(sql, "BEGIN", "IMMEDIATE"):
+            begun += 1
+            if begun == 2:
+                _set_cutoff(db, seeded.person, None)
+
+    with traced(monkeypatch, lower):
+        code, out, err = _run(["--email", PERSON_EMAIL], capsys, now=now)
+    assert begun == 2, "the hook ran at the read-back"
+    assert code == 4, (out, err)
+    assert "1 account with a lower cutoff" in err, err
+    assert cutoff_of(db, seeded.person) is None
+    code, out, err = _run(["--email", PERSON_EMAIL], capsys, now=now)
+    assert code == 0, (out, err)
+    assert cutoff_of(db, seeded.person) == now.isoformat()
+
+
 # -- test 14: one short transaction, and no record ----------------------------------
 
 
@@ -562,7 +685,9 @@ def test_one_short_write_one_read_back_and_no_record_of_the_run(
     ``sessions``. The schema and the migration markers are unchanged, and no
     ``SessionStore`` is built. Red when: it builds a ``SessionStore`` (the
     patched constructor raises), migrates, records a run anywhere, splits the
-    write into several transactions, or forgets ``secure_delete``."""
+    write into several transactions, or forgets ``secure_delete`` or sets it
+    to anything but ``ON`` (the falsifier's ``= OFF`` survived the check
+    before it read the value)."""
     seed(db, created_at=_cutoff() - timedelta(hours=1))
     before = snapshot(db)
 
@@ -580,6 +705,11 @@ def test_one_short_write_one_read_back_and_no_record_of_the_run(
     assert sum(1 for sql in statements if _is(sql, "COMMIT")) == 2
     secure = [i for i, sql in enumerate(statements) if _is(sql, "PRAGMA", "SECURE_DELETE")]
     assert secure and secure[0] < begins[0], statements
+    # Falsifier M17: the value too, not only that a PRAGMA ran. Every one of
+    # them sets it ON (``FAST`` leaves traces on freelist pages, ADR-0172).
+    assert [" ".join(statements[i].upper().split()) for i in secure] == [
+        "PRAGMA SECURE_DELETE = ON"
+    ], statements
     for word in ("VACUUM", "CREATE", "ALTER", "DROP", "INSERT", "REPLACE"):
         assert not [sql for sql in statements if _is(sql, word)], (word, statements)
     updates = [sql for sql in statements if _is(sql, "UPDATE")]
@@ -749,6 +879,43 @@ def test_the_real_module_entry_point_ends_the_sessions(db: Path) -> None:
     usage = run_command(db, "--all", PERSON_EMAIL)
     assert usage.returncode == 2, usage
     assert USAGE in usage.stderr and "@" not in usage.stdout + usage.stderr
+
+
+def test_a_closed_output_after_the_commit_keeps_the_exit_code(
+    db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Break-it F4. The command's standard output is a pipe nobody reads
+    (its read end closed before the run), as when a wrapper exits early.
+    The cutoff is written, so the exit is still 0: in this process
+    ``main`` returns 0 without raising, and in a real ``python -I`` run the
+    exit is 0, never Python's 120 for a failed flush at exit, with no
+    traceback on stderr. Partner: the rows are gone and the cutoffs are
+    written. Red when: the command prints without catching
+    ``BrokenPipeError`` (measured on the unfixed command: exit 120,
+    ``BrokenPipeError: [Errno 32] Broken pipe``)."""
+    seeded = seed(db, created_at=_cutoff() - timedelta(hours=1))
+    read_end, write_end = os.pipe()
+    os.close(read_end)
+    with (
+        os.fdopen(write_end, "w", encoding="utf-8") as closed_output,
+        monkeypatch.context() as patch,
+    ):
+        patch.setattr(sys, "stdout", closed_output)
+        code = _command().main(["--email", PERSON_EMAIL], now=_cutoff())
+    assert code == 0
+    assert rows_of(db, seeded.person) == 0, "partner: the command did its work"
+    assert cutoff_of(db, seeded.person) is not None
+
+    read_end, write_end = os.pipe()
+    os.close(read_end)
+    try:
+        ran = run_command(db, "--all", stdout=write_end)
+    finally:
+        os.close(write_end)
+    assert ran.returncode == 0, ran
+    assert "Traceback" not in ran.stderr and "BrokenPipe" not in ran.stderr, ran.stderr
+    assert rows_of(db, seeded.other) == 0, "partner: the command did its work"
+    assert cutoff_of(db, seeded.other) is not None
 
 
 def test_the_command_busy_timeout_is_the_apps_default() -> None:

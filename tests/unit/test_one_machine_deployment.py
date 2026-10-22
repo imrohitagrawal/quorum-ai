@@ -1,7 +1,11 @@
 """W87-3 (ADR-0176): the operator command ends sessions on ONE machine's
 volume, and every app process there reads the same file. That holds only
 while production runs one worker on one machine with one volume, so both
-are pinned here. Neither was pinned by any test before W87-3 (grep).
+are pinned here. No test pinned the worker count before W87-3
+(``git grep -e '--workers' origin/main -- 'tests/*.py'`` finds nothing).
+The one mount was already pinned by
+``tests/unit/test_telemetry_sink.py::test_fly_toml_points_the_telemetry_sink_at_the_persistent_volume``,
+for the telemetry sink; it is pinned here too, for this reason.
 """
 
 from __future__ import annotations
