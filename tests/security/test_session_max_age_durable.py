@@ -406,6 +406,29 @@ def test_a_revoked_session_is_never_told_12_hours(
     assert auth.session_repository.end_reason("revoked") == "SESSION_EXPIRED"
 
 
+def test_a_cutoff_exactly_at_the_rows_start_is_never_told_12_hours(
+    store: SessionStore, clock: Clock
+) -> None:
+    """Round 2 falsifier N16b: the boundary of the durable-cutoff check in
+    ``max_age_account``. A signed-in row past 12 h whose cutoff is one
+    microsecond before its start says ``SESSION_MAX_AGE``; with the cutoff
+    exactly at its start (the row planted back after it) it says
+    ``SESSION_EXPIRED``. Red when: that comparison is ``<`` instead of
+    ``<=``."""
+    account = _signed_in_account(store)
+    created = clock.at - H12 - US
+    _plant(store, "edge", account_id=account, created_at=created, last_used_at=clock.at)
+    assert store.end_sessions_before(account, created - US) == "ended"
+    _restarted()
+    assert auth.session_repository.get("edge") is None
+    assert auth.session_repository.end_reason("edge") == "SESSION_MAX_AGE", "just before"
+    assert store.end_sessions_before(account, created) == "ended"
+    _plant(store, "edge", account_id=account, created_at=created, last_used_at=clock.at)
+    _restarted()
+    assert auth.session_repository.get("edge") is None
+    assert auth.session_repository.end_reason("edge") == "SESSION_EXPIRED", "exactly at"
+
+
 def test_the_reason_uses_the_last_use_the_process_held_not_the_stale_row(
     store: SessionStore, clock: Clock
 ) -> None:

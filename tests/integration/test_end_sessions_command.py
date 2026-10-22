@@ -40,10 +40,12 @@ from uuid import UUID
 import pytest
 from fastapi.testclient import TestClient
 from tests.end_sessions_harness import (
+    BOOTSTRAP,
     IMPORT_PROBE,
     OTHER_EMAIL,
     PERSON_EMAIL,
     Seeded,
+    _strip_imported,
     anonymous_rows,
     cutoff_of,
     plant_account,
@@ -51,6 +53,7 @@ from tests.end_sessions_harness import (
     rows_of,
     run_command,
     run_probe,
+    run_python,
     seed,
     snapshot,
 )
@@ -304,6 +307,11 @@ def test_each_exit_code_and_nothing_changes_unless_it_is_0(
     if case.startswith("missing file"):
         # ``listdir``, not ``exists()``: one case patches ``os.stat``.
         assert db.name not in os.listdir(db.parent), "the command must never create the file"
+        if case == "missing file past the owner check":
+            # Round 2 falsifier N12: proof the patched ``os.stat`` answered and
+            # the open refused, so an owner check that stops calling
+            # ``os.stat`` cannot quietly turn this into the plain case.
+            assert "could not be opened" in err, err
         return
     assert before is not None
     after = snapshot(db)
@@ -995,6 +1003,28 @@ def test_a_closed_output_keeps_help_at_0_and_usage_at_2(db: Path) -> None:
         if expected == 2:
             assert USAGE in ran.stderr, "partner: the usage run said why"
     assert snapshot(db) == before
+
+
+def test_a_closed_error_output_keeps_the_refusal_codes(tmp_path: Path) -> None:
+    """Round 2 falsifier N07: the same for standard ERROR, where every
+    refusal is printed. In a real ``python -I`` run whose stderr is a pipe
+    with its read end closed, a missing file exits 3 and a usage error 2,
+    and no file is created. The bootstrap reports what it imported on
+    stdout here, and that line is checked. Red when: ``_say`` prints without
+    the protected writer (measured by the falsifier on 45c644d: exit 120)."""
+    bootstrap = BOOTSTRAP.replace("file=sys.stderr)", "file=sys.stdout, flush=True)")
+    assert bootstrap != BOOTSTRAP, "the bootstrap's report line moved"
+    missing = tmp_path / "sessions.sqlite3"
+    for args, expected in ((("--all",), 3), (("--all", PERSON_EMAIL), 2)):
+        read_end, write_end = os.pipe()
+        os.close(read_end)
+        try:
+            done = run_python(bootstrap, missing, *args, stderr=write_end)
+        finally:
+            os.close(write_end)
+        assert done.returncode == expected, (args, done)
+        assert _strip_imported(done.stdout) == "", done.stdout
+    assert missing.name not in os.listdir(tmp_path), "the command must never create the file"
 
 
 class _FileTooLarge(io.TextIOBase):

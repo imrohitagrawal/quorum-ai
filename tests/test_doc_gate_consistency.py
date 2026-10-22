@@ -1526,7 +1526,9 @@ def test_the_capability_claim_guard_bites() -> None:
 # Part D5 — a BOUND an ADR states, pinned to the constant (W87-3 review).
 #
 # ADR-0176 states the signed-in cutoff read's lock bound three times, and
-# SC-104 and failure mode FM-56 state it once each. The round-1 falsifier
+# SC-104, failure mode FM-56 and the failure-modes doc's known limits state
+# it once each (the last added after the round-2 falsifier's P1d changed it
+# to 2.5 s and every gate stayed green). The round-1 falsifier
 # changed ADR-0176's "The 1.0 s bound" to "The 2.5 s bound" and every gate
 # stayed green, though the number is derivable offline (AGENTS.md rule 1a).
 # Each pattern below must match, and every number it captures must equal
@@ -1547,6 +1549,10 @@ _LOCK_BOUND_STATEMENTS = (
         "docs/analysis/2026-10-20-w87-3-end-sessions-failure-modes.md",
         rf"at most {_NUMBER} s for the store lock",
     ),
+    (
+        "docs/analysis/2026-10-20-w87-3-end-sessions-failure-modes.md",
+        rf"the {_NUMBER} s bound covers",
+    ),
 )
 
 
@@ -1566,7 +1572,8 @@ def _check_stated_bound(*, text: str, pattern: str, actual: float, label: str) -
 
 def test_the_docs_state_the_real_cutoff_lock_bound() -> None:
     """RED WHEN: ``SIGNED_IN_CUTOFF_LOCK_TIMEOUT_S`` changes, or one of the
-    five statements of it (ADR-0176 three times, SC-104, FM-56) is edited to
+    six statements of it (ADR-0176 three times, SC-104, FM-56, the
+    failure-modes doc's known limits) is edited to
     another number or reworded out of its pattern."""
     from product_app import session_store
 

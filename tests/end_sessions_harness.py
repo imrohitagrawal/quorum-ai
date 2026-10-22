@@ -130,18 +130,23 @@ def _strip_imported(stderr: str) -> str:
 
 
 def run_python(
-    script: str, db_path: Path, *args: str, timeout: float = 60.0, stdout: int | None = None
+    script: str,
+    db_path: Path,
+    *args: str,
+    timeout: float = 60.0,
+    stdout: int | None = None,
+    stderr: int | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Run ``script`` with ``-I`` in the database's directory; this tree's
-    ``src`` is ``sys.argv[1]``. ``stdout``: a file descriptor for the
-    child's standard output instead of a captured pipe (then ``stdout`` of
-    the result is ``None``)."""
+    ``src`` is ``sys.argv[1]``. ``stdout`` / ``stderr``: a file descriptor
+    for the child's standard output or error instead of a captured pipe
+    (then that field of the result is ``None``)."""
     return subprocess.run(
         [sys.executable, "-I", "-c", script, str(SRC), *args],
         cwd=str(db_path.parent),
         env=env_without_coverage({"PATH": "/usr/bin:/bin"}, SESSION_DB_PATH=str(db_path)),
         stdout=subprocess.PIPE if stdout is None else stdout,
-        stderr=subprocess.PIPE,
+        stderr=subprocess.PIPE if stderr is None else stderr,
         text=True,
         timeout=timeout,
         check=False,
