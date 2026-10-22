@@ -28,7 +28,7 @@ def _read(body: bytes) -> tuple[str, str]:
 
 
 # ---------------------------------------------------------------------------
-# Garbled text (decision 4): more than 20% of characters in U+0080-U+00FF
+# Garbled text (decision 4): more than 20% of characters in U+0080-U+00FF or U+FFFD
 # ---------------------------------------------------------------------------
 
 
@@ -54,8 +54,8 @@ def test_text_over_twenty_percent_latin1_is_unusable() -> None:
     assert _read(pdfs.text_pdf([page])) == ("", "unusable")
 
 
-def test_the_garble_guard_counts_only_u0080_to_u00ff() -> None:
-    """Characters above U+00FF are not garble: 50% curly quotes and dashes
+def test_the_garble_guard_does_not_count_typography_above_u00ff() -> None:
+    """Characters above U+00FF other than U+FFFD are not garble: 50% curly quotes and dashes
     (U+2018-U+2014, which cp1252 bytes 0x91-0x97 extract as) is ordinary
     typography. RED IF: the guard counts every non-ASCII character. Partner:
     the text really is half non-ASCII."""

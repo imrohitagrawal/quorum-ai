@@ -115,10 +115,9 @@ def strip_lone_surrogates(text: str) -> str:
 
 def is_garbled(text: str) -> bool:
     """More than 20% of the characters in U+0080-U+00FF or U+FFFD (exactly 20%
-    is not): what a font read with the wrong single-byte table looks like, or,
-    since pypdf 6.21.1, a font it cannot read at all (one U+FFFD for each
-    character). Other characters above U+00FF (curly quotes, dashes, CJK) are
-    not counted."""
+    is not): what a font read with the wrong single-byte table looks like, or
+    a font pypdf cannot read at all (one U+FFFD for each character). Other
+    characters above U+00FF (curly quotes, dashes, CJK) are not counted."""
     garbled = sum(1 for char in text if "\x80" <= char <= "\xff" or char == "\ufffd")
     return 5 * garbled > len(text)
 

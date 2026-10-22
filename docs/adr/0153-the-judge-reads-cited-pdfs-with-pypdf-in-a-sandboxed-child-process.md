@@ -91,14 +91,16 @@ reaches the judge (ADR-0152). Nothing raises into the run.
 
 ### Amendment of 2026-10-23: U+FFFD counts as garbled
 
-pypdf moved from 6.19.0 to 6.21.1 because five advisories against 6.19.0 blocked every merge
-(ADR-0164's audit; the owner chose to update first, CHG-085). Every PDF fixture's extracted text
-was compared under both versions: 21 of 22 are byte-identical. The one that changed is a page whose
-`/Font` is not a dictionary. 6.19.0 raised `TypeError`, so the child returned no text. 6.21.1
-reads it and gives one U+FFFD for each character. U+FFFD is above U+00FF, so the old rule did not
-count it: with 588 such characters, past the 200-character floor, the page was `fetched` and would
-have reached the judge as a source (measured before this change). The rule now counts U+FFFD with
-U+0080–U+00FF, at the same 20% threshold. Rejected: making the child drop U+FFFD, which would let a
+pypdf moved from 6.19.0 to 6.21.1 because advisories against 6.19.0 blocked every merge
+(ADR-0164's audit: five when it first failed, eight listed by api.osv.dev on 2026-10-23, all fixed
+by 6.21.1; the owner chose to update first, CHG-085). Every PDF fixture's extracted text was
+compared under both versions: 21 of 22 are byte-identical. The one that changed is a page whose
+`/Font` is not a dictionary: 6.19.0 raised `TypeError`, so the child returned no text, and 6.21.1
+reads it as one U+FFFD for each character (147 for that fixture). U+FFFD is what pypdf gives for
+each character of a font it cannot read, in both versions, and it is above U+00FF, so the old rule
+did not count it: a built page of 588 of them, past the 200-character floor, was `fetched` and
+would have reached the judge as a source (measured before this change). The rule now counts U+FFFD
+with U+0080–U+00FF, at the same 20% threshold. Rejected: making the child drop U+FFFD, which would let a
 page that is mostly unreadable pass on its few readable characters.
 
 Codex then found a second change the fixtures did not cover. For a Type0 font whose predefined

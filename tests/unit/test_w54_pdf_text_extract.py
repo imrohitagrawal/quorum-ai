@@ -57,7 +57,7 @@ def _stream_of(total: int) -> bytes:
 
 
 # ---------------------------------------------------------------------------
-# is_garbled: more than 20% of characters in U+0080-U+00FF
+# is_garbled: more than 20% of characters in U+0080-U+00FF or U+FFFD
 # ---------------------------------------------------------------------------
 
 
@@ -79,8 +79,8 @@ def test_the_garble_range_is_u0080_to_u00ff_inclusive() -> None:
 
 
 def test_the_replacement_character_counts_as_garbled() -> None:
-    """U+FFFD is what pypdf 6.21.1 gives for each character of a font it
-    cannot read. RED IF: U+FFFD is not counted (25% is then accepted), or it
+    """U+FFFD is what pypdf gives for each character of a font it cannot
+    read. RED IF: U+FFFD is not counted (25% is then accepted), or it
     is counted twice (exactly 20% is then refused). Literals on both sides;
     U+FFFE beside it is not counted."""
     assert pdf_text.is_garbled("A" * 200 + "\ufffd" * 50) is False
