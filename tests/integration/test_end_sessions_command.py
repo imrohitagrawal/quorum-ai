@@ -19,6 +19,8 @@ command exists every test fails on its own with ``ModuleNotFoundError``.
 
 from __future__ import annotations
 
+import errno
+import io
 import json
 import os
 import sqlite3
@@ -193,6 +195,15 @@ def _scenario(case: str, path: Path, monkeypatch: pytest.MonkeyPatch) -> Scenari
             seeded = seed(path, created_at=created)
         return Scenario(email, 3, seeded, now)
     seeded = seed(path, created_at=created)
+    if case.startswith("SESSION_DB_PATH"):
+        # Break-it R2-3. In a directory with no ``.data``, so a fallback to
+        # the app's relative default could not reach any real file.
+        monkeypatch.chdir(path.parent)
+        if case == "SESSION_DB_PATH unset":
+            monkeypatch.delenv("SESSION_DB_PATH")
+        else:
+            monkeypatch.setenv("SESSION_DB_PATH", "")
+        return Scenario(email, 3, seeded, now)
     if case == "marker deleted":
         # Falsifier M22: every table and column is there, only the marker is
         # gone, so nothing but the marker check refuses the file.
@@ -255,6 +266,8 @@ EXIT_CASES = [
     "usage two at signs",
     "usage extra argument",
     "usage repeated email",
+    "SESSION_DB_PATH unset",
+    "SESSION_DB_PATH empty",
     "missing file",
     "missing file past the owner check",
     "read-only file",
@@ -376,12 +389,50 @@ def test_exit_4_when_the_read_back_cannot_run(
     assert cutoff_of(db, seeded.person) == now.isoformat(), "the cutoff is written"
 
 
-def test_help_prints_the_usage_and_exits_0(tmp_path: Path) -> None:
-    """``--help`` through a real ``python -I`` run. Red when: help exits
-    non-zero, or names neither flag."""
+def test_help_prints_the_usage_and_exits_0(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """``--help`` through a real ``python -I`` run, and in this process.
+    Red when: help exits non-zero, raises ``SystemExit``, or names neither
+    flag."""
     ran = run_command(tmp_path / "sessions.sqlite3", "--help")
     assert ran.returncode == 0, ran
     assert "--email" in ran.stdout and "--all" in ran.stdout
+    code, out, err = _run(["--help"], capsys)
+    assert code == 0, (out, err)
+    assert "--email" in out and "--all" in out and err == ""
+
+
+def test_no_session_db_path_is_exit_3_and_a_stray_store_is_untouched(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Break-it R2-3. With ``SESSION_DB_PATH`` unset, then empty, a migrated
+    store at the app's default ``.data/sessions.sqlite3`` under the working
+    directory is NOT used: exit 3, one fixed sentence, the stray file's rows
+    unchanged. Partner: named by ``SESSION_DB_PATH``, the same file is a
+    valid target (exit 0, rows deleted). Red when: the command falls back to
+    the app's default path (measured on the unfixed command: ``--all`` exit
+    0, "Ended the signed-in sessions of 2 accounts", the stray file changed)."""
+    stray = tmp_path / ".data" / "sessions.sqlite3"
+    stray.parent.mkdir()
+    seeded = seed(stray, created_at=_cutoff() - timedelta(hours=1))
+    monkeypatch.chdir(tmp_path)
+    before = snapshot(stray)
+    for setting in (None, ""):
+        if setting is None:
+            monkeypatch.delenv("SESSION_DB_PATH", raising=False)
+        else:
+            monkeypatch.setenv("SESSION_DB_PATH", setting)
+        code, out, err = _run(["--all"], capsys, now=_cutoff())
+        assert (code, out) == (3, ""), (setting, code, out, err)
+        assert err == (
+            "SESSION_DB_PATH is not set; give it the path the app uses. Nothing was changed.\n"
+        )
+        assert snapshot(stray) == before, f"SESSION_DB_PATH={setting!r} changed the stray file"
+    monkeypatch.setenv("SESSION_DB_PATH", str(stray))
+    code, out, err = _run(["--all"], capsys, now=_cutoff())
+    assert code == 0, (out, err)
+    assert rows_of(stray, seeded.person) == 0, "partner: the file is a valid target"
 
 
 # -- test 11: no personal data in any output ------------------------------------
@@ -640,15 +691,19 @@ def test_a_session_created_after_the_cutoff_survives_and_a_later_cutoff_stays(
     assert _client("w873-after").get(ACTIVE).status_code == 200, "a later sign-in keeps working"
 
 
+@pytest.mark.parametrize("lowered", ["cleared", "one second earlier"])
 def test_exit_4_when_the_read_back_finds_a_lower_cutoff(
-    db: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    lowered: str, db: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """Falsifier M32. Between the write and the read-back another writer
     (no app writer does; an operator's ``sqlite3`` could) clears the
-    person's cutoff. The read-back counts it and exits 4 (run it again).
-    Partner: a rerun raises it again and exits 0. Red when: the read-back
-    does not compare the stored cutoffs (exit 0 with the cutoff gone)."""
+    person's cutoff, or sets it one second earlier. The read-back counts it
+    and exits 4 (run it again). Partner: a rerun raises it again and exits
+    0. Red when: the read-back does not compare the stored cutoffs (exit 0
+    with the cutoff gone), or counts only a cleared one (round 2 falsifier
+    N11: ``[one second earlier]``)."""
     now = _cutoff()
+    stamp = None if lowered == "cleared" else (now - timedelta(seconds=1)).isoformat()
     seeded = seed(db, created_at=now - timedelta(hours=1))
     begun = 0
 
@@ -657,14 +712,14 @@ def test_exit_4_when_the_read_back_finds_a_lower_cutoff(
         if _is(sql, "BEGIN", "IMMEDIATE"):
             begun += 1
             if begun == 2:
-                _set_cutoff(db, seeded.person, None)
+                _set_cutoff(db, seeded.person, stamp)
 
     with traced(monkeypatch, lower):
         code, out, err = _run(["--email", PERSON_EMAIL], capsys, now=now)
     assert begun == 2, "the hook ran at the read-back"
     assert code == 4, (out, err)
     assert "1 account with a lower cutoff" in err, err
-    assert cutoff_of(db, seeded.person) is None
+    assert cutoff_of(db, seeded.person) == stamp
     code, out, err = _run(["--email", PERSON_EMAIL], capsys, now=now)
     assert code == 0, (out, err)
     assert cutoff_of(db, seeded.person) == now.isoformat()
@@ -916,6 +971,81 @@ def test_a_closed_output_after_the_commit_keeps_the_exit_code(
     assert "Traceback" not in ran.stderr and "BrokenPipe" not in ran.stderr, ran.stderr
     assert rows_of(db, seeded.other) == 0, "partner: the command did its work"
     assert cutoff_of(db, seeded.other) is not None
+
+
+def test_a_closed_output_keeps_help_at_0_and_usage_at_2(db: Path) -> None:
+    """Codex round 2 and break-it R2-2: the closed-output test above, for the
+    two paths that change nothing. In a real ``python -I`` run whose standard
+    output is a pipe with its read end closed, ``--help`` exits 0 and a usage
+    error exits 2, with no traceback, and the file is untouched. Partner: the
+    usage run printed the usage sentence. Red when: argparse prints the help
+    itself, outside ``_write`` (measured on the unfixed command: exit 120,
+    ``BrokenPipeError: [Errno 32] Broken pipe``)."""
+    seed(db, created_at=_cutoff() - timedelta(hours=1))
+    before = snapshot(db)
+    for args, expected in ((("--help",), 0), (("--all", PERSON_EMAIL), 2)):
+        read_end, write_end = os.pipe()
+        os.close(read_end)
+        try:
+            ran = run_command(db, *args, stdout=write_end)
+        finally:
+            os.close(write_end)
+        assert ran.returncode == expected, (args, ran)
+        assert "Traceback" not in ran.stderr and "BrokenPipe" not in ran.stderr, ran.stderr
+        if expected == 2:
+            assert USAGE in ran.stderr, "partner: the usage run said why"
+    assert snapshot(db) == before
+
+
+class _FileTooLarge(io.TextIOBase):
+    """A text stream whose every write fails as a file at its size limit does
+    (``OSError(EFBIG)``, "File too large"; break-it R2-1 forced it with
+    ``ulimit -f``). It has no descriptor: ``fileno`` raises."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.attempts = 0
+
+    def write(self, text: str) -> int:
+        self.attempts += 1
+        raise OSError(errno.EFBIG, os.strerror(errno.EFBIG))
+
+
+WRITE_ERROR_CASES = {
+    "stdout after the commit": ("stdout", ["--all"], 0),
+    "stderr, unknown email": ("stderr", ["--email", "nobody@example.invalid"], 1),
+    "stderr, usage": ("stderr", ["--all", PERSON_EMAIL], 2),
+    "stderr, missing file": ("stderr", ["--all"], 3),
+}
+
+
+@pytest.mark.parametrize("case", list(WRITE_ERROR_CASES))
+def test_an_output_write_error_keeps_the_exit_code(
+    case: str, db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Break-it R2-1. Any ``OSError`` from writing the output, not only
+    ``BrokenPipeError``, leaves the exit code saying what the run did: 0
+    after the commit (the rows are gone), and 1, 2, 3 before it (nothing
+    changed, and no file created). Partner: the failing stream was written
+    to. Red when: ``_write`` catches only ``BrokenPipeError`` (measured on
+    the unfixed command: ``OSError: [Errno 27] File too large`` out of
+    ``main``)."""
+    stream, argv, expected = WRITE_ERROR_CASES[case]
+    if expected == 3:
+        monkeypatch.setenv("SESSION_DB_PATH", str(db.parent / "missing.sqlite3"))
+    seeded = seed(db, created_at=_cutoff() - timedelta(hours=1))
+    before = snapshot(db)
+    failing = _FileTooLarge()
+    with monkeypatch.context() as patch:
+        patch.setattr(sys, stream, failing)
+        code = _command().main(argv, now=_cutoff())
+    assert code == expected
+    assert failing.attempts > 0, "partner: the command wrote to the failing stream"
+    if expected == 0:
+        assert rows_of(db, seeded.person) == rows_of(db, seeded.other) == 0
+    else:
+        assert snapshot(db) == before, f"exit {code} must change nothing"
+        assert "missing.sqlite3" not in os.listdir(db.parent)
 
 
 def test_the_command_busy_timeout_is_the_apps_default() -> None:

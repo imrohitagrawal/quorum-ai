@@ -35,10 +35,11 @@ What it never does, on purpose:
 
 Exit codes: 0 done and read back (``--help`` also exits 0, and changes
 nothing); 1 no account has that email; 2 usage (a repeated ``--email`` too);
-3 nothing changed (no file, not writable, locked past the busy timeout, not
-migrated, or not run as the file's owner); 4 the cutoff is written but the
-read-back found a row put back, a lower cutoff, or could not run: run it
-again, which is safe (the cutoff never moves back).
+3 nothing changed (``SESSION_DB_PATH`` not set, no file, not writable,
+locked past the busy timeout, not migrated, or not run as the file's owner);
+4 the cutoff is written but the read-back found a row put back, a lower
+cutoff, or could not run: run it again, which is safe (the cutoff never
+moves back). An output that cannot be written does not change the code.
 """
 
 from __future__ import annotations
@@ -50,10 +51,13 @@ import sys
 from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TextIO
+from typing import IO, TYPE_CHECKING
 
 from product_app import session_store
 from product_app.session_store import DELETE_SESSIONS_BEFORE_SQL, RAISE_SESSIONS_CUTOFF_SQL
+
+if TYPE_CHECKING:
+    from _typeshed import SupportsWrite
 
 #: The busy timeout of the command's connection, read at call time. Python's
 #: default, which the app's own connection uses too; ADR-0002 measured that
@@ -96,6 +100,13 @@ class _Parser(argparse.ArgumentParser):
     def exit(self, status: int = 0, message: str | None = None) -> None:  # type: ignore[override]
         raise _Exit(status)
 
+    def print_help(self, file: SupportsWrite[str] | None = None) -> None:
+        # Through ``_write``: argparse's own print leaves the text buffered,
+        # and Python's flush at exit then fails on a closed output and turns
+        # ``--help``'s 0 into 120 (Codex round 2). ``--help`` passes no file.
+        assert file is None, "the command prints its help to standard output only"
+        _write(sys.stdout, self.format_help().rstrip("\n"))
+
 
 def _parser() -> _Parser:
     parser = _Parser(
@@ -125,14 +136,16 @@ def _plural(count: int, word: str) -> str:
     return f"{count} {word}" if count == 1 else f"{count} {word}s"
 
 
-def _write(stream: TextIO, message: str) -> None:
-    """Print one line. A reader that has gone away (``BrokenPipeError``)
-    changes nothing: the exit code still says what the run did to the file
-    (break-it F4). The stream's descriptor is then pointed at ``os.devnull``,
-    so Python's own flush at exit cannot fail and exit 120 instead."""
+def _write(stream: IO[str], message: str) -> None:
+    """Print one line. An output that cannot be written (any ``OSError``: a
+    reader that has gone away, a full disk, a file-size limit) changes
+    nothing: the exit code still says what the run did to the file (break-it
+    F4 and round 2's R2-1). The stream's descriptor is then pointed at
+    ``os.devnull``, so Python's own flush at exit cannot fail and exit 120
+    instead."""
     try:
         print(message, file=stream, flush=True)
-    except BrokenPipeError:
+    except OSError:
         with suppress(OSError, ValueError):
             devnull = os.open(os.devnull, os.O_WRONLY)
             try:
@@ -161,7 +174,13 @@ def main(argv: list[str] | None = None, *, now: datetime | None = None) -> int:
             _say(USAGE)
             return 2
     cutoff = (datetime.now(UTC) if now is None else now).astimezone(UTC)
-    path = os.environ.get("SESSION_DB_PATH", session_store.DEFAULT_DB_PATH)
+    # No fallback to the app's default: it is a path under the working
+    # directory, where a stray store would take the run and exit 0 while the
+    # real file is untouched (break-it R2-3).
+    path = os.environ.get("SESSION_DB_PATH", "")
+    if not path:
+        _say("SESSION_DB_PATH is not set; give it the path the app uses. Nothing was changed.")
+        return 3
     try:
         owner = os.stat(path).st_uid
     except OSError as exc:

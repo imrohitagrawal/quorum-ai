@@ -323,9 +323,9 @@ fly ssh console -a quorum-ai --user quorum \
 If the ssh session lacks the app's environment, name everything explicitly.
 Two signs of that: Python's own error `No module named 'product_app'` with
 exit 1 (no `PYTHONPATH`; this is not the command's "No account has that
-email" line, which is also exit 1), or exit 3 with "could not be read" on a
-file that should be there (no `SESSION_DB_PATH`, so the command looked for
-`.data/sessions.sqlite3` under the working directory):
+email" line, which is also exit 1), or exit 3 with "SESSION_DB_PATH is not
+set" (the command never falls back to the app's default path, which is under
+the working directory):
 
 ```bash
 fly ssh console -a quorum-ai --user quorum -C "env SESSION_DB_PATH=/data/sessions.sqlite3 \
@@ -340,8 +340,8 @@ It prints counts and the cutoff time only, and keeps no record of the run
 | 0 | Written and read back; or `--help`, which changes nothing | Nothing |
 | 1 | No account has that email as of its last sign-in; nothing changed. (Python's `No module named 'product_app'` is also exit 1: see the environment, above) | Try the email the person last signed in with, or `--all` |
 | 2 | Usage: neither flag, both, `--email` given twice, an extra argument, or not one `@`; nothing changed | Fix the command line |
-| 3 | No file, not writable, locked for more than 5 s, not migrated, or not the file's owner; nothing changed | Check `--user quorum`, the path, and that the machine is started; run again |
-| 4 | The cutoff is written, but the check after it found a session put back or could not run | Run it again; that is safe |
+| 3 | `SESSION_DB_PATH` not set, no file, not writable, locked for more than 5 s, not migrated, or not the file's owner; nothing changed | Check `--user quorum`, `SESSION_DB_PATH`, the path, and that the machine is started; run again |
+| 4 | The cutoff is written, but the check after it found a session put back, a lower cutoff, or could not run | Run it again; that is safe |
 
 **UNVERIFIED**, each free to check on the live machine and none mints a
 session:

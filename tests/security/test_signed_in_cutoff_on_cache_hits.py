@@ -561,3 +561,61 @@ def test_a_cutoff_exactly_at_a_cached_sessions_start_refuses_it(
     durable_cutoff(started)
     assert auth.session_repository.get(session_id) is None, "exactly at its start: refused"
     assert session_id not in auth.session_repository._sessions
+
+
+def _set_durable_cutoff(db: Path, account: UUID, at: datetime) -> None:
+    connection = sqlite3.connect(str(db))
+    try:
+        connection.execute(
+            "UPDATE accounts SET sessions_valid_after = ? WHERE account_id = ?",
+            (at.astimezone(UTC).isoformat(), str(account)),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+
+def test_a_durable_cutoff_exactly_at_a_restored_sessions_start_refuses_it(
+    db: Path, live: SessionStore
+) -> None:
+    """Falsifier round 2 N16: M23's boundary on the RESTORE path (the cached
+    copy dropped, so ``get`` reads the row from disk). Another connection
+    writes the durable cutoff only. One microsecond before the session's
+    start: restored and served. Exactly at its start: refused. Partner: the
+    row is on disk both times. Red when: the restore's durable-cutoff
+    comparison is ``<`` instead of ``<=``."""
+    person = _account(db, "restore-boundary")
+    session_id = _signed_in_session(person)
+    started = auth.session_repository._sessions[session_id].created_at
+    assert rows_of(db, person) == 1, "partner: the row is on disk"
+    _set_durable_cutoff(db, person, started - timedelta(microseconds=1))
+    auth.session_repository._sessions.pop(session_id)
+    assert auth.session_repository.get(session_id) is not None, "just before: restored"
+    _set_durable_cutoff(db, person, started)
+    auth.session_repository._sessions.pop(session_id)
+    assert rows_of(db, person) == 1, "partner: the row is still on disk"
+    assert person not in auth.session_repository._valid_after, "only the durable cutoff"
+    assert auth.session_repository.get(session_id) is None, "exactly at its start: refused"
+
+
+def test_an_in_memory_cutoff_exactly_at_a_sessions_start_refuses_it(
+    db: Path, live: SessionStore
+) -> None:
+    """Falsifier round 2 N16b: the same boundary for the IN-MEMORY cutoff
+    (``end_sessions_of``, a sign-out everywhere in this process), which no
+    durable cutoff backs here. One microsecond before the session's start:
+    the cached copy stays, and a restore of the row is served. Exactly at
+    its start: the cached copy is dropped and the restore of the row still on
+    disk is refused. Red when: ``end_sessions_of``'s drop or the restore's
+    in-memory check (``_before_cutoff_locked``) is ``<`` instead of ``<=``."""
+    person = _account(db, "memory-boundary")
+    session_id = _signed_in_session(person)
+    started = auth.session_repository._sessions[session_id].created_at
+    auth.session_repository.end_sessions_of(person, started - timedelta(microseconds=1))
+    assert session_id in auth.session_repository._sessions, "just before: kept"
+    auth.session_repository._sessions.pop(session_id)
+    assert auth.session_repository.get(session_id) is not None, "just before: restored"
+    auth.session_repository.end_sessions_of(person, started)
+    assert session_id not in auth.session_repository._sessions, "exactly at: dropped"
+    assert rows_of(db, person) == 1, "partner: the row is still on disk"
+    assert auth.session_repository.get(session_id) is None, "exactly at its start: refused"

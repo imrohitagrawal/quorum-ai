@@ -81,12 +81,17 @@ The planner's figures are inherited by this ADR, not re-measured by the build.
    exit 4; running again is safe.
 3. **Exit codes.** 0 written and read back, or `--help`, which changes nothing; 1 no account has
    that email as of its last sign-in, nothing changed; 2 usage (neither flag, both, `--email` given
-   twice, an extra argument, or an email without exactly one `@`), nothing changed; 3 no file, not writable, locked past the busy timeout, not migrated, or
-   not run as the file's owner, nothing changed; 4 the cutoff is written but the read-back found
-   or could not check something.
+   twice, an extra argument, or an email without exactly one `@`), nothing changed; 3
+   `SESSION_DB_PATH` not set or empty (the command never falls back to the app's default, which is
+   a path under the working directory, where a stray store would take the run; break-it round
+   2), no file, not writable, locked past the busy timeout, not
+   migrated, or not run as the file's owner, nothing changed; 4 the cutoff is written but the
+   read-back found or could not check something.
 4. **What it prints.** Counts and the cutoff only, and that it does not secure the Google account
-   itself. A reader that has gone away (`BrokenPipeError`) does not change the exit code: it still
-   says what the run did to the file. Usage errors print one fixed sentence: argparse's own `error()` echoed the arguments
+   itself. An output that cannot be written (any `OSError`: a reader that has gone away, a full
+   disk, a file-size limit) does not change the exit code, `--help` included: every line, the
+   help too, goes through one writer that catches it, so the code still says what the run did
+   to the file. Usage errors print one fixed sentence: argparse's own `error()` echoed the arguments
    (Codex; the planner reproduced `unrecognized arguments: person@example.invalid`). Other errors
    name the exception type only. It stores no record of its runs (CHG-083 (b)).
 5. **Every process reads the cutoff on each signed-in request.** `SessionRepository.get`'s
@@ -138,7 +143,8 @@ The planner's figures are inherited by this ADR, not re-measured by the build.
 
 - An operator can end one account's sessions, or every signed-in session, from `fly ssh`
   (`DEPLOY.md`, "End sessions"). Every process on the machine refuses them from its next request.
-- ADR-0002 gains a second writer. It is short and rare: one transaction of milliseconds per run.
+- ADR-0002 gains a second writer. It is short and rare: per run, one short write transaction and
+  one read-back, a second short transaction.
 - ADR-0137: sign-out everywhere is now seen by other processes too.
 - ADR-0144 decision 3: on a read-only database that predates the spend key, a signed-in session
   used to restore and be metered under its own id. No cutoff can be read there, so it is now
