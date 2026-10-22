@@ -100,6 +100,12 @@ class _GuessedEncoding(logging.Handler):
             self.seen = True
 
 
+#: What ``surrogateescape`` makes of a byte a codec cannot decode: pypdf 6.21.1
+#: falls back to it, without logging, for bytes a font's named encoding does
+#: not map. The child turns each into U+FFFD, so the garble rule counts it
+#: instead of the parent stripping it as a lone surrogate.
+_ESCAPED_BYTE = re.compile("[\udc80-\udcff]")
+
 #: UTF-16 surrogates (Unicode category Cs). In the PARENT, after JSON decoding
 #: has joined every valid escaped pair into one character above U+FFFF, any
 #: U+D800-U+DFFF left is lone. A ToUnicode map can emit them, and an escaped
@@ -165,7 +171,7 @@ def extract_text(data: bytes) -> str:
         return ""
     finally:
         cmap_log.removeHandler(guessed)
-    return "\n".join(pages)[:MAX_CHARS]
+    return _ESCAPED_BYTE.sub("\ufffd", "\n".join(pages)[:MAX_CHARS])
 
 
 def read_reply(out: bytes) -> str:

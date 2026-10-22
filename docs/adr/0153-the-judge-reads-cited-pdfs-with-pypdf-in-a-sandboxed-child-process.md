@@ -116,6 +116,13 @@ font; mapping more CMaps, which fixes only the names listed and not the unknown 
 depends on pypdf's log message, which a later version may reword; the tests pin it, so an update
 that rewords it fails them.
 
+The break-it review found a third: bytes that a mapped CMap's codec cannot decode (including
+`/90msp-RKSJ-H`). 6.19.0 fell back to single bytes, refused as garbled; 6.21.1 decodes them with
+`surrogateescape`, one U+DC80–U+DCFF for each high byte, and logs nothing. The parent strips lone
+surrogates, which left 240 control characters `fetched` for a built page of 240 such codes. The
+child now turns U+DC80–U+DCFF into U+FFFD before replying, so the garble rule counts them. The 13
+unsupported CMaps that review listed are all refused again, as under 6.19.0.
+
 ## Rejected alternatives
 
 - **Parse in the app's process with a timeout thread.** A CPython thread cannot be stopped, and

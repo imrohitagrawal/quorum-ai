@@ -140,6 +140,7 @@ UNREADABLE: dict[str, Callable[[], bytes]] = {
     "parser raises RecursionError": pdfs.recursion_error_pdf,
     "a font the parser cannot read": lambda: pdfs.type_error_pdf(pdfs.EVIDENCE * 4),
     "a CMap the parser cannot read": lambda: pdfs.rksj_pdf(encoding=b"/90pv-RKSJ-H"),
+    "bytes a mapped CMap cannot decode": pdfs.invalid_rksj_pdf,
     "not a PDF": lambda: b"%PDF-1.7 x",
     "empty body": lambda: b"",
     "HTML sent as a PDF": lambda: b"<html><body>" + pdfs.EVIDENCE.encode() * 3 + b"</body></html>",
