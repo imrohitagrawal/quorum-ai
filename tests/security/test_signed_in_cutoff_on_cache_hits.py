@@ -601,7 +601,9 @@ def test_a_durable_cutoff_exactly_at_a_restored_sessions_start_refuses_it(
 def test_an_in_memory_cutoff_exactly_at_a_sessions_start_refuses_it(
     db: Path, live: SessionStore
 ) -> None:
-    """Falsifier round 2 N16b: the same boundary for the IN-MEMORY cutoff
+    """Round 2 fixer's mutation survey (no falsifier ID; N16b is
+    ``max_age_account``'s check, in ``test_session_max_age_durable.py``): the
+    same boundary for the IN-MEMORY cutoff
     (``end_sessions_of``, a sign-out everywhere in this process), which no
     durable cutoff backs here. One microsecond before the session's start:
     the cached copy stays, and a restore of the row is served. Exactly at

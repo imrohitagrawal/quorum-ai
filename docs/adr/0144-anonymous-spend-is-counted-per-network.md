@@ -10,6 +10,10 @@ question ADR-0141 left open. The shape below is the session's design; its own ca
 listed under Consequences so the owner can overturn them. Failure modes, listed before
 the code: `docs/analysis/2026-10-04-w47-anonymous-spend-per-network-failure-modes.md`.
 
+**Amended by ADR-0176 (2026-10-22), decision 3:** on a read-only database that predates the spend
+key, a signed-in session used to restore and be metered under its own id. No cutoff can be read
+there, so it is now refused, and so never metered (CHG-083 (a)).
+
 ## Context
 
 An anonymous session's spend key is its own random id, so every new anonymous session —
