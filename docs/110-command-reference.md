@@ -63,6 +63,7 @@ FACTORY_STRICT=1 make validate-strict
 | `make format` | Generated product repo | Runs `ruff check . --fix` and then `ruff format .`. |
 | `make test` | Generated product repo | Runs the test suite. |
 | `make run` | Generated product repo | Starts the local FastAPI app. |
+| `fly ssh console -a quorum-ai --user quorum -C "python -m product_app.end_sessions --email ADDRESS"` (or `--all`) | The production machine, through `fly ssh` | Ends one account's signed-in sessions, or every signed-in session; anonymous sessions keep running (W87-3, ADR-0176). Steps, exit codes and the unverified points: `DEPLOY.md`, "End sessions". |
 | `make workflow-audit` | Generated product repo | Audits every GitHub Actions workflow and composite action under `.github` with zizmor, offline, using `.github/zizmor.yml` (W69, ADR-0166). Exits non-zero on any finding the config does not suppress. Blocking in CI's `validate-and-test` job. |
 | `make publishing-check` | Generated product repo or factory root | Validates study/FAQ/article/LinkedIn/media publishing backbone. |
 | `make bootstrap-smoke` | Factory root | Creates a temporary product and validates it. Useful when changing the factory itself. |

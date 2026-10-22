@@ -294,6 +294,61 @@ It prints the link and its id. Send the link; keep the id. Confirm with
 **If the app does not start** after changing either: `fly secrets unset
 INVITE_LINK_SIGNING_KEY INVITE_LINK_REVOKED_IDS -a quorum-ai` turns links off.
 
+### End sessions (W87-3)
+
+Ends one account's signed-in sessions, or every signed-in session, for
+example after a cookie is stolen (ADR-0176, CHG-063 (d)). It raises the
+accounts' sessions cutoff and deletes their session rows; every app process
+on the machine refuses those sessions from its next request. Anonymous
+sessions keep running (CHG-066 (d)). Someone who signs in with Google again
+afterwards keeps working: this does not secure the Google account itself.
+
+**First**, check there is exactly one machine and that it is started (the
+command reaches only the volume beside it):
+
+```bash
+fly machine list -a quorum-ai
+fly machine start <id> -a quorum-ai    # only if it is stopped
+```
+
+**Then** run it as the app's user:
+
+```bash
+fly ssh console -a quorum-ai --user quorum \
+  -C "python -m product_app.end_sessions --email someone@example.com"
+fly ssh console -a quorum-ai --user quorum \
+  -C "python -m product_app.end_sessions --all"
+```
+
+If the ssh session lacks the app's environment (exit 3 on a file that should
+be there), name everything explicitly:
+
+```bash
+fly ssh console -a quorum-ai --user quorum -C "env SESSION_DB_PATH=/data/sessions.sqlite3 \
+  PYTHONPATH=/app/src /opt/venv/bin/python -m product_app.end_sessions --all"
+```
+
+It prints counts and the cutoff time only, and keeps no record of the run
+(CHG-083 (b)). The email stays in your shell history.
+
+| Exit | Meaning | What to do |
+|---|---|---|
+| 0 | Written and read back | Nothing |
+| 1 | No account has that email as of its last sign-in; nothing changed | Try the email the person last signed in with, or `--all` |
+| 2 | Usage: neither flag, both, an extra argument, or not one `@`; nothing changed | Fix the command line |
+| 3 | No file, not writable, locked for more than 5 s, not migrated, or not the file's owner; nothing changed | Check `--user quorum`, the path, and that the machine is started; run again |
+| 4 | The cutoff is written, but the check after it found a session put back or could not run | Run it again; that is safe |
+
+**UNVERIFIED**, each free to check on the live machine and none mints a
+session:
+- whether `fly ssh` sessions get the image's and `fly.toml`'s `[env]`
+  variables: `fly ssh console -a quorum-ai --user quorum -C "printenv
+  SESSION_DB_PATH PYTHONPATH PATH"` (not a bare `env`, which prints secrets);
+- whether `--user quorum` works on the live machine (local `flyctl v0.4.118`
+  lists `-u, --user` with the default `root`; the image's user is `quorum`,
+  uid 1000, by the `Dockerfile`);
+- whether `fly ssh` reaches, or starts, a stopped machine (start it first).
+
 ### Rollback to a previous version
 
 flyctl has no `rollback` subcommand (`fly releases --help` on flyctl 0.4.113

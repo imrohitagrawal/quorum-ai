@@ -1,6 +1,6 @@
 """Every security measure in docs/41-security-controls.md must name tests that exist.
 
-docs/41 lists the security measures SC-01 to SC-103 in tables, one row each. A
+docs/41 lists the security measures SC-01 to SC-104 in tables, one row each. A
 row that says a measure is TESTED is worth something only if the test it names
 is real.
 
@@ -16,7 +16,7 @@ A MEASURE TABLE is a rendered table whose header has seven cells, with the text
 ``Proof`` in the fourth and ``Status`` in the seventh. Its body rows are the
 measure rows. The rules:
 
-1. The measure ids are exactly SC-01 to SC-103, each once. They are written out
+1. The measure ids are exactly SC-01 to SC-104, each once. They are written out
    by hand below, so the document cannot define its own population. An ID cell
    whose text is not ``SC-`` and two digits, or ``SC-`` and three digits not
    starting with 0 (SC-100 onward, added by W86), is reported.
@@ -120,7 +120,7 @@ SC-61 SC-62 SC-63 SC-64 SC-65 SC-66 SC-67 SC-68 SC-69 SC-70
 SC-71 SC-72 SC-73 SC-74 SC-75 SC-76 SC-77 SC-78 SC-79 SC-80
 SC-81 SC-82 SC-83 SC-84 SC-85 SC-86 SC-87 SC-88 SC-89 SC-90
 SC-91 SC-92 SC-93 SC-94 SC-95 SC-96 SC-97 SC-98 SC-99 SC-100
-SC-101 SC-102 SC-103
+SC-101 SC-102 SC-103 SC-104
 """
 EXPECTED_IDS = frozenset(_EXPECTED_ID_TEXT.split())
 
@@ -369,7 +369,7 @@ def _report(problems: Sequence[Problem]) -> str:
 
 
 def test_real_document_names_real_tests_for_every_measure() -> None:
-    """docs/41 has exactly SC-01 to SC-103, each in a measure table, each proof real.
+    """docs/41 has exactly SC-01 to SC-104, each in a measure table, each proof real.
 
     Red when: docs/41 drops, adds or renumbers a measure row, moves one out of a
     measure table, or any row breaks rules 2 to 7 (for example, a cited test is
@@ -380,16 +380,16 @@ def test_real_document_names_real_tests_for_every_measure() -> None:
     assert not problems, _report(problems)
 
 
-def test_the_hand_written_id_list_is_sc01_to_sc103() -> None:
-    """The literal expected list has 103 distinct ids, SC-01 to SC-103
-    (SC-103 added by W87-2, ADR-0175).
+def test_the_hand_written_id_list_is_sc01_to_sc104() -> None:
+    """The literal expected list has 104 distinct ids, SC-01 to SC-104
+    (SC-103 added by W87-2, ADR-0175; SC-104 by W87-3, ADR-0176).
 
     Red when: an id in _EXPECTED_ID_TEXT is dropped, repeated or mistyped.
     """
     written = _EXPECTED_ID_TEXT.split()
-    assert len(written) == 103
-    assert len(set(written)) == 103
-    assert set(written) == {f"SC-{number:02d}" for number in range(1, 104)}
+    assert len(written) == 104
+    assert len(set(written)) == 104
+    assert set(written) == {f"SC-{number:02d}" for number in range(1, 105)}
 
 
 # ---------------------------------------------------------------------------
@@ -531,14 +531,14 @@ def test_a_good_document_has_no_problems(fake_root: Path) -> None:
 
 
 def test_a_full_size_document_matches_the_real_expected_ids(fake_root: Path) -> None:
-    """Rows SC-01..SC-103, generated here independently, satisfy EXPECTED_IDS.
+    """Rows SC-01..SC-104, generated here independently, satisfy EXPECTED_IDS.
 
-    Red when: EXPECTED_IDS stops being exactly SC-01 to SC-103, or a
-    three-digit id (SC-100 to SC-103) is reported as malformed.
+    Red when: EXPECTED_IDS stops being exactly SC-01 to SC-104, or a
+    three-digit id (SC-100 to SC-104) is reported as malformed.
     """
     rows = [
         (f"SC-{n:02d}", "a measure", "a module", "—", "nothing runs it", "—", "CODE-ONLY")
-        for n in range(1, 104)
+        for n in range(1, 105)
     ]
     assert check_security_controls(_doc(rows), fake_root, EXPECTED_IDS) == []
     problems = check_security_controls(_doc(rows[:41] + rows[42:]), fake_root, EXPECTED_IDS)

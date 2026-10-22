@@ -40,6 +40,11 @@ PARTIAL, V6.8.4 from N/A to PARTIAL, and V7.1.3 stays PARTIAL; the three PARTIAL
 session's proposals. The counts below follow, recounted by hand (no check counts them). V7.6.1's
 reading, held back until the fix was built (CHG-060), is restored in the past tense.
 
+**Updated by W87-3 (2026-10-22).** Rows V7.4.5 and V7.5.2 were updated to the operator command and
+the per-request cutoff read W87-3 added (ADR-0176); each says so at the start of its Evidence. V7.4.5
+moves from NOT IN PLACE to TESTED, and V7.5.2 stays PARTIAL. The counts below follow, recounted by
+hand (no check counts them).
+
 **What the verdicts mean.**
 - **TESTED**: in place, and a named test fails without it.
 - **MEASURED**: the session checked production directly with a free, read-only request.
@@ -63,7 +68,7 @@ says so at the start of its Evidence.
 | V4 API and Web Service | 10 | 1 | 0 | 1 | 0 | 1 | 1 | 6 |
 | V5 File Handling | 9 | 0 | 0 | 1 | 0 | 0 | 0 | 8 |
 | V6 Authentication | 35 | 1 | 0 | 1 | 5 | 1 | 0 | 27 |
-| V7 Session Management | 18 | 9 | 0 | 2 | 4 | 1 | 0 | 2 |
+| V7 Session Management | 18 | 10 | 0 | 2 | 4 | 0 | 0 | 2 |
 | V8 Authorization | 7 | 2 | 0 | 1 | 2 | 1 | 0 | 1 |
 | V9 Self-contained Tokens | 7 | 2 | 0 | 0 | 4 | 0 | 0 | 1 |
 | V10 OAuth and OIDC | 29 | 4 | 0 | 0 | 2 | 0 | 0 | 23 |
@@ -74,7 +79,7 @@ says so at the start of its Evidence.
 | V15 Secure Coding and Architecture | 13 | 3 | 0 | 2 | 7 | 1 | 0 | 0 |
 | V16 Security Logging and Error Handling | 16 | 0 | 0 | 0 | 15 | 1 | 0 | 0 |
 | V17 WebRTC | 7 | 0 | 0 | 0 | 0 | 0 | 0 | 7 |
-| **All** | **253** | **47** | **2** | **24** | **75** | **8** | **1** | **96** |
+| **All** | **253** | **48** | **2** | **24** | **75** | **7** | **1** | **96** |
 
 ## V1 Encoding and Sanitization
 
@@ -234,9 +239,9 @@ says so at the start of its Evidence.
 | V7.4.2 | 1 | TESTED | The app has no "disable account" feature. Deletion removes the session rows in one transaction (`session_store.py:964-993`), refuses the account's cached sessions (`auth.py:449-463`) and deletes them again (`account_deletion.py:32-56`). `tests/integration/test_account_deletion.py::test_deleting_signs_out_another_device`: the other device's session fails from cache, from disk, and after a simulated restart. | — |
 | V7.4.3 | 2 | N/A | The app manages no authentication factor: sign-in is Google only, and there is no password or MFA to change. (Sign-out everywhere exists anyway; see V7.5.2.) | — |
 | V7.4.4 | 2 | PARTIAL | "Sign out" exists only inside `header.topbar` (`main.py:1013`, `workspace.html:82,105`). The top bar is `display:none` on the landing, result, live-run and transcript views (`app.css:849-854`), so a signed-in user looking at a result has no visible sign-out. The idle reminder's "Sign out now" is moved to the page body but appears only near expiry (ADR-0138). Found by reading the CSS; not checked in a browser. | W90 |
-| V7.4.5 | 2 | NOT IN PLACE | There is no admin or operator role: `grep -rni "admin\|role" src/product_app/*.py` finds none. Nothing lets an operator end one user's sessions or all sessions. The in-memory cache is authoritative while the process runs, so deleting rows on the volume would also need a restart. | W87 |
+| V7.4.5 | 2 | TESTED | Updated by W87-3 (ADR-0176). Since W87-3 (ADR-0176, SC-104) an operator ends one account's signed-in sessions or every signed-in session with `python -m product_app.end_sessions --email ADDRESS \| --all`, run on the machine through `fly ssh` (CHG-063 (d)); anonymous sessions keep running (CHG-066 (d)). Every app process reads the durable cutoff on each signed-in request, so no restart is needed: `tests/security/test_signed_in_cutoff_on_cache_hits.py::test_the_command_ends_a_cached_session_at_once_with_the_gc_stalled`. There is still no admin role in the app; the operator is whoever can `fly ssh` to the machine. | W87 |
 | V7.5.1 | 2 | N/A | No account attribute can be edited. The email is re-read from Google at each sign-in (`session_store.py:950-953`) and no route changes it. Deletion is confirmed by typing the email plus the CSRF token (`account_deletion.py:72-89`), not by signing in again. | — |
-| V7.5.2 | 2 | PARTIAL | Users can end all sessions: `tests/integration/test_session_safety.py::test_sign_out_everywhere_ends_every_session_of_the_account`. They cannot see their active sessions (no route lists them), cannot end just one other session, and sign-out everywhere asks for no re-authentication (`google_signin.py:739-780`). | W87 |
+| V7.5.2 | 2 | PARTIAL | Updated by W87-3 (ADR-0176); the verdict is unchanged. Users can end all sessions: `tests/integration/test_session_safety.py::test_sign_out_everywhere_ends_every_session_of_the_account`. They cannot see their active sessions (no route lists them), cannot end just one other session, and sign-out everywhere asks for no re-authentication (`google_signin.py:739-780`). Since W87-3 (ADR-0176) a sign-out everywhere is also seen by every other process's cached copy on its next request: `tests/security/test_signed_in_cutoff_on_cache_hits.py::test_a_sign_out_everywhere_in_one_process_ends_the_other_processes_cached_copy`; the missing parts above are unchanged. | W87 |
 | V7.6.1 | 2 | TESTED | Updated by W87-2 (ADR-0175); the agent's reading below was held back until this fix was built (CHG-060). Before W87-2, read at `2f13e22`: nothing limited the time since the last Google sign-in: no absolute lifetime (V7.3.2), no `max_age` in the authorization URL (`google_signin.py:312-324`), and `auth_time` was never read. `grep -rn "max_age\|auth_time" src/product_app/google_signin.py` found 0 hits. At W87-2's build the same grep finds 6 hits, and none is a parameter sent to Google: the two `ends_because` values W87-1 added, and W87-2's two calls to `SessionRepository.max_age_account` and two comments; `auth_time` is still not read. Fixed for what the app controls: a new Google round trip is needed 12 hours after a sign-in (W87-1, SC-102) and within 10 minutes before an account is deleted (W87-2, SC-103). Google decides whether that round trip asks for a password; the app does not ask it to (ADR-0175, decision 3). Tests: `tests/integration/test_recent_sign_in_for_deletion.py::test_deletion_is_allowed_at_exactly_600_s_and_refused_1_us_later`, `::test_the_check_reads_the_sessions_own_start_not_the_accounts_last_sign_in`, `::test_the_re_sign_in_for_deletion_replaces_the_old_session`, `tests/integration/test_session_max_age_routes.py::test_a_signed_in_session_ends_12_hours_after_sign_in_with_the_owners_words`. | — |
 | V7.6.2 | 2 | TESTED | A signed-in session needs a click: both starts are click handlers (`app.js:11301-11304`, `capped-sign-in.html:24-27`). The start is a POST that needs the CSRF header, and the callback needs this session's pending sign-in. `tests/integration/test_google_sign_in.py::test_sign_in_start_needs_the_csrf_token` (403, nothing pending) and `::test_a_callback_without_this_sessions_fresh_state_is_refused` with `[missing]` and `[other_session]`. | — |
 
