@@ -61,7 +61,11 @@ def test_tables_that_cannot_be_created_leave_session_safety_off(
     unready way. Turns red if a failed migration is reported as ready, is
     recorded as applied, or leaves its column behind (read on the store's
     own connection: closing it would discard an open transaction and hide a
-    missing rollback)."""
+    missing rollback). W87-3 (CHG-083 a, Codex 1): the cutoff of an account
+    row on a store that is not ready is "not read", ``(False, None)``, so the
+    caller refuses the session; it was ``(True, None)``, "no cutoff", which
+    let every signed-in session through. Turns red if that comes back.
+    Partner: an id with no account row (anonymous) is ``(True, None)``."""
     connection = sqlite3.connect(str(path))
     try:
         connection.execute("CREATE VIEW sign_in_events AS SELECT 1 AS x")
@@ -78,7 +82,8 @@ def test_tables_that_cannot_be_created_leave_session_safety_off(
         assert store.accounts_available() is True
         _add_account(store, account)
         assert store.end_sessions_before(account, NOW) == "failed"
-        assert store.sessions_valid_after(account) == (True, None)
+        assert store.sessions_valid_after(account) == (False, None)
+        assert store.sessions_valid_after(uuid4()) == (True, None)
         assert (
             store.record_sign_in_event(account, "signed_in", now=NOW, keep_count=10, keep_days=30)
             is False

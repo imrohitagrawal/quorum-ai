@@ -63,6 +63,31 @@ def _row(
     )
 
 
+def _plant(
+    store: SessionStore,
+    session_id: str,
+    *,
+    account_id: UUID,
+    created_at: datetime,
+    last_used_at: datetime,
+) -> None:
+    """A plain ``INSERT``, as a writer before W87-3's conditional save made it."""
+    with store._lock:
+        store._conn.execute(
+            "INSERT OR REPLACE INTO sessions "
+            "(session_digest, account_id, csrf_token, created_at, last_used_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (
+                session_store._digest(session_id),
+                str(account_id),
+                "an-independent-csrf-token",
+                created_at.astimezone(UTC).isoformat(),
+                last_used_at.astimezone(UTC).isoformat(),
+            ),
+        )
+    assert store.fetch(session_id, not_used_before=datetime(1970, 1, 1, tzinfo=UTC)) is not None
+
+
 def _signed_in_account(store: SessionStore, sub: str = "w87-sub-1") -> UUID:
     account = store.upsert_google_account(
         google_sub=sub, email=f"{sub}@example.com", now=datetime.now(UTC)
@@ -371,9 +396,11 @@ def test_a_revoked_session_is_never_told_12_hours(
     if case == "signed out everywhere before 12 h":
         assert store.end_sessions_before(account, created + timedelta(minutes=5)) == "ended"
         assert store.fetch("revoked", not_used_before=datetime(1970, 1, 1, tzinfo=UTC)) is None
-        _row(store, "revoked", account_id=account, created_at=created, last_used_at=clock.at)
+        # W87-3: ``save`` now refuses a row its cutoff covers, so the stale
+        # write-back is planted the way an older writer would have made it.
+        _plant(store, "revoked", account_id=account, created_at=created, last_used_at=clock.at)
     else:
-        monkeypatch.setattr(store, "sessions_valid_after", lambda _account: (False, None))
+        monkeypatch.setattr(store, "sessions_valid_after", lambda _account, **_: (False, None))
     _restarted()
     assert auth.session_repository.get("revoked") is None
     assert auth.session_repository.end_reason("revoked") == "SESSION_EXPIRED"
