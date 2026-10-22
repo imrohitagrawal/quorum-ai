@@ -7,7 +7,8 @@ to read PDFs (CHG-033 (a)) and chose pypdf in a sandboxed process (CHG-034). The
 are the session's, from the research in `docs/analysis/2026-10-08-w54-pdf-research/`; the owner
 may overturn any. `quorum_source_fetch_enabled` stays False in code and `fly.toml`. Failure modes,
 written before the code: `docs/analysis/2026-10-08-w54-step3-pdf-reading-failure-modes.md`. Decisions 1 and 4 are amended by ADR-0154
-(encrypted PDFs and PDFs served as binary downloads, 2026-10-09).
+(encrypted PDFs and PDFs served as binary downloads, 2026-10-09). Decision 4's garble rule is
+amended on 2026-10-23 (see "Amendment of 2026-10-23" below).
 
 ## Context
 
@@ -75,7 +76,8 @@ download cap). At most 20 pages and 50,000 characters are extracted. The `/90msp
 encoding is mapped to `cp932` (the research reported that this made pypdf's output on a Japanese
 government PDF match the other libraries; its output files were not kept, so that is
 UNVERIFIED here; the tests show it on a small built file). Text whose characters are more than
-20% in U+0080–U+00FF is treated as garbled; that check is measured only on the built file.
+20% in U+0080–U+00FF, or U+FFFD since 2026-10-23, is treated as garbled; that check is measured
+only on built files.
 pypdf's own limits do not bound memory from a font map that expands each byte into many
 characters; only the child's memory limit does.
 
@@ -86,6 +88,18 @@ cut exactly as a web page's does (ADR-0150), so the price reserve is unchanged. 
 text, a password-protected file, a parser failure, a child that could not start, a busy sandbox:
 `unusable`. A child killed by its time limit: `timeout`. In each unread case the search preview
 reaches the judge (ADR-0152). Nothing raises into the run.
+
+### Amendment of 2026-10-23: U+FFFD counts as garbled
+
+pypdf moved from 6.19.0 to 6.21.1 because five advisories against 6.19.0 blocked every merge
+(ADR-0164's audit; the owner chose to update first, CHG-085). Every PDF fixture's extracted text
+was compared under both versions: 21 of 22 are byte-identical. The one that changed is a page whose
+`/Font` is not a dictionary. 6.19.0 raised `TypeError`, so the child returned no text. 6.21.1
+reads it and gives one U+FFFD for each character. U+FFFD is above U+00FF, so the old rule did not
+count it: with 588 such characters, past the 200-character floor, the page was `fetched` and would
+have reached the judge as a source (measured before this change). The rule now counts U+FFFD with
+U+0080–U+00FF, at the same 20% threshold. Rejected: making the child drop U+FFFD, which would let a
+page that is mostly unreadable pass on its few readable characters.
 
 ## Rejected alternatives
 

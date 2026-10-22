@@ -29,7 +29,8 @@ WHAT THE PARSER IS ALLOWED (decision 4)
     external ``jbig2dec`` program. At most 20 pages and 50,000 characters are
     extracted. ``/90msp-RKSJ-H`` is read as cp932, as pypdf already reads
     ``/90ms-RKSJ-H``. Text more than 20% of whose characters are in
-    U+0080-U+00FF is garbled (:func:`is_garbled`; the parent refuses it).
+    U+0080-U+00FF or are U+FFFD is garbled (:func:`is_garbled`; the parent
+    refuses it).
 
 A password or a parser exception of any kind comes back as "". Nothing here
 raises into the parent: the parent reads a JSON object, or nothing, through
@@ -92,11 +93,13 @@ def strip_lone_surrogates(text: str) -> str:
 
 
 def is_garbled(text: str) -> bool:
-    """More than 20% of the characters in U+0080-U+00FF (exactly 20% is not):
-    what a font read with the wrong single-byte table looks like. Characters
-    above U+00FF (curly quotes, dashes, CJK) are not counted."""
-    latin1 = sum(1 for char in text if "\x80" <= char <= "\xff")
-    return 5 * latin1 > len(text)
+    """More than 20% of the characters in U+0080-U+00FF or U+FFFD (exactly 20%
+    is not): what a font read with the wrong single-byte table looks like, or,
+    since pypdf 6.21.1, a font it cannot read at all (one U+FFFD for each
+    character). Other characters above U+00FF (curly quotes, dashes, CJK) are
+    not counted."""
+    garbled = sum(1 for char in text if "\x80" <= char <= "\xff" or char == "\ufffd")
+    return 5 * garbled > len(text)
 
 
 def extract_text(data: bytes) -> str:

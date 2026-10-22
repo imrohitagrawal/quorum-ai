@@ -37,7 +37,7 @@ dependencies = [
   # for identical answers, with no code change and no failing test. A version
   # bump here must be a reviewed decision, not a side effect of a lock update.
   "markdown-it-py==4.2.0",
-  "pypdf==6.19.0",
+  "pypdf==6.21.1",
   # pypdf needs it to open AES-encrypted PDFs; pinned exactly like pypdf (ADR-0154).
   "cryptography==50.0.2",
 ]

@@ -78,6 +78,29 @@ def test_the_garble_range_is_u0080_to_u00ff_inclusive() -> None:
     assert pdf_text.is_garbled("") is False
 
 
+def test_the_replacement_character_counts_as_garbled() -> None:
+    """U+FFFD is what pypdf 6.21.1 gives for each character of a font it
+    cannot read. RED IF: U+FFFD is not counted (25% is then accepted), or it
+    is counted twice (exactly 20% is then refused). Literals on both sides;
+    U+FFFE beside it is not counted."""
+    assert pdf_text.is_garbled("A" * 200 + "\ufffd" * 50) is False
+    assert pdf_text.is_garbled("A" * 150 + "\ufffd" * 50) is True
+    assert pdf_text.is_garbled("\ufffd" * 10) is True
+    assert pdf_text.is_garbled("\ufffe" * 10) is False
+
+
+def test_a_font_the_parser_cannot_read_comes_back_garbled() -> None:
+    """pypdf 6.21.1 no longer raises on ``/Font 7``; it returns U+FFFD for
+    every character, 588 of them here, past the parent's 200-character floor.
+    RED IF: ``is_garbled`` stops counting U+FFFD, so a page of replacement
+    characters would reach the judge as a source. Partner: the same builder's
+    length is above the floor, so only the garble rule refuses it."""
+    text = pdf_text.extract_text(pdfs.type_error_pdf(pdfs.EVIDENCE * 4))
+    assert len(text) == 588
+    assert set(text) == {"\ufffd"}
+    assert pdf_text.is_garbled(text) is True
+
+
 # ---------------------------------------------------------------------------
 # extract_text: pages, characters, encodings, failures
 # ---------------------------------------------------------------------------
@@ -130,11 +153,10 @@ def test_90msp_rksj_h_is_read_as_cp932() -> None:
     [
         pdfs.encrypted_pdf,
         pdfs.recursion_error_pdf,
-        pdfs.type_error_pdf,
         lambda: b"%PDF-1.7 x",
         lambda: b"",
     ],
-    ids=["encrypted", "recursion", "type-error", "not-a-pdf", "empty"],
+    ids=["encrypted", "recursion", "not-a-pdf", "empty"],
 )
 def test_a_parser_failure_is_empty_text_and_never_raises(make: Any) -> None:
     """RED IF: any parser exception escapes ``extract_text`` (the test then

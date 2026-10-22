@@ -426,7 +426,10 @@ UNREAD: dict[str, tuple[str, Any]] = {
     "encrypted": ("unusable", lambda: _pdf(pdfs.encrypted_pdf())),
     "image only": ("unusable", lambda: _pdf(pdfs.image_only_pdf())),
     "garbled": ("unusable", lambda: _pdf(pdfs.text_pdf(["A" * 150 + "é" * 100]))),
-    "parser TypeError": ("unusable", lambda: _pdf(pdfs.type_error_pdf())),
+    "a font the parser cannot read": (
+        "unusable",
+        lambda: _pdf(pdfs.type_error_pdf(pdfs.EVIDENCE * 4)),
+    ),
 }
 
 

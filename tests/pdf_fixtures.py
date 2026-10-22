@@ -8,7 +8,8 @@ point.
 
 Every fixture was checked against pypdf 6.19.0 by the test designer on
 2026-10-08 (the numbers in the docstrings are those measurements, macOS,
-Python 3.12.13).
+Python 3.12.13). On 2026-10-23 every fixture's extracted text was compared
+under pypdf 6.19.0 and 6.21.1: only :func:`type_error_pdf` changed.
 
 Also here: :class:`ChildLaunches`, a spy on ``subprocess.Popen`` that records
 every launch of ``product_app.pdf_text`` and can swap the child's program for a
@@ -205,11 +206,14 @@ def recursion_error_pdf() -> bytes:
     return _one_page(b"BT /F1 12 Tf 72 700 Td " + b"[" * depth + b"(x)" + b"]" * depth + b" TJ ET")
 
 
-def type_error_pdf() -> bytes:
-    """``/Font 7`` where a dictionary belongs: pypdf 6.19.0 raises
-    ``TypeError: 'NumberObject' object is not iterable`` (measured)."""
+def type_error_pdf(text: str = EVIDENCE) -> bytes:
+    """``/Font 7`` where a dictionary belongs: pypdf 6.19.0 raised
+    ``TypeError: 'NumberObject' object is not iterable`` (measured). pypdf
+    6.21.1 reads it instead, one U+FFFD for each character (147 for
+    ``EVIDENCE``; measured 2026-10-23), so it is now a font the parser cannot
+    read, not a parser failure."""
     return _one_page(
-        b"BT /F1 12 Tf 72 700 Td (" + EVIDENCE.encode() + b") Tj ET",
+        b"BT /F1 12 Tf 72 700 Td (" + text.encode() + b") Tj ET",
         resources=b"/Resources << /Font 7 >>",
     )
 

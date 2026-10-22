@@ -138,7 +138,7 @@ UNREADABLE: dict[str, Callable[[], bytes]] = {
     "encrypted with a user password": pdfs.encrypted_pdf,
     "image only": pdfs.image_only_pdf,
     "parser raises RecursionError": pdfs.recursion_error_pdf,
-    "parser raises TypeError": pdfs.type_error_pdf,
+    "a font the parser cannot read": lambda: pdfs.type_error_pdf(pdfs.EVIDENCE * 4),
     "not a PDF": lambda: b"%PDF-1.7 x",
     "empty body": lambda: b"",
     "HTML sent as a PDF": lambda: b"<html><body>" + pdfs.EVIDENCE.encode() * 3 + b"</body></html>",
