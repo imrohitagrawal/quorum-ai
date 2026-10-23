@@ -384,9 +384,18 @@ BUCKET_B_PIN_BEHAVIOUR = {
         "the frame destinations /ui refuses; pinned dest by dest by "
         "tests/unit/test_fetch_site.py::test_ui_framed_from_another_site_is_a_frame"
     ),
+    "fetch_site._PURPOSE_HEADERS": (
+        "the headers that mark a prefetch, refused on both routes (W88 round 1, B1); pinned "
+        "header by header by "
+        "tests/unit/test_fetch_site_prefetch_and_edges.py::"
+        "test_the_older_purpose_header_is_read_too "
+        "and ::test_the_measured_prefetch_is_refused_on_both_routes"
+    ),
     "fetch_site.CLASSES": (
         "the refusal classes /status reports; pinned by "
         "tests/integration/test_cross_site_session_requests.py::test_status_counts_each_refusal_once_under_its_route_and_class"
+        " and, all six by name, "
+        "tests/unit/test_fetch_site_prefetch_and_edges.py::test_prefetch_is_a_counted_class"
     ),
     "fetch_site._ROUTES": (
         "the route each refusal is counted under; pinned as fetch_site.CLASSES is"
@@ -403,8 +412,10 @@ BUCKET_B_PIN_BEHAVIOUR = {
         "tests/unit/test_fetch_site.py::test_the_ui_refusal_is_a_short_html_403_with_a_link_back"
     ),
     "main._FETCH_SITE_VARY": (
-        "the four headers both routes vary on; pinned on a 200, a 403 and a 429 by "
+        "the headers both routes vary on; the first four pinned on a 200, a 403 and a 429 by "
         "tests/integration/test_cross_site_session_requests.py::test_every_response_of_both_routes_varies_on_the_four_headers"
+        ", Sec-Purpose and Purpose by "
+        "tests/integration/test_cross_site_prefetch.py::test_both_routes_vary_on_sec_purpose_and_purpose"
     ),
     "main._VARY_ON_FETCH_SITE_PATHS": (
         "the two routes that carry that Vary; pinned as main._FETCH_SITE_VARY is"

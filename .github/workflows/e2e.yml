@@ -485,6 +485,7 @@ jobs:
           tests/navigation/navigation.spec.ts
           tests/api-mocking/late-run-sign-in-off.spec.ts
           tests/navigation/cross-site-loads.spec.ts
+          tests/navigation/cross-site-prefetch.spec.ts
           --project=chromium
           --retries=0
 
@@ -492,9 +493,10 @@ jobs:
       # the EXACT count measured on 2026-08-03 (51 = 16 + 16 + 9 + 10).
       # 51 -> 52 (W87-1, ADR-0174): late-run-sign-in-off.spec.ts adds 1 test,
       # added to the old floor. 52 -> 60 (W88): cross-site-loads.spec.ts adds 8
-      # tests, added to the old floor.
+      # tests, added to the old floor. 60 -> 62 (W88 round 1):
+      # cross-site-prefetch.spec.ts adds 2 tests, added to the old floor.
       - name: "workspace/accessibility/api-mocking/navigation lane: floor on tests actually executed"
-        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 60 --lane "workspace/accessibility/api-mocking/navigation lane"
+        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 62 --lane "workspace/accessibility/api-mocking/navigation lane"
 
       - name: Clear the previous lane's JUnit report
         run: rm -f e2e/results.xml

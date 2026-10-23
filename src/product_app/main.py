@@ -906,10 +906,18 @@ _CSP_POLICY = (
 _HSTS_HEADER = "max-age=31536000; includeSubDomains"
 
 #: W88: ``/ui`` and ``/v1/session`` answer differently depending on where a
-#: request came from (``fetch_site``), so every answer of theirs says so, and
-#: no cache can hand one visitor's answer to another kind of request.
+#: request came from, and on whether it is a prefetch (``fetch_site``), so
+#: every answer of theirs says so, and a cache that honours ``Vary`` cannot
+#: hand one kind of request's answer to another.
 _VARY_ON_FETCH_SITE_PATHS = frozenset({"/ui", "/v1/session"})
-_FETCH_SITE_VARY = ("Sec-Fetch-Site", "Sec-Fetch-Mode", "Sec-Fetch-Dest", "Origin")
+_FETCH_SITE_VARY = (
+    "Sec-Fetch-Site",
+    "Sec-Fetch-Mode",
+    "Sec-Fetch-Dest",
+    "Origin",
+    "Sec-Purpose",
+    "Purpose",
+)
 
 
 def _add_vary(response: Response, names: tuple[str, ...]) -> None:

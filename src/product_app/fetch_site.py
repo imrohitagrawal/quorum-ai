@@ -8,6 +8,12 @@ request came from in ``Sec-Fetch-Site`` (and how it was made in
 ``Sec-Fetch-Mode`` and ``Sec-Fetch-Dest``), and a script cannot set those
 headers, so the decision is made from them alone:
 
+* A prefetch (``Sec-Purpose`` or the older ``Purpose`` naming ``prefetch``,
+  a prerender included) is refused on both routes, whatever else the request
+  says. Round 1 of W88's review MEASURED Chromium fetching both routes from
+  another site's ``<script type="speculationrules">`` with
+  ``Sec-Fetch-Site: none``, the value of a typed address, so the rule below
+  alone let it open a counted session. This site's own pages never prefetch.
 * ``same-origin`` and ``none`` (this site's own pages, a typed address or a
   bookmark) are allowed on both routes.
 * From another site, including a neighbour on the same registrable domain
@@ -46,15 +52,19 @@ _log = logging.getLogger(__name__)
 #: ``Sec-Fetch-Site`` values that mean this site, or no site (a typed address).
 _OURS = frozenset({"same-origin", "none"})
 #: ``Sec-Fetch-Site`` values that name another site. ``same-site`` counts as
-#: another site: neighbours on the same domain are run by someone else, and
+#: another site: neighbours on the same domain are hosted elsewhere, and
 #: their images carry this site's cookie.
 _ANOTHER_SITE = frozenset({"cross-site", "same-site"})
 #: ``Sec-Fetch-Dest`` values of a frame or an embedded object. These are
 #: navigations too, which is why ``Sec-Fetch-Mode`` alone cannot decide.
 _FRAME_DESTS = frozenset({"iframe", "frame", "object", "embed", "fencedframe"})
 
+#: The headers in which a browser marks a load it makes ahead of time, before
+#: anyone opens the page: ``Sec-Purpose``, and ``Purpose``, its older name.
+_PURPOSE_HEADERS = ("sec-purpose", "purpose")
+
 #: The refusal classes, the only words ``/status`` and the log ever carry.
-CLASSES = ("subresource", "frame", "navigation", "unknown", "origin-fallback")
+CLASSES = ("subresource", "frame", "navigation", "unknown", "origin-fallback", "prefetch")
 #: The two routes this module guards, keyed by ``page``.
 _ROUTES = {True: "/ui", False: "/v1/session"}
 
@@ -68,8 +78,9 @@ SESSION_REFUSAL_MESSAGE = (
 
 #: The ``/ui`` refusal. Short and plain, with no script (the page's
 #: Content-Security-Policy applies to it). A person sees it only when a
-#: browser that does not say how a page was opened lands here; the link
-#: back is same-origin, so it is always allowed.
+#: browser that does not say how a page was opened lands here (a hidden load
+#: or a prefetch is never shown), so it does not guess why; the link back is
+#: same-origin, so it is always allowed.
 _PAGE_REFUSAL_HTML = """<!doctype html>
 <html lang="en">
   <head>
@@ -80,8 +91,7 @@ _PAGE_REFUSAL_HTML = """<!doctype html>
   <body>
     <main>
       <h1>This page cannot be opened this way</h1>
-      <p>The page was opened in a way this site does not allow: from inside
-        another site, as a picture or a frame, rather than as a page of its own.
+      <p>This page was opened in a way this site does not allow.
         Nothing was started or counted.</p>
       <p><a id="cross-site-back" href="/ui">Open Quorum-AI</a></p>
     </main>
@@ -109,7 +119,10 @@ SESSION_RESPONSES: dict[int | str, dict[str, object]] = {
 #: The 403 for ``/ui``'s ``responses=``.
 PAGE_RESPONSES: dict[int | str, dict[str, object]] = {
     403: {
-        "description": "Another site loaded the page as an image, a script, a fetch or a frame.",
+        "description": (
+            "The page was opened in a way this site does not allow (for example, loaded hidden"
+            " by another site, or prefetched)."
+        ),
         "content": {"text/html": {"schema": {"type": "string"}}},
     },
 }
@@ -145,6 +158,18 @@ def _normalised(origin: str) -> tuple[str, str, int | None] | None:
     return scheme, host, effective
 
 
+def _is_prefetch(headers: Headers) -> bool:
+    """Whether ``Sec-Purpose`` or ``Purpose`` names ``prefetch`` as a token:
+    ``prefetch``, ``prefetch;prerender``, ``prefetch;anonymous-client-ip``,
+    in any case and spacing. A word that only contains it does not count."""
+    return any(
+        token.strip() == "prefetch"
+        for name in _PURPOSE_HEADERS
+        for value in _values(headers, name)
+        for token in value.split(";")
+    )
+
+
 def _all_ours(origins: Iterable[str], own_origin: str) -> bool:
     own = _normalised(own_origin)
     return own is not None and all(_normalised(o) == own for o in origins)
@@ -155,6 +180,10 @@ def classify(headers: Headers, own_origin: str, *, page: bool) -> str | None:
     :data:`CLASSES`). ``page=True`` is ``/ui``; ``page=False`` is
     ``/v1/session``. ``own_origin`` is this request's own origin, for
     example ``https://quorum.stackclimb.com``."""
+    # First: a prefetch arrives as ``none`` (a typed address) when another
+    # site's page asks for it, so the allow below must not see it.
+    if _is_prefetch(headers):
+        return "prefetch"
     sites = _values(headers, "sec-fetch-site")
     if not sites:
         origins = _values(headers, "origin")

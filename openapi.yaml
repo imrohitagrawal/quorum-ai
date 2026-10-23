@@ -352,7 +352,7 @@ paths:
               schema:
                 type: string
         '403':
-          description: Another site loaded the page as an image, a script, a fetch or a frame.
+          description: The page was opened in a way this site does not allow (for example, loaded hidden by another site, or prefetched).
           content:
             text/html:
               schema:

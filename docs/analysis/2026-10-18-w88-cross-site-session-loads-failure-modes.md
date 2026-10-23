@@ -15,6 +15,15 @@ What changed after this list was written:
   server (ADR-0177).
 - The second-tab token effect, which this list does not name, was found by Codex's first plan
   review and is board row W105 (CHG-071).
+- F20 below calls the `/ui` refusal page something "nobody sees". The build found a person can land
+  on it, in a browser that sends `Sec-Fetch-Site` without `Sec-Fetch-Dest` (ADR-0177, decision 4),
+  so its words say only that the page was opened in a way the site does not allow.
+- F20 below names a `Vary` of three headers. The build sends four (`Origin` too), and review round 1
+  added `Sec-Purpose` and `Purpose`, so six.
+- F21 below names four refusal classes. The build added `unknown`, and review round 1 added
+  `prefetch`, so six.
+- F16 below was wrong on two counts, found by review round 1 and measured: any page can ask for a
+  prefetch, and Chromium sends it as `none`, so both routes let it through. It is F28, now fixed.
 
 Tree read: `origin/main` at `8463a72`, a `git archive` copy. Probes ran on ports 18260-18265 against
 (a) a header-echo server and (b) the real app copy with temporary databases, in Playwright
@@ -35,6 +44,9 @@ So the reading in the brief holds, and adds one case it did not name: a frame (A
 (main.py:911) stops the frame being shown, not the request being served.
 
 ## 1. What browsers actually send (MEASURED, all three engines)
+
+The "Lax cookie" column is the session cookie, which is `SameSite=Lax`: a browser sends it on
+same-site requests and on top-level links, but not on another site's hidden loads.
 
 | Request | Sec-Fetch-Site | Mode | Dest | Lax cookie sent | Origin |
 |---|---|---|---|---|---|
@@ -79,7 +91,8 @@ Note this is NOT the textbook resource-isolation policy, which allows every `nav
 so would let A2 (the frame) through.
 
 **No `Sec-Fetch-Site` at all** (CHG-063 (b), the owner's choice): look at `Origin`. If present and
-not this request's own origin, refuse; `Origin: null` is refused too (only an opaque origin sends
+not this request's own origin, refuse; `Origin: null` is refused too (only an opaque origin, a page
+with no origin of its own such as a sandboxed frame or a local file, sends
 it, and the app's own GETs never carry `Origin`). With neither header, allow, as today.
 
 **Not gated**: the Google callback (google_signin.py:667), `/ui/invite`, `/v1/invite`, every
@@ -196,7 +209,27 @@ starts fresh each time. Accepted residual; state it in the ADR.
 
 **F16. A cross-site navigational prefetch (search-engine prefetch).**
 Trigger: allowed as a navigation; it may mint a session the visitor never opens. UNVERIFIED headers
-for Google's prefetch proxy. Today's behaviour, not made worse.
+for Google's prefetch proxy. Today's behaviour, not made worse. **Superseded by F28**: this entry
+assumed a prefetch arrives as a cross-site navigation and only from a search engine; both were
+wrong.
+
+**F28. Any page's speculation-rules prefetch arrives as a typed address (MEASURED, now fixed).**
+Found by W88's review, round 1, after the build. A page on another site carrying
+`<script type="speculationrules">` with `/ui` and `/v1/session` in a prefetch list makes Chromium
+149 fetch both in the background with `Sec-Fetch-Site: none`, `Sec-Fetch-Mode: navigate`,
+`Sec-Fetch-Dest: document`, `Sec-Purpose: prefetch`, no `Origin` and no cookie (measured against a
+header logger and against the real app at `ecbbe63`: both 200, each opening a counted session,
+the tab still on the other site). `none` is allowed, so the fix as first built let it through on
+both routes, `/v1/session` included. With a live session cookie Chromium did not send the
+prefetch at all (round 1, measured), so the exposure is visitors with no cookie, the same group
+A1's images hit. Fix: refuse on both routes when `Sec-Purpose` or `Purpose` names `prefetch`,
+checked before the `none` allow, counted as `prefetch` in `/status`, with both headers in `Vary`.
+Tests: `tests/unit/test_fetch_site_prefetch_and_edges.py`, `tests/integration/test_cross_site_prefetch.py`
+(the measured headers give 403 with no mint; the same headers without `Sec-Purpose` give 200 and
+one mint), and `e2e/tests/navigation/cross-site-prefetch.spec.ts` (a real second server's page;
+the browser's `sec-purpose: prefetch` is asserted before the 403; a link click after the refused
+prefetch still reaches a working page). UNVERIFIED: a browser's own preloading of an address
+while it is typed, and prefetches in Firefox and WebKit.
 
 ### Side effects of the refusal itself
 
@@ -238,7 +271,9 @@ Set-Cookie. Test pins it, so a later "add HEAD for uptime checks" must go throug
 ### Tests and tooling
 
 **F24. Every existing test still passes with the check missing.** All 34 files under `tests/` that
-name `/v1/session` (33 test files and `tests/helpers.py`, by `grep -rln`) use `TestClient`, which sends no Sec-Fetch headers, so they take the "allow"
+call the quoted route `"/v1/session"` (33 test files and `tests/helpers.py`;
+`git grep -l '"/v1/session"' 8463a72 -- tests | wc -l` prints 34; without the quotes it prints 38,
+the other 4 naming only `/v1/session/keep-active` or the route in a docstring) use `TestClient`, which sends no Sec-Fetch headers, so they take the "allow"
 path. That keeps them green (good), and means none of them can show the check works. Every new
 test above needs a refused case and a partner without headers.
 
@@ -255,11 +290,11 @@ cross-site; another port on `127.0.0.1` is same-site, also worth one case).
 
 **F27. Fly's proxy may change the headers.** UNVERIFIED: nothing in the repo measures whether Fly
 passes `Sec-Fetch-*` and `Origin` unchanged (ADR-0132 measured only `Fly-Client-IP` and
-`X-Forwarded-For`). A free check after the deploy:
-`curl -s -o /dev/null -w '%{http_code}' -H 'Sec-Fetch-Site: cross-site' -H 'Sec-Fetch-Mode: no-cors' -H 'Sec-Fetch-Dest: image' https://quorum.stackclimb.com/ui`
-should print 403 (refused, so no session is spent). The positive partner should reuse an existing
-cookie, or a typed visit in a browser, so the check does not spend one of the operator's two
-daily sessions.
+`X-Forwarded-For`). Review round 1 corrected the check first written here, a cookie-less `curl`
+of production `/ui` with cross-site headers: if the proxy dropped the headers, that request would
+be allowed and would spend one of the network's two daily sessions, so it is not free. The free
+check after the deploy is `/status` `cross_site_refusals` (ADR-0177, Known limits). A header
+request is an optional check for the owner, sent with an existing session cookie.
 
 ## 4. The owner question it still needs
 

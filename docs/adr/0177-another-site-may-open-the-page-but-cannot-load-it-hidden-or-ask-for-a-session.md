@@ -11,7 +11,7 @@ pull request, which carries the fix, restores it. **Everything else below is the
 design**, and the choices the owner was not asked about are marked "(the session's choice)".
 
 The failure modes were listed before any code and are published with the fix in
-`docs/analysis/2026-10-18-w88-cross-site-session-loads-failure-modes.md` (F1 to F27, attacks A1 to
+`docs/analysis/2026-10-18-w88-cross-site-session-loads-failure-modes.md` (F1 to F27, and F28 added by review round 1; attacks A1 to
 A4). Codex reviewed the plan three times before any code (ADR-0168, decision 7); its reviews are
 kept outside the repository and none has a committed record. Round 1 found the second-tab token
 effect (Known limits); round 2 found a port the e2e bounce could not use, a counter test that could
@@ -34,7 +34,7 @@ page on `localhost` attacking the app on `127.0.0.1` (the failure-modes file, se
 | A2: a frame does the same, despite `X-Frame-Options: DENY` | one `<iframe src=".../ui">` | the request reached the app (200) and opened a session; fresh visitors then got 200, 429 |
 | A3: an image of `/v1/session` | `<img src=".../v1/session">` | a session opened; fresh visitors 200, 429 |
 | A4: a link replaces an open tab's token | tab A on `/ui` gets token T1 (warnings POST with T1: 200); a page on `localhost` links to `/v1/session` | the warnings POST with T1 then got 403 |
-| Control: links, not hidden loads | three clicks on a cross-site link to `/ui` in one browser | one session (the Lax cookie set on the first visit is sent on the next two) |
+| Control: links, not hidden loads | three clicks on a cross-site link to `/ui` in one browser | one session (the session cookie, which is `SameSite=Lax`, set on the first visit is sent on the next two) |
 
 `X-Frame-Options` and `frame-ancestors 'none'` stop a frame being shown, not the request being
 served. The browser says where a request came from in `Sec-Fetch-Site`, and how it was made in
@@ -52,6 +52,10 @@ section 1, records what all three engines sent for each kind of load.
 | The tests bite | the designer's mutations of a reference copy, each restored and checked with `diff -q` | allow every `navigate` on `/ui`: 14 red; share `/ui`'s page rule with `/v1/session`: 5 red; treat `same-site` as ours: 10 red; ignore the scheme in the `Origin` compare: 4 red; log the raw headers: 1 red; the `/v1/session` check below the invite counter and the limiter: 3 red; the `/ui` check below `record_exempted_request`: 2 red; the `/ui` check below the mint: 20 red; no `Vary` on a 429: 1 red |
 | Changed lines covered | the builder, the last two steps of `make diff-cover DIFF_BASE=origin/main` run by hand on its coverage report | `Total: 108 lines, Missing: 3 lines, Coverage: 97%` |
 | The OpenAPI document | `make openapi-check` | `openapi contract validation passed`; the only change is the two 403s and their two schemas |
+| Review round 1: another site's prefetch | Chromium 149 on a page at `localhost` carrying `<script type="speculationrules">` for `/ui` and `/v1/session` on `127.0.0.1`, against a header logger and against the real app at `ecbbe63` | both fetched in the background with `Sec-Fetch-Site: none`, `Sec-Fetch-Mode: navigate`, `Sec-Fetch-Dest: document`, `Sec-Purpose: prefetch`, no `Origin`, no cookie; both answered 200 and each opened a counted session, while the tab stayed on the other site |
+| The round-1 tests fail without the prefetch fix | `tests/unit/test_fetch_site_prefetch_and_edges.py`, `tests/integration/test_cross_site_prefetch.py` on `ecbbe63`'s code | `16 failed, 15 passed` (the fixer's run) |
+| The round-1 browser spec, without and with the fix | `e2e/tests/navigation/cross-site-prefetch.spec.ts`, AGENTS.md rule 13's command, the server confirmed by its `/status` | `2 failed` (`Expected: 403`, `Received: 200`) against a `git archive` copy of `ecbbe63`; `20 passed` with `--repeat-each=10` on the fix, and `/status` then counted 20 `/ui` and 10 `/v1/session` prefetch refusals |
+| The round-1 tests bite | the fixer's 24 mutants of `fetch_site.py` and `main.py`, each restored and checked byte for byte | 23 killed; the 1 survivor left the first prefetch check in place, so it changed nothing, and its corrected form (the check moved below the `none` allow) was killed, 13 red |
 
 ## Decision
 
@@ -61,6 +65,7 @@ section 1, records what all three engines sent for each kind of load.
 
    | `Sec-Fetch-Site` | `/ui` | `/v1/session` |
    |---|---|---|
+   | any value, or none, with `Sec-Purpose` or `Purpose` naming `prefetch` | 403 (`prefetch`) | 403 (`prefetch`) |
    | `same-origin`, `none` | allow | allow |
    | `same-site`, `cross-site` | allow only `Sec-Fetch-Mode: navigate` with `Sec-Fetch-Dest: document`; else 403 | 403 in every mode, a link included |
    | any other value | 403 (`unknown`) | 403 (`unknown`) |
@@ -68,20 +73,31 @@ section 1, records what all three engines sent for each kind of load.
    | missing, `Origin` is this request's own | allow | allow |
    | missing, `Origin` is another origin or `null` | 403 (`origin-fallback`) | 403 (`origin-fallback`) |
 
-   On `/ui`, a frame `Dest` (`iframe`, `frame`, `object`, `embed`, `fencedframe`) is `frame`
-   whatever the mode; a missing `Dest`, or a missing `Mode` beside `Dest: document`, is refused;
-   any other hidden load (an image, a script, a fetch) is `subresource`. On `/v1/session` a
-   navigation is `navigation`. `same-site` counts as another site (the session's choice): a
-   neighbour such as `www.stackclimb.com` is hosted elsewhere (`dig`, failure-modes section 1), and
-   same-site images carry the Lax cookie, so allowing it would let any page on the domain replace
-   an open tab's token (F10). `Origin: null` counts as another origin (the session's choice): only an
-   opaque origin sends it, and the app's own GETs send no `Origin`.
+   The prefetch row is checked first (review round 1, the session's choice). `Sec-Purpose`, or its
+   older name `Purpose`, is read as a list: a value counts when one of its parts, split at `,` and
+   `;`, is `prefetch` in any case (`prefetch`, `prefetch;prerender`,
+   `prefetch;anonymous-client-ip`); a word that only contains it, such as `noprefetch`, does not.
+   It comes before the `none` allow because Chromium sends another site's speculation-rules
+   prefetch as `none`, the value of a typed address (Measured). This site's own pages never
+   prefetch either route.
+   On both routes a frame `Dest` (`iframe`, `frame`, `object`, `embed`, `fencedframe`) is `frame`
+   whatever the mode. On `/ui` a missing `Dest`, or a missing `Mode` beside `Dest: document`, is
+   refused, and any other hidden load (an image, a script, a fetch) is `subresource`. On
+   `/v1/session` any other navigation is `navigation`, and any other load `subresource`.
+   `same-site` counts as another site (the session's choice): a neighbour such as
+   `www.stackclimb.com` is hosted elsewhere (`dig`, failure-modes section 1), and same-site images
+   carry the session cookie, which is `SameSite=Lax` (sent on same-site requests and on top-level
+   links, not on another site's images), so allowing it would let any page on the domain replace
+   an open tab's token (F10). `Origin: null` counts as another origin (the session's choice): a
+   browser sends it from a page with no origin of its own, such as a sandboxed frame or a local
+   file, and the app's own GETs send no `Origin`.
 2. **Why `/v1/session` refuses every other site, unlike the usual "allow every navigation" rule.**
    The usual resource-isolation rule allows any `Sec-Fetch-Mode: navigate`. A frame is a navigation
    too, so that rule lets A2 through, on both routes. On `/v1/session` it would also let A4 through:
-   a link carries the Lax cookie, so it resumes the visitor's session and replaces the open tab's
-   token. Nothing real needs `/v1/session` from another site: the page asks for it with its own
-   same-origin fetch (`initSession`, `static/app.js:8397`), and a typed address sends `none`.
+   a link carries the session cookie, so it resumes the visitor's session and replaces the open
+   tab's token. Nothing real needs `/v1/session` from another site: the page asks for it with its
+   own same-origin fetch (`initSession`, `static/app.js:8397`), and a typed address sends `none`.
+   A prefetch sends `none` too, which is why the prefetch row comes first.
    `/ui` keeps the page exception because people open it from email, chat and search links, and
    Google's sign-in return is a cross-site navigation in all three engines (F1, F2).
 3. **Placement: before every counter.** `fetch_site.cross_site_refusal` is the first statement of
@@ -96,8 +112,9 @@ section 1, records what all three engines sent for each kind of load.
    (`main.py:2049`, `:2064`, `:2086` on `/v1/session`; the daily cap's page on `/ui`,
    `_session_capped_response`), so a refusal sent as 429 would read as one. `/v1/session` answers
    `{"detail":{"code":"CROSS_SITE_REFUSED","message":"This request came from another site, so it cannot open or renew a session."}}`.
-   `/ui` answers a short HTML page (under 4,096 bytes, no script, no inline style) that says the
-   page was opened in a way the site does not allow and links back with
+   `/ui` answers a short HTML page (under 4,096 bytes, no script, no inline style) that says only
+   "This page was opened in a way this site does not allow. Nothing was started or counted." (it
+   does not guess why, since the one person who can see it opened it as a page) and links back with
    `<a id="cross-site-back" href="/ui">Open Quorum-AI</a>`, a same-origin link, so always allowed.
    A person can land on it in a browser that sends `Sec-Fetch-Site` without `Sec-Fetch-Dest`
    (the user-journey tester's addition). Both carry `Cache-Control: no-store` and no `Set-Cookie`,
@@ -105,12 +122,14 @@ section 1, records what all three engines sent for each kind of load.
    They are returned from the handler, so the security headers, `X-Request-ID` and the request
    metrics (a 4xx of the route) apply. The 403 is declared with `responses=` in `openapi.yaml`.
 5. **`Vary`.** Every answer of both routes (200, 403 and 429) carries
-   `Vary: Sec-Fetch-Site, Sec-Fetch-Mode, Sec-Fetch-Dest, Origin`, added by path in
+   `Vary: Sec-Fetch-Site, Sec-Fetch-Mode, Sec-Fetch-Dest, Origin, Sec-Purpose, Purpose`, added by
+   path in
    `_security_headers_middleware` and combined with any `Vary` already there, so a cache that
    honours `Vary` cannot serve one kind of request's answer to another. No cache is known to sit in front (UNVERIFIED for Fly).
 6. **`/status` and the log.** `/status` gains `cross_site_refusals`, the refusals since the process
-   started, shaped `{"/ui": {class: n}, "/v1/session": {class: n}}` with all five classes
-   (`subresource`, `frame`, `navigation`, `unknown`, `origin-fallback`) always present. Each refusal
+   started, shaped `{"/ui": {class: n}, "/v1/session": {class: n}}` with all six classes
+   (`subresource`, `frame`, `navigation`, `unknown`, `origin-fallback`, `prefetch`) always present.
+   Each refusal
    writes one INFO line, `refused another site's request: route=%s class=%s`, naming the route and
    the class only, never a header value, which would let anyone write into the log (F21). A count
    also shows a false refusal of a real visitor, which nobody would otherwise report.
@@ -154,17 +173,20 @@ section 1, records what all three engines sent for each kind of load.
 
 ## Consequences
 
-- A hidden image, script, fetch or frame of `/ui` or `/v1/session` from another site gets a 403
-  and opens and counts nothing, so it can no longer use up a network's 2 daily sessions or replace
-  an open tab's token.
+- A hidden image, script, fetch or frame of `/ui` or `/v1/session` from another site, and a
+  prefetch of either, gets a 403 and opens and counts nothing, so it can no longer use up a
+  network's 2 daily sessions or replace an open tab's token.
+- After a refused prefetch of `/ui`, a click on the link it was for still opens a working page
+  (`e2e/tests/navigation/cross-site-prefetch.spec.ts`, measured in Chromium).
 - A link from another site still opens the page, and Google sign-in, its cancel and W87-2's
   deletion sign-in still return to it (the cross-site integration tests and
   `e2e/tests/signed-in/cross-site-return.spec.ts`).
 - The tests that called these routes before W88 use `TestClient`, which sends no `Sec-Fetch-*`
-  header, so they take the allow path (F24, counted at `8463a72`: 34 files under `tests/` name
-  `/v1/session`); only the new tests show the check works.
-- The e2e navigation lane's floor rises from 52 to 60 and the signed-in History lane's from 46 to
-  48.
+  header, so they take the allow path (F24, counted at `8463a72`:
+  `git grep -l '"/v1/session"' 8463a72 -- tests | wc -l` prints 34, the files that call the quoted
+  route, `tests/helpers.py` among them); only the new tests show the check works.
+- The e2e navigation lane's floor rises from 52 to 62 (8 tests in `cross-site-loads.spec.ts`, 2 in
+  `cross-site-prefetch.spec.ts`) and the signed-in History lane's from 46 to 48.
 
 ## Known limits
 
@@ -181,15 +203,26 @@ section 1, records what all three engines sent for each kind of load.
 - **Plain http on a LAN address** (F8): browsers send no `Sec-Fetch-*` header to an `http://` host
   that is not `localhost` or `127.0.0.1` (measured), so the check is off there. Production is https
   only (`fly.toml:167`, `force_https = true`).
-- **A cross-site prefetch** (F16) is allowed as a navigation and may open a session nobody uses;
-  the headers of a search engine's prefetch are UNVERIFIED. Unchanged from before W88.
-- **Fly's proxy may change the headers** (F27, UNVERIFIED: no test here measures it). After the
-  deploy, three free requests that are each refused, so none spends a session, settle it: a
-  cross-site image of `/ui`, a `same-site` `/v1/session`, and a `/v1/session` with a foreign
-  `Origin`, each expected to be 403, the second with no `set-cookie`.
-- **Not tested:** a malformed port in `Origin` and an `Origin` with a user part, a path or a query
-  (`fetch_site.py:137-138`, `:143`, the 3 changed lines `make diff-cover` reports missing); an empty
-  `Origin` value.
+- **Prefetches are refused, from any page.** The first version of this record called a
+  cross-site prefetch (F16) a search engine's, allowed as a navigation. Review round 1 measured
+  that wrong on both counts: any page can ask for one with a script tag, and Chromium sends it as
+  `none`, so both routes let it through. It is now refused (decision 1, F28). Still UNVERIFIED: a
+  browser's own preloading of an address while it is being typed. If the browser marks that load
+  with `Sec-Purpose`, it is refused too, and nothing here measures that the browser then loads the
+  page normally when the visitor presses Enter; whether it marks it at all was not measured. The
+  e2e measures the normal load only for a prefetch followed by a link click. Firefox and WebKit
+  prefetches were not measured.
+- **Fly's proxy may change the headers** (F27, UNVERIFIED: no test here measures it). The free
+  check after the deploy is `/status` `cross_site_refusals`: it should list all six classes for
+  both routes (counts since the process started), and non-zero counts later show the deployed
+  check refusing real requests. It cannot show that a header arrives unchanged. An optional check for the owner: send a cross-site image of `/ui`, a
+  `same-site` `/v1/session` and a `/v1/session` with a foreign `Origin`, each expecting 403.
+  **Warning:** these have no cookie, so if the proxy dropped the headers each would be allowed and
+  would spend one of the network's 2 daily sessions; send them only with an existing session
+  cookie, or accept that cost.
+- **Not tested:** an empty `Origin` value. (A malformed port and an `Origin` with a user part, a
+  path or a query, untested at first, are now tested in
+  `tests/unit/test_fetch_site_prefetch_and_edges.py`.)
 
 ## Rejected alternatives
 
@@ -216,7 +249,9 @@ section 1, records what all three engines sent for each kind of load.
   `_security_headers_middleware`, `status_snapshot`), `openapi.yaml`.
 - Tests: `tests/unit/test_fetch_site.py`, `tests/integration/test_cross_site_session_requests.py`,
   `tests/integration/test_page_load_keeps_csrf.py`, `tests/unit/test_signed_in_bounce_is_closed.py`,
-  `e2e/tests/navigation/cross-site-loads.spec.ts`, `e2e/tests/signed-in/cross-site-return.spec.ts`.
+  `tests/unit/test_fetch_site_prefetch_and_edges.py`, `tests/integration/test_cross_site_prefetch.py`,
+  `e2e/tests/navigation/cross-site-loads.spec.ts`, `e2e/tests/navigation/cross-site-prefetch.spec.ts`,
+  `e2e/tests/signed-in/cross-site-return.spec.ts`.
 - ADR-0131 (loading the page keeps the token; the session call still renews it), ADR-0132 (the
   session limits count the visitor), ADR-0139 (a capped network gets a sign-in-only session),
   ADR-0171 (A8: where a refusal sits decides its headers). `docs/41-security-controls.md` SC-105;
