@@ -80,6 +80,36 @@ def test_the_session_call_still_retires_the_previous_token() -> None:
     assert _warnings(client, new) == 200
 
 
+#: What the page's own ``fetch("/v1/session")`` sends (W88 failure modes, F5).
+PAGE_FETCH = {"Sec-Fetch-Site": "same-origin", "Sec-Fetch-Mode": "cors", "Sec-Fetch-Dest": "empty"}
+PAGE_LOAD = {
+    "Sec-Fetch-Site": "same-origin",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Dest": "document",
+}
+
+
+def test_the_pages_own_same_origin_session_call_still_retires_the_previous_token() -> None:
+    """Partner (W88): the same rotation when the call carries the headers a
+    browser sends on the page's own fetch, so the cross-site check never
+    refuses it. RED IF ``/v1/session`` refuses or stops rotating a
+    ``same-origin``/``cors``/``empty`` request."""
+    # RED-IF: W88's check refuses the page's own same-origin fetch of /v1/session, or the rotation
+    #   stops for it (F5).
+    client = TestClient(app)
+    first = client.get("/v1/session", headers=PAGE_FETCH)
+    assert first.status_code == 200
+    old = cast(str, first.json()["csrf_token"])
+    assert client.get("/ui", headers=PAGE_LOAD).status_code == 200
+    second = client.get("/v1/session", headers=PAGE_FETCH)
+    assert second.status_code == 200
+    new = cast(str, second.json()["csrf_token"])
+
+    assert new != old
+    assert _warnings(client, old) == 403
+    assert _warnings(client, new) == 200
+
+
 def test_a_session_gone_between_lookup_and_resume_gets_a_new_one(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

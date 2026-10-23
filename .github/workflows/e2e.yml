@@ -484,15 +484,17 @@ jobs:
           tests/api-mocking/api-mocking.spec.ts
           tests/navigation/navigation.spec.ts
           tests/api-mocking/late-run-sign-in-off.spec.ts
+          tests/navigation/cross-site-loads.spec.ts
           --project=chromium
           --retries=0
 
       # EXECUTED-COUNT FLOOR, same reasoning as the two lanes above. Floor is
       # the EXACT count measured on 2026-08-03 (51 = 16 + 16 + 9 + 10).
       # 51 -> 52 (W87-1, ADR-0174): late-run-sign-in-off.spec.ts adds 1 test,
-      # added to the old floor.
+      # added to the old floor. 52 -> 60 (W88): cross-site-loads.spec.ts adds 8
+      # tests, added to the old floor.
       - name: "workspace/accessibility/api-mocking/navigation lane: floor on tests actually executed"
-        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 52 --lane "workspace/accessibility/api-mocking/navigation lane"
+        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 60 --lane "workspace/accessibility/api-mocking/navigation lane"
 
       - name: Clear the previous lane's JUnit report
         run: rm -f e2e/results.xml
@@ -517,6 +519,7 @@ jobs:
           tests/signed-in/help-history-hint.spec.ts
           tests/signed-in/session-max-age.spec.ts
           tests/signed-in/delete-recent-sign-in.spec.ts
+          tests/signed-in/cross-site-return.spec.ts
           --config=playwright.signed-in.config.ts
           --project=chromium
           --retries=0
@@ -549,9 +552,11 @@ jobs:
       # in view; a wheel before the restore stops the page moving; the
       # sign-in failure notice stays on screen), added to the old floor;
       # `playwright test --list` counts 46; the lane has not been run on them
-      # by this commit's author.
+      # by this commit's author. 46 -> 48 (W88): cross-site-return.spec.ts adds
+      # 2 tests (Google's return through a real cross-site hop), added to the
+      # old floor.
       - name: "signed-in History lane: floor on tests actually executed"
-        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 46 --lane "signed-in History lane"
+        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 48 --lane "signed-in History lane"
 
       - name: Clear the previous lane's JUnit report
         # Adversarial review (#162/#166): without this, a Playwright run that
