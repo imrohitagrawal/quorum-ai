@@ -966,25 +966,25 @@ def test_with_no_usable_accounts_table_anonymous_sessions_share_the_network(
         store.close()
 
 
-def test_with_no_usable_accounts_table_a_signed_in_session_keeps_its_own_allowance(
+def test_with_no_usable_accounts_table_a_signed_in_session_is_refused_not_metered(
     tmp_path: Path,
 ) -> None:
     """Builder-reported branch 2, the signed-in half. The same read-only,
-    pre-spend-key database still RESTORES a signed-in account's durable session
-    (``SessionStore._MIGRATIONS_DDL``'s note: "sessions work as before"). Every
-    account in such a database predates the spend key, so its key is its own
-    id (CHG-024) -- what this state metered it under before W47 -- and decision
-    3 says a signed-in account never gets the network's key. The account row
-    is still readable, so the code can tell it from an anonymous session.
-    RED-IF its estimate or run is metered under the network (shared flag
-    true, the network's spend shown, or a run key other than its id).
-    Partners: the session really was restored from disk (the cookie resolves
-    to the stored account), and the network has spent, so a network key would
-    show it."""
+    pre-spend-key database holds a signed-in account's durable session. Until
+    W87-3 it was RESTORED and metered under its own id (ADR-0144 decision 3).
+    W87-3 (CHG-083 a, ADR-0176, amending that decision): no cutoff can be
+    read for a signed-in session on a database without the session-safety
+    migration, so it is refused as an expired session, and so it is never
+    metered at all, least of all under the network. RED-IF the cookie
+    resolves, its estimate is answered (with the network's meter or its own),
+    or the network is charged for it. Partners: the anonymous spender on the
+    same network really was charged, so a network key would show it, and the
+    account row is on disk."""
     path, account, session_id, csrf = _read_only_store_without_the_spend_key(tmp_path)
     store = SessionStore(str(path))
     try:
         assert store.accounts_available() is False
+        assert store.has_no_account_row(account) is False, "partner: a signed-in row"
         session_store.configure(store)  # restored by conftest's _isolated_session_store
         with configure_for_tests() as ledger, isolated_run_semaphore(1) as semaphore:
             spender = _browser(NET_A)
@@ -992,14 +992,13 @@ def test_with_no_usable_accounts_table_a_signed_in_session_keeps_its_own_allowan
             spender_rows = _charge_rows(ledger, _key(spender_run))
             restored = _browser(NET_A)
             restored.cookies.set(COOKIE, session_id)
-            assert _account_of(restored) == account
+            assert auth.session_repository.get(session_id) is None
 
-            estimate = _estimate(restored, csrf)
-            run = _run(restored, csrf, semaphore)
+            refused = restored.post(ESTIMATE, json=_estimate_body(), headers={"X-CSRF-Token": csrf})
 
+            assert refused.status_code == 401, refused.text
+            assert refused.json()["detail"]["code"] == "SESSION_EXPIRED"
             assert spender_rows == 1
-            assert _allowance(estimate) == OWN_FRESH
-            assert _key(run) == account
             assert _charge_rows(ledger, _key(spender_run)) == 1
     finally:
         path.chmod(0o644)

@@ -278,10 +278,13 @@ def test_a_sessions_store_that_cannot_say_who_is_signed_in_is_503(
 ) -> None:
     """Row 9 / ADR-0142 decision 2a (review round 1 reproduced 403
     NOT_SIGNED_IN here, so the page said the sign-in had changed). RED-IF:
-    with the sessions store closed, or gone (``get_store()`` is ``None``),
-    mid-session, a signed-in cookie gets anything but 503
-    ``HISTORY_UNAVAILABLE``, lacks ``no-store``, or carries list markup.
-    Partner: the same cookie read its row while the store was there."""
+    with the sessions store gone (``get_store()`` is ``None``) mid-session, a
+    signed-in cookie gets anything but 503 ``HISTORY_UNAVAILABLE``, lacks
+    ``no-store``, or carries list markup. With the store CLOSED, W87-3
+    (CHG-083 a, ADR-0176) refuses the signed-in session itself, because its
+    durable cutoff cannot be read: 401 ``SESSION_EXPIRED``, never the list.
+    RED-IF a closed store serves it. Partner: the same cookie read its row
+    while the store was there."""
     client = sign_in.client()
     _signed_in(client)
     _finish(_start_run(_account(sign_in, ADA), "kept while the store is down 8d4f"))
@@ -294,10 +297,14 @@ def test_a_sessions_store_that_cannot_say_who_is_signed_in_is_503(
         response = _get(client)
     finally:
         session_store.configure(sign_in.store)
+    assert "kept while the store is down 8d4f" not in response.text
+    if how == "store_closed":
+        _refused(response, 401)
+        assert response.json()["detail"]["code"] == "SESSION_EXPIRED"
+        return
     _refused(response, 503)
     assert response.json()["detail"]["code"] == "HISTORY_UNAVAILABLE"
     assert response.headers.get("Cache-Control") == "no-store"
-    assert "kept while the store is down 8d4f" not in response.text
 
 
 @pytest.mark.parametrize("who", ["signed_in", "no_session", "anonymous"])

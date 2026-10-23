@@ -92,6 +92,30 @@ SESSION_TOUCH_PERSIST_INTERVAL_S = 300.0
 #: re-run the ``VACUUM`` (a rewrite of the whole file) on every database.
 SECURE_DELETE_VACUUM_MARKER = "w86_secure_delete_vacuum"
 
+#: W87-3 (ADR-0176): the most a signed-in cache hit waits for this store's
+#: lock to read its account's durable cutoff. Past it the cutoff counts as
+#: "not read" and the request is refused as an expired session (CHG-083 (a):
+#: "while the database is busy"). It bounds that one read's lock wait, not the
+#: request. Why 1.0 s: above every routine hold measured for the plan (the
+#: first history sweep 297 ms with ``secure_delete`` on, which this store
+#: always sets, ADR-0172; the operator command's whole 10,000-account
+#: transaction 68 ms; 205 ms behind a 0.3 s outside write lock), and well
+#: under the 5 s busy timeout a stuck write can take. A constant, not a
+#: setting, like ``_CLOSE_LOCK_TIMEOUT_S``. Read at call time.
+SIGNED_IN_CUTOFF_LOCK_TIMEOUT_S = 1.0
+
+#: W7 part 3 (ADR-0137), shared since W87-3 (ADR-0176): the two statements of
+#: :meth:`SessionStore.end_sessions_before`, which the operator command
+#: (``product_app.end_sessions``) runs too, so the two cannot drift. Raise the
+#: account's cutoff, never lower it (parameters: the cutoff, the account id),
+#: then delete its rows created at or before it (the account id, the cutoff).
+#: The cutoff is ``isoformat()`` of the UTC time: the app compares it as TEXT.
+RAISE_SESSIONS_CUTOFF_SQL = (
+    "UPDATE accounts SET sessions_valid_after = "
+    "MAX(COALESCE(sessions_valid_after, ''), ?) WHERE account_id = ?"
+)
+DELETE_SESSIONS_BEFORE_SQL = "DELETE FROM sessions WHERE account_id = ? AND created_at <= ?"
+
 
 @dataclass(frozen=True)
 class StoredSession:
@@ -417,9 +441,17 @@ class SessionStore:
             self._conn.executescript(self._SCHEMA)
         # Sign-in needs BOTH: without the spend key column a new account would
         # be metered under its random id, a fresh envelope (ADR-0136).
-        self._accounts_ready = self._migrate_accounts() and self._migrate_spend_key()
-        self._history_ready = self._accounts_ready and self._migrate_history()
-        self._safety_ready = self._accounts_ready and self._migrate_session_safety()
+        migrated_accounts = self._migrate_accounts() and self._migrate_spend_key()
+        self._history_ready = migrated_accounts and self._migrate_history()
+        migrated_safety = migrated_accounts and self._migrate_session_safety()
+        # W87-3 (ADR-0176): a migration that reports success is checked
+        # against the schema, by the same read-only validation
+        # :meth:`refresh_readiness` uses, so the two cannot disagree. Never
+        # more permissive than the migrations; stricter only for a marker
+        # whose table or column is missing.
+        accounts_ok, safety_ok = self._readiness_from_schema()
+        self._accounts_ready = migrated_accounts and accounts_ok
+        self._safety_ready = migrated_safety and safety_ok
         # W86 (ADR-0172): every open sweeps history for every account, so a
         # start, a deploy, a rollback or a restored snapshot applies the keep
         # rule even if no signed-in user ever saves again. The wall clock is
@@ -608,18 +640,11 @@ class SessionStore:
             try:
                 self._conn.execute("BEGIN IMMEDIATE")
                 try:
-                    updated = self._conn.execute(
-                        "UPDATE accounts SET sessions_valid_after = "
-                        "MAX(COALESCE(sessions_valid_after, ''), ?) WHERE account_id = ?",
-                        (stamp, key),
-                    ).rowcount
+                    updated = self._conn.execute(RAISE_SESSIONS_CUTOFF_SQL, (stamp, key)).rowcount
                     if updated != 1:
                         self._conn.execute("ROLLBACK")
                         return "no_account"
-                    self._conn.execute(
-                        "DELETE FROM sessions WHERE account_id = ? AND created_at <= ?",
-                        (key, stamp),
-                    )
+                    self._conn.execute(DELETE_SESSIONS_BEFORE_SQL, (key, stamp))
                     self._conn.execute("COMMIT")
                 except BaseException:
                     self._conn.execute("ROLLBACK")
@@ -629,15 +654,35 @@ class SessionStore:
                 return "failed"
         return "ended"
 
-    def sessions_valid_after(self, account_id: UUID) -> tuple[bool, datetime | None]:
+    def sessions_valid_after(
+        self, account_id: UUID, *, lock_timeout: float | None = None
+    ) -> tuple[bool, datetime | None]:
         """``(read, cutoff)``: the account's sessions cutoff, ``None`` when it
         has none (every anonymous session). ``read`` is ``False`` when it could
-        not be read; the caller then refuses the session (the closed side)."""
-        if not self._safety_ready:
-            return True, None
-        with self._lock:
+        not be read; the caller then refuses the session (the closed side).
+
+        W87-3 (ADR-0176, CHG-083 (a)). While the session-safety tables are not
+        ready there is no cutoff to read, and "none" would let every signed-in
+        session through (Codex's blocker: the reader said ``(True, None)``
+        while the operator command, which checks only the file's marker,
+        exited 0). So the answer then follows the account row, read the way
+        :meth:`has_no_account_row` reads it, which works while the accounts
+        flag is latched too: no row (anonymous) is ``(True, None)``; a row, or
+        a read that fails, is ``(False, None)``.
+
+        With ``lock_timeout``, a lock not acquired within it is ``(False,
+        None)`` too: the signed-in cache hit refuses rather than waits. The
+        bound covers this read's wait for the lock only."""
+        if lock_timeout is None:
+            self._lock.acquire()
+        elif not self._lock.acquire(timeout=lock_timeout):
+            return False, None
+        try:
             if self._closed:
                 return False, None
+            if not self._safety_ready:
+                no_row = self._no_account_row(account_id, table_may_be_missing=True)
+                return (True, None) if no_row is True else (False, None)
             try:
                 row = self._conn.execute(
                     "SELECT sessions_valid_after FROM accounts WHERE account_id = ?",
@@ -646,6 +691,8 @@ class SessionStore:
             except sqlite3.Error as exc:
                 self._warn("read a sessions cutoff", exc)
                 return False, None
+        finally:
+            self._lock.release()
         if row is None or row[0] is None:
             return True, None
         try:
@@ -896,6 +943,75 @@ class SessionStore:
         """Whether the accounts table exists. ``False`` means sign-in refuses."""
         return self._accounts_ready
 
+    def cutoffs_available(self) -> bool:
+        """Whether the session-safety tables are ready, so an account's
+        durable cutoff can be read (W87-3, ADR-0176). ``False`` means no
+        signed-in session is restored (CHG-083 (a))."""
+        return self._safety_ready
+
+    def _readiness_from_schema(self) -> tuple[bool, bool]:
+        """``(accounts_ok, safety_ok)``: whether the schema the two features
+        need is really there (W87-3, ADR-0176). The ONE validation, called by
+        the constructor after its migrations and by :meth:`refresh_readiness`.
+
+        Strictly read-only: two ``SELECT`` statements and one ``PRAGMA``, no
+        DDL and no write, so it can run on a read-only file. ``accounts_ok``:
+        the ``w7_accounts`` and ``w7_spend_key`` markers, the ``accounts`` and
+        ``spend_key_carry`` tables (the second is what the spend-key
+        migration's marker-present branch creates, so a legacy file without
+        it is not ready), and the ``spend_key`` column. ``safety_ok``: that,
+        the ``w7_session_safety`` marker, the ``sign_in_events`` table and
+        the ``sessions_valid_after`` column. Any ``sqlite3.Error`` is
+        ``(False, False)``."""
+        try:
+            with self._lock:
+                markers = {
+                    row[0] for row in self._conn.execute("SELECT name FROM schema_migrations")
+                }
+                tables = {
+                    row[0]
+                    for row in self._conn.execute(
+                        "SELECT name FROM sqlite_master WHERE type = 'table'"
+                    )
+                }
+                columns = {row[1] for row in self._conn.execute("PRAGMA table_info(accounts)")}
+        except sqlite3.Error:
+            return False, False
+        accounts_ok = (
+            {self._ACCOUNTS_MIGRATION, self._SPEND_KEY_MIGRATION} <= markers
+            and {"accounts", "spend_key_carry"} <= tables
+            and "spend_key" in columns
+        )
+        safety_ok = (
+            accounts_ok
+            and self._SESSION_SAFETY_MIGRATION in markers
+            and "sign_in_events" in tables
+            and "sessions_valid_after" in columns
+        )
+        return accounts_ok, safety_ok
+
+    def refresh_readiness(self) -> None:
+        """Re-validate a store that opened not ready, and raise its flags
+        when the schema passes (W87-3, ADR-0176). The GC daemon calls it once
+        a tick (``auth._refresh_store_readiness``), so a file that became
+        readable again reopens signed-in access without a restart.
+
+        Returns at once, with no statement, when the store is ready. Never
+        lowers a flag, never writes, never migrates: a file whose migration
+        never ran stays not ready until a restart on a writable volume, as
+        before. ``_history_ready`` is not touched."""
+        if self._safety_ready:
+            return
+        with self._lock:
+            if self._closed or self._safety_ready:
+                return
+            accounts_ok, safety_ok = self._readiness_from_schema()
+            if accounts_ok:
+                self._accounts_ready = True
+            if safety_ok:
+                self._safety_ready = True
+                _log.info("session_store: the session-safety tables are available again")
+
     @classmethod
     def from_env(cls) -> SessionStore:
         """Construct using ``SESSION_DB_PATH`` or the default."""
@@ -907,18 +1023,43 @@ class SessionStore:
     # -- writes: every one of them best-effort ------------------------------
 
     def save(self, session: StoredSession) -> bool:
-        """Insert or replace ``session``. ``True`` if the row landed."""
-        return self._write(
+        """Insert or replace ``session``. ``True`` only if the row landed.
+
+        W87-3 (ADR-0176). One statement, conditional on the account's durable
+        cutoff: a request can read the old cutoff, wait on the operator
+        command's (or a sign-out everywhere's) transaction, and write after
+        it commits, so the condition is checked in the write itself. A
+        session created at or before its account's cutoff writes nothing. An
+        anonymous id is in no accounts row, so its save is unconditional.
+
+        While the session-safety tables are not ready no cutoff can govern a
+        signed-in row, so only an id certainly in no accounts row is written
+        (CHG-083 (a)); a signed-in row, or one whose kind cannot be read,
+        writes nothing and returns ``False``."""
+        key = str(session.account_id)
+        created = session.created_at.astimezone(UTC).isoformat()
+        values = (
+            _digest(session.session_id),
+            key,
+            session.csrf_token,
+            created,
+            session.last_used_at.astimezone(UTC).isoformat(),
+        )
+        columns = (
             "INSERT OR REPLACE INTO sessions "
             "(session_digest, account_id, csrf_token, created_at, last_used_at) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (
-                _digest(session.session_id),
-                str(session.account_id),
-                session.csrf_token,
-                session.created_at.astimezone(UTC).isoformat(),
-                session.last_used_at.astimezone(UTC).isoformat(),
-            ),
+        )
+        if not self._safety_ready:
+            if self._no_account_row(session.account_id, table_may_be_missing=True) is not True:
+                return False
+            return self._write_count(columns + "VALUES (?, ?, ?, ?, ?)", values) == 1
+        return (
+            self._write_count(
+                columns + "SELECT ?, ?, ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM accounts "
+                "WHERE account_id = ? AND sessions_valid_after >= ?)",
+                (*values, key, created),
+            )
+            == 1
         )
 
     def delete(self, session_id: str) -> bool:
@@ -972,6 +1113,19 @@ class SessionStore:
                 self._warn("persist a session", exc)
                 return False
             return True
+
+    def _write_count(self, sql: str, parameters: tuple[object, ...]) -> int | None:
+        """Like :meth:`_write`, but the statement's row count: how many rows
+        it wrote. ``None`` when closed or on any ``sqlite3.Error`` (W87-3:
+        ``_write`` says ``True`` for a statement that matched nothing)."""
+        with self._lock:
+            if self._closed:
+                return None
+            try:
+                return int(self._conn.execute(sql, parameters).rowcount)
+            except sqlite3.Error as exc:
+                self._warn("persist a session", exc)
+                return None
 
     # -- reads ---------------------------------------------------------------
 
@@ -1076,7 +1230,10 @@ class SessionStore:
         the sign-in route reports as a plain "did not complete": nothing is
         half-written, because the transaction rolls back.
         """
-        if not self._accounts_ready:
+        # W87-3 (ADR-0176, CHG-083 (a)): and the session-safety tables, so
+        # while they are not ready sign-in refuses plainly instead of making
+        # a session that the next request refuses for its unreadable cutoff.
+        if not (self._accounts_ready and self._safety_ready):
             return None
         stamp = now.astimezone(UTC).isoformat()
         with self._lock:
@@ -1350,7 +1507,10 @@ def get_store() -> SessionStore | None:
 
 __all__ = [
     "DEFAULT_DB_PATH",
+    "DELETE_SESSIONS_BEFORE_SQL",
+    "RAISE_SESSIONS_CUTOFF_SQL",
     "SESSION_TOUCH_PERSIST_INTERVAL_S",
+    "SIGNED_IN_CUTOFF_LOCK_TIMEOUT_S",
     "SessionStore",
     "StoredAccount",
     "StoredSession",

@@ -597,7 +597,11 @@ def test_the_cutoff_on_disk_refuses_a_row_written_back_before_a_crash(
 ) -> None:
     """Another device writes its row back after the commit, then the process
     stops before dropping the cache and the second pass. Turns red if, after
-    the restart, that row resolves: only the durable cutoff can refuse it."""
+    the restart, that row resolves: only the durable cutoff can refuse it.
+    W87-3 (ADR-0176): the write-back itself is now refused (the cache hit
+    reads the durable cutoff, and ``save`` is conditional), so no row comes
+    back; turns red if it does. The restore's own refusal is still tested,
+    on a row planted the way a writer before W87-3 put it back."""
     phone = sign_in.client()
     laptop = sign_in.client()
     _signed_in(phone)
@@ -618,7 +622,20 @@ def test_the_cutoff_on_disk_refuses_a_row_written_back_before_a_crash(
     with pytest.raises(RuntimeError):
         _everywhere(phone)
     account = _account(sign_in)
-    assert _session_rows(sign_in, account) == 1  # the written-back row
+    assert _session_rows(sign_in, account) == 0  # W87-3: nothing written back
+    with sign_in.store._lock:
+        sign_in.store._conn.execute(
+            "INSERT INTO sessions (session_digest, account_id, csrf_token, created_at, "
+            "last_used_at) VALUES (?, ?, ?, ?, ?)",
+            (
+                session_store._digest(laptop_session),
+                str(account),
+                "csrf-written-back",
+                (datetime.now(UTC) - timedelta(minutes=1)).isoformat(),
+                datetime.now(UTC).isoformat(),
+            ),
+        )
+    assert _session_rows(sign_in, account) == 1  # the row an older writer put back
     _restart()
     assert auth.session_repository.get(laptop_session) is None
 

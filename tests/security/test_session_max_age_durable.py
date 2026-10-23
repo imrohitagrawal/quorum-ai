@@ -63,6 +63,31 @@ def _row(
     )
 
 
+def _plant(
+    store: SessionStore,
+    session_id: str,
+    *,
+    account_id: UUID,
+    created_at: datetime,
+    last_used_at: datetime,
+) -> None:
+    """A plain ``INSERT``, as a writer before W87-3's conditional save made it."""
+    with store._lock:
+        store._conn.execute(
+            "INSERT OR REPLACE INTO sessions "
+            "(session_digest, account_id, csrf_token, created_at, last_used_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (
+                session_store._digest(session_id),
+                str(account_id),
+                "an-independent-csrf-token",
+                created_at.astimezone(UTC).isoformat(),
+                last_used_at.astimezone(UTC).isoformat(),
+            ),
+        )
+    assert store.fetch(session_id, not_used_before=datetime(1970, 1, 1, tzinfo=UTC)) is not None
+
+
 def _signed_in_account(store: SessionStore, sub: str = "w87-sub-1") -> UUID:
     account = store.upsert_google_account(
         google_sub=sub, email=f"{sub}@example.com", now=datetime.now(UTC)
@@ -371,12 +396,37 @@ def test_a_revoked_session_is_never_told_12_hours(
     if case == "signed out everywhere before 12 h":
         assert store.end_sessions_before(account, created + timedelta(minutes=5)) == "ended"
         assert store.fetch("revoked", not_used_before=datetime(1970, 1, 1, tzinfo=UTC)) is None
-        _row(store, "revoked", account_id=account, created_at=created, last_used_at=clock.at)
+        # W87-3: ``save`` now refuses a row its cutoff covers, so the stale
+        # write-back is planted the way an older writer would have made it.
+        _plant(store, "revoked", account_id=account, created_at=created, last_used_at=clock.at)
     else:
-        monkeypatch.setattr(store, "sessions_valid_after", lambda _account: (False, None))
+        monkeypatch.setattr(store, "sessions_valid_after", lambda _account, **_: (False, None))
     _restarted()
     assert auth.session_repository.get("revoked") is None
     assert auth.session_repository.end_reason("revoked") == "SESSION_EXPIRED"
+
+
+def test_a_cutoff_exactly_at_the_rows_start_is_never_told_12_hours(
+    store: SessionStore, clock: Clock
+) -> None:
+    """Round 2 falsifier N16b: the boundary of the durable-cutoff check in
+    ``max_age_account``. A signed-in row past 12 h whose cutoff is one
+    microsecond before its start says ``SESSION_MAX_AGE``; with the cutoff
+    exactly at its start (the row planted back after it) it says
+    ``SESSION_EXPIRED``. Red when: that comparison is ``<`` instead of
+    ``<=``."""
+    account = _signed_in_account(store)
+    created = clock.at - H12 - US
+    _plant(store, "edge", account_id=account, created_at=created, last_used_at=clock.at)
+    assert store.end_sessions_before(account, created - US) == "ended"
+    _restarted()
+    assert auth.session_repository.get("edge") is None
+    assert auth.session_repository.end_reason("edge") == "SESSION_MAX_AGE", "just before"
+    assert store.end_sessions_before(account, created) == "ended"
+    _plant(store, "edge", account_id=account, created_at=created, last_used_at=clock.at)
+    _restarted()
+    assert auth.session_repository.get("edge") is None
+    assert auth.session_repository.end_reason("edge") == "SESSION_EXPIRED", "exactly at"
 
 
 def test_the_reason_uses_the_last_use_the_process_held_not_the_stale_row(

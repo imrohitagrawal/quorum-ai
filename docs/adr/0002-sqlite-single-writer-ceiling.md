@@ -4,6 +4,11 @@
 
 Accepted — 2026-07-19 (R2 Phase 0, ledger RB-3)
 
+**Amended by ADR-0176 (2026-10-22):** the session store, which uses this shape
+(`session_store.py`, the `SessionStore` docstring), gains a second writer: the operator command
+`python -m product_app.end_sessions`, run on the machine. It is short and rare: per run, one short
+write transaction and one read-back, a second short transaction.
+
 ## Context
 
 Two durable stores back Release 2's trust & evaluation surfaces:

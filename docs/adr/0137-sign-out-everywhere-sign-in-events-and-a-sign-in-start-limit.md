@@ -15,6 +15,11 @@ building session proposes them as settings."* Every value below was
 this record was written. Splitting part 3 into two pull requests is
 the session's choice, for size.
 
+**Amended by ADR-0176 (2026-10-22):** the durable cutoff `accounts.sessions_valid_after` is now
+read on every signed-in request, cache hits included, not only when a session is restored, so a
+sign-out everywhere is seen by other processes too. A signed-in request whose cutoff cannot be read
+is refused as an expired session (CHG-083 (a)).
+
 ## Context
 
 Failure modes first: `docs/analysis/2026-09-28-w7-session-safety-failure-modes.md`.

@@ -1523,6 +1523,86 @@ def test_the_capability_claim_guard_bites() -> None:
     )
 
 
+# Part D5 — a BOUND an ADR states, pinned to the constant (W87-3 review).
+#
+# ADR-0176 states the signed-in cutoff read's lock bound three times, and
+# SC-104, failure mode FM-56 and the failure-modes doc's known limits state
+# it once each (the last added after the round-2 falsifier's P1d changed it
+# to 2.5 s and every gate stayed green). The round-1 falsifier
+# changed ADR-0176's "The 1.0 s bound" to "The 2.5 s bound" and every gate
+# stayed green, though the number is derivable offline (AGENTS.md rule 1a).
+# Each pattern below must match, and every number it captures must equal
+# ``session_store.SIGNED_IN_CUTOFF_LOCK_TIMEOUT_S``.
+
+_NUMBER = r"(\d+(?:\.\d+)?)"
+
+#: (file, pattern) for every statement of the bound this gate checks.
+_LOCK_BOUND_STATEMENTS = (
+    ("docs/adr/0176-*.md", rf"its lock not\s+acquired within {_NUMBER} s"),
+    (
+        "docs/adr/0176-*.md",
+        rf"\*\*The {_NUMBER} s bound\*\* \(`session_store\.SIGNED_IN_CUTOFF_LOCK_TIMEOUT_S`\)",
+    ),
+    ("docs/adr/0176-*.md", rf"including the {_NUMBER} s bound"),
+    ("docs/41-security-controls.md", rf"at most {_NUMBER} s for the store lock"),
+    (
+        "docs/analysis/2026-10-20-w87-3-end-sessions-failure-modes.md",
+        rf"at most {_NUMBER} s for the store lock",
+    ),
+    (
+        "docs/analysis/2026-10-20-w87-3-end-sessions-failure-modes.md",
+        rf"the {_NUMBER} s bound covers",
+    ),
+)
+
+
+def _check_stated_bound(*, text: str, pattern: str, actual: float, label: str) -> None:
+    """Raise ``AssertionError`` unless ``text`` states the bound with
+    ``pattern`` and every number it states equals ``actual``."""
+    quoted = [float(found) for found in re.findall(pattern, text)]
+    assert quoted, (
+        f"{label} no longer states the cutoff read's lock bound in the form this gate "
+        f"checks ({pattern!r}). Restore the sentence or update the pattern."
+    )
+    assert all(value == actual for value in quoted), (
+        f"{label} says {quoted} s; session_store.SIGNED_IN_CUTOFF_LOCK_TIMEOUT_S is "
+        f"{actual} s. Correct the sentence."
+    )
+
+
+def test_the_docs_state_the_real_cutoff_lock_bound() -> None:
+    """RED WHEN: ``SIGNED_IN_CUTOFF_LOCK_TIMEOUT_S`` changes, or one of the
+    six statements of it (ADR-0176 three times, SC-104, FM-56, the
+    failure-modes doc's known limits) is edited to
+    another number or reworded out of its pattern."""
+    from product_app import session_store
+
+    for pattern_file, pattern in _LOCK_BOUND_STATEMENTS:
+        matches = sorted(REPO_ROOT.glob(pattern_file))
+        assert len(matches) == 1, (pattern_file, matches)
+        _check_stated_bound(
+            text=matches[0].read_text(encoding="utf-8"),
+            pattern=pattern,
+            actual=session_store.SIGNED_IN_CUTOFF_LOCK_TIMEOUT_S,
+            label=matches[0].name,
+        )
+
+
+def test_the_stated_bound_guard_bites() -> None:
+    """The partner: the guard fails on the falsifier's planted number and on
+    a deleted sentence. RED WHEN: ``_check_stated_bound`` stops comparing."""
+    pattern = _LOCK_BOUND_STATEMENTS[1][1]
+    planted = "7. **The 2.5 s bound** (`session_store.SIGNED_IN_CUTOFF_LOCK_TIMEOUT_S`) covers"
+    with pytest.raises(AssertionError) as caught:
+        _check_stated_bound(text=planted, pattern=pattern, actual=1.0, label="ADR")
+    assert "says [2.5] s" in str(caught.value)
+    with pytest.raises(AssertionError) as removed:
+        _check_stated_bound(
+            text="the sentence was deleted", pattern=pattern, actual=1.0, label="ADR"
+        )
+    assert "no longer states" in str(removed.value)
+
+
 # --------------------------------------------------------------------------
 # Part E — the CONFIGURATION surface: every knob the app reads must be
 # discoverable in `.env.example`.

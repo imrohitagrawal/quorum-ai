@@ -102,6 +102,7 @@ from product_app import (
     auth,
     catalog_fetcher,
     costs,
+    end_sessions,
     feedback_store,
     google_signin,
     main,
@@ -175,6 +176,10 @@ RISK_TIER_MODULES = (
     # Added 2026-10-20 with ADR-0175 (W87-2). It decides whether an account
     # may be deleted: how recent the sign-in must be.
     "account_deletion.py",
+    # Added 2026-10-22 with ADR-0176 (W87-3). The operator command that ends
+    # signed-in sessions: its busy timeout, its SQL for --all, and the fixed
+    # sentences that keep what the operator typed out of its output.
+    "end_sessions.py",
 )
 
 #: A wrong value here is silently harmful and nothing else constrains it.
@@ -204,6 +209,10 @@ BUCKET_A_LITERAL_PIN = (
     # W87-2 (ADR-0175, CHG-056 d, CHG-063 f): how recent a sign-in deletion
     # needs. Longer lets a stolen cookie delete the account for longer.
     "account_deletion.RECENT_SIGN_IN_FOR_DELETION",
+    # W87-3 (ADR-0176): the operator command's busy timeout. Python's default
+    # and the app's; ADR-0002 measured that ``timeout=0`` loses writes, and a
+    # longer one holds the operator's shell longer before exit 3.
+    "end_sessions.COMMAND_BUSY_TIMEOUT_S",
     # The ports a browser leaves out of ``Host``. A wrong entry makes the
     # host rule refuse the one host sign-in can finish on, or accept a
     # different port as the same origin (round-2 review).
@@ -217,6 +226,12 @@ BUCKET_A_LITERAL_PIN = (
     # W86 (ADR-0172): the same reason; renaming it re-runs the VACUUM, a
     # rewrite of the whole file, on every database.
     "session_store.SECURE_DELETE_VACUUM_MARKER",
+    # W87-3 (ADR-0176): how long a signed-in cache hit waits for the store
+    # lock before its cutoff counts as unread and the request is refused
+    # (CHG-083 (a)). Longer makes a busy request wait; shorter signs people
+    # out under routine holds the plan measured. Pinned in tests/security/
+    # test_signed_in_cutoff_on_cache_hits.py.
+    "session_store.SIGNED_IN_CUTOFF_LOCK_TIMEOUT_S",
     # W86 (ADR-0172): how often the daemon sweeps history for every account.
     # Longer keeps a question past history_keep_days for longer, the direction
     # the approved keep rule forbids; pinned in tests/unit/test_history_sweep.py.
@@ -352,6 +367,17 @@ BUCKET_A_LITERAL_PIN = (
 #: Pin the BEHAVIOUR, not the literal — these legitimately change, and a literal
 #: pin would teach people to edit the test alongside the code.
 BUCKET_B_PIN_BEHAVIOUR = {
+    # --- Added 2026-10-22 with W87-3 (ADR-0176) ---
+    "end_sessions.USAGE": (
+        "the one sentence every usage error prints, so no argument is echoed; "
+        "pinned word for word on every exit-2 case: tests/integration/"
+        "test_end_sessions_command.py::test_no_output_carries_an_email_an_id_or_an_argument"
+    ),
+    "end_sessions._OWNER_HINT": (
+        "how to run as the file's owner; pinned on the exit-3 owner case: "
+        "tests/integration/test_end_sessions_command.py::"
+        "test_each_exit_code_and_nothing_changes_unless_it_is_0"
+    ),
     # --- Added 2026-10-19 with W87-1 (ADR-0174) ---
     "auth.SESSION_MAX_AGE_MESSAGE": (
         "CHG-063 (f)(2), the 401 for a session ended by its 12 hours; the exact "
@@ -777,6 +803,28 @@ BUCKET_C_NO_PIN = {
     ),
     "session_store.SessionStore._SIGN_IN_EVENTS_INDEX_DDL": (
         "an index for the per-account newest-first prune; it changes no result"
+    ),
+    # --- Added 2026-10-22 with W87-3 (ADR-0176) ---
+    "session_store.RAISE_SESSIONS_CUTOFF_SQL": (
+        "SQL, not a value; shared with the operator command, and pinned by "
+        "tests/integration/test_end_sessions_command.py::"
+        "test_the_command_and_sign_out_everywhere_share_one_copy_of_the_sql, "
+        "with its effect pinned by the cutoff tests in test_session_safety.py"
+    ),
+    "session_store.DELETE_SESSIONS_BEFORE_SQL": (
+        "SQL, not a value; shared with the operator command and pinned as "
+        "session_store.RAISE_SESSIONS_CUTOFF_SQL is"
+    ),
+    "end_sessions.RAISE_ALL_CUTOFFS_SQL": (
+        "SQL, not a value; its effect (raised, never lowered) is pinned by "
+        "tests/integration/test_end_sessions_command.py::"
+        "test_a_session_created_after_the_cutoff_survives_and_a_later_cutoff_stays"
+    ),
+    "end_sessions.DELETE_ALL_SIGNED_IN_BEFORE_SQL": (
+        "SQL, not a value; its effect is pinned by "
+        "tests/integration/test_end_sessions_command.py::"
+        "test_all_leaves_anonymous_sessions_and_the_mint_count_untouched and "
+        "::test_a_session_created_after_the_cutoff_survives_and_a_later_cutoff_stays"
     ),
     "session_store.SessionStore._SPEND_KEY_CARRY_DDL": (
         "the spend-key pointer table's shape; its use is pinned by "
@@ -1532,6 +1580,13 @@ def test_the_recent_sign_in_constants_are_pinned() -> None:
     assert timedelta(minutes=10) == account_deletion.RECENT_SIGN_IN_FOR_DELETION
     assert google_signin.ACCOUNT_DELETE_PATH == "/ui?account=delete"
     assert google_signin.ACCOUNT_SWITCHED_PATH == "/ui?account=switched"
+
+
+def test_the_end_sessions_busy_timeout_is_pinned() -> None:
+    """Turns red if: the operator command's busy timeout moves from 5.0 s,
+    Python's default and the app's (W87-3, ADR-0176). Literal on the right
+    (rule 7a)."""
+    assert end_sessions.COMMAND_BUSY_TIMEOUT_S == 5.0
 
 
 def test_the_google_sign_in_constants_are_pinned() -> None:

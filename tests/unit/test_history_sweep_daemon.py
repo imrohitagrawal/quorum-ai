@@ -236,6 +236,9 @@ def test_a_failing_daemon_sweep_logs_the_type_only(
         def sweep_history(self, **_: object) -> tuple[int, int]:
             raise sqlite3.OperationalError(f"near {question} for {account}")
 
+        def refresh_readiness(self) -> None:
+            """W87-3: the tick's readiness step (a ready store does nothing)."""
+
     monkeypatch.setattr(session_store, "get_store", lambda: _Raising())
     monkeypatch.setattr(auth, "session_repository", _QuietPurge())
     caplog.set_level(logging.WARNING, logger="product_app.auth")
