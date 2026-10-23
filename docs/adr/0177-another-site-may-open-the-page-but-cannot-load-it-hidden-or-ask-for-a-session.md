@@ -52,10 +52,10 @@ section 1, records what all three engines sent for each kind of load.
 | The tests bite | the designer's mutations of a reference copy, each restored and checked with `diff -q` | allow every `navigate` on `/ui`: 14 red; share `/ui`'s page rule with `/v1/session`: 5 red; treat `same-site` as ours: 10 red; ignore the scheme in the `Origin` compare: 4 red; log the raw headers: 1 red; the `/v1/session` check below the invite counter and the limiter: 3 red; the `/ui` check below `record_exempted_request`: 2 red; the `/ui` check below the mint: 20 red; no `Vary` on a 429: 1 red |
 | Changed lines covered | the builder, the last two steps of `make diff-cover DIFF_BASE=origin/main` run by hand on its coverage report | `Total: 108 lines, Missing: 3 lines, Coverage: 97%` |
 | The OpenAPI document | `make openapi-check` | `openapi contract validation passed`; the only change is the two 403s and their two schemas |
-| Review round 1: another site's prefetch | Chromium 149 on a page at `localhost` carrying `<script type="speculationrules">` for `/ui` and `/v1/session` on `127.0.0.1`, against a header logger and against the real app at `ecbbe63` | both fetched in the background with `Sec-Fetch-Site: none`, `Sec-Fetch-Mode: navigate`, `Sec-Fetch-Dest: document`, `Sec-Purpose: prefetch`, no `Origin`, no cookie; both answered 200 and each opened a counted session, while the tab stayed on the other site |
+| Review round 1: another site's prefetch | a page at `localhost` carrying `<script type="speculationrules">` for `/ui` and `/v1/session` on `127.0.0.1`: Playwright's Chromium 148 (the round-1 break reviewer, against a header logger and then the real app at `ecbbe63`), and Chromium 149 (the orchestrator, against a header logger) | both fetched in the background with `Sec-Fetch-Site: none`, `Sec-Fetch-Mode: navigate`, `Sec-Fetch-Dest: document`, `Sec-Purpose: prefetch`, no `Origin`, no cookie; both answered 200 and each opened a counted session, while the tab stayed on the other site |
 | The round-1 tests fail without the prefetch fix | `tests/unit/test_fetch_site_prefetch_and_edges.py`, `tests/integration/test_cross_site_prefetch.py` on `ecbbe63`'s code | `16 failed, 15 passed` (the fixer's run) |
-| The round-1 browser spec, without and with the fix | `e2e/tests/navigation/cross-site-prefetch.spec.ts`, AGENTS.md rule 13's command, the server confirmed by its `/status` | `2 failed` (`Expected: 403`, `Received: 200`) against a `git archive` copy of `ecbbe63`; `20 passed` with `--repeat-each=10` on the fix, and `/status` then counted 20 `/ui` and 10 `/v1/session` prefetch refusals |
-| The round-1 tests bite | the fixer's 24 mutants of `fetch_site.py` and `main.py`, each restored and checked byte for byte | 23 killed; the 1 survivor left the first prefetch check in place, so it changed nothing, and its corrected form (the check moved below the `none` allow) was killed, 13 red |
+| The round-1 browser spec, without and with the fix | `e2e/tests/navigation/cross-site-prefetch.spec.ts`, AGENTS.md rule 13's command, the server confirmed by its `/status` | `2 failed` (`Expected: 403`, `Received: 200`) against a `git archive` copy of `ecbbe63`; on the fix, the navigation lane run as `e2e.yml` runs it, both of these tests included, gave `62 passed` |
+| The round-1 tests bite | the fixer's mutants of `fetch_site.py` and `main.py`, each restored and checked byte for byte | 23 mutants: 22 killed, 1 survived (it left the first prefetch check in place, so it changed nothing). Three versions of its intended form, the check moved below the `none` allow, were each killed (1, 1 and 13 red) |
 
 ## Decision
 
@@ -101,7 +101,7 @@ section 1, records what all three engines sent for each kind of load.
    `/ui` keeps the page exception because people open it from email, chat and search links, and
    Google's sign-in return is a cross-site navigation in all three engines (F1, F2).
 3. **Placement: before every counter.** `fetch_site.cross_site_refusal` is the first statement of
-   `browser_session` (`main.py:2031`) and `browser_ui` (`main.py:2259`), before `_daily_cap_key`
+   `browser_session` (`main.py:2039`) and `browser_ui` (`main.py:2267`), before `_daily_cap_key`
    (which counts invite use), `record_exempted_request`, the per-minute limiter,
    `issue_or_resume_session` and `_session_capped_response`. Allow-listed visitors are checked too.
    It is a plain function: the decorated-function cap of
@@ -109,16 +109,17 @@ section 1, records what all three engines sent for each kind of load.
    would sit outside `_security_headers_middleware`, so its answer would carry no security headers,
    no `X-Request-ID` and no request count (ADR-0171's A8 measurement).
 4. **The refusal.** `403`, not `429`: on these two routes a 429 already means a session limit
-   (`main.py:2049`, `:2064`, `:2086` on `/v1/session`; the daily cap's page on `/ui`,
+   (`main.py:2057`, `:2072`, `:2094` on `/v1/session`; the daily cap's page on `/ui`,
    `_session_capped_response`), so a refusal sent as 429 would read as one. `/v1/session` answers
    `{"detail":{"code":"CROSS_SITE_REFUSED","message":"This request came from another site, so it cannot open or renew a session."}}`.
    `/ui` answers a short HTML page (under 4,096 bytes, no script, no inline style) that says only
-   "This page was opened in a way this site does not allow. Nothing was started or counted." (it
+   "This page was opened in a way this site does not allow. No session was started." (it
    does not guess why, since the one person who can see it opened it as a page) and links back with
    `<a id="cross-site-back" href="/ui">Open Quorum-AI</a>`, a same-origin link, so always allowed.
    A person can land on it in a browser that sends `Sec-Fetch-Site` without `Sec-Fetch-Dest`
    (the user-journey tester's addition). Both carry `Cache-Control: no-store` and no `Set-Cookie`,
-   and count nowhere: no session, no mint row, no limiter hit, no invite or allow-list count.
+   and count against no limit: no session, no mint row, no limiter hit, no invite or allow-list
+   count. `/status` and the log count each refusal (decision 6).
    They are returned from the handler, so the security headers, `X-Request-ID` and the request
    metrics (a 4xx of the route) apply. The 403 is declared with `responses=` in `openapi.yaml`.
 5. **`Vary`.** Every answer of both routes (200, 403 and 429) carries
@@ -174,8 +175,8 @@ section 1, records what all three engines sent for each kind of load.
 ## Consequences
 
 - A hidden image, script, fetch or frame of `/ui` or `/v1/session` from another site, and a
-  prefetch of either, gets a 403 and opens and counts nothing, so it can no longer use up a
-  network's 2 daily sessions or replace an open tab's token.
+  prefetch of either, gets a 403, opens no session and counts against no limit, so it can no
+  longer use up a network's 2 daily sessions or replace an open tab's token.
 - After a refused prefetch of `/ui`, a click on the link it was for still opens a working page
   (`e2e/tests/navigation/cross-site-prefetch.spec.ts`, measured in Chromium).
 - A link from another site still opens the page, and Google sign-in, its cancel and W87-2's
@@ -197,8 +198,10 @@ section 1, records what all three engines sent for each kind of load.
   row W105 (CHG-071: tabs share a renewed token); W88 asserts neither way.
 - **A page opened from another site still opens one counted session per browser** (F15): a link,
   or a forced top-level navigation, costs one session while the cookie lives (three clicks gave one,
-  measured), and a private window starts fresh each time. It is visible: the visitor lands on the
-  app. Handled by board row W106 (CHG-067: page loads never count).
+  measured), and a private window starts fresh each time. The visitor does not always stay on
+  the app: after one click on another site, that site can open `/ui` as a page in a small window
+  and close it again at once. That too counts one session per browser, as it did before W88.
+  Handled by board row W106 (CHG-067: page loads never count).
 - **Old browsers that send neither header** are allowed, as the owner chose (CHG-063 (b), F14).
 - **Plain http on a LAN address** (F8): browsers send no `Sec-Fetch-*` header to an `http://` host
   that is not `localhost` or `127.0.0.1` (measured), so the check is off there. Production is https
@@ -211,7 +214,8 @@ section 1, records what all three engines sent for each kind of load.
   with `Sec-Purpose`, it is refused too, and nothing here measures that the browser then loads the
   page normally when the visitor presses Enter; whether it marks it at all was not measured. The
   e2e measures the normal load only for a prefetch followed by a link click. Firefox and WebKit
-  prefetches were not measured.
+  prefetches were not measured. Only loopback http (`localhost` to `127.0.0.1`) was measured; the
+  same over https, which the deployed site uses, is UNVERIFIED.
 - **Fly's proxy may change the headers** (F27, UNVERIFIED: no test here measures it). The free
   check after the deploy is `/status` `cross_site_refusals`: it should list all six classes for
   both routes (counts since the process started), and non-zero counts later show the deployed

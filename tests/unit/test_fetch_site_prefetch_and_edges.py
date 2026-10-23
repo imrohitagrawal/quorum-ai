@@ -104,6 +104,14 @@ def test_every_form_of_a_prefetch_purpose_is_refused(value: str) -> None:
     assert _both(_with_purpose("Sec-Purpose", value)) == ("prefetch", "prefetch")
 
 
+def test_a_prefetch_named_after_another_part_is_refused_too() -> None:
+    # RED-IF: only the first ";" part of Sec-Purpose is read, so "prerender;prefetch"
+    #   (prefetch not first) is allowed on either route (W88 round 2, Z1).
+    assert _both(_with_purpose("Sec-Purpose", "prerender;prefetch")) == ("prefetch", "prefetch")
+    # Partner: the first part alone, with no prefetch after it, is allowed on both.
+    assert _both(_with_purpose("Sec-Purpose", "prerender")) == (None, None)
+
+
 def test_the_older_purpose_header_is_read_too() -> None:
     # RED-IF: only Sec-Purpose is read, so a browser that names a prefetch with the older
     #   Purpose header opens a session.

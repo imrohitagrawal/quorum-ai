@@ -17,7 +17,8 @@ What changed after this list was written:
   review and is board row W105 (CHG-071).
 - F20 below calls the `/ui` refusal page something "nobody sees". The build found a person can land
   on it, in a browser that sends `Sec-Fetch-Site` without `Sec-Fetch-Dest` (ADR-0177, decision 4),
-  so its words say only that the page was opened in a way the site does not allow.
+  so its words say only that the page was opened in a way the site does not allow, and that no
+  session was started.
 - F20 below names a `Vary` of three headers. The build sends four (`Origin` too), and review round 1
   added `Sec-Purpose` and `Purpose`, so six.
 - F21 below names four refusal classes. The build added `unknown`, and review round 1 added
@@ -28,7 +29,8 @@ What changed after this list was written:
 Tree read: `origin/main` at `8463a72`, a `git archive` copy. Probes ran on ports 18260-18265 against
 (a) a header-echo server and (b) the real app copy with temporary databases, in Playwright
 Chromium, Firefox and WebKit from `e2e/node_modules`. Everything marked MEASURED below was run
-today (2026-10-18). Anything else is marked UNVERIFIED.
+today (2026-10-18), except F28 (measured 2026-10-23 by review round 1). Anything else is marked
+UNVERIFIED.
 
 ## 0. The attacks, reproduced in a real browser (MEASURED, Chromium, real app)
 
@@ -213,10 +215,11 @@ for Google's prefetch proxy. Today's behaviour, not made worse. **Superseded by 
 assumed a prefetch arrives as a cross-site navigation and only from a search engine; both were
 wrong.
 
-**F28. Any page's speculation-rules prefetch arrives as a typed address (MEASURED, now fixed).**
+**F28. Another site's speculation-rules prefetch arrives as a typed address (MEASURED, now fixed).**
 Found by W88's review, round 1, after the build. A page on another site carrying
 `<script type="speculationrules">` with `/ui` and `/v1/session` in a prefetch list makes Chromium
-149 fetch both in the background with `Sec-Fetch-Site: none`, `Sec-Fetch-Mode: navigate`,
+(148, the round-1 break reviewer, against a header logger and the real app; 149, the orchestrator,
+against a header logger) fetch both in the background with `Sec-Fetch-Site: none`, `Sec-Fetch-Mode: navigate`,
 `Sec-Fetch-Dest: document`, `Sec-Purpose: prefetch`, no `Origin` and no cookie (measured against a
 header logger and against the real app at `ecbbe63`: both 200, each opening a counted session,
 the tab still on the other site). `none` is allowed, so the fix as first built let it through on
@@ -229,7 +232,8 @@ Tests: `tests/unit/test_fetch_site_prefetch_and_edges.py`, `tests/integration/te
 one mint), and `e2e/tests/navigation/cross-site-prefetch.spec.ts` (a real second server's page;
 the browser's `sec-purpose: prefetch` is asserted before the 403; a link click after the refused
 prefetch still reaches a working page). UNVERIFIED: a browser's own preloading of an address
-while it is typed, and prefetches in Firefox and WebKit.
+while it is typed, prefetches in Firefox and WebKit, and the same over https, which the deployed site uses:
+only loopback http (`localhost` to `127.0.0.1`) was measured.
 
 ### Side effects of the refusal itself
 
@@ -273,7 +277,7 @@ Set-Cookie. Test pins it, so a later "add HEAD for uptime checks" must go throug
 **F24. Every existing test still passes with the check missing.** All 34 files under `tests/` that
 call the quoted route `"/v1/session"` (33 test files and `tests/helpers.py`;
 `git grep -l '"/v1/session"' 8463a72 -- tests | wc -l` prints 34; without the quotes it prints 38,
-the other 4 naming only `/v1/session/keep-active` or the route in a docstring) use `TestClient`, which sends no Sec-Fetch headers, so they take the "allow"
+the other 4 naming only `/v1/session/keep-active` or the route in a docstring or a comment) use `TestClient`, which sends no Sec-Fetch headers, so they take the "allow"
 path. That keeps them green (good), and means none of them can show the check works. Every new
 test above needs a refused case and a partner without headers.
 

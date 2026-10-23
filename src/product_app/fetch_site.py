@@ -6,7 +6,9 @@ load either route without the visitor ever seeing it, using up that
 allowance or replacing the token an open tab holds. The browser says where a
 request came from in ``Sec-Fetch-Site`` (and how it was made in
 ``Sec-Fetch-Mode`` and ``Sec-Fetch-Dest``), and a script cannot set those
-headers, so the decision is made from them alone:
+headers, so the decision is made from them. A prefetch mark (``Sec-Purpose``
+or ``Purpose``) can only refuse, and without ``Sec-Fetch-Site`` the
+``Origin`` decides:
 
 * A prefetch (``Sec-Purpose`` or the older ``Purpose`` naming ``prefetch``,
   a prerender included) is refused on both routes, whatever else the request
@@ -27,7 +29,9 @@ headers, so the decision is made from them alone:
   ``Origin`` at all, is allowed, as before W88.
 
 The check is a plain function called first in each handler, before any
-counter, limiter or session is touched, so a refusal opens and counts nothing.
+counter, limiter or session is touched, so a refusal opens no session and
+counts against no limit (``/status``, the log and the request metrics still
+count it).
 The refusal is returned from the handler, so the security headers, the
 request id and the request metrics still apply to it. No decorators here: the
 decorated-function cap is full (``tests/unit/test_mutation_test_set_integrity.py``).
@@ -92,7 +96,7 @@ _PAGE_REFUSAL_HTML = """<!doctype html>
     <main>
       <h1>This page cannot be opened this way</h1>
       <p>This page was opened in a way this site does not allow.
-        Nothing was started or counted.</p>
+        No session was started.</p>
       <p><a id="cross-site-back" href="/ui">Open Quorum-AI</a></p>
     </main>
   </body>
