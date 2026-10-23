@@ -47,6 +47,11 @@ hand (no check counts them). V7.1.1 and V7.5.2 named W87 as the row closing thei
 close them and no board row does, so both now read advisory. V7.5.1's line citation was corrected.
 None of the three verdicts changes.
 
+**Updated by W88 (2026-10-23).** Row V3.5.3 was updated to the check of where a request comes from
+that W88 added (ADR-0177); it says so at the start of its Evidence. V3.5.3 moves from NOT IN PLACE
+to TESTED. The counts below follow, recounted by hand (no check counts them). V3.5.3's reading,
+held back until the fix was built (CHG-060), is restored in the past tense.
+
 **What the verdicts mean.**
 - **TESTED**: in place, and a named test fails without it.
 - **MEASURED**: the session checked production directly with a free, read-only request.
@@ -66,7 +71,7 @@ says so at the start of its Evidence.
 |---|---|---|---|---|---|---|---|---|
 | V1 Encoding and Sanitization | 27 | 9 | 0 | 5 | 2 | 0 | 0 | 11 |
 | V2 Validation and Business Logic | 11 | 5 | 0 | 0 | 6 | 0 | 0 | 0 |
-| V3 Web Frontend Security | 19 | 7 | 0 | 3 | 7 | 1 | 0 | 1 |
+| V3 Web Frontend Security | 19 | 8 | 0 | 3 | 7 | 0 | 0 | 1 |
 | V4 API and Web Service | 10 | 1 | 0 | 1 | 0 | 1 | 1 | 6 |
 | V5 File Handling | 9 | 0 | 0 | 1 | 0 | 0 | 0 | 8 |
 | V6 Authentication | 35 | 1 | 0 | 1 | 5 | 1 | 0 | 27 |
@@ -81,7 +86,7 @@ says so at the start of its Evidence.
 | V15 Secure Coding and Architecture | 13 | 3 | 0 | 2 | 7 | 1 | 0 | 0 |
 | V16 Security Logging and Error Handling | 16 | 0 | 0 | 0 | 15 | 1 | 0 | 0 |
 | V17 WebRTC | 7 | 0 | 0 | 0 | 0 | 0 | 0 | 7 |
-| **All** | **253** | **48** | **2** | **24** | **75** | **7** | **1** | **96** |
+| **All** | **253** | **49** | **2** | **24** | **75** | **6** | **1** | **96** |
 
 ## V1 Encoding and Sanitization
 
@@ -149,7 +154,7 @@ says so at the start of its Evidence.
 | V3.4.6 | 2 | PARTIAL | Measured by the session: see V3.4.1. Recorded as PARTIAL by the session (the agent wrote TESTED): the evidence below names a gap in this item. CSP `frame-ancestors 'none'` (`main.py:885`) plus `X-Frame-Options: DENY` (`:903`), asserted by the same test. Not on unhandled 500s. | W75 |
 | V3.5.1 | 1 | TESTED | Every POST/DELETE that uses the cookie needs `X-CSRF-Token`. It is not a CORS-safelisted header, so another site needs a preflight, and that fails. The token is compared with `compare_digest` (`auth.py:1178-1179`). Call sites: `query_runs.py:610`, `:666`, `:1049`, `:1123`; `google_signin.py:613` (start, keep-active, sign-out, sign-out-everywhere); `account_deletion.py:73`. Tests: `tests/integration/test_csrf_enforcement.py::test_estimate_without_csrf_token_is_rejected`, `tests/integration/test_csrf_rotation_and_query_string_blocked.py::test_csrf_query_string_is_not_accepted`, `tests/integration/test_google_sign_in.py::test_sign_out_without_the_csrf_token_changes_nothing`, `tests/integration/test_account_deletion.py::test_without_the_csrf_token_nothing_is_deleted`. **No test refuses `POST /v1/query-runs` (starts a run, the money path) or `DELETE /v1/query-runs/{id}` without the token**; those two are CODE-ONLY. | W98 |
 | V3.5.2 | 1 | PARTIAL | Recorded as PARTIAL by the session (the agent wrote TESTED (partly)): the evidence below names a gap in this item. Only `POST /v1/invite` has no token; it relies on a JSON body (`invite_links.py:195-196`). FastAPI 0.137.2 reads JSON only for `application/json` or `+json`, and its strict content-type default refuses a missing Content-Type (`.venv/.../fastapi/routing.py:374`, `:421-435`). So a `text/plain` body, or one with no type, gets 422. `tests/security/test_invite_link.py::test_a_form_post_is_refused` covers the form case. The `text/plain` and no-type cases are CODE-ONLY: they rely on the framework default. | W98 |
-| V3.5.3 | 1 | NOT IN PLACE | Not met, by the session's reading: another site can cause a visitor's browser to open sessions counted against the visitor's network (row W88). The agent's reading and the session's evidence are held back until the fix ships (CHG-060) and kept outside the repository. | W88 |
+| V3.5.3 | 1 | TESTED | Updated by W88 (ADR-0177); the session's reading below was held back until this fix was built (CHG-060). Before W88, read by the session at `2f13e22`: `GET /ui` (`main.py:2114-2157`) and `GET /v1/session` (`main.py:1906-1991`) changed state. With no cookie, each made a new session counted against the network's 2-per-24-hour allowance (`auth.py:84`; `issue_or_resume_session`, `auth.py:1231-1296`). On an existing session, `GET /v1/session` replaced the CSRF token (`auth.py:1288-1291`); `tests/integration/test_page_load_keeps_csrf.py::test_the_session_call_still_retires_the_previous_token` pins that behaviour. No Sec-Fetch check existed (0 matches). By reading, not run at the time: an `<img src=".../ui">` on another site arrived without the Lax cookie, so it made a session. Two such loads used up the visitor's network's anonymous allowance for 24 hours. A cross-site link to `/v1/session` broke the visitor's open tab. ADR-0131 notes `/ui` no longer replaced the token; `/v1/session` still did. Measured on 2026-10-18 by W88's failure-modes list, in Chromium against a copy of `8463a72`: two hidden images of `/ui` left the next two fresh visitors with 429; a frame of `/ui`, or an image of `/v1/session`, used one session; a link on another site to `/v1/session` turned the open tab's next warnings POST from 200 to 403 (`docs/analysis/2026-10-18-w88-cross-site-session-loads-failure-modes.md`, section 0). Fixed by W88: from another site `/ui` is served only as a page, `/v1/session` is refused in every form, and the refusal comes before any counter (`docs/41-security-controls.md` SC-105). Tests: `tests/integration/test_cross_site_session_requests.py::test_ui_rows_that_are_refused`, `::test_session_rows_that_are_refused`, `::test_two_refused_loads_mint_nothing_and_two_allowed_mint_two`, `::test_another_sites_session_request_leaves_the_open_tabs_token_working`; in a browser, `e2e/tests/navigation/cross-site-loads.spec.ts`. | — |
 | V3.5.4 | 2 | CODE-ONLY | One app (`fly.toml:15`). `/ui/ops` and `/docs` are parts of it; `/docs` is off outside local (`config.py:80-84`). The session cookie belongs to this host only (`__Host-`). | advisory |
 | V3.5.5 | 2 | N/A | No `postMessage` and no `message` listener in first-party code (`git grep`: 0). The vendored `swagger-ui-bundle.js` has one, but only `/docs` loads it, and `/docs` is off in production (`config.py:80-84`, `main.py:567-568`). | — |
 | V3.7.1 | 2 | CODE-ONLY | Plain HTML, CSS and JS, plus markdown-it 14.1.1 vendored (`static/vendor/README.md`). No `<object>`, `<embed>` or `<applet>` in templates or first-party JS (`git grep`: 0). | advisory |
