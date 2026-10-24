@@ -524,6 +524,7 @@
           "src/product_app/account_history.py",
           "src/product_app/credentialed_url.py",
           "src/product_app/provider_keys.py",
+          "src/product_app/fetch_site.py",
           "src/product_app/main.py",
           "src/product_app/request_limits.py",
           "src/product_app/templates/*sign-in*.html",

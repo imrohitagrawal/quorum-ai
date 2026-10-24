@@ -29,6 +29,13 @@ cache and its durable row), so a browser test can stand at 11 h 55 m of a
 spec can reach it. ``tests/unit/test_age_sessions_is_test_only.py`` keeps the
 handler out of ``src``.
 
+W88 adds ``GET /bounce?to=<url>`` on the same stub: a 302 to ``to`` when it is
+the app's own sign-in callback (``GOOGLE_OAUTH_REDIRECT_URI``, any query), and
+400 for anything else. A spec addresses the stub as ``localhost`` while the app
+is ``127.0.0.1``, so the hop back to the callback is a real cross-site
+navigation, as Google's return is. A ``page.route`` fulfilment alone does not
+give that: Chromium then reports the return as same-origin.
+
 Usage (from the repository root)::
 
     PYTHONPATH=src:. uv run python e2e/servers/signed_in_server.py --port 18096
@@ -43,7 +50,7 @@ import tempfile
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, urlsplit
 
 from tests.google_token_stub import (
     ACCESS_TOKEN,
@@ -90,7 +97,41 @@ def _age_session(raw: bytes) -> tuple[int, dict[str, Any]]:
     return (200 if found else 404), {"cached": cached is not None, "rows": rows}
 
 
+def _bounce_target(request_path: str, callback: str) -> str | None:
+    """TEST-ONLY (W88): where ``GET /bounce?to=...`` may send the browser.
+
+    Only the app's own callback, compared by scheme, host, port and path; the
+    query (``code``, ``state`` or ``error``) is the spec's. Anything else,
+    including a missing or repeated ``to``, gets ``None`` (answered 400), so
+    the stub is never an open redirect."""
+    targets = parse_qs(urlsplit(request_path).query).get("to", [])
+    if len(targets) != 1:
+        return None
+    target, allowed = urlsplit(targets[0]), urlsplit(callback)
+    same = (target.scheme, target.netloc, target.path) == (
+        allowed.scheme,
+        allowed.netloc,
+        allowed.path,
+    )
+    if not same or target.fragment or not allowed.netloc:
+        return None
+    return targets[0]
+
+
 class _TokenHandler(BaseHTTPRequestHandler):
+    def do_GET(self) -> None:  # noqa: N802 - http.server's name
+        if urlsplit(self.path).path != "/bounce":
+            self._send(404, b"{}")
+            return
+        target = _bounce_target(self.path, os.environ.get("GOOGLE_OAUTH_REDIRECT_URI", ""))
+        if target is None:
+            self._send(400, b'{"error": "not the app callback"}')
+            return
+        self.send_response(302)
+        self.send_header("Location", target)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
     def do_POST(self) -> None:  # noqa: N802 - http.server's name
         length = int(self.headers.get("Content-Length") or 0)
         raw = self.rfile.read(length)

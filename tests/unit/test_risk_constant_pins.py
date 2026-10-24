@@ -180,6 +180,9 @@ RISK_TIER_MODULES = (
     # signed-in sessions: its busy timeout, its SQL for --all, and the fixed
     # sentences that keep what the operator typed out of its output.
     "end_sessions.py",
+    # Added 2026-10-23 with W88 (CHG-067). It decides which requests from
+    # another site /ui and /v1/session refuse before a session is opened.
+    "fetch_site.py",
 )
 
 #: A wrong value here is silently harmful and nothing else constrains it.
@@ -367,6 +370,56 @@ BUCKET_A_LITERAL_PIN = (
 #: Pin the BEHAVIOUR, not the literal — these legitimately change, and a literal
 #: pin would teach people to edit the test alongside the code.
 BUCKET_B_PIN_BEHAVIOUR = {
+    # --- Added 2026-10-23 with W88 (CHG-067) ---
+    "fetch_site._OURS": (
+        "the Sec-Fetch-Site values allowed on both routes; pinned by "
+        "tests/unit/test_fetch_site.py::test_same_origin_is_allowed_on_both_routes and "
+        "::test_session_hidden_loads_from_another_site_are_refused (same-site is not ours)"
+    ),
+    "fetch_site._ANOTHER_SITE": (
+        "the values that name another site; pinned by "
+        "tests/unit/test_fetch_site.py::test_an_unknown_site_value_is_refused_as_unknown_on_both_routes"
+    ),
+    "fetch_site._FRAME_DESTS": (
+        "the frame destinations /ui refuses; pinned dest by dest by "
+        "tests/unit/test_fetch_site.py::test_ui_framed_from_another_site_is_a_frame"
+    ),
+    "fetch_site._PURPOSE_HEADERS": (
+        "the headers that mark a prefetch, refused on both routes (W88 round 1, B1); pinned "
+        "header by header by "
+        "tests/unit/test_fetch_site_prefetch_and_edges.py::"
+        "test_the_older_purpose_header_is_read_too "
+        "and ::test_the_measured_prefetch_is_refused_on_both_routes"
+    ),
+    "fetch_site.CLASSES": (
+        "the refusal classes /status reports; pinned by "
+        "tests/integration/test_cross_site_session_requests.py::test_status_counts_each_refusal_once_under_its_route_and_class"
+        " and, all six by name, "
+        "tests/unit/test_fetch_site_prefetch_and_edges.py::test_prefetch_is_a_counted_class"
+    ),
+    "fetch_site._ROUTES": (
+        "the route each refusal is counted under; pinned as fetch_site.CLASSES is"
+    ),
+    "fetch_site.SESSION_REFUSAL_CODE": (
+        "the /v1/session refusal's code; pinned word for word by "
+        "tests/unit/test_fetch_site.py::test_the_session_refusal_is_a_403_with_the_fixed_body"
+    ),
+    "fetch_site.SESSION_REFUSAL_MESSAGE": (
+        "the /v1/session refusal's sentence; pinned as fetch_site.SESSION_REFUSAL_CODE is"
+    ),
+    "fetch_site._PAGE_REFUSAL_HTML": (
+        "the /ui refusal page; its link back and its size are pinned by "
+        "tests/unit/test_fetch_site.py::test_the_ui_refusal_is_a_short_html_403_with_a_link_back"
+    ),
+    "main._FETCH_SITE_VARY": (
+        "the headers both routes vary on; the first four pinned on a 200, a 403 and a 429 by "
+        "tests/integration/test_cross_site_session_requests.py::test_every_response_of_both_routes_varies_on_the_four_headers"
+        ", Sec-Purpose and Purpose by "
+        "tests/integration/test_cross_site_prefetch.py::test_both_routes_vary_on_sec_purpose_and_purpose"
+    ),
+    "main._VARY_ON_FETCH_SITE_PATHS": (
+        "the two routes that carry that Vary; pinned as main._FETCH_SITE_VARY is"
+    ),
     # --- Added 2026-10-22 with W87-3 (ADR-0176) ---
     "end_sessions.USAGE": (
         "the one sentence every usage error prints, so no argument is echoed; "
@@ -784,6 +837,13 @@ BUCKET_B_PIN_BEHAVIOUR = {
 
 #: No pin. A literal here restates the implementation and catches nothing.
 BUCKET_C_NO_PIN = {
+    "fetch_site.SESSION_RESPONSES": (
+        "W88: /v1/session's declared 403 in the API description; the document is "
+        "pinned by make openapi-check"
+    ),
+    "fetch_site.PAGE_RESPONSES": (
+        "W88: /ui's declared 403; pinned as fetch_site.SESSION_RESPONSES is"
+    ),
     "query_runs.ESTIMATE_RESPONSES": (
         "W87-1: the estimate's declared responses in the API description; the "
         "409 is pinned by tests/integration/test_late_run_refusal.py::"

@@ -332,6 +332,12 @@ paths:
           content:
             application/json:
               schema: {}
+        '403':
+          description: The request came from another site (CROSS_SITE_REFUSED).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CrossSiteRefusalResponse'
   /ui:
     get:
       tags:
@@ -341,6 +347,12 @@ paths:
       responses:
         '200':
           description: Successful Response
+          content:
+            text/html:
+              schema:
+                type: string
+        '403':
+          description: The page was opened in a way this site does not allow (for example, loaded hidden by another site, or prefetched).
           content:
             text/html:
               schema:
@@ -721,6 +733,27 @@ components:
       - require_confirmation
       - block
       title: CostThresholdAction
+    CrossSiteRefusalDetail:
+      properties:
+        code:
+          type: string
+          title: Code
+        message:
+          type: string
+          title: Message
+      type: object
+      required:
+      - code
+      - message
+      title: CrossSiteRefusalDetail
+    CrossSiteRefusalResponse:
+      properties:
+        detail:
+          $ref: '#/components/schemas/CrossSiteRefusalDetail'
+      type: object
+      required:
+      - detail
+      title: CrossSiteRefusalResponse
     DailyAllowance:
       properties:
         cap_usd:

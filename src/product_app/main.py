@@ -39,6 +39,7 @@ from sentry_sdk.types import Event as SentryEvent
 from product_app import (
     account_deletion,
     account_history,
+    fetch_site,
     invite_links,
     session_exemptions,
     session_store,
@@ -904,6 +905,34 @@ _CSP_POLICY = (
 
 _HSTS_HEADER = "max-age=31536000; includeSubDomains"
 
+#: W88: ``/ui`` and ``/v1/session`` answer differently depending on where a
+#: request came from, and on whether it is a prefetch (``fetch_site``), so
+#: every answer of theirs says so, and a cache that honours ``Vary`` cannot
+#: hand one kind of request's answer to another.
+_VARY_ON_FETCH_SITE_PATHS = frozenset({"/ui", "/v1/session"})
+_FETCH_SITE_VARY = (
+    "Sec-Fetch-Site",
+    "Sec-Fetch-Mode",
+    "Sec-Fetch-Dest",
+    "Origin",
+    "Sec-Purpose",
+    "Purpose",
+)
+
+
+def _add_vary(response: Response, names: tuple[str, ...]) -> None:
+    """Add ``names`` to the response's ``Vary``, keeping what it already says."""
+    present = [
+        token.strip()
+        for value in response.headers.getlist("vary")
+        for token in value.split(",")
+        if token.strip()
+    ]
+    known = {token.lower() for token in present}
+    merged = present + [name for name in names if name.lower() not in known]
+    # Setting a header replaces every earlier line of it.
+    response.headers["Vary"] = ", ".join(merged)
+
 
 @app.middleware("http")
 async def _security_headers_middleware(request: Request, call_next):  # type: ignore[no-untyped-def]
@@ -916,6 +945,8 @@ async def _security_headers_middleware(request: Request, call_next):  # type: ig
         response.headers.setdefault("Strict-Transport-Security", _HSTS_HEADER)
     # Replace the default ``Server: uvicorn`` with a neutral value.
     response.headers["server"] = settings.app_name
+    if request.url.path in _VARY_ON_FETCH_SITE_PATHS:
+        _add_vary(response, _FETCH_SITE_VARY)
     return response
 
 
@@ -1887,6 +1918,10 @@ def status_snapshot() -> dict[str, object]:
         # W32 (ADR-0134): whether invite links are on, how many are revoked,
         # and session requests that carried a valid one. Never an id or token.
         "invite_links": invite_links.status_snapshot(),
+        # W88 (CHG-067): requests from another site refused on /ui and
+        # /v1/session since start, per route and per fixed class. Counts
+        # only; no header value is ever a key.
+        "cross_site_refusals": fetch_site.status_snapshot(),
         # ADR-0116, #458. The FLAG above says what is configured; this says
         # whether a critic call can actually be dispatched. They differed in
         # production from 2026-09-12 to 2026-09-24 — flag true, live execution
@@ -1995,10 +2030,15 @@ def _daily_cap_key(
     return f"invite:{invite}", invite_links.DAILY_SESSIONS_PER_LINK, invite
 
 
-@app.get("/v1/session", tags=["session"])
+@app.get("/v1/session", tags=["session"], responses=fetch_site.SESSION_RESPONSES)
 def browser_session(
     request: Request,
-) -> JSONResponse:
+) -> Response:
+    # W88 (CHG-067): another site's request is refused before anything below
+    # counts it, limits it or opens a session for it.
+    refusal = fetch_site.cross_site_refusal(request, page=False)
+    if refusal is not None:
+        return refusal
     # C9: per-IP rate limit on session creation. Without this a
     # script can mint thousands of sessions per second and bloat the
     # in-memory ``session_repository``. The ``/health`` and ``/``
@@ -2217,8 +2257,16 @@ def ops_dashboard() -> HTMLResponse:
     return HTMLResponse((TEMPLATES_DIR / "ops.html").read_text())
 
 
-@app.get("/ui", response_class=HTMLResponse, tags=["browser-ui"])
-def browser_ui(request: Request) -> HTMLResponse:
+@app.get(
+    "/ui", response_class=HTMLResponse, tags=["browser-ui"], responses=fetch_site.PAGE_RESPONSES
+)
+def browser_ui(request: Request) -> Response:
+    # W88 (CHG-067): from another site this page may only be opened as a
+    # page; an image, a script, a fetch or a frame of it is refused before
+    # anything below counts it or opens a session for it.
+    refusal = fetch_site.cross_site_refusal(request, page=True)
+    if refusal is not None:
+        return refusal
     # Issue #100 §2.3: this route mints a session exactly like
     # ``/v1/session`` does (a first-time visitor loading the page with no
     # cookie mints one here), and resumes one without a new CSRF token
