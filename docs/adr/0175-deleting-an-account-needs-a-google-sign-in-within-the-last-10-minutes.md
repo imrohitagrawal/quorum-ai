@@ -335,9 +335,10 @@ page records `window.scrollY` and the box's top on screen each time it places th
 A browser fires the `scroll` event a frame after the scroll, so a readiness paint or the boot's
 end can run in between. Each placement after the first, and the boot's end, first makes step 2's
 check against the records and cancels if it holds; without that, it records the visitor's scroll as the page's
-own place, and the late event finds nothing to cancel. X5 ended "settled" instead of "cancelled"
-in 3 of the 39 Linux runs (17e652e, before this check) that got past the test's setup, each with
-the readiness answer 13 to 15 ms after the scroll. That this is the order of events is inferred
+own place, and the late event finds nothing to cancel. On Linux, X5 ended "settled" instead of
+"cancelled" in 7 of 143 runs that got past the test's setup without this check (`17e652e`, two
+batches: 3 of 39 and 4 of 104), each with the readiness answer 13 to 15 ms after the scroll; with
+it (`d681138`), 0 of 96, run batch by batch alongside the second. That this is the order of events is inferred
 from those timings and the code: an in-page log never caught it (0 of 54). The unit tests
 `test_a_scroll_whose_event_has_not_fired_still_cancels_a_placement` and
 `test_a_scroll_whose_event_has_not_fired_cancels_at_the_boots_end` make that order happen and
@@ -357,9 +358,10 @@ view during the watch was found. Steps 1 and 4 above are the correction.
 
 **Measured** (a Linux Chromium container, `mcr.microsoft.com/playwright:v1.61.1-noble`, fallback
 `DejaVu Sans`, the lane's settings; and the signed-in lane on a Mac). The Linux rows and the Mac
-X1 to X5 rows were measured on the rule's first version, `af774b2`. Round 1 changed only what
-happens when `scrollY` moves and the box does not, and when the box scrolls its own text; the
-Linux rows were not re-run on the corrected rule (UNVERIFIED).
+X1 to X5 rows were measured on the rule's first version, `af774b2`. The three Linux rows were
+measured again on the corrected rule with the pending-scroll check (`d681138`), with the same
+results: 10 of 10 settled with the box fully in view, 10 of 10 cancelled, and 10 of 10 cancelled;
+R1 to R4 there passed 20 of 20.
 
 | Case | Before (main `c40159e`) | After |
 |---|---|---|
