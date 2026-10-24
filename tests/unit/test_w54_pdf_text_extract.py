@@ -164,6 +164,18 @@ def test_a_mapped_rksj_cmap_still_reads_exactly(encoding: bytes) -> None:
     assert pdf_text.extract_text(pdfs.rksj_pdf(encoding=encoding)) == pdfs.JAPANESE
 
 
+@pytest.mark.parametrize("encoding", [b"/UniGB-UTF16-H", b"/UniGB-UTF16-V"])
+def test_a_unigb_utf16_page_reads_exactly(encoding: bytes) -> None:
+    """The UniGB-UTF16 CMaps carry UTF-16BE codes (ISO 32000-2, 9.7.5.2).
+    pypdf 6.21.1 decoded them as GB18030, which gave text the garble rule
+    accepts and that is not the page (measured: ``N-e\\u5675...``); 6.21.2
+    decodes them as UTF-16BE. RED IF: these CMaps are decoded as anything
+    but UTF-16BE, or the guard refuses them as a guessed encoding."""
+    chinese = "中文证据：这一页说明了来源中的事实。" * 4
+    page = pdfs.rksj_pdf_with_codes(chinese.encode("utf-16-be"), encoding=encoding)
+    assert pdf_text.extract_text(page) == chinese
+
+
 @pytest.mark.parametrize("encoding", [b"/90msp-RKSJ-H", b"/90ms-RKSJ-H"])
 def test_bytes_a_mapped_cmap_cannot_decode_come_back_as_u_fffd(encoding: bytes) -> None:
     """pypdf 6.21.1 decodes them with ``surrogateescape`` and says nothing;

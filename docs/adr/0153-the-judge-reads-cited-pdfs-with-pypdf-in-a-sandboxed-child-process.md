@@ -8,7 +8,8 @@ are the session's, from the research in `docs/analysis/2026-10-08-w54-pdf-resear
 may overturn any. `quorum_source_fetch_enabled` stays False in code and `fly.toml`. Failure modes,
 written before the code: `docs/analysis/2026-10-08-w54-step3-pdf-reading-failure-modes.md`. Decisions 1 and 4 are amended by ADR-0154
 (encrypted PDFs and PDFs served as binary downloads, 2026-10-09). Decision 4's garble rule is
-amended on 2026-10-23 (see "Amendment of 2026-10-23" below).
+amended on 2026-10-23 (see "Amendment of 2026-10-23" below). pypdf moved to 6.21.2 on 2026-10-24
+(see "Amendment of 2026-10-24" below).
 
 ## Context
 
@@ -129,6 +130,33 @@ The break-it review found a third: bytes that a mapped CMap's codec cannot decod
 surrogates, which left 240 characters, half of them control characters, `fetched` for a built page
 of 240 such codes. The child now turns U+DC80–U+DCFF into U+FFFD before replying, so the garble rule counts them. The 13
 unsupported CMaps that review listed are all refused again, as under 6.19.0.
+
+### Amendment of 2026-10-24: pypdf 6.21.2
+
+pypdf moved from 6.21.1 to 6.21.2 because three advisories against 6.21.1 blocked every merge
+again (`make vuln-audit`: CVE-2026-115572, CVE-2026-115580 and CVE-2026-115585, all fixed in
+6.21.2; api.osv.dev titles them "repeated references to the same missing object", "large xref
+table header limits" and "repeated malformed cross-reference entries"). The owner chose to
+update first (CHG-086). The guard on a guessed encoding still works: 6.21.2 logs the same
+"Advanced encoding" messages from the same `pypdf._cmap` logger (its `_cmap.py:109` and `:119`),
+and the five unreadable CMaps in `tests/pdf_fixtures.py` are still refused (the break-it review).
+
+The `/UniGB-UTF16-H` and `/UniGB-UTF16-V` CMaps are now decoded as UTF-16BE, not GB18030 (pypdf's
+own comment cites ISO 32000-2:2020, 9.7.5.2). Under 6.21.1 a page in such a font gave other
+characters, which the garble rule let through as a readable source; under 6.21.2 it reads
+exactly. `test_a_unigb_utf16_page_reads_exactly` failed on 6.21.1 and passes on 6.21.2. The text
+of 36 built and committed PDF fixtures was compared under both versions: 34 were identical; the
+other 2 were Shift-JIS codes put under the UniGB CMaps, which neither version reads correctly.
+
+The break-it review built malformed and non-standard files for the rest of pypdf's diff. Some
+read better under 6.21.2. Some read worse; how common each is in real files is UNVERIFIED:
+- AES-128 whose crypt filter gives `/Length 128` (bits, not bytes), AES-256 with `/Length 32`,
+  RC4 with `/Length 41`, and a cross-reference table of 19-byte rows give no usable text where
+  6.21.1 read them. The reviewer expects the first in real files;
+- GB18030 bytes put under `/UniGB-UTF16-H` now read as text the garble rule lets through
+  (6.21.1 read them right), and so does a ToUnicode map whose only range has a negative bound.
+Under both versions the garble rule lets through text made of glyph numbers, text with NUL bytes
+between its letters, and CJK or Hangul read through the wrong codec.
 
 ## Rejected alternatives
 
