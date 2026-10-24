@@ -8,7 +8,8 @@ are the session's, from the research in `docs/analysis/2026-10-08-w54-pdf-resear
 may overturn any. `quorum_source_fetch_enabled` stays False in code and `fly.toml`. Failure modes,
 written before the code: `docs/analysis/2026-10-08-w54-step3-pdf-reading-failure-modes.md`. Decisions 1 and 4 are amended by ADR-0154
 (encrypted PDFs and PDFs served as binary downloads, 2026-10-09). Decision 4's garble rule is
-amended on 2026-10-23 (see "Amendment of 2026-10-23" below).
+amended on 2026-10-23 (see "Amendment of 2026-10-23" below). pypdf moved to 6.21.2 on 2026-10-24
+(see "Amendment of 2026-10-24" below).
 
 ## Context
 
@@ -129,6 +130,22 @@ The break-it review found a third: bytes that a mapped CMap's codec cannot decod
 surrogates, which left 240 characters, half of them control characters, `fetched` for a built page
 of 240 such codes. The child now turns U+DC80–U+DCFF into U+FFFD before replying, so the garble rule counts them. The 13
 unsupported CMaps that review listed are all refused again, as under 6.19.0.
+
+### Amendment of 2026-10-24: pypdf 6.21.2
+
+pypdf moved from 6.21.1 to 6.21.2 because three advisories against 6.21.1 blocked every merge
+again (`make vuln-audit`: CVE-2026-115572, CVE-2026-115580 and CVE-2026-115585, possible long
+runtimes on PDFs with broken cross-reference tables, all fixed in 6.21.2; the owner chose to
+update first, CHG-086). The guard on a guessed encoding still works: 6.21.2 logs the same
+"Advanced encoding" messages from the same `pypdf._cmap` logger (its `_cmap.py:109` and `:119`).
+
+One reading changed. The `/UniGB-UTF16-H` and `/UniGB-UTF16-V` CMaps carry UTF-16BE codes
+(ISO 32000-2, 9.7.5.2). 6.21.1 decoded them as GB18030, so a page in such a font gave other
+characters, and the garble rule accepted them as a readable source. 6.21.2 decodes them as
+UTF-16BE and reads the page exactly. `test_a_unigb_utf16_page_reads_exactly` failed on 6.21.1
+and passes on 6.21.2. The text of 36 built and committed PDF fixtures was compared under both
+versions: 34 were identical; the other 2 were Shift-JIS codes put under the UniGB CMaps, which
+neither version can read correctly and neither refuses.
 
 ## Rejected alternatives
 
