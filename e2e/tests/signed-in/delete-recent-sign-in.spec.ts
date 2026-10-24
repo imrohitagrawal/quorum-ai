@@ -68,6 +68,31 @@ async function routeGoogle(page: Page, account: Account) {
   );
 }
 
+/**
+ * One Google route for a whole test: `who()` names the account that comes
+ * back, so changing the account changes a variable and never touches the
+ * routes. An `unroute` and `route` while a page loads can leave one of its
+ * requests unsent for good (repro 2026-10-24, many swaps during one load:
+ * 8 of 20 runs, app.js never reached the server).
+ */
+async function routeGoogleTo(page: Page, who: () => Account) {
+  await page.route("https://accounts.google.com/**", (route) => {
+    const account = who();
+    return backToCallback(route, { code: `${account.sub}|${account.email}` });
+  });
+}
+
+/**
+ * The page has loaded and booted. The sign-in and delete buttons are in the
+ * server's HTML, but their listeners and the CSRF token come from app.js: a
+ * click before the boot does nothing or is refused (repro 2026-10-24, a
+ * 300 ms hold of app.js: 20 of 20 runs).
+ */
+async function booted(page: Page) {
+  await page.waitForLoadState("load");
+  await expect(page.locator("html")).toHaveAttribute("data-app-state", "ready");
+}
+
 async function openWorkspace(page: Page) {
   await page.addInitScript(() => {
     try {
@@ -224,18 +249,28 @@ test.describe("deleting an account needs a recent sign-in (W87-2)", () => {
     // nothing was deleted, A is deleted or loses its history, or B is asked
     // to sign in again before deleting with B's own email. Partners: B is
     // really signed in; A's history really lists A's question afterwards.
+    // The test's Google route is set once and never swapped; each page has
+    // loaded and booted before the account changes and before a sign-in
+    // click (the restore-scroll race plan, 2026-10-24: a swap during a load
+    // left app.js unsent; a click before the boot did nothing).
     test.setTimeout(240000);
     const first = freshAccount("recent-delete-a");
     const second = freshAccount("recent-delete-b");
-    await signIn(page, first);
+    let comesBack = first;
+    await routeGoogleTo(page, () => comesBack);
+    await openWorkspace(page);
+    await booted(page);
+    await page.locator("#sign-in-google").click();
+    await expect(page.locator("#account-email")).toHaveText(first.email);
     await runQuestion(page, QUESTION);
     await ageSession(page, request, 11 * MINUTE);
     await page.goto("/ui", { waitUntil: "domcontentloaded" });
+    await booted(page);
     await expect(page.locator("#account-email")).toHaveText(first.email);
     await openAccountPanel(page);
     await page.locator("#account-delete-start").click();
     await expect(page.locator("#account-delete-reauth-step")).toBeVisible();
-    await routeGoogle(page, second);
+    comesBack = second;
     await clickThenNextPage(page, page.locator("#account-delete-reauth"));
     await expect(page.locator("html")).toHaveAttribute("data-app-state", "ready");
     await expect(page.locator("#account-email")).toHaveText(second.email);
@@ -245,10 +280,14 @@ test.describe("deleting an account needs a recent sign-in (W87-2)", () => {
     await expect(line).toHaveText(switchedLine(second.email));
     expect(page.url()).not.toContain("account=");
 
+    // The deletion loads a new page: wait for it to load and boot.
+    const nextPage = page.waitForEvent("load");
     expect(await deleteWith(page, second.email)).toBe(200);
+    await nextPage;
+    await booted(page);
     await expect(page.locator("#sign-in-google")).toBeVisible();
 
-    await routeGoogle(page, first);
+    comesBack = first;
     await page.locator("#sign-in-google").click();
     await expect(page.locator("#account-email")).toHaveText(first.email);
     await openAccountPanel(page);

@@ -556,9 +556,11 @@ jobs:
       # `playwright test --list` counts 46; the lane has not been run on them
       # by this commit's author. 46 -> 48 (W88): cross-site-return.spec.ts adds
       # 2 tests (Google's return through a real cross-site hop), added to the
-      # old floor.
+      # old floor. 48 -> 50 (the W87-2 restore-scroll race, 2026-10-24):
+      # session-max-age.spec.ts adds X4 and X5 (a layout shift above the
+      # restored box, with and without a view scroll), added to the old floor.
       - name: "signed-in History lane: floor on tests actually executed"
-        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 48 --lane "signed-in History lane"
+        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 50 --lane "signed-in History lane"
 
       - name: Clear the previous lane's JUnit report
         # Adversarial review (#162/#166): without this, a Playwright run that
