@@ -3,7 +3,7 @@
 ## Status
 
 Accepted — 2026-10-23, board row W88. The owner's decisions it builds on are CHG-063 (b) (no
-`Sec-Fetch-Site`: the `Origin` header decides; neither header: allow), CHG-067 (from another site
+`Sec-Fetch-Site`: the `Origin` header decides; with neither header the request is allowed), CHG-067 (from another site
 `/ui` may only be opened as a page; `/v1/session` is refused from any other site; page loads that
 never count are a later row, W106) and CHG-071 (the second-tab token effect is fixed by its own
 row, W105). CHG-060 holds the detail back from the public documents until the fix ships; this
@@ -58,7 +58,7 @@ section 1, records what all three engines sent for each kind of load.
 | Review round 1: another site's prefetch | a page at `localhost` carrying `<script type="speculationrules">` for `/ui` and `/v1/session` on `127.0.0.1`: Playwright's Chromium 148 (the round-1 break reviewer, against a header logger and then the real app at `ecbbe63`), and Chromium 149 (the orchestrator, against a header logger) | both fetched in the background with `Sec-Fetch-Site: none`, `Sec-Fetch-Mode: navigate`, `Sec-Fetch-Dest: document`, `Sec-Purpose: prefetch`, no `Origin`, no cookie; both answered 200 and each opened a counted session, while the tab stayed on the other site |
 | The round-1 tests fail without the prefetch fix | `tests/unit/test_fetch_site_prefetch_and_edges.py`, `tests/integration/test_cross_site_prefetch.py` on `ecbbe63`'s code | `16 failed, 15 passed` (the fixer's run) |
 | The round-1 browser spec, without and with the fix | `e2e/tests/navigation/cross-site-prefetch.spec.ts`, AGENTS.md rule 13's command, the server confirmed by its `/status` | `2 failed` (`Expected: 403`, `Received: 200`) against a `git archive` copy of `ecbbe63`; on the fix, the navigation lane run as `e2e.yml` runs it, both of these tests included, gave `62 passed` |
-| The round-1 tests bite | the fixer's mutants of `fetch_site.py` and `main.py`, each restored and checked byte for byte | 23 mutants: 22 killed, 1 survived (it left the first prefetch check in place, so it changed nothing). Three versions of its intended form, the check moved below the `none` allow, were each killed: the first two by the fixer's script, with 1 red each; the third's line in the fixer's log matches no mutant in that script, so its count is not given here |
+| The round-1 tests bite | the fixer's mutants of `fetch_site.py` and `main.py`, each restored and checked byte for byte | 23 mutants: 22 killed, 1 survived (it left the first prefetch check in place, so it changed nothing). Three versions of its intended form, the check moved below the `none` allow, were each killed: the first two run by hand, outside the fixer's committed script, with 1 red each; the third's line in the fixer's log matches no mutant in that script, so its count is not given here |
 | Firefox 151 and WebKit 26.5, with Chromium 149 as the control | the completeness critic, 2026-10-24, Playwright 1.61.1's headless builds on its machine: a stand-in server on `127.0.0.1` logged every header and answered `/ui` and `/v1/session` with the real `fetch_site.classify` of `2591725`; 20 cases per engine from pages on `localhost` (another site) and on another port (the same site); then the same over https with a throwaway certificate, in Chromium and Firefox only (WebKit has no host mapping) | every hidden load refused and every page opening allowed, in all three engines; https matched http in Chromium and Firefox. See "How it was tested in a browser" |
 | Fly's proxy passes the headers, on Fly's own app | the session, 2026-10-24, `curl` 8.7.1 to Fly's header-echo app `debug.fly.dev`, which answered with `server: Fly/331937a822`, over HTTP/2 and HTTP/1.1, GET and POST | `Sec-Fetch-Site`, `Sec-Fetch-Mode`, `Sec-Fetch-Dest`, `Sec-Purpose`, `Purpose` and `Origin` arrived unchanged in every case. This app's own path is UNVERIFIED (Known limits) |
 
@@ -85,7 +85,7 @@ section 1, records what all three engines sent for each kind of load.
    It comes before the `none` allow because Chromium sends another site's speculation-rules
    prefetch as `none`, the value of a typed address (Measured). This site's own pages never
    prefetch either route.
-   This row narrows CHG-063 (b)'s "neither header: allow", and CHG-067's result, for a request
+   This row narrows CHG-063 (b)'s rule that a request with neither header is allowed, and CHG-067's result, for a request
    that names a prefetch: one with neither `Sec-Fetch-Site` nor `Origin` but `Purpose: prefetch`
    is refused, and so are `same-origin` and `none` when marked as a prefetch. It fails closed.
    The round-2 break reviewer found that none of the refused shapes is sent on a visit a person
@@ -230,9 +230,8 @@ section 1, records what all three engines sent for each kind of load.
   or a forced top-level navigation, costs one session while the cookie lives (three clicks gave one,
   measured), and a private window starts fresh each time. The visitor need not see the app at
   all: after one click on another site, that site can open `/ui` as a page in a popup and close
-  it again after about a quarter of a second (256 and 263 ms, the round-2 break reviewer), while
-  the visitor's own tab never leaves the other site. The popup was requested as 1x1 and measured
-  headless, so its size on screen was not measured. That too counts one session per browser, as
+  it again at once, while the visitor's own tab never leaves the other site (the round-2 break
+  reviewer; its size on screen was not measured). That too counts one session per browser, as
   it did before W88.
   Handled by board row W106 (CHG-067: page loads never count).
 - **Old browsers that send neither header** are allowed, as the owner chose (CHG-063 (b), F14).
@@ -265,9 +264,10 @@ section 1, records what all three engines sent for each kind of load.
   loopback http on 2026-10-24, through a local proxy that drops the headers and without it; https
   and production are UNVERIFIED):
   1. In Chrome, not a private window, in one Quorum-AI tab, open
-     `https://quorum.stackclimb.com/v1/session/idle`. It must show `"signed_in":true`. If it does
-     not, stop and sign in first: with an ended session, step 3 would open a counted session if
-     the headers were dropped (measured). `/v1/session/idle` itself never opens a session
+     `https://quorum.stackclimb.com/v1/session/idle`. It must show `"signed_in":true` and an `idle_seconds_left` above 600. If
+     it does not, do not run the check now, and do not sign in just for it: with an ended session,
+     step 3 would open a counted session if the headers were dropped (measured), and so can
+     loading the page to sign in. Run it another time, while signed in for ordinary use. `/v1/session/idle` itself never opens a session
      (measured). Use `quorum.stackclimb.com`, not `quorum-ai.fly.dev`: the sign-in cookie belongs
      to the host you signed in on.
   2. Open `https://quorum.stackclimb.com/status` and note `cross_site_refusals`, `"/v1/session"`,
