@@ -46,7 +46,9 @@ QUESTION = "the kept question"
 _PAGE = r"""
 const BOX_TOP = 734, BOX_H = 156, BANNER = 159, VIEW = 844, MARGIN = 16;
 const BODY = { tag: "body" };
-const page = { banner: false, notice: false, scrolls: [], focuses: 0, live: 0, errorFocus: false };
+const page = {
+  banner: false, notice: false, above: 0, scrolls: [], focuses: 0, live: 0, errorFocus: false,
+};
 const events = new EventTarget();
 const storage = window.sessionStorage;
 window = {
@@ -73,7 +75,7 @@ document = {
     return { classList: { add() {} }, dataset: {}, append() {}, appendChild() {} };
   },
 };
-const boxTopInPage = () => BOX_TOP + (page.banner ? BANNER : 0);
+const boxTopInPage = () => BOX_TOP + page.above + (page.banner ? BANNER : 0);
 queryTextarea = {
   value: "",
   dispatchEvent() {},
@@ -360,3 +362,95 @@ def test_focus_placed_elsewhere_is_not_scrolled_away() -> None:
     assert got["value"] == QUESTION
     assert got["scrolls"] == 0
     assert got["focuses"] == 0
+
+
+def test_scroll_anchoring_with_the_box_still_on_screen_does_not_cancel() -> None:
+    """W87-2 restore race, review round 1 (break-it F1): content grows 40 px
+    above the view and the browser's scroll anchoring raises ``scrollY`` by
+    40 px, so the box stays where it was on screen. Red when: a ``scrollY``
+    move alone cancels (af774b2: "cancelled", 1 scroll), or the new place
+    is not recorded (a visitor scroll of 40 px back up then reads as a
+    layout move and the page places the box again). Partner: the banner
+    paint after it still places the box (2 scrolls, in view)."""
+    back = _run(
+        f"""
+        watchRestoredQuestionScroll();
+        seed({SAVED});
+        await restoreLateRunQuestion();
+        page.above += 40;
+        window.scrollY += 40;
+        window.dispatchEvent(new Event("scroll"));
+        window.scrollY -= 40;
+        window.dispatchEvent(new Event("scroll"));
+        """
+    )
+    assert back["attr"] == "cancelled"
+    assert back["scrolls"] == 1
+    got = _run(
+        f"""
+        watchRestoredQuestionScroll();
+        seed({SAVED});
+        await restoreLateRunQuestion();
+        page.above += 40;
+        window.scrollY += 40;
+        window.dispatchEvent(new Event("scroll"));
+        answerReadiness();
+        await refreshReadiness();
+        """
+    )
+    assert got["attr"] is None
+    assert got["scrolls"] == 2
+    assert got["inView"] is True
+
+
+def test_a_layout_move_with_the_view_still_places_the_box_again() -> None:
+    """W87-2 restore race (X4 at unit level, falsification lens F3): the
+    layout moves the box 44 px down and ``scrollY`` does not move. Red when:
+    the listener cancels (main c40159e) or does nothing (1 scroll, the box
+    out of view) in that case. Partner: the restore's own scroll (1 before)."""
+    got = _run(
+        f"""
+        watchRestoredQuestionScroll();
+        seed({SAVED});
+        await restoreLateRunQuestion();
+        const before = page.scrolls.length;
+        page.above += 44;
+        window.dispatchEvent(new Event("scroll"));
+        const r = result();
+        r.before = before;
+        return r;
+        """
+    )
+    assert got["before"] == 1
+    assert got["attr"] is None
+    assert got["scrolls"] == 2
+    assert got["inView"] is True
+
+
+def test_two_small_scrolls_add_up_and_cancel() -> None:
+    """W87-2 restore race, review round 1: two script scrolls of 5 px each,
+    with no layout move. Red when: a scroll under the tolerance resets the
+    baseline (the two never add up to 10 px, so nothing cancels). Partner:
+    one 5 px scroll alone leaves the watch on."""
+    once = _run(
+        f"""
+        watchRestoredQuestionScroll();
+        seed({SAVED});
+        await restoreLateRunQuestion();
+        window.scrollY -= 5;
+        window.dispatchEvent(new Event("scroll"));
+        """
+    )
+    assert once["attr"] is None
+    twice = _run(
+        f"""
+        watchRestoredQuestionScroll();
+        seed({SAVED});
+        await restoreLateRunQuestion();
+        window.scrollY -= 5;
+        window.dispatchEvent(new Event("scroll"));
+        window.scrollY -= 5;
+        window.dispatchEvent(new Event("scroll"));
+        """
+    )
+    assert twice["attr"] == "cancelled"

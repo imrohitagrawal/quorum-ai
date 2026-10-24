@@ -11568,13 +11568,17 @@
   // "settled"; no pixels change).
   //
   // A scroll the page did not make cancels too (a scrollbar drag, a
-  // script, assistive technology): the window's scrollY moved more than
-  // this from where the page last placed the box. A layout move with the
-  // view still places the box again instead (a late font swap moved it
-  // 44 px on Linux, X1 2026-10-24). JUDGMENT CALL: 8 px is chosen, above
-  // the scrolls measured with no input (2 px in review round 3; 1 px after
-  // the Linux font swap; the cause of neither found) and below the one
-  // wheel scroll measured (120 px). Such a scroll of 8 px or less is
+  // script, assistive technology). Each time the page places the box it
+  // records the window's scrollY and the box's top on screen. A scroll
+  // cancels when both moved more than this from those records: the view
+  // moved under the visitor. When only the box's top moved, the layout
+  // moved it and the page places it again (a late font swap moved it 44 px
+  // on Linux, X1 2026-10-24). When only scrollY moved, the browser's scroll
+  // anchoring kept the box still and the page records the new place.
+  // JUDGMENT CALL: 8 px is chosen, above the scrolls measured with no input
+  // (2 px in review round 3; 1 px after the Linux font swap; the cause of
+  // neither found) and below the smallest real scroll measured (a 100 px
+  // script scroll; a 120 px wheel). Such a scroll of 8 px or less is
   // treated as layout noise, whether a script, a scrollbar drag or
   // assistive technology made it; a wheel, touch, pointer or key event
   // cancels at any distance.
@@ -11597,22 +11601,37 @@
           cancel();
           return;
         }
-        // An inner panel that holds the box scrolled: cancel.
+        // An inner panel that holds the box scrolled: cancel. The box
+        // scrolling its own text is not one (``contains`` is true for the
+        // node itself), and it does not move the box on screen.
         const target = event.target;
-        if (target instanceof Element && target.contains(queryTextarea)) {
+        if (target instanceof Element && target !== queryTextarea && target.contains(queryTextarea)) {
           cancel();
           return;
         }
-        // The view moved since the page last placed the box: cancel, even
-        // if the layout moved too.
-        if (Math.abs(window.scrollY - watch.ourScrollY) > RESTORE_SCROLL_TOLERANCE_PX) {
-          cancel();
-          return;
-        }
-        // The view did not move, so the layout moved the box (a late font
-        // swap: 44 px measured on Linux, X1 2026-10-24). Place it again.
         const top = queryTextarea.getBoundingClientRect().top;
-        if (Math.abs(top - watch.ourTop) > RESTORE_SCROLL_TOLERANCE_PX) bringRestoredQuestionIntoView();
+        const viewMoved = Math.abs(window.scrollY - watch.ourScrollY) > RESTORE_SCROLL_TOLERANCE_PX;
+        const boxMoved = Math.abs(top - watch.ourTop) > RESTORE_SCROLL_TOLERANCE_PX;
+        // The view moved and the box moved on screen: the view moved under
+        // the visitor, so cancel, even if the layout moved too.
+        if (viewMoved && boxMoved) {
+          cancel();
+          return;
+        }
+        // Only the box moved on screen: the layout moved it (a late font
+        // swap: 44 px measured on Linux, X1 2026-10-24). Place it again.
+        if (boxMoved) {
+          bringRestoredQuestionIntoView();
+          return;
+        }
+        // Only the view moved: content above the view changed size and the
+        // browser's scroll anchoring kept the box still (break-it review,
+        // 2026-10-25). Record the new place. A move under 8 px on both
+        // counts records nothing, so small scrolls still add up.
+        if (viewMoved) {
+          watch.ourScrollY = window.scrollY;
+          watch.ourTop = top;
+        }
       },
       options,
     );

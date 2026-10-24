@@ -522,6 +522,7 @@ jobs:
           tests/signed-in/session-max-age.spec.ts
           tests/signed-in/delete-recent-sign-in.spec.ts
           tests/signed-in/cross-site-return.spec.ts
+          tests/signed-in/restored-question-scroll.spec.ts
           --config=playwright.signed-in.config.ts
           --project=chromium
           --retries=0
@@ -559,8 +560,12 @@ jobs:
       # old floor. 48 -> 50 (the W87-2 restore-scroll race, 2026-10-24):
       # session-max-age.spec.ts adds X4 and X5 (a layout shift above the
       # restored box, with and without a view scroll), added to the old floor.
+      # 50 -> 54 (the W87-2 restore-scroll race, review round 1, 2026-10-25):
+      # restored-question-scroll.spec.ts adds 4 tests (scroll anchoring; the
+      # 8 px tolerance's upper side; a layout move placed at once; the box's
+      # own text scroll), added to the old floor.
       - name: "signed-in History lane: floor on tests actually executed"
-        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 50 --lane "signed-in History lane"
+        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 54 --lane "signed-in History lane"
 
       - name: Clear the previous lane's JUnit report
         # Adversarial review (#162/#166): without this, a Playwright run that

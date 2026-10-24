@@ -250,9 +250,11 @@ test.describe("deleting an account needs a recent sign-in (W87-2)", () => {
     // to sign in again before deleting with B's own email. Partners: B is
     // really signed in; A's history really lists A's question afterwards.
     // The test's Google route is set once and never swapped; each page has
-    // loaded and booted before the account changes and before a sign-in
-    // click (the restore-scroll race plan, 2026-10-24: a swap during a load
-    // left app.js unsent; a click before the boot did nothing).
+    // loaded and booted before the account changes and before the test's
+    // first click on it (the restore-scroll race plan, 2026-10-24: a swap
+    // during a load left app.js unsent; a click before the boot did nothing.
+    // Review round 1, 2026-10-25: the Run click after the first sign-in and
+    // the account-panel click after the last one now wait too).
     test.setTimeout(240000);
     const first = freshAccount("recent-delete-a");
     const second = freshAccount("recent-delete-b");
@@ -262,6 +264,7 @@ test.describe("deleting an account needs a recent sign-in (W87-2)", () => {
     await booted(page);
     await page.locator("#sign-in-google").click();
     await expect(page.locator("#account-email")).toHaveText(first.email);
+    await booted(page);
     await runQuestion(page, QUESTION);
     await ageSession(page, request, 11 * MINUTE);
     await page.goto("/ui", { waitUntil: "domcontentloaded" });
@@ -290,6 +293,7 @@ test.describe("deleting an account needs a recent sign-in (W87-2)", () => {
     comesBack = first;
     await page.locator("#sign-in-google").click();
     await expect(page.locator("#account-email")).toHaveText(first.email);
+    await booted(page);
     await openAccountPanel(page);
     await expect(page.locator("#account-history-list .history-question").first()).toHaveText(QUESTION);
   });
