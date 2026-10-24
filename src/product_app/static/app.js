@@ -11568,18 +11568,21 @@
   // "settled"; no pixels change).
   //
   // A scroll the page did not make cancels too (a scrollbar drag, a
-  // script, assistive technology): the box's top moved more than this from
-  // where the last check left it. JUDGMENT CALL: 8 px is chosen, above a
-  // 2 px scroll measured with no input (scroll anchoring or the font swap;
-  // not separated) and below the one wheel scroll measured (120 px). Such a
-  // scroll of 8 px or less is treated as layout noise, whether a script, a
-  // scrollbar drag or assistive technology made it; a wheel, touch, pointer
-  // or key event cancels at any distance.
+  // script, assistive technology): the window's scrollY moved more than
+  // this from where the page last placed the box. A layout move with the
+  // view still places the box again instead (a late font swap moved it
+  // 44 px on Linux, X1 2026-10-24). JUDGMENT CALL: 8 px is chosen, above
+  // the scrolls measured with no input (2 px in review round 3; 1 px after
+  // the Linux font swap; the cause of neither found) and below the one
+  // wheel scroll measured (120 px). Such a scroll of 8 px or less is
+  // treated as layout noise, whether a script, a scrollbar drag or
+  // assistive technology made it; a wheel, touch, pointer or key event
+  // cancels at any distance.
   const RESTORE_SCROLL_TOLERANCE_PX = 8;
 
   function watchRestoredQuestionScroll() {
     const controller = new AbortController();
-    const watch = { question: null, done: false, ourTop: null, controller };
+    const watch = { question: null, done: false, ourTop: null, ourScrollY: null, controller };
     state.restoreScroll = watch;
     const cancel = () => endRestoredQuestionScroll("cancelled");
     const options = { capture: true, passive: true, signal: controller.signal };
@@ -11588,14 +11591,28 @@
     }
     window.addEventListener(
       "scroll",
-      () => {
+      (event) => {
         if (watch.done) return;
         if (watch.ourTop === null || !queryTextarea) {
           cancel();
           return;
         }
+        // An inner panel that holds the box scrolled: cancel.
+        const target = event.target;
+        if (target instanceof Element && target.contains(queryTextarea)) {
+          cancel();
+          return;
+        }
+        // The view moved since the page last placed the box: cancel, even
+        // if the layout moved too.
+        if (Math.abs(window.scrollY - watch.ourScrollY) > RESTORE_SCROLL_TOLERANCE_PX) {
+          cancel();
+          return;
+        }
+        // The view did not move, so the layout moved the box (a late font
+        // swap: 44 px measured on Linux, X1 2026-10-24). Place it again.
         const top = queryTextarea.getBoundingClientRect().top;
-        if (Math.abs(top - watch.ourTop) > RESTORE_SCROLL_TOLERANCE_PX) cancel();
+        if (Math.abs(top - watch.ourTop) > RESTORE_SCROLL_TOLERANCE_PX) bringRestoredQuestionIntoView();
       },
       options,
     );
@@ -11628,6 +11645,7 @@
       queryTextarea.scrollIntoView({ behavior: "auto", block: "nearest" });
     }
     watch.ourTop = queryTextarea.getBoundingClientRect().top;
+    watch.ourScrollY = window.scrollY;
   }
 
   async function restoreLateRunQuestion() {

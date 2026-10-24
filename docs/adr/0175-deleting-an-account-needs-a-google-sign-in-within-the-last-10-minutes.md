@@ -232,10 +232,13 @@ Facts the design rests on, read on `main` at `0f06765` unless marked:
   or the deletion waits for the write and then removes the row (decision 5). On the live path it is
   today's behaviour, unchanged.
 - **A scroll of 8 px or less that the page did not make is treated as layout noise** (review round
-  3). The watch on a restored question cancels on such a scroll only when the box moved more than
-  8 px from where its last check left it, because a 2 px scroll with no input was measured (scroll
-  anchoring or the font swap; not separated). 8 px is chosen, not derived: above that 2 px and
-  below the one wheel scroll measured (120 px). A script, a scrollbar drag or assistive
+  3, amended 2026-10-24). The watch on a restored question cancels on such a scroll only when the
+  window's `scrollY` moved more than 8 px from where the page last placed the box; a move of the
+  box with the view still is the layout's, and the page places the box again (see the amendment
+  below). Two scrolls with no input were measured: 2 px (review round 3, scrollY 90 to 92) and 1 px right
+  after a 44 px font-swap reflow on Linux (2026-10-24); what makes either is not known. 8 px is
+  chosen, not derived: above those and below the one wheel scroll measured (120 px). A script, a
+  scrollbar drag or assistive
   technology can scroll with no wheel, touch, pointer or key event, so a scroll of 8 px or less
   from them does not cancel; a wheel, touch, pointer or key event cancels at any distance.
 - **The anonymous question can be lost.** After 900 seconds (decision 14); when the bootstrap could
@@ -296,3 +299,54 @@ Facts the design rests on, read on `main` at `0f06765` unless marked:
   `docs/41-security-controls.md` SC-03, SC-30 and SC-103.
 - CHG-056 (d), CHG-060 (the detail held back until the fix shipped), CHG-063 (e), (f)(1), CHG-066
   (c), CHG-073 (a) to (e).
+
+## Amendment: a layout move no longer cancels the restore (2026-10-24)
+
+**What failed.** The test X1 (`e2e/tests/signed-in/session-max-age.spec.ts`) failed 2 of 11
+executions of the signed-in e2e lane in CI since #582, each time with `data-restore-scroll`
+"cancelled" instead of "settled". Reproduced on Linux Chromium with DejaVu Sans as the fallback
+font: when the Geist web font arrives just after the question is put back, the text above the box
+shrinks and the box moves 44 px up, while the window's `scrollY` moves 1 px. The next `scroll`
+event saw the box more than 8 px from where the page left it and cancelled, though nobody did
+anything. A real visitor with a slow font load could see the question left out of view. On a Mac
+the fallback font wraps the same lines as Geist (the heights above the box are the same), so the
+font swap moves nothing there: 0 cancelled in 62 runs.
+
+**The new rule** (`watchRestoredQuestionScroll` and `bringRestoredQuestionIntoView` in `app.js`).
+The page records `window.scrollY` with the box's top each time it places the box. On a `scroll`
+event, in this order:
+1. the event's target is an element that holds the box: an inner panel scrolled, so cancel;
+2. `window.scrollY` moved more than 8 px from the recorded value: the view moved, so cancel, even
+   if the layout moved too;
+3. otherwise the view did not move: if the box's top moved more than 8 px, the layout moved it,
+   so the page places it again (which records the new top and `scrollY`).
+
+A wheel, touch, pointer or key event, a typed change and an error box cancel as before. The first
+rule tried (the box moved in the document, so place it again) was rejected in Codex's plan review:
+it swallowed a real scroll made together with a reflow, and an inner panel's scroll.
+
+**Measured** (a Linux Chromium container, `mcr.microsoft.com/playwright:v1.61.1-noble`, fallback
+`DejaVu Sans`, the lane's settings; and the signed-in lane on a Mac):
+
+| Case | Before (main `c40159e`) | After (this rule) |
+|---|---|---|
+| Linux: Geist arrives just after the restore | 28 of 28 cancelled | 30 of 30 settled, the box fully in view |
+| Linux: a window scroll of 100 px with a 44 px reflow | (the first rule tried: 10 of 10 settled, the scroll swallowed) | 10 of 10 cancelled |
+| Linux: a wheel of 120 px | | 10 of 10 cancelled |
+| Mac: X1, X2, X3 | | 15 of 15 green |
+| Mac: X4, a 44 px layout shift above the box, then a `scroll`, the view still | 10 of 10 red, "cancelled" | 10 of 10 green |
+| Mac: X5, a 44 px shift with a 100 px view scroll | 10 of 10 green | 10 of 10 green (the first rule tried: 10 of 10 red) |
+
+**UNVERIFIED.** Which fallback font the CI runner uses (`fc-match sans-serif` in a CI step would
+settle it). What makes the 1 px scroll after the reflow (under 8 px, so the rule does not depend on
+it). The inner-panel branch cannot be reached in today's layout: the box has no scrollable ancestor
+at 390x844, so it was not measured.
+
+**The delete test.** The other intermittent failure in the lane, "another account at the new
+sign-in" in `e2e/tests/signed-in/delete-recent-sign-in.spec.ts` (1 of 11 executions in CI), was a
+test defect: it swapped its Google route (`unroute`, then `route`) while the next page loaded, and
+clicked "Sign in with Google" before that page had booted. It is fixed in the same pull request:
+one Google route whose account can be changed, and a wait for the page's load and
+`data-app-state="ready"` before each click. With a 300 ms hold of `app.js` on the page after the
+deletion, the old test was red 10 of 10 and the fixed one green 10 of 10. The signed-in lane's
+floor rises from 48 to 50 for X4 and X5.
