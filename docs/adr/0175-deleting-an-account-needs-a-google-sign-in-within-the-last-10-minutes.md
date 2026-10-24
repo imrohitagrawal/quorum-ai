@@ -332,6 +332,17 @@ page records `window.scrollY` and the box's top on screen each time it places th
    and top. A move of 8 px or less on both counts records nothing, so small scrolls still add up
    (two 5 px scrolls cancel).
 
+A browser fires the `scroll` event a frame after the scroll, so a readiness paint or the boot's
+end can run in between. Each placement, and the boot's end, first makes step 2's check against
+the records and cancels if it holds; without that, it records the visitor's scroll as the page's
+own place, and the late event finds nothing to cancel. X5 ended "settled" instead of "cancelled"
+in 3 of the 39 Linux runs (17e652e, before this check) that got past the test's setup, each with
+the readiness answer 13 to 15 ms after the scroll. That this is the order of events is inferred
+from those timings and the code: an in-page log never caught it (0 of 54). The unit tests
+`test_a_scroll_whose_event_has_not_fired_still_cancels_a_placement` and
+`test_a_scroll_whose_event_has_not_fired_cancels_at_the_boots_end` make that order happen and
+are red without the check. Main has the same gap.
+
 A wheel, touch, pointer or key event, a typed change and an error box cancel as before. The first
 rule tried (the box moved in the document, so place it again) was rejected in Codex's plan review:
 it swallowed a real scroll made together with a reflow, and an inner panel's scroll.
@@ -358,10 +369,10 @@ Linux rows were not re-run on the corrected rule (UNVERIFIED).
 | Mac: X1, X2, X3 | | 15 of 15 green |
 | Mac: X4, a 44 px layout shift above the box, then a `scroll`, the view still | 10 of 10 red, "cancelled" | 10 of 10 green |
 | Mac: X5, a 44 px shift with a 100 px view scroll | 10 of 10 green | 10 of 10 green (the first rule tried: 10 of 10 red) |
-| Mac: R1, a 40 px bar prepended while the view is scrolled, then the drift banner | settled (the break-it review: 5 of 5 for this 40 px bar, 5 of 5 for a wrapped header line; this spec not run on main) | `af774b2`: 2 of 2 red, "cancelled"; corrected rule: 3 of 3 green |
+| Mac: R1, a 40 px bar prepended while the view is scrolled, then the drift banner | settled (the break-it review: 5 of 5 for this 40 px bar, 5 of 5 for a wrapped header line); this spec on main: 1 of 1 green | `af774b2`: 2 of 2 red, "cancelled"; corrected rule: 3 of 3 green |
 | Mac: R2, a script scroll of 8 px, then 1 px more | | 3 of 3 green; red with the tolerance at 9 px |
 | Mac: R3, X4's shift with the box fully in view while `/ready` is still held | | 3 of 3 green; red (82% in view) with step 3 doing nothing |
-| Mac: R4, the box scrolls its own text | not measured on main | `af774b2`: 2 of 2 red, "cancelled"; corrected rule: 3 of 3 green |
+| Mac: R4, the box scrolls its own text | 1 of 1 green | `af774b2`: 2 of 2 red, "cancelled"; corrected rule: 3 of 3 green |
 
 R1 to R4 are in `e2e/tests/signed-in/restored-question-scroll.spec.ts`. Removing step 4's record
 leaves R1 green; the unit test
@@ -410,5 +421,5 @@ the fixed one green 10 of 10. Review round 1 found the Run click after the first
 without that wait (Codex; the break-it review). With a 300 ms hold of `app.js` on the page back
 from the first sign-in, the test was red 5 of 5 without the wait and green 5 of 5 with it. The
 account-panel click after the last sign-in now waits too, as a precaution: the same hold on that
-page left the old test green 5 of 5. The signed-in lane's floor rises from 48 to 54: X4 and X5,
+page left the test without this wait green 5 of 5. The signed-in lane's floor rises from 48 to 54: X4 and X5,
 and R1 to R4.

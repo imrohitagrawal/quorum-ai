@@ -30,6 +30,7 @@ from tests.unit.test_late_run_question_rules import KEY, _node
 FUNCTIONS = [
     "watchRestoredQuestionScroll",
     "endRestoredQuestionScroll",
+    "restoredQuestionMovedUnderVisitor",
     "bringRestoredQuestionIntoView",
     "restoreLateRunQuestion",
     "lateRunQuestionToRestore",
@@ -482,3 +483,68 @@ def test_two_small_scrolls_add_up_and_cancel() -> None:
         """
     )
     assert twice["attr"] == "cancelled"
+
+
+def test_a_scroll_whose_event_has_not_fired_still_cancels_a_placement() -> None:
+    """W87-2 restore race, the Linux re-measure (2026-10-25): a browser fires
+    the ``scroll`` event for a scroll at the next frame, so a readiness paint
+    can place the box between the scroll and its event. Here the layout moves
+    the box 44 px and a script scrolls the view 100 px, then readiness paints
+    before the event. Red when: the placement records the new place without
+    first checking the records (it pulls the view back, 2 scrolls, and the
+    late event finds nothing to cancel). Partner: the same layout move with no
+    scroll is placed again (2 scrolls, in view, the watch on)."""
+    layout_only = _run(
+        f"""
+        watchRestoredQuestionScroll();
+        seed({SAVED});
+        await restoreLateRunQuestion();
+        page.above += 44;
+        answerReadiness();
+        await refreshReadiness();
+        """
+    )
+    assert layout_only["attr"] is None
+    assert layout_only["scrolls"] == 2
+    assert layout_only["inView"] is True
+    got = _run(
+        f"""
+        watchRestoredQuestionScroll();
+        seed({SAVED});
+        await restoreLateRunQuestion();
+        page.above += 44;
+        window.scrollY += 100;
+        answerReadiness();
+        await refreshReadiness();
+        window.dispatchEvent(new Event("scroll"));
+        """
+    )
+    assert got["attr"] == "cancelled"
+    assert got["scrolls"] == 1
+
+
+def test_a_scroll_whose_event_has_not_fired_cancels_at_the_boots_end() -> None:
+    """W87-2 restore race, the Linux re-measure: the same scroll, with the
+    boot's end ("settled") reached before its event. Red when: the end
+    records "settled" without checking the records. Partner: with no scroll
+    the end records "settled"."""
+    still = _run(
+        f"""
+        watchRestoredQuestionScroll();
+        seed({SAVED});
+        await restoreLateRunQuestion();
+        endRestoredQuestionScroll("settled");
+        """
+    )
+    assert still["attr"] == "settled"
+    got = _run(
+        f"""
+        watchRestoredQuestionScroll();
+        seed({SAVED});
+        await restoreLateRunQuestion();
+        page.above += 44;
+        window.scrollY += 100;
+        endRestoredQuestionScroll("settled");
+        """
+    )
+    assert got["attr"] == "cancelled"
