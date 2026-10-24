@@ -330,11 +330,11 @@ page records `window.scrollY` and the box's top on screen each time it places th
 4. only `scrollY` moved more than 8 px: content above the view changed size and the browser's
    scroll anchoring kept the box where it was on screen, so the page records the new `scrollY`
    and top. A move of 8 px or less on both counts records nothing, so small scrolls still add up
-   (two 5 px scrolls cancel).
+   (two 5 px scrolls cancel) while the page does not place the box between them.
 
 A browser fires the `scroll` event a frame after the scroll, so a readiness paint or the boot's
-end can run in between. Each placement, and the boot's end, first makes step 2's check against
-the records and cancels if it holds; without that, it records the visitor's scroll as the page's
+end can run in between. Each placement after the first, and the boot's end, first makes step 2's
+check against the records and cancels if it holds; without that, it records the visitor's scroll as the page's
 own place, and the late event finds nothing to cancel. X5 ended "settled" instead of "cancelled"
 in 3 of the 39 Linux runs (17e652e, before this check) that got past the test's setup, each with
 the readiness answer 13 to 15 ms after the scroll. That this is the order of events is inferred
@@ -407,6 +407,13 @@ restored box (X1 to X5, R1 to R4) all stay green.
   drift is missed, as main misses it. The rule keeps the visitor's scroll:
   `test_a_visitor_scroll_after_a_small_anchored_drift_cancels` pins that choice. No app code was
   found that makes such a pair of moves.
+- A scroll whose event has not fired when the page first places the box is recorded as the
+  page's own place: there is no earlier record to compare with. The later readiness paint can
+  then move the view, and the boot ends "settled" (review round 3, in a browser; main does the
+  same). A scroll whose event comes first cancels.
+- Small scrolls add up only while the page does not place the box between them: two 6 px
+  scrolls cancel, and the same two with a placement between them end "settled" (review round 3,
+  in the unit model; main does the same).
 
 **The delete test.** The other intermittent failure in the lane, "another account at the new
 sign-in" in `e2e/tests/signed-in/delete-recent-sign-in.spec.ts` (1 of 14 executions in CI, the same

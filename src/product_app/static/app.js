@@ -11627,7 +11627,8 @@
         // Only the view moved: content above the view changed size and the
         // browser's scroll anchoring kept the box still (break-it review,
         // 2026-10-25). Record the new place. A move of 8 px or less on both
-        // counts records nothing, so small scrolls still add up.
+        // counts records nothing, so small scrolls still add up (until the
+        // page next places the box).
         if (viewMoved) {
           watch.ourScrollY = window.scrollY;
           watch.ourTop = top;
@@ -11644,6 +11645,7 @@
   // run in between; each checks this first, or it would record the
   // visitor's scroll as the page's own (X5 ended "settled" in 3 of 39 Linux
   // runs, 2026-10-25, with the readiness answer 13 to 15 ms after the scroll).
+  // Before the first placement there is no record, so this is false then.
   function restoredQuestionMovedUnderVisitor(watch) {
     if (watch.ourTop === null || watch.ourScrollY === null || !queryTextarea) return false;
     const top = queryTextarea.getBoundingClientRect().top;
