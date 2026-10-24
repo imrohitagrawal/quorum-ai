@@ -135,36 +135,28 @@ unsupported CMaps that review listed are all refused again, as under 6.19.0.
 
 pypdf moved from 6.21.1 to 6.21.2 because three advisories against 6.21.1 blocked every merge
 again (`make vuln-audit`: CVE-2026-115572, CVE-2026-115580 and CVE-2026-115585, all fixed in
-6.21.2; api.osv.dev titles them as possible long runtimes for repeated references to the same
-missing object, for large cross-reference table headers, and for repeated malformed
-cross-reference entries). The owner chose to update first (CHG-086). The guard on a guessed
-encoding still works: 6.21.2 logs the same "Advanced encoding" messages from the same
-`pypdf._cmap` logger (its `_cmap.py:109` and `:119`), and all five unreadable CMaps in
-`tests/pdf_fixtures.py` are still refused (the break-it review).
+6.21.2; api.osv.dev titles them "repeated references to the same missing object", "large xref
+table header limits" and "repeated malformed cross-reference entries"). The owner chose to
+update first (CHG-086). The guard on a guessed encoding still works: 6.21.2 logs the same
+"Advanced encoding" messages from the same `pypdf._cmap` logger (its `_cmap.py:109` and `:119`),
+and the five unreadable CMaps in `tests/pdf_fixtures.py` are still refused (the break-it review).
 
-Two readings changed in what the review built:
-1. The `/UniGB-UTF16-H` and `/UniGB-UTF16-V` CMaps. pypdf's own comment cites ISO 32000-2:2020,
-   9.7.5.2, for these carrying UTF-16BE codes. 6.21.1 decoded them as GB18030, so a page in such a
-   font gave other characters, and the garble rule let them through as a readable source. 6.21.2
-   decodes them as UTF-16BE and reads the page exactly. `test_a_unigb_utf16_page_reads_exactly`
-   failed on 6.21.1 and passes on 6.21.2.
-2. A ToUnicode range with a negative bound (`<-001>`), which only a crafted file has. 6.21.1
-   raised, so the page gave no text; 6.21.2 rejects the range and reads the page's codes as they
-   are, which the garble rule does not refuse.
+The `/UniGB-UTF16-H` and `/UniGB-UTF16-V` CMaps are now decoded as UTF-16BE, not GB18030 (pypdf's
+own comment cites ISO 32000-2:2020, 9.7.5.2). Under 6.21.1 a page in such a font gave other
+characters, which the garble rule let through as a readable source; under 6.21.2 it reads
+exactly. `test_a_unigb_utf16_page_reads_exactly` failed on 6.21.1 and passes on 6.21.2. The text
+of 36 built and committed PDF fixtures was compared under both versions: 34 were identical; the
+other 2 were Shift-JIS codes put under the UniGB CMaps, which neither version reads correctly.
 
-The text of 36 built and committed PDF fixtures was compared under both versions: 34 were
-identical; the other 2 were Shift-JIS codes put under the UniGB CMaps, which neither version
-reads correctly and neither refuses.
-
-Known trade-offs, from the break-it review (each fails toward giving no text, except the last
-two; none is a file a standard producer writes, and how common each is is UNVERIFIED):
-- four non-standard files that 6.21.1 read now give no usable text: AES-128 whose crypt filter
-  gives `/Length 128` (bits, not bytes), AES-256 with `/Length 32`, RC4 with `/Length 41`, and a
-  cross-reference table of 19-byte rows filling most of the file;
-- GB18030 bytes put under `/UniGB-UTF16-H` now read as Hangul that the garble rule lets through
-  (6.21.1 read them right), and the negative-bound range above.
-The garble rule already let through, under both versions, text made of glyph numbers, text with
-NUL bytes between its letters, and CJK or Hangul read through the wrong codec.
+The break-it review built malformed and non-standard files for the rest of pypdf's diff. Some
+read better under 6.21.2. Some read worse; how common each is in real files is UNVERIFIED:
+- AES-128 whose crypt filter gives `/Length 128` (bits, not bytes), AES-256 with `/Length 32`,
+  RC4 with `/Length 41`, and a cross-reference table of 19-byte rows give no usable text where
+  6.21.1 read them. The reviewer expects the first in real files;
+- GB18030 bytes put under `/UniGB-UTF16-H` now read as text the garble rule lets through
+  (6.21.1 read them right), and so does a ToUnicode map whose only range has a negative bound.
+Under both versions the garble rule lets through text made of glyph numbers, text with NUL bytes
+between its letters, and CJK or Hangul read through the wrong codec.
 
 ## Rejected alternatives
 
