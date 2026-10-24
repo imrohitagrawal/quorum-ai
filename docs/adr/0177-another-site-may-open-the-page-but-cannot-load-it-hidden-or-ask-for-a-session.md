@@ -7,8 +7,8 @@ Accepted — 2026-10-23, board row W88. The owner's decisions it builds on are C
 `/ui` may only be opened as a page; `/v1/session` is refused from any other site; page loads that
 never count are a later row, W106) and CHG-071 (the second-tab token effect is fixed by its own
 row, W105). CHG-060 holds the detail back from the public documents until the fix ships; this
-pull request, which carries the fix, restores it, and CHG-086 has the owner's choice that this
-detail, F28 included, is published with the push of this pull request. CHG-086 also keeps the
+pull request, which carries the fix, restores it, and CHG-087 has the owner's choice that this
+detail, F28 included, is published with the push of this pull request. CHG-087 also keeps the
 two refusal messages a person can see (decision 4) as written. **Everything else below is the
 session's design**, and the choices the owner was not asked about are marked "(the session's
 choice)".
