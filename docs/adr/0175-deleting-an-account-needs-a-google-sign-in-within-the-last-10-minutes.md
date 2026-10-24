@@ -232,9 +232,10 @@ Facts the design rests on, read on `main` at `0f06765` unless marked:
   or the deletion waits for the write and then removes the row (decision 5). On the live path it is
   today's behaviour, unchanged.
 - **A scroll of 8 px or less that the page did not make is treated as layout noise** (review round
-  3, amended 2026-10-24 and 2026-10-25). The watch on a restored question cancels on a `scroll`
-  event only when both the window's `scrollY` and the box's top on screen moved more than 8 px from
-  where the page last placed the box. When the box moves and the view does not, the layout moved
+  3, amended 2026-10-24 and 2026-10-25). Apart from an inner panel's scroll (step 1 of the
+  amendment below), the watch on a restored question cancels on a `scroll` event only when both
+  the window's `scrollY` and the box's top on screen moved more than 8 px from where the page last
+  placed the box. When the box moves and the view does not, the layout moved
   it, and the page places the box again. When the view moves and the box does not, the browser's
   scroll anchoring kept it still, and the page records the new place (see the amendment below).
   Two scrolls with no input were measured: 2 px (review round 3, scrollY 90 to 92) and 1 px right
@@ -318,13 +319,14 @@ heights above the box are the same), so the font swap moves nothing there: 0 can
 **The rule** (`watchRestoredQuestionScroll` and `bringRestoredQuestionIntoView` in `app.js`). The
 page records `window.scrollY` and the box's top on screen each time it places the box. On a
 `scroll` event, in this order:
-1. the event's target is an element other than the box that holds the box: an inner panel
+1. the event came from an element that holds the box (not the box itself): an inner panel
    scrolled, so cancel. The box scrolling its own text (a long question) is not such a panel: it
    does not move the box on screen, and it does not cancel;
 2. `scrollY` and the box's top both moved more than 8 px from the records: the view moved under
    the visitor, so cancel, even if the layout moved too;
 3. only the box's top moved more than 8 px: the layout moved it, so the page places it again
-   (which records the new top and `scrollY`);
+   (which records the new top and `scrollY`, unless the sign-in notice is shown or focus is
+   elsewhere: then the page neither scrolls nor records);
 4. only `scrollY` moved more than 8 px: content above the view changed size and the browser's
    scroll anchoring kept the box where it was on screen, so the page records the new `scrollY`
    and top. A move of 8 px or less on both counts records nothing, so small scrolls still add up
@@ -356,7 +358,7 @@ Linux rows were not re-run on the corrected rule (UNVERIFIED).
 | Mac: X1, X2, X3 | | 15 of 15 green |
 | Mac: X4, a 44 px layout shift above the box, then a `scroll`, the view still | 10 of 10 red, "cancelled" | 10 of 10 green |
 | Mac: X5, a 44 px shift with a 100 px view scroll | 10 of 10 green | 10 of 10 green (the first rule tried: 10 of 10 red) |
-| Mac: R1, a 40 px bar prepended while the view is scrolled, then the drift banner | settled (the break-it review, 10 of 10) | `af774b2`: 2 of 2 red, "cancelled"; corrected rule: 3 of 3 green |
+| Mac: R1, a 40 px bar prepended while the view is scrolled, then the drift banner | settled (the break-it review: 5 of 5 for this 40 px bar, 5 of 5 for a wrapped header line; this spec not run on main) | `af774b2`: 2 of 2 red, "cancelled"; corrected rule: 3 of 3 green |
 | Mac: R2, a script scroll of 8 px, then 1 px more | | 3 of 3 green; red with the tolerance at 9 px |
 | Mac: R3, X4's shift with the box fully in view while `/ready` is still held | | 3 of 3 green; red (82% in view) with step 3 doing nothing |
 | Mac: R4, the box scrolls its own text | not measured on main | `af774b2`: 2 of 2 red, "cancelled"; corrected rule: 3 of 3 green |
@@ -377,13 +379,23 @@ restored box (X1 to X5, R1 to R4) all stay green.
   moves the box more than 8 px in every frame, is absorbed: each layout move places the box again
   and records the new place, so the page and the scroll fight until the boot ends. In the break-it
   review's script (20 frames), the page placed the box 22 times and the end was "settled"; main
-  cancelled on the first frame. No real trigger was found.
+  cancelled on the first frame. No real trigger was found. (Measured on `af774b2`; the corrected
+  rule takes the same step 3 here, shown in the unit model and not re-run in a browser.)
 - If `/ready` never answers, the watch never ends (`api()` uses a bare `fetch` with no timeout;
   this is older than the rule), so a later layout move can still make the page place the box. In
   the break-it review, a 400 px shift more than 8 s after the load moved the view from 221 to 609;
-  main cancelled instead.
+  main cancelled instead. (Measured on `af774b2`; the unit model shows the same on the corrected
+  rule.)
 - A scroll the page did not make, matched by an equal and opposite layout move above the view in
   the same frame, reads as scroll anchoring (step 4) and does not cancel.
+- Two layout moves in turn can cancel with no visitor input, leaving the box off screen. In
+  review round 2's script, a 40 px bar was added above the view (scroll anchoring absorbed it)
+  while the box moved 7 px on screen, and step 4 recorded that place; then the bar was removed
+  while the box moved 9 px back, and step 2 cancelled: 5 of 5, where main settled 5 of 5. Recording
+  only `scrollY` in step 4 keeps this case in view, but then a 10 px script scroll after such a
+  drift is missed, as main misses it. The rule keeps the visitor's scroll:
+  `test_a_visitor_scroll_after_a_small_anchored_drift_cancels` pins that choice. No app code was
+  found that makes such a pair of moves.
 
 **The delete test.** The other intermittent failure in the lane, "another account at the new
 sign-in" in `e2e/tests/signed-in/delete-recent-sign-in.spec.ts` (1 of 14 executions in CI, the same
@@ -394,8 +406,9 @@ click on "Sign in with Google" before the page had booted: 20 of 20 with a 300 m
 `app.js`. It is fixed in the same pull request: one Google route whose account can be changed, and
 a wait for the page's load and `data-app-state="ready"` before the test's first click on each page.
 With a 300 ms hold of `app.js` on the page after the deletion, the old test was red 10 of 10 and
-the fixed one green 10 of 10. Review round 1 (Codex and the break-it review) found two clicks still
-without that wait, the Run click after the first sign-in and the account-panel click after the
-last one; with a 300 ms hold on the page back from the first sign-in, the test without them was
-red 5 of 5 and with them green 5 of 5. The signed-in lane's floor rises from 48 to 54: X4 and X5,
+the fixed one green 10 of 10. Review round 1 found the Run click after the first sign-in still
+without that wait (Codex; the break-it review). With a 300 ms hold of `app.js` on the page back
+from the first sign-in, the test was red 5 of 5 without the wait and green 5 of 5 with it. The
+account-panel click after the last sign-in now waits too, as a precaution: the same hold on that
+page left the old test green 5 of 5. The signed-in lane's floor rises from 48 to 54: X4 and X5,
 and R1 to R4.

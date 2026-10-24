@@ -11626,7 +11626,7 @@
         }
         // Only the view moved: content above the view changed size and the
         // browser's scroll anchoring kept the box still (break-it review,
-        // 2026-10-25). Record the new place. A move under 8 px on both
+        // 2026-10-25). Record the new place. A move of 8 px or less on both
         // counts records nothing, so small scrolls still add up.
         if (viewMoved) {
           watch.ourScrollY = window.scrollY;

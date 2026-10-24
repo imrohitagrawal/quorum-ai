@@ -365,7 +365,7 @@ def test_focus_placed_elsewhere_is_not_scrolled_away() -> None:
 
 
 def test_scroll_anchoring_with_the_box_still_on_screen_does_not_cancel() -> None:
-    """W87-2 restore race, review round 1 (break-it F1): content grows 40 px
+    """W87-2 restore race, review round 1: content grows 40 px
     above the view and the browser's scroll anchoring raises ``scrollY`` by
     40 px, so the box stays where it was on screen. Red when: a ``scrollY``
     move alone cancels (af774b2: "cancelled", 1 scroll), or the new place
@@ -403,8 +403,36 @@ def test_scroll_anchoring_with_the_box_still_on_screen_does_not_cancel() -> None
     assert got["inView"] is True
 
 
+def test_a_visitor_scroll_after_a_small_anchored_drift_cancels() -> None:
+    """W87-2 restore race, review round 2: content grows 47 px above the view
+    and scroll anchoring raises ``scrollY`` by 40 px, so the box drifts 7 px
+    on screen; then a script scrolls the view 10 px. Red when: the anchored
+    step records only ``scrollY`` (the box then reads 3 px from its record and
+    the scroll is missed), or the listener is main c40159e's. ADR-0175 keeps
+    this choice (its known limits, "Two layout moves in turn"). Partner: the
+    drift alone leaves the watch on."""
+    drift = f"""
+        watchRestoredQuestionScroll();
+        seed({SAVED});
+        await restoreLateRunQuestion();
+        page.above += 47;
+        window.scrollY += 40;
+        window.dispatchEvent(new Event("scroll"));
+    """
+    alone = _run(drift)
+    assert alone["attr"] is None
+    got = _run(
+        drift
+        + """
+        window.scrollY += 10;
+        window.dispatchEvent(new Event("scroll"));
+        """
+    )
+    assert got["attr"] == "cancelled"
+
+
 def test_a_layout_move_with_the_view_still_places_the_box_again() -> None:
-    """W87-2 restore race (X4 at unit level, falsification lens F3): the
+    """W87-2 restore race (X4 at unit level): the
     layout moves the box 44 px down and ``scrollY`` does not move. Red when:
     the listener cancels (main c40159e) or does nothing (1 scroll, the box
     out of view) in that case. Partner: the restore's own scroll (1 before)."""

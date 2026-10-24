@@ -175,9 +175,9 @@ test.describe("the restored question box: what a scroll event means (W87-2 resto
     // RED-IF: the scroll listener cancels when the window's scrollY moved
     // but the box stayed where it was on screen (af774b2's rule: "cancelled"
     // at the anchoring scroll, then the drift banner leaves the box off
-    // screen; break-it review round 1, 10 of 10). Partners: the browser's
-    // scroll anchoring really moved scrollY by the bar's 40 px while the box
-    // stayed put, and the drift banner really painted after it.
+    // screen; this test red 2 of 2 on af774b2; see ADR-0175). Partners: the
+    // browser's scroll anchoring really moved scrollY by the bar's 40 px while
+    // the box stayed put, and the drift banner really painted after it.
     test.setTimeout(120000);
     const held = await heldAfterRestore(page, request, "restore-r1", { drift: true });
     const before = await page.evaluate(() => ({
@@ -237,9 +237,10 @@ test.describe("the restored question box: what a scroll event means (W87-2 resto
     request,
   }) => {
     // RED-IF: the listener does nothing when the layout alone moved the box
-    // (the falsification lens's P7: the box 82% in view until the readiness
-    // paint after the release). Partners: the box really moved 44 px in the
-    // document with the view still, and the watch is still on.
+    // (a review mutation that made this step do nothing: the box 82% in view
+    // until the readiness paint after the release). Partners: the box really
+    // moved 44 px in the document with the view still, and the watch is still
+    // on.
     test.setTimeout(120000);
     const held = await heldAfterRestore(page, request, "restore-r3");
     const shift = await page.evaluate(() => {

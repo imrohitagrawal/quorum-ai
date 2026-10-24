@@ -561,8 +561,8 @@ jobs:
       # session-max-age.spec.ts adds X4 and X5 (a layout shift above the
       # restored box, with and without a view scroll), added to the old floor.
       # 50 -> 54 (the W87-2 restore-scroll race, review round 1, 2026-10-25):
-      # restored-question-scroll.spec.ts adds 4 tests (scroll anchoring; the
-      # 8 px tolerance's upper side; a layout move placed at once; the box's
+      # restored-question-scroll.spec.ts adds 4 tests (scroll anchoring; a
+      # 9 px scroll cancels; a layout move placed at once; the box's
       # own text scroll), added to the old floor.
       - name: "signed-in History lane: floor on tests actually executed"
         run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 54 --lane "signed-in History lane"
