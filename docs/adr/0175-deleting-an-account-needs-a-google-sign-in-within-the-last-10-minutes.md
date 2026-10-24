@@ -334,15 +334,18 @@ page records `window.scrollY` and the box's top on screen each time it places th
 
 A browser fires the `scroll` event a frame after the scroll, so a readiness paint or the boot's
 end can run in between. Each placement after the first, and the boot's end, first makes step 2's
-check against the records and cancels if it holds; without that, it records the visitor's scroll as the page's
-own place, and the late event finds nothing to cancel. On Linux, X5 ended "settled" instead of
-"cancelled" in 7 of 143 runs that got past the test's setup without this check (`17e652e`, two
-batches: 3 of 39 and 4 of 104), each with the readiness answer 13 to 15 ms after the scroll; with
-it (`d681138`), 0 of 96, run batch by batch alongside the second. That this is the order of events is inferred
-from those timings and the code: an in-page log never caught it (0 of 54). The unit tests
-`test_a_scroll_whose_event_has_not_fired_still_cancels_a_placement` and
+check against the records and cancels if it holds; without that, it records the visitor's scroll
+as the page's own place, and the late event finds nothing to cancel. On Linux, X5 ended "settled"
+instead of "cancelled" in 7 of 143 runs that got past the test's setup without this check
+(`17e652e`, two batches: 3 of 39 and 4 of 104), each with the readiness answer 13 to 15 ms after
+the scroll; with it (`d681138`), 0 of 96, run batch by batch alongside the second. 4 settled runs
+is a small count (one-sided p = 0.071 against the batches run alongside), so the result fits the
+check closing the gap and cannot rule out one that only makes it smaller; 104 of the 200 runs on
+`d681138` failed earlier, in a setup step that main has too. That this is the order of events is
+inferred from those timings and the code: an in-page log never caught it (0 of 54). The unit
+tests `test_a_scroll_whose_event_has_not_fired_still_cancels_a_placement` and
 `test_a_scroll_whose_event_has_not_fired_cancels_at_the_boots_end` make that order happen and
-are red without the check. Main has the same gap.
+are red without the check. By reading the code, main has the same gap; it was not run on main.
 
 A wheel, touch, pointer or key event, a typed change and an error box cancel as before. The first
 rule tried (the box moved in the document, so place it again) was rejected in Codex's plan review:
@@ -361,7 +364,7 @@ view during the watch was found. Steps 1 and 4 above are the correction.
 X1 to X5 rows were measured on the rule's first version, `af774b2`. The three Linux rows were
 measured again on the corrected rule with the pending-scroll check (`d681138`), with the same
 results: 10 of 10 settled with the box fully in view, 10 of 10 cancelled, and 10 of 10 cancelled;
-R1 to R4 there passed 20 of 20.
+R1 to R4 were green there, 20 of 20.
 
 | Case | Before (main `c40159e`) | After |
 |---|---|---|
@@ -411,11 +414,12 @@ restored box (X1 to X5, R1 to R4) all stay green.
   found that makes such a pair of moves.
 - A scroll whose event has not fired when the page first places the box is recorded as the
   page's own place: there is no earlier record to compare with. The later readiness paint can
-  then move the view, and the boot ends "settled" (review round 3, in a browser; main does the
-  same). A scroll whose event comes first cancels.
+  then move the view, and the boot ends "settled" (this amendment's third review, 2026-10-25, in
+  a browser; main does the same). A scroll whose event comes first cancels.
 - Small scrolls add up only while the page does not place the box between them: two 6 px
-  scrolls cancel, and the same two with a placement between them end "settled" (review round 3,
-  in the unit model; main does the same).
+  scrolls cancel, and the same two with a placement between them end "settled" (this
+  amendment's third review, in the unit model, on this rule and on `17e652e`; main by reading the
+  code, not run).
 
 **The delete test.** The other intermittent failure in the lane, "another account at the new
 sign-in" in `e2e/tests/signed-in/delete-recent-sign-in.spec.ts` (1 of 14 executions in CI, the same
@@ -432,3 +436,11 @@ from the first sign-in, the test was red 5 of 5 without the wait and green 5 of 
 account-panel click after the last sign-in now waits too, as a precaution: the same hold on that
 page left the test without this wait green 5 of 5. The signed-in lane's floor rises from 48 to 54: X4 and X5,
 and R1 to R4.
+
+**The X1 to X5 setup.** It pressed Run before the page had booted. On the Linux browser that
+gave "Cannot read properties of undefined (reading 'trim')" instead of the late-run refusal, in
+104 of 200 X5 runs on `d681138`; it was never seen on a Mac or in the 14 CI lane runs. The setup
+now waits for `data-app-state="ready"` first, as `restored-question-scroll.spec.ts`'s setup
+already did (20 of 20 there on Linux). That a visitor who presses Run that early sees this error
+does not come from this change (main gave it in 19 of 65 Linux runs) and is left for the owner's
+backlog.

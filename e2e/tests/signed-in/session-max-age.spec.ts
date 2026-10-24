@@ -465,6 +465,11 @@ test.describe("the restored question box ends in view (W87-2 round 3)", () => {
     const account = freshAccount(label);
     await signIn(page, account);
     await ageSession(page, request, 12 * HOUR - 600);
+    // Run pressed before the page has booted throws "Cannot read properties
+    // of undefined (reading 'trim')" instead of the refusal (Linux re-measure,
+    // 2026-10-25: 104 of 200 X5 runs failed here). restored-question-scroll's
+    // setup waits the same way and passed 20 of 20 there.
+    await expect(page.locator("html")).toHaveAttribute("data-app-state", "ready");
     await pressRun(page, LONG_QUESTION);
     await expect(page.locator("#error-region-message")).toHaveText(SIGNED_IN_LATE_RUN);
     return account;
@@ -707,9 +712,10 @@ test.describe("the restored question box ends in view (W87-2 round 3)", () => {
     request,
   }) => {
     // RED-IF: the listener treats a view scroll made with a layout shift as
-    // layout and places the box again (repro/x1-restore-scroll-fix.patch:
-    // "settled" 10 of 10 on Linux, linux2.md). Partners: the watch was still
-    // on, the box moved 44 px in the document, and the view moved 100 px.
+    // layout and places the box again (the first rule tried did: this test
+    // red 10 of 10 on a Mac, and the same case "settled" 10 of 10 on Linux;
+    // ADR-0175). Partners: the watch was still on, the box moved 44 px in the
+    // document, and the view moved 100 px.
     test.setTimeout(120000);
     const held = await heldAfterRestore(page, request, "max-age-x5");
     const shift = await shiftAboveBox(page, 44, 100);
