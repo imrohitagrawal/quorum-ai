@@ -272,6 +272,7 @@ def test_add_vary_folds_two_existing_vary_lines_into_one() -> None:
 
 def test_add_vary_on_a_response_with_no_vary() -> None:
     # Partner of the two above: with nothing there, the names are the whole header.
+    # RED-IF: the merge drops, reorders or repeats a name when the response has no Vary yet.
     response = Response("x")
     _add_vary(response, ("Sec-Fetch-Site", "Origin"))
     assert _vary_lines(response) == ["Sec-Fetch-Site, Origin"]
