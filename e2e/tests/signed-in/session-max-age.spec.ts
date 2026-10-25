@@ -468,7 +468,9 @@ test.describe("the restored question box ends in view (W87-2 round 3)", () => {
     // Run pressed before the page has booted throws "Cannot read properties
     // of undefined (reading 'trim')" instead of the refusal (Linux re-measure,
     // 2026-10-25: 104 of 200 X5 runs failed here). restored-question-scroll's
-    // setup waits the same way and passed 20 of 20 there.
+    // setup also waits for the boot before Run, and had no setup failure in 20
+    // runs there; it also waits before the first sign-in click, which this
+    // setup does not.
     await expect(page.locator("html")).toHaveAttribute("data-app-state", "ready");
     await pressRun(page, LONG_QUESTION);
     await expect(page.locator("#error-region-message")).toHaveText(SIGNED_IN_LATE_RUN);

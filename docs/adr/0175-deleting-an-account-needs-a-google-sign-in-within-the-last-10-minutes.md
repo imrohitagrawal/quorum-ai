@@ -238,7 +238,7 @@ Facts the design rests on, read on `main` at `0f06765` unless marked:
   placed the box. When the box moves and the view does not, the layout moved
   it, and the page places the box again. When the view moves and the box does not, the browser's
   scroll anchoring kept it still, and the page records the new place (see the amendment below).
-  Two scrolls with no input were measured: 2 px (review round 3, scrollY 90 to 92) and 1 px right
+  Two scrolls with no input were measured: 2 px (#582's review round 3, scrollY 90 to 92) and 1 px right
   after a 44 px font-swap reflow on Linux (2026-10-24); what makes either is not known. 8 px is
   chosen, not derived: above those and below the smallest real scroll measured (a 100 px script
   scroll; a 120 px wheel). A script, a scrollbar drag or assistive technology can scroll with no
@@ -339,7 +339,8 @@ as the page's own place, and the late event finds nothing to cancel. On Linux, X
 instead of "cancelled" in 7 of 143 runs that got past the test's setup without this check
 (`17e652e`, two batches: 3 of 39 and 4 of 104), each with the readiness answer 13 to 15 ms after
 the scroll; with it (`d681138`), 0 of 96, run batch by batch alongside the second. 4 settled runs
-is a small count (one-sided p = 0.071 against the batches run alongside), so the result fits the
+is a small count (a split this uneven would still happen about 7 times in 100 if the check did
+nothing; one-sided p = 0.071 against the batches run alongside), so the result fits the
 check closing the gap and cannot rule out one that only makes it smaller; 104 of the 200 runs on
 `d681138` failed earlier, in a setup step that main has too. That this is the order of events is
 inferred from those timings and the code: an in-page log never caught it (0 of 54). The unit
@@ -440,7 +441,9 @@ and R1 to R4.
 **The X1 to X5 setup.** It pressed Run before the page had booted. On the Linux browser that
 gave "Cannot read properties of undefined (reading 'trim')" instead of the late-run refusal, in
 104 of 200 X5 runs on `d681138`; it was never seen on a Mac or in the 14 CI lane runs. The setup
-now waits for `data-app-state="ready"` first, as `restored-question-scroll.spec.ts`'s setup
-already did (20 of 20 there on Linux). That a visitor who presses Run that early sees this error
-does not come from this change (main gave it in 19 of 65 Linux runs) and is left for the owner's
-backlog.
+now waits for `data-app-state="ready"` before Run. `restored-question-scroll.spec.ts` waits
+there too, and had no setup failure in 20 runs on Linux. It also waits before the first sign-in
+click, and this setup does not. That a visitor who presses Run that early sees this error does not
+come from this change (on main, `session-max-age.spec.ts`'s tests gave this error, or a "Something
+went wrong" title, in 19 of 65 test runs on the same Linux setup). It is outside this pull request
+and has no board row yet; the handoff carries it.
