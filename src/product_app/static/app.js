@@ -11568,18 +11568,25 @@
   // "settled"; no pixels change).
   //
   // A scroll the page did not make cancels too (a scrollbar drag, a
-  // script, assistive technology): the box's top moved more than this from
-  // where the last check left it. JUDGMENT CALL: 8 px is chosen, above a
-  // 2 px scroll measured with no input (scroll anchoring or the font swap;
-  // not separated) and below the one wheel scroll measured (120 px). Such a
-  // scroll of 8 px or less is treated as layout noise, whether a script, a
-  // scrollbar drag or assistive technology made it; a wheel, touch, pointer
-  // or key event cancels at any distance.
+  // script, assistive technology). Each time the page places the box it
+  // records the window's scrollY and the box's top on screen. A scroll
+  // cancels when both moved more than this from those records: the view
+  // moved under the visitor. When only the box's top moved, the layout
+  // moved it and the page places it again (a late font swap moved it 44 px
+  // on Linux, X1 2026-10-24). When only scrollY moved, the browser's scroll
+  // anchoring kept the box still and the page records the new place.
+  // JUDGMENT CALL: 8 px is chosen, above the scrolls measured with no input
+  // (2 px in review round 3; 1 px after the Linux font swap; the cause of
+  // neither found) and below the smallest real scroll measured (a 100 px
+  // script scroll; a 120 px wheel). Such a scroll of 8 px or less is
+  // treated as layout noise, whether a script, a scrollbar drag or
+  // assistive technology made it; a wheel, touch, pointer or key event
+  // cancels at any distance.
   const RESTORE_SCROLL_TOLERANCE_PX = 8;
 
   function watchRestoredQuestionScroll() {
     const controller = new AbortController();
-    const watch = { question: null, done: false, ourTop: null, controller };
+    const watch = { question: null, done: false, ourTop: null, ourScrollY: null, controller };
     state.restoreScroll = watch;
     const cancel = () => endRestoredQuestionScroll("cancelled");
     const options = { capture: true, passive: true, signal: controller.signal };
@@ -11588,23 +11595,70 @@
     }
     window.addEventListener(
       "scroll",
-      () => {
+      (event) => {
         if (watch.done) return;
         if (watch.ourTop === null || !queryTextarea) {
           cancel();
           return;
         }
+        // An inner panel that holds the box scrolled: cancel. The box
+        // scrolling its own text is not one (``contains`` is true for the
+        // node itself), and it does not move the box on screen.
+        const target = event.target;
+        if (target instanceof Element && target !== queryTextarea && target.contains(queryTextarea)) {
+          cancel();
+          return;
+        }
         const top = queryTextarea.getBoundingClientRect().top;
-        if (Math.abs(top - watch.ourTop) > RESTORE_SCROLL_TOLERANCE_PX) cancel();
+        const viewMoved = Math.abs(window.scrollY - watch.ourScrollY) > RESTORE_SCROLL_TOLERANCE_PX;
+        const boxMoved = Math.abs(top - watch.ourTop) > RESTORE_SCROLL_TOLERANCE_PX;
+        // The view moved and the box moved on screen: the view moved under
+        // the visitor, so cancel, even if the layout moved too.
+        if (viewMoved && boxMoved) {
+          cancel();
+          return;
+        }
+        // Only the box moved on screen: the layout moved it (a late font
+        // swap: 44 px measured on Linux, X1 2026-10-24). Place it again.
+        if (boxMoved) {
+          bringRestoredQuestionIntoView();
+          return;
+        }
+        // Only the view moved: content above the view changed size and the
+        // browser's scroll anchoring kept the box still (break-it review,
+        // 2026-10-25). Record the new place. A move of 8 px or less on both
+        // counts records nothing, so small scrolls still add up (until the
+        // page next places the box).
+        if (viewMoved) {
+          watch.ourScrollY = window.scrollY;
+          watch.ourTop = top;
+        }
       },
       options,
     );
   }
 
   // Idempotent: the first outcome stands, and the listeners go once.
+  // The view and the box both moved more than the tolerance since the page
+  // last placed the box: a scroll the page did not make. The scroll event
+  // comes a frame after the scroll, so a placement or the boot's end can
+  // run in between; each checks this first, or it would record the
+  // visitor's scroll as the page's own (X5 ended "settled" in 3 of 39 Linux
+  // runs, 2026-10-25, with the readiness answer 13 to 15 ms after the scroll).
+  // Before the first placement there is no record, so this is false then.
+  function restoredQuestionMovedUnderVisitor(watch) {
+    if (watch.ourTop === null || watch.ourScrollY === null || !queryTextarea) return false;
+    const top = queryTextarea.getBoundingClientRect().top;
+    return (
+      Math.abs(window.scrollY - watch.ourScrollY) > RESTORE_SCROLL_TOLERANCE_PX &&
+      Math.abs(top - watch.ourTop) > RESTORE_SCROLL_TOLERANCE_PX
+    );
+  }
+
   function endRestoredQuestionScroll(outcome) {
     const watch = state.restoreScroll;
     if (!watch || watch.done) return;
+    if (outcome === "settled" && restoredQuestionMovedUnderVisitor(watch)) outcome = "cancelled";
     watch.done = true;
     watch.controller.abort();
     document.documentElement.dataset.restoreScroll = outcome;
@@ -11613,7 +11667,7 @@
   function bringRestoredQuestionIntoView() {
     const watch = state.restoreScroll;
     if (!watch || watch.done || watch.question === null || !queryTextarea) return;
-    if (queryTextarea.value !== watch.question) {
+    if (queryTextarea.value !== watch.question || restoredQuestionMovedUnderVisitor(watch)) {
       endRestoredQuestionScroll("cancelled");
       return;
     }
@@ -11628,6 +11682,7 @@
       queryTextarea.scrollIntoView({ behavior: "auto", block: "nearest" });
     }
     watch.ourTop = queryTextarea.getBoundingClientRect().top;
+    watch.ourScrollY = window.scrollY;
   }
 
   async function restoreLateRunQuestion() {

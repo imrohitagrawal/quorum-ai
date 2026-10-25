@@ -30,6 +30,7 @@ from tests.unit.test_late_run_question_rules import KEY, _node
 FUNCTIONS = [
     "watchRestoredQuestionScroll",
     "endRestoredQuestionScroll",
+    "restoredQuestionMovedUnderVisitor",
     "bringRestoredQuestionIntoView",
     "restoreLateRunQuestion",
     "lateRunQuestionToRestore",
@@ -46,7 +47,9 @@ QUESTION = "the kept question"
 _PAGE = r"""
 const BOX_TOP = 734, BOX_H = 156, BANNER = 159, VIEW = 844, MARGIN = 16;
 const BODY = { tag: "body" };
-const page = { banner: false, notice: false, scrolls: [], focuses: 0, live: 0, errorFocus: false };
+const page = {
+  banner: false, notice: false, above: 0, scrolls: [], focuses: 0, live: 0, errorFocus: false,
+};
 const events = new EventTarget();
 const storage = window.sessionStorage;
 window = {
@@ -73,7 +76,7 @@ document = {
     return { classList: { add() {} }, dataset: {}, append() {}, appendChild() {} };
   },
 };
-const boxTopInPage = () => BOX_TOP + (page.banner ? BANNER : 0);
+const boxTopInPage = () => BOX_TOP + page.above + (page.banner ? BANNER : 0);
 queryTextarea = {
   value: "",
   dispatchEvent() {},
@@ -360,3 +363,188 @@ def test_focus_placed_elsewhere_is_not_scrolled_away() -> None:
     assert got["value"] == QUESTION
     assert got["scrolls"] == 0
     assert got["focuses"] == 0
+
+
+def test_scroll_anchoring_with_the_box_still_on_screen_does_not_cancel() -> None:
+    """W87-2 restore race, review round 1: content grows 40 px
+    above the view and the browser's scroll anchoring raises ``scrollY`` by
+    40 px, so the box stays where it was on screen. Red when: a ``scrollY``
+    move alone cancels (af774b2: "cancelled", 1 scroll), or the new place
+    is not recorded (a visitor scroll of 40 px back up then reads as a
+    layout move and the page places the box again). Partner: the banner
+    paint after it still places the box (2 scrolls, in view)."""
+    back = _run(
+        f"""
+        watchRestoredQuestionScroll();
+        seed({SAVED});
+        await restoreLateRunQuestion();
+        page.above += 40;
+        window.scrollY += 40;
+        window.dispatchEvent(new Event("scroll"));
+        window.scrollY -= 40;
+        window.dispatchEvent(new Event("scroll"));
+        """
+    )
+    assert back["attr"] == "cancelled"
+    assert back["scrolls"] == 1
+    got = _run(
+        f"""
+        watchRestoredQuestionScroll();
+        seed({SAVED});
+        await restoreLateRunQuestion();
+        page.above += 40;
+        window.scrollY += 40;
+        window.dispatchEvent(new Event("scroll"));
+        answerReadiness();
+        await refreshReadiness();
+        """
+    )
+    assert got["attr"] is None
+    assert got["scrolls"] == 2
+    assert got["inView"] is True
+
+
+def test_a_visitor_scroll_after_a_small_anchored_drift_cancels() -> None:
+    """W87-2 restore race, review round 2: content grows 47 px above the view
+    and scroll anchoring raises ``scrollY`` by 40 px, so the box drifts 7 px
+    on screen; then a script scrolls the view 10 px. Red when: the anchored
+    step records only ``scrollY`` (the box then reads 3 px from its record and
+    the scroll is missed), or the listener is main c40159e's. ADR-0175 keeps
+    this choice (its known limits, "Two layout moves in turn"). Partner: the
+    drift alone leaves the watch on."""
+    drift = f"""
+        watchRestoredQuestionScroll();
+        seed({SAVED});
+        await restoreLateRunQuestion();
+        page.above += 47;
+        window.scrollY += 40;
+        window.dispatchEvent(new Event("scroll"));
+    """
+    alone = _run(drift)
+    assert alone["attr"] is None
+    got = _run(
+        drift
+        + """
+        window.scrollY += 10;
+        window.dispatchEvent(new Event("scroll"));
+        """
+    )
+    assert got["attr"] == "cancelled"
+
+
+def test_a_layout_move_with_the_view_still_places_the_box_again() -> None:
+    """W87-2 restore race (X4 at unit level): the
+    layout moves the box 44 px down and ``scrollY`` does not move. Red when:
+    the listener cancels (main c40159e) or does nothing (1 scroll, the box
+    out of view) in that case. Partner: the restore's own scroll (1 before)."""
+    got = _run(
+        f"""
+        watchRestoredQuestionScroll();
+        seed({SAVED});
+        await restoreLateRunQuestion();
+        const before = page.scrolls.length;
+        page.above += 44;
+        window.dispatchEvent(new Event("scroll"));
+        const r = result();
+        r.before = before;
+        return r;
+        """
+    )
+    assert got["before"] == 1
+    assert got["attr"] is None
+    assert got["scrolls"] == 2
+    assert got["inView"] is True
+
+
+def test_two_small_scrolls_add_up_and_cancel() -> None:
+    """W87-2 restore race, review round 1: two script scrolls of 5 px each,
+    with no layout move. Red when: a scroll under the tolerance resets the
+    baseline (the two never add up to 10 px, so nothing cancels). Partner:
+    one 5 px scroll alone leaves the watch on."""
+    once = _run(
+        f"""
+        watchRestoredQuestionScroll();
+        seed({SAVED});
+        await restoreLateRunQuestion();
+        window.scrollY -= 5;
+        window.dispatchEvent(new Event("scroll"));
+        """
+    )
+    assert once["attr"] is None
+    twice = _run(
+        f"""
+        watchRestoredQuestionScroll();
+        seed({SAVED});
+        await restoreLateRunQuestion();
+        window.scrollY -= 5;
+        window.dispatchEvent(new Event("scroll"));
+        window.scrollY -= 5;
+        window.dispatchEvent(new Event("scroll"));
+        """
+    )
+    assert twice["attr"] == "cancelled"
+
+
+def test_a_scroll_whose_event_has_not_fired_still_cancels_a_placement() -> None:
+    """W87-2 restore race, the Linux re-measure (2026-10-25): a browser fires
+    the ``scroll`` event for a scroll at the next frame, so a readiness paint
+    can place the box between the scroll and its event. Here the layout moves
+    the box 44 px and a script scrolls the view 100 px, then readiness paints
+    before the event. Red when: the placement records the new place without
+    first checking the records (it pulls the view back, 2 scrolls, and the
+    late event finds nothing to cancel). Partner: the same layout move with no
+    scroll is placed again (2 scrolls, in view, the watch on)."""
+    layout_only = _run(
+        f"""
+        watchRestoredQuestionScroll();
+        seed({SAVED});
+        await restoreLateRunQuestion();
+        page.above += 44;
+        answerReadiness();
+        await refreshReadiness();
+        """
+    )
+    assert layout_only["attr"] is None
+    assert layout_only["scrolls"] == 2
+    assert layout_only["inView"] is True
+    got = _run(
+        f"""
+        watchRestoredQuestionScroll();
+        seed({SAVED});
+        await restoreLateRunQuestion();
+        page.above += 44;
+        window.scrollY += 100;
+        answerReadiness();
+        await refreshReadiness();
+        window.dispatchEvent(new Event("scroll"));
+        """
+    )
+    assert got["attr"] == "cancelled"
+    assert got["scrolls"] == 1
+
+
+def test_a_scroll_whose_event_has_not_fired_cancels_at_the_boots_end() -> None:
+    """W87-2 restore race, the Linux re-measure: the same scroll, with the
+    boot's end ("settled") reached before its event. Red when: the end
+    records "settled" without checking the records. Partner: with no scroll
+    the end records "settled"."""
+    still = _run(
+        f"""
+        watchRestoredQuestionScroll();
+        seed({SAVED});
+        await restoreLateRunQuestion();
+        endRestoredQuestionScroll("settled");
+        """
+    )
+    assert still["attr"] == "settled"
+    got = _run(
+        f"""
+        watchRestoredQuestionScroll();
+        seed({SAVED});
+        await restoreLateRunQuestion();
+        page.above += 44;
+        window.scrollY += 100;
+        endRestoredQuestionScroll("settled");
+        """
+    )
+    assert got["attr"] == "cancelled"

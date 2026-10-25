@@ -232,12 +232,18 @@ Facts the design rests on, read on `main` at `0f06765` unless marked:
   or the deletion waits for the write and then removes the row (decision 5). On the live path it is
   today's behaviour, unchanged.
 - **A scroll of 8 px or less that the page did not make is treated as layout noise** (review round
-  3). The watch on a restored question cancels on such a scroll only when the box moved more than
-  8 px from where its last check left it, because a 2 px scroll with no input was measured (scroll
-  anchoring or the font swap; not separated). 8 px is chosen, not derived: above that 2 px and
-  below the one wheel scroll measured (120 px). A script, a scrollbar drag or assistive
-  technology can scroll with no wheel, touch, pointer or key event, so a scroll of 8 px or less
-  from them does not cancel; a wheel, touch, pointer or key event cancels at any distance.
+  3, amended 2026-10-24 and 2026-10-25). Apart from an inner panel's scroll (step 1 of the
+  amendment below), the watch on a restored question cancels on a `scroll` event only when both
+  the window's `scrollY` and the box's top on screen moved more than 8 px from where the page last
+  placed the box. When the box moves and the view does not, the layout moved
+  it, and the page places the box again. When the view moves and the box does not, the browser's
+  scroll anchoring kept it still, and the page records the new place (see the amendment below).
+  Two scrolls with no input were measured: 2 px (#582's review round 3, scrollY 90 to 92) and 1 px right
+  after a 44 px font-swap reflow on Linux (2026-10-24); what makes either is not known. 8 px is
+  chosen, not derived: above those and below the smallest real scroll measured (a 100 px script
+  scroll; a 120 px wheel). A script, a scrollbar drag or assistive technology can scroll with no
+  wheel, touch, pointer or key event, so a scroll of 8 px or less from them does not cancel; a
+  wheel, touch, pointer or key event cancels at any distance.
 - **The anonymous question can be lost.** After 900 seconds (decision 14); when the bootstrap could
   not tell the session's kind (decision 12); and after any identity change in the page load, even
   for a draft typed after the change, until a reload (the cost is a retyped question, never a
@@ -296,3 +302,148 @@ Facts the design rests on, read on `main` at `0f06765` unless marked:
   `docs/41-security-controls.md` SC-03, SC-30 and SC-103.
 - CHG-056 (d), CHG-060 (the detail held back until the fix shipped), CHG-063 (e), (f)(1), CHG-066
   (c), CHG-073 (a) to (e).
+
+## Amendment: a layout move no longer cancels the restore (2026-10-24, review round 1 2026-10-25)
+
+**What failed.** The test X1 (`e2e/tests/signed-in/session-max-age.spec.ts`) failed 2 of 14
+executions of the signed-in e2e lane in CI, from #582's pull request run to `c40159e` (counted
+2026-10-25), each time with `data-restore-scroll` "cancelled" instead of "settled". Reproduced on
+Linux Chromium with DejaVu Sans as the fallback font: when the Geist web font arrives just after
+the question is put back, the text above the box shrinks and the box moves 44 px up, while the
+window's `scrollY` moves 1 px. The next `scroll` event saw the box more than 8 px from where the
+page left it and cancelled, though nobody did anything. A real visitor with a slow font load could
+see the question left out of view. On a Mac the fallback font wraps the same lines as Geist (the
+heights above the box are the same), so the font swap moves nothing there: 0 cancelled in 52 runs
+(measured 2026-10-24; the logs are held outside the repository).
+
+**The rule** (`watchRestoredQuestionScroll` and `bringRestoredQuestionIntoView` in `app.js`). The
+page records `window.scrollY` and the box's top on screen each time it places the box. On a
+`scroll` event, in this order:
+1. the event came from an element that holds the box (not the box itself): an inner panel
+   scrolled, so cancel. The box scrolling its own text (a long question) is not such a panel: it
+   does not move the box on screen, and it does not cancel;
+2. `scrollY` and the box's top both moved more than 8 px from the records: the view moved under
+   the visitor, so cancel, even if the layout moved too;
+3. only the box's top moved more than 8 px: the layout moved it, so the page places it again
+   (which records the new top and `scrollY`, unless the sign-in notice is shown or focus is
+   elsewhere: then the page neither scrolls nor records);
+4. only `scrollY` moved more than 8 px: content above the view changed size and the browser's
+   scroll anchoring kept the box where it was on screen, so the page records the new `scrollY`
+   and top. A move of 8 px or less on both counts records nothing, so small scrolls still add up
+   (two 5 px scrolls cancel) while the page does not place the box between them.
+
+A browser fires the `scroll` event a frame after the scroll, so a readiness paint or the boot's
+end can run in between. Each placement after the first, and the boot's end, first makes step 2's
+check against the records and cancels if it holds; without that, it records the visitor's scroll
+as the page's own place, and the late event finds nothing to cancel. On Linux, X5 ended "settled"
+instead of "cancelled" in 7 of 143 runs that got past the test's setup without this check
+(`17e652e`, two batches: 3 of 39 and 4 of 104), each with the readiness answer 13 to 15 ms after
+the scroll; with it (`d681138`), 0 of 96, run batch by batch alongside the second. 4 settled runs
+is a small count (a split this uneven would still happen about 7 times in 100 if the check did
+nothing; one-sided p = 0.071 against the batches run alongside), so the result fits the
+check closing the gap and cannot rule out one that only makes it smaller; 104 of the 200 runs on
+`d681138` failed earlier, in a setup step that main has too. That this is the order of events is
+inferred from those timings and the code: an in-page log never caught it (0 of 54). The unit
+tests `test_a_scroll_whose_event_has_not_fired_still_cancels_a_placement` and
+`test_a_scroll_whose_event_has_not_fired_cancels_at_the_boots_end` make that order happen and
+are red without the check. By reading the code, main has the same gap; it was not run on main.
+
+A wheel, touch, pointer or key event, a typed change and an error box cancel as before. The first
+rule tried (the box moved in the document, so place it again) was rejected in Codex's plan review:
+it swallowed a real scroll made together with a reflow, and an inner panel's scroll.
+
+The rule's first version (`af774b2`) cancelled whenever `scrollY` moved more than 8 px, and it
+counted the box itself as an inner panel (`contains` is true for the node itself). Review round 1
+found both. Scroll anchoring then cancelled the restore, and the next drift banner left the box off
+screen: 10 of 10 on that version, where main settled 10 of 10 with the box in view (the break-it
+review, a 40 px bar prepended to the page or a header line made to wrap, Chromium; Firefox gave the
+same split, 1 run each). The trigger was made by a script; no change of the app's own above the
+view during the watch was found. Steps 1 and 4 above are the correction.
+
+**Measured** (a Linux Chromium container, `mcr.microsoft.com/playwright:v1.61.1-noble`, fallback
+`DejaVu Sans`, the lane's settings; and the signed-in lane on a Mac). The Linux rows and the Mac
+X1 to X5 rows were measured on the rule's first version, `af774b2`. The three Linux rows were
+measured again on the corrected rule with the pending-scroll check (`d681138`), with the same
+results: 10 of 10 settled with the box fully in view, 10 of 10 cancelled, and 10 of 10 cancelled;
+R1 to R4 were green there, 20 of 20.
+
+| Case | Before (main `c40159e`) | After |
+|---|---|---|
+| Linux: Geist arrives just after the restore (the font files held until just after the restore) | 28 of 28 cancelled | 30 of 30 settled, the box fully in view |
+| Linux: a window scroll of 100 px with a 44 px reflow | not measured on main | 10 of 10 cancelled (the first rule tried: 10 of 10 settled, the scroll swallowed) |
+| Linux: a wheel of 120 px | not measured on main | 10 of 10 cancelled |
+| Mac: X1, X2, X3 | | 15 of 15 green |
+| Mac: X4, a 44 px layout shift above the box, then a `scroll`, the view still | 10 of 10 red, "cancelled" | 10 of 10 green |
+| Mac: X5, a 44 px shift with a 100 px view scroll | 10 of 10 green | 10 of 10 green (the first rule tried: 10 of 10 red) |
+| Mac: R1, a 40 px bar prepended while the view is scrolled, then the drift banner | settled (the break-it review: 5 of 5 for this 40 px bar, 5 of 5 for a wrapped header line); this spec on main: 1 of 1 green | `af774b2`: 2 of 2 red, "cancelled"; corrected rule: 3 of 3 green |
+| Mac: R2, a script scroll of 8 px, then 1 px more | | 3 of 3 green; red with the tolerance at 9 px |
+| Mac: R3, X4's shift with the box fully in view while `/ready` is still held | | 3 of 3 green; red (82% in view) with step 3 doing nothing |
+| Mac: R4, the box scrolls its own text | 1 of 1 green | `af774b2`: 2 of 2 red, "cancelled"; corrected rule: 3 of 3 green |
+
+R1 to R4 are in `e2e/tests/signed-in/restored-question-scroll.spec.ts`. Removing step 4's record
+leaves R1 green; the unit test
+`tests/unit/test_restored_question_in_view.py::test_scroll_anchoring_with_the_box_still_on_screen_does_not_cancel`
+goes red instead (a later 40 px scroll back up would read as a layout move).
+
+**UNVERIFIED.** Which fallback font the CI runner uses (`fc-match sans-serif` in a CI step would
+settle it). What makes the 1 px scroll after the reflow (under 8 px, so the rule does not depend on
+it). No inner panel that holds the box can scroll in today's layout (no scrollable ancestor at
+390x844), so step 1 was not measured: with it removed, the unit tests and the e2e tests of the
+restored box (X1 to X5, R1 to R4) all stay green.
+
+**Known limits of this rule.**
+- A slow scroll the page did not make, 8 px or less per `scroll` event, while the layout also
+  moves the box more than 8 px in every frame, is absorbed: each layout move places the box again
+  and records the new place, so the page and the scroll fight until the boot ends. In the break-it
+  review's script (20 frames), the page placed the box 22 times and the end was "settled"; main
+  cancelled on the first frame. No real trigger was found. (Measured on `af774b2`; the corrected
+  rule takes the same step 3 here, shown in the unit model and not re-run in a browser.)
+- If `/ready` never answers, the watch never ends (`api()` uses a bare `fetch` with no timeout;
+  this is older than the rule), so a later layout move can still make the page place the box. In
+  the break-it review, a 400 px shift more than 8 s after the load moved the view from 221 to 609;
+  main cancelled instead. (Measured on `af774b2`; the unit model shows the same on the corrected
+  rule.)
+- A scroll the page did not make, matched by an equal and opposite layout move above the view in
+  the same frame, reads as scroll anchoring (step 4) and does not cancel.
+- Two layout moves in turn can cancel with no visitor input, leaving the box off screen. In
+  review round 2's script, a 40 px bar was added above the view (scroll anchoring absorbed it)
+  while the box moved 7 px on screen, and step 4 recorded that place; then the bar was removed
+  while the box moved 9 px back, and step 2 cancelled: 5 of 5, where main settled 5 of 5. Recording
+  only `scrollY` in step 4 keeps this case in view, but then a 10 px script scroll after such a
+  drift is missed, as main misses it. The rule keeps the visitor's scroll:
+  `test_a_visitor_scroll_after_a_small_anchored_drift_cancels` pins that choice. No app code was
+  found that makes such a pair of moves.
+- A scroll whose event has not fired when the page first places the box is recorded as the
+  page's own place: there is no earlier record to compare with. The later readiness paint can
+  then move the view, and the boot ends "settled" (this amendment's third review, 2026-10-25, in
+  a browser; main does the same). A scroll whose event comes first cancels.
+- Small scrolls add up only while the page does not place the box between them: two 6 px
+  scrolls cancel, and the same two with a placement between them end "settled" (this
+  amendment's third review, in the unit model, on this rule and on `17e652e`; main by reading the
+  code, not run).
+
+**The delete test.** The other intermittent failure in the lane, "another account at the new
+sign-in" in `e2e/tests/signed-in/delete-recent-sign-in.spec.ts` (1 of 14 executions in CI, the same
+window), was most likely a test defect (UNVERIFIED for CI: the lane keeps no trace). Two paths in
+the test give the same failure. A route swap (`unroute`, then `route`) during a page load left
+`app.js` unsent: 8 of 20 runs with 113 to 2,072 swaps, and only this matches the CI server log. A
+click on "Sign in with Google" before the page had booted: 20 of 20 with a 300 ms hold of
+`app.js`. It is fixed in the same pull request: one Google route whose account can be changed, and
+a wait for the page's load and `data-app-state="ready"` before the test's first click on each page.
+With a 300 ms hold of `app.js` on the page after the deletion, the old test was red 10 of 10 and
+the fixed one green 10 of 10. Review round 1 found the Run click after the first sign-in still
+without that wait (Codex; the break-it review). With a 300 ms hold of `app.js` on the page back
+from the first sign-in, the test was red 5 of 5 without the wait and green 5 of 5 with it. The
+account-panel click after the last sign-in now waits too, as a precaution: the same hold on that
+page left the test without this wait green 5 of 5. The signed-in lane's floor rises from 48 to 54: X4 and X5,
+and R1 to R4.
+
+**The X1 to X5 setup.** It pressed Run before the page had booted. On the Linux browser that
+gave "Cannot read properties of undefined (reading 'trim')" instead of the late-run refusal, in
+104 of 200 X5 runs on `d681138`; it was never seen on a Mac or in the 14 CI lane runs. The setup
+now waits for `data-app-state="ready"` before Run. `restored-question-scroll.spec.ts` waits
+there too, and had no setup failure in 20 runs on Linux. It also waits before the first sign-in
+click, and this setup does not. That a visitor who presses Run that early sees this error does not
+come from this change (on main, `session-max-age.spec.ts`'s tests gave this error, or a "Something
+went wrong" title, in 19 of 65 test runs on the same Linux setup). It is outside this pull request
+and has no board row yet; the handoff carries it.

@@ -465,6 +465,13 @@ test.describe("the restored question box ends in view (W87-2 round 3)", () => {
     const account = freshAccount(label);
     await signIn(page, account);
     await ageSession(page, request, 12 * HOUR - 600);
+    // Run pressed before the page has booted throws "Cannot read properties
+    // of undefined (reading 'trim')" instead of the refusal (Linux re-measure,
+    // 2026-10-25: 104 of 200 X5 runs failed here). restored-question-scroll's
+    // setup also waits for the boot before Run, and had no setup failure in 20
+    // runs there; it also waits before the first sign-in click, which this
+    // setup does not.
+    await expect(page.locator("html")).toHaveAttribute("data-app-state", "ready");
     await pressRun(page, LONG_QUESTION);
     await expect(page.locator("#error-region-message")).toHaveText(SIGNED_IN_LATE_RUN);
     return account;
@@ -607,5 +614,117 @@ test.describe("the restored question box ends in view (W87-2 round 3)", () => {
     await expect(page.locator("#sign-in-notice")).toBeInViewport({ ratio: 1 });
     expect(await page.evaluate(() => window.scrollY)).toBe(0);
     await expect(page.locator("#query-text")).toHaveValue(LONG_QUESTION);
+  });
+
+  /**
+   * X4 and X5 (the restore-scroll race, 2026-10-24): on Linux a web font
+   * that arrives just after the question is put back moves the box 44 px,
+   * and the next scroll event ended the watch as if the visitor had
+   * scrolled. Both tests act while the watch is still on: the return page's
+   * first `/ready` is held, so the boot waits in readiness after the restore
+   * (the watch ends only when readiness is done). They wait for the 2 s
+   * readiness fallback to paint the banner first, so no paint of the page's
+   * own places the box between the shift and the scroll.
+   */
+  async function heldAfterRestore(page: Page, request: APIRequestContext, label: string) {
+    await refusedLateRun(page, request, label);
+    const returned = watchReturn(page);
+    let release!: () => void;
+    const released = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const hold = { held: 0 };
+    await page.route("**/ready", async (route) => {
+      if (returned() && hold.held === 0) {
+        hold.held += 1;
+        await released;
+      }
+      await route.continue();
+    });
+    let defaultsFinished = 0;
+    page.on("requestfinished", (finished) => {
+      if (returned() && new URL(finished.url()).pathname === "/v1/models/defaults") defaultsFinished += 1;
+    });
+    await clickThenNextPage(page, signInAgain(page));
+    await expect.poll(() => hold.held, { message: "the return page's /ready is held" }).toBe(1);
+    await expect(page.locator("html")).toHaveAttribute("data-app-state", "ready");
+    await expect(page.locator("#query-text")).toHaveValue(LONG_QUESTION);
+    await expect(page.locator("#readiness-banner")).toBeVisible();
+    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    expect(hold.held, "the /ready is still held").toBe(1);
+    expect(
+      await page.evaluate(() => document.documentElement.dataset.restoreScroll ?? "unset"),
+      "the watch is still on",
+    ).toBe("unset");
+    return {
+      /** Release the /ready, then wait out the boot: the second defaults and two frames. */
+      async finish() {
+        release();
+        await expect.poll(() => defaultsFinished, { message: "both defaults requests finished" }).toBe(2);
+        await page.evaluate(
+          () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))),
+        );
+      },
+    };
+  }
+
+  /** Grow the privacy notice above the box by `px`, then scroll the view by `scrollBy`. */
+  async function shiftAboveBox(page: Page, px: number, scrollBy: number) {
+    return page.evaluate(
+      ({ px, scrollBy }) => {
+        const box = document.getElementById("query-text") as HTMLElement;
+        const notice = document.querySelector(".privacy-notice") as HTMLElement;
+        const before = { top: box.getBoundingClientRect().top, scrollY: window.scrollY };
+        notice.style.paddingBottom = `${parseFloat(getComputedStyle(notice).paddingBottom) + px}px`;
+        if (scrollBy !== 0) window.scrollTo(0, window.scrollY + scrollBy);
+        const after = { top: box.getBoundingClientRect().top, scrollY: window.scrollY };
+        return {
+          movedInDocument: after.top + after.scrollY - (before.top + before.scrollY),
+          viewMoved: after.scrollY - before.scrollY,
+          scrollY: after.scrollY,
+        };
+      },
+      { px, scrollBy },
+    );
+  }
+
+  test("X4: a layout shift above the box, with no scroll, does not stop the page placing it", async ({
+    page,
+    request,
+  }) => {
+    // RED-IF: the scroll listener ends the watch when the layout alone moved
+    // the box and the view did not move (main c40159e: "cancelled").
+    // Partners: the watch was still on, the box really moved 44 px in the
+    // document, and the view did not move.
+    test.setTimeout(120000);
+    const held = await heldAfterRestore(page, request, "max-age-x4");
+    const shift = await shiftAboveBox(page, 44, 0);
+    expect(Math.abs(shift.movedInDocument - 44), `the box moved ${shift.movedInDocument} px`).toBeLessThan(1);
+    expect(shift.viewMoved, "the view did not move").toBe(0);
+    // A scroll event with the view where it was, as after the Linux font swap.
+    await page.evaluate(() => document.dispatchEvent(new Event("scroll", { bubbles: true })));
+    await held.finish();
+    await expect(page.locator("html")).toHaveAttribute("data-restore-scroll", "settled");
+    await expect(page.locator("#query-text")).toHaveValue(LONG_QUESTION);
+    await expect(page.locator("#query-text")).toBeInViewport({ ratio: 1 });
+  });
+
+  test("X5: a scroll of the view together with a layout shift still stops the page from moving", async ({
+    page,
+    request,
+  }) => {
+    // RED-IF: the listener treats a view scroll made with a layout shift as
+    // layout and places the box again (the first rule tried did: this test
+    // red 10 of 10 on a Mac, and the same case "settled" 10 of 10 on Linux;
+    // ADR-0175). Partners: the watch was still on, the box moved 44 px in the
+    // document, and the view moved 100 px.
+    test.setTimeout(120000);
+    const held = await heldAfterRestore(page, request, "max-age-x5");
+    const shift = await shiftAboveBox(page, 44, 100);
+    expect(Math.abs(shift.movedInDocument - 44), `the box moved ${shift.movedInDocument} px`).toBeLessThan(1);
+    expect(shift.viewMoved, "the view moved 100 px").toBe(100);
+    await held.finish();
+    await expect(page.locator("html")).toHaveAttribute("data-restore-scroll", "cancelled");
+    expect(await page.evaluate(() => window.scrollY), "the page did not move the view back").toBe(shift.scrollY);
   });
 });
