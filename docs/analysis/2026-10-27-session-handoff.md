@@ -6,7 +6,8 @@ Written by the session. The owner's decisions are the CHG rows named here.
 
 Before this handoff pull request, production `/status` reported `build_sha`
 `d92f628ba6aa981a8882d6f058f5c1f7ab3d7df7`, the squash merge of #589, and `/ready` answered 200;
-`make readiness` read the same build at 2026-10-26T21:04:01Z (UTC).
+`docs/product-readiness.md`, which `make handoff` regenerates, names the same build and its time
+in UTC.
 
 | Pull request | What |
 |---|---|

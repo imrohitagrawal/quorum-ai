@@ -1,7 +1,7 @@
 # Session Handoff
 
 ## Date/time
-2026-10-27T02:33:44+05:30
+2026-10-27T02:58:09+05:30
 
 ## Open work
 `docs/65-open-work.md` — the source of truth for what is open, what blocks what,
@@ -73,13 +73,13 @@ Read CONTINUE-SECURITY-W114-W113-W80-W75-W76-PROMPT.md in the repo root and foll
 ## Leftovers
 From `make session-clean`, which reports and never deletes.
 ```text
+Poisoned local state:
+- `.data/feedback_events.sqlite3` — poisoned local state -- a stale mint cap makes the UI answer 429 and ~12 specs fail. The same events table also holds locally seeded audit and spend-rail events; production keeps its own database elsewhere
+
 Feature branches and worktrees:
 - `worktree ~/Projects/quorum-ai-handoff` — remove with 'git worktree remove' once its branch is merged
 - `worktree ~/Projects/quorum-ai-w113` — remove with 'git worktree remove' once its branch is merged
 - `worktree ~/Projects/quorum-ai-w873f` — remove with 'git worktree remove' once its branch is merged
-
-Containers and images:
-- `image quorum-ai:local` — built by this repo. Remove by name: docker image rm quorum-ai:local
 ```
 
 ## Current phase
@@ -137,12 +137,17 @@ Operate, learn, and improve
 
 ## Git status
 ```text
-clean
+M docs/analysis/2026-10-27-session-handoff.md
+ M docs/product-readiness.md
+ M docs/session-handoff.md
 ```
 
 ## Diff stat
 ```text
-no unstaged diff
+docs/analysis/2026-10-27-session-handoff.md |  3 ++-
+ docs/product-readiness.md                   | 10 +++++-----
+ docs/session-handoff.md                     |  8 ++++----
+ 3 files changed, 11 insertions(+), 10 deletions(-)
 ```
 
 ## Completed in this session
