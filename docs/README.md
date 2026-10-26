@@ -221,6 +221,7 @@ being true, fix the row in the same pull request that made it false.
 | `faq/` | none — read by file name and date |
 | `learning/` | none — read by file name and date |
 | `metrics/` | none — read by file name and date |
+| `owner-answers/` | none — read by file name and date |
 | `reviews/` | README.md |
 | `runbooks/` | none — read by file name and date |
 | `study/` | 00-study-index.md |

@@ -1,0 +1,16 @@
+{
+  "chg": "CHG-093",
+  "entries": [
+    {
+      "kind": "question",
+      "transcript": "bda9c799",
+      "tool_use_id": "toolu_014VSVKyGXPMfCf3o7ERzK5y",
+      "asked_at": "2026-10-26T14:43:20.790Z",
+      "answered_at": "2026-10-26T15:30:42.545Z",
+      "header": "Board W45",
+      "answer": "Leave W45 open",
+      "chosen_label": "Leave W45 open",
+      "chosen_was_recommended": false
+    }
+  ]
+}
