@@ -1037,8 +1037,25 @@ async def validation_exception_handler(
 SIGN_IN_FAILED_NOTICE = "Sign-in did not complete. Please try again."
 
 
-def _account_controls_html(
-    account_id: UUID | None,
+def _account_controls_html(account_id: UUID | None, **options: Any) -> tuple[str, bool]:
+    """:func:`_account_controls_for` after looking the account up."""
+    account = None if account_id is None else signed_in_account(account_id)
+    return _account_controls_for(account, **options)
+
+
+def _drawn_identity(account_id: UUID, account: session_store.StoredAccount | None) -> str:
+    """W105 (ADR-0178): the identity a page or a ``/v1/session`` answer is
+    for, from the account already looked up: its id; ``"anonymous"`` only
+    when the store says the id is certainly in no accounts row (W87-2,
+    ADR-0175); otherwise ``""`` (unknown)."""
+    if account is not None:
+        return str(account.account_id)
+    store = session_store.get_store()
+    return "anonymous" if store is not None and store.is_anonymous(account_id) is True else ""
+
+
+def _account_controls_for(
+    account: session_store.StoredAccount | None,
     *,
     sign_in_failed: bool,
     on_sign_in_host: bool = True,
@@ -1069,8 +1086,10 @@ def _account_controls_html(
     puts CHG-073 (d)'s line in the panel; and the anonymous sign-in branch
     carries the 2-Step line (CHG-063 e, CHG-073 e). With sign-in off the
     anonymous page still gets the empty string.
+
+    W105 (ADR-0178): ``account`` is the one lookup ``/ui`` made, so these
+    controls, the page's ``drawn-identity`` island and ``no-store`` agree.
     """
-    account = None if account_id is None else signed_in_account(account_id)
     notice = (
         '<span class="account-notice" id="sign-in-notice" role="status">'
         + SIGN_IN_FAILED_NOTICE
@@ -1347,7 +1366,9 @@ def _account_delete_html(*, recent_sign_in_seconds_left: int = 0) -> str:
     )
 
 
-def _render_workspace_html(account_controls: str = "", *, signed_in: bool = False) -> str:
+def _render_workspace_html(
+    account_controls: str = "", *, signed_in: bool = False, drawn_identity: str = ""
+) -> str:
     """Render the workspace page with the catalog and default model ids.
 
     Both JSON data islands must be ``</``-escaped before being inserted
@@ -1393,6 +1414,7 @@ def _render_workspace_html(account_controls: str = "", *, signed_in: bool = Fals
         }
     ).replace("<", "\\u003c")
     stale_ids_json = json.dumps(stale_ids).replace("<", "\\u003c")
+    drawn_identity_json = json.dumps(drawn_identity).replace("<", "\\u003c")
     # The readiness snapshot is seeded at template-render time so the
     # client can render the pre-run honesty banner without a round-trip.
     # ``run_startup_probe`` re-reads settings on every call, so the value
@@ -1441,6 +1463,7 @@ def _render_workspace_html(account_controls: str = "", *, signed_in: bool = Fals
         .replace("{{ stale_model_ids_json }}", stale_ids_json)
         .replace("{{ live_readiness_json }}", live_readiness_json)
         .replace("{{ cost_model_json }}", cost_model_json)
+        .replace("{{ drawn_identity_json }}", drawn_identity_json)
         .replace("{{ landing_subhead }}", _landing_subhead(settings))
         .replace("{{ landing_sources_line }}", _landing_sources_line(settings))
     )
@@ -2125,13 +2148,11 @@ def browser_session(
     # only when the store answers that the id is certainly in no accounts row.
     # A lookup that fails (or no store) gives NEITHER field, so the page never
     # reads a failed read as "anonymous" and saves nothing (Codex re-check).
-    account = signed_in_account(session.account_id)
-    if account is not None:
-        body["account_id"] = str(account.account_id)
-    else:
-        store = session_store.get_store()
-        if store is not None and store.is_anonymous(session.account_id) is True:
-            body["anonymous"] = True
+    identity = _drawn_identity(session.account_id, signed_in_account(session.account_id))
+    if identity == "anonymous":
+        body["anonymous"] = True
+    elif identity:
+        body["account_id"] = identity
     response = JSONResponse(body)
     attach_session_cookie(response, session)
     return response
@@ -2297,8 +2318,13 @@ def browser_ui(request: Request) -> Response:
         return _session_capped_response(
             request, exc, client_ip=client_ip, invite=invite is not None, mint_cap=mint_cap
         )
-    controls, shows_account = _account_controls_html(
-        session.account_id,
+    # W105 (ADR-0178): ONE account lookup draws the controls, the page's
+    # ``drawn-identity`` island and the ``no-store`` decision, so they agree.
+    # With no account and a store, ``_drawn_identity`` makes one more read
+    # (``is_anonymous``) to tell "anonymous" from unknown.
+    account = signed_in_account(session.account_id)
+    controls, shows_account = _account_controls_for(
+        account,
         sign_in_failed=request.query_params.get("sign_in") == "failed",
         on_sign_in_host=on_sign_in_host(request),
         max_age_seconds_left=max_age_seconds_left(session.session_id),
@@ -2310,7 +2336,13 @@ def browser_ui(request: Request) -> Response:
         ),
         account_switched=request.query_params.get("account") == "switched",
     )
-    response = HTMLResponse(_render_workspace_html(controls, signed_in=shows_account))
+    response = HTMLResponse(
+        _render_workspace_html(
+            controls,
+            signed_in=shows_account,
+            drawn_identity=_drawn_identity(session.account_id, account),
+        )
+    )
     if shows_account:
         # The page carries the signed-in email: no cache may keep it
         # (review round 1).

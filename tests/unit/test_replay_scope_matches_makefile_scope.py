@@ -128,8 +128,11 @@ def local_clone(tmp_path_factory: pytest.TempPathFactory) -> Path:
     (`open(path)`), unlike the replay script, which reads via `git show`.
     """
     clone = tmp_path_factory.mktemp("mutscope-clone") / "repo"
+    # `--no-hardlinks`: on ubuntu-26.04 runners /tmp is a different device
+    # from the checkout, and a hardlinked `--local` clone fails there with
+    # "Invalid cross-device link" (PR #589's first CI run, 2026-10-26).
     subprocess.run(
-        ["git", "clone", "--local", "--quiet", str(REPO_ROOT), str(clone)],
+        ["git", "clone", "--local", "--no-hardlinks", "--quiet", str(REPO_ROOT), str(clone)],
         check=True,
         capture_output=True,
     )

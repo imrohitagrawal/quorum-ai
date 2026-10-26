@@ -486,6 +486,7 @@ jobs:
           tests/api-mocking/late-run-sign-in-off.spec.ts
           tests/navigation/cross-site-loads.spec.ts
           tests/navigation/cross-site-prefetch.spec.ts
+          tests/navigation/tabs-share-token.spec.ts
           --project=chromium
           --retries=0
 
@@ -495,8 +496,11 @@ jobs:
       # added to the old floor. 52 -> 60 (W88): cross-site-loads.spec.ts adds 8
       # tests, added to the old floor. 60 -> 62 (W88 round 1):
       # cross-site-prefetch.spec.ts adds 2 tests, added to the old floor.
+      # 62 -> 72 (W105, ADR-0178): tabs-share-token.spec.ts adds 10 tests,
+      # added to the old floor (`playwright test --list` printed
+      # "Total: 72 tests in 8 files" for this lane).
       - name: "workspace/accessibility/api-mocking/navigation lane: floor on tests actually executed"
-        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 62 --lane "workspace/accessibility/api-mocking/navigation lane"
+        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 72 --lane "workspace/accessibility/api-mocking/navigation lane"
 
       - name: Clear the previous lane's JUnit report
         run: rm -f e2e/results.xml
@@ -523,6 +527,8 @@ jobs:
           tests/signed-in/delete-recent-sign-in.spec.ts
           tests/signed-in/cross-site-return.spec.ts
           tests/signed-in/restored-question-scroll.spec.ts
+          tests/signed-in/tabs-share-token.spec.ts
+          tests/signed-in/tabs-drawn-identity.spec.ts
           --config=playwright.signed-in.config.ts
           --project=chromium
           --retries=0
@@ -563,9 +569,16 @@ jobs:
       # 50 -> 54 (the W87-2 restore-scroll race, review round 1, 2026-10-25):
       # restored-question-scroll.spec.ts adds 4 tests (scroll anchoring; a
       # 9 px scroll cancels; a layout move placed at once; the box's
-      # own text scroll), added to the old floor.
+      # own text scroll), added to the old floor. 54 -> 57 (W105, ADR-0178):
+      # tabs-share-token.spec.ts adds 3 tests, added to the old floor
+      # (`playwright test --list` printed "Total: 57 tests in 9 files").
+      # 57 -> 63 (the W105 guard, ADR-0178): tabs-drawn-identity.spec.ts adds
+      # 6 tests (the lane printed "63 passed" on 87233ec). 63 -> 64 (W105
+      # review round 3): delete-recent-sign-in.spec.ts adds 1 test (a page
+      # drawn unknown saves under the bootstrap's account); `playwright test
+      # --list` with this lane's command printed "Total: 64 tests in 10 files".
       - name: "signed-in History lane: floor on tests actually executed"
-        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 54 --lane "signed-in History lane"
+        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 64 --lane "signed-in History lane"
 
       - name: Clear the previous lane's JUnit report
         # Adversarial review (#162/#166): without this, a Playwright run that

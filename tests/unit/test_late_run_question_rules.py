@@ -132,6 +132,12 @@ const __stubs = {
   startGoogleSignIn: async function () { __calls.start += 1; },
   signInStartMessage: function (e) { return String(e); },
   LATE_RUN_QUESTION_KEY: "quorum.lateRunQuestion",
+  // W105: ``initSession`` renews through ``renewSessionToken``. No Web Lock
+  // and no IndexedDB here (Node 26 has a real ``navigator.locks``, so it is
+  // named, not inherited), so every bootstrap is one plain ``/v1/session``
+  // fetch, as before W105, whatever the Node version.
+  navigator: { locks: undefined },
+  indexedDB: undefined,
 };
 const __scope = new Proxy(__stubs, {
   has(target, key) {
@@ -302,8 +308,17 @@ def _page_load(*identities: str | None) -> Any:
         " changed: state.pageIdentityChanged === true, starts: __calls.start,"
         " fetches: __calls.fetch };"
     ).replace("__ANSWER_COUNT__", str(len(identities)))
+    # W105: initSession's renewal and identity rule live in their own
+    # functions, lifted with it so the real ones run (not the scope's no-op).
     return _node(
-        ["initSession", "lateRunQuestionEntry", "signInAgainKeepingQuestion"],
+        [
+            "initSession",
+            "renewSessionToken",
+            "takeTokenNumber",
+            "sharedTokenIdentity",
+            "lateRunQuestionEntry",
+            "signInAgainKeepingQuestion",
+        ],
         body,
         answers=[_bootstrap(i) for i in identities],
     )
