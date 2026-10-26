@@ -2320,6 +2320,8 @@ def browser_ui(request: Request) -> Response:
         )
     # W105 (ADR-0178): ONE account lookup draws the controls, the page's
     # ``drawn-identity`` island and the ``no-store`` decision, so they agree.
+    # With no account and a store, ``_drawn_identity`` makes one more read
+    # (``is_anonymous``) to tell "anonymous" from unknown.
     account = signed_in_account(session.account_id)
     controls, shows_account = _account_controls_for(
         account,

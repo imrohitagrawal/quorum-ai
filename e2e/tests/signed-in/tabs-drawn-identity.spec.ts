@@ -14,8 +14,8 @@ import {
 
 /**
  * THE SIGNED-IN BROWSER LANE (ADR-0142) — the W105 drawn-account guard (plan
- * addendum revision 3; round-2 break-it F1, probe S1). A tab never keeps a
- * renewed token for an identity other than the one its HTML was drawn for:
+ * addendum revision 3; round-2 break-it F1, probe S1). A tab drawn for a
+ * known identity never keeps a renewed token for another known identity:
  * its next write is refused with "Security check failed", it saves nothing
  * and restores nothing, and it still passes the token to the answer's own
  * tabs. Runs ONLY under `playwright.signed-in.config.ts`.

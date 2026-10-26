@@ -384,8 +384,9 @@ test.describe("deleting an account needs a recent sign-in (W87-2)", () => {
     // so its run is refused with "Security check failed" and nothing is saved.
     // RED-IF the page sends B's token, reaches the late-run card, or saves
     // the question under any account or as anonymous. Partners: the HTML
-    // really is anonymous, the bootstrap really named B with a token, and B's
-    // session is old enough that a page using B's token would get the card.
+    // really is anonymous, and the bootstrap really named B with a token. The
+    // next test, with the island blanked, shows the same aged session reaching
+    // the card.
     test.setTimeout(120000);
     const other = await browser.newContext();
     const otherPage = await other.newPage();
@@ -430,6 +431,76 @@ test.describe("deleting an account needs a recent sign-in (W87-2)", () => {
     ).toBeVisible();
     await expect(page.locator("#error-region-message")).not.toHaveText(SIGNED_IN_LATE_RUN);
     expect(await savedQuestion(page)).toBeNull();
+    await other.close();
+  });
+
+  test("a page drawn unknown whose bootstrap names an account saves under that account", async ({
+    browser,
+    page,
+    request,
+  }) => {
+    // W105 review round 3 (break-it F1). The W105 guard refuses only when the
+    // drawn identity is known (ADR-0178, decision 8), so for a page whose
+    // island is "" (the server could not tell) ADR-0175's rule still applies:
+    // the late-run card saves under the account the bootstrap names. This is
+    // the original W87-2 test with `/ui`'s island blanked. RED-IF the card
+    // saves nothing or saves as anonymous. Partners: the HTML is anonymous,
+    // the served island really is "", and the bootstrap really named B.
+    test.setTimeout(120000);
+    const other = await browser.newContext();
+    const otherPage = await other.newPage();
+    const b = freshAccount("recent-delete-unknown-b");
+    await signIn(otherPage, b);
+    const bCookie = await sessionCookie(otherPage);
+    const bAccount = (await (await otherPage.request.get("/v1/session")).json()).account_id;
+    expect(bAccount, "B's bootstrap names B").toBeTruthy();
+
+    let blanked = 0;
+    await page.route(
+      (url) => url.pathname === "/ui",
+      async (route) => {
+        const response = await route.fetch();
+        const html = (await response.text()).replace(
+          /(<script id="drawn-identity" type="application\/json">)[^<]*(<\/script>)/,
+          (_all, open, close) => {
+            blanked += 1;
+            return `${open}""${close}`;
+          },
+        );
+        await route.fulfill({ response, body: html });
+      },
+    );
+    let bootstrapAccount = "";
+    await page.route("**/v1/session", async (route) => {
+      const origin = new URL(route.request().url()).origin;
+      await page.context().addCookies([{ name: bCookie.name, value: bCookie.value, url: origin }]);
+      const headers = { ...(await route.request().allHeaders()) };
+      headers["cookie"] = `${bCookie.name}=${bCookie.value}`;
+      const response = await route.fetch({ headers });
+      const body = await response.json();
+      bootstrapAccount = String(body.account_id ?? "");
+      await route.fulfill({ response, json: body });
+    });
+    await page.route("https://accounts.google.com/**", (route) => route.fulfill({ status: 204 }));
+    await openWorkspace(page);
+    await expect(page.locator("#sign-in-google")).toHaveCount(1); // partner: anonymous HTML
+    await expect(page.locator("#account-email")).toHaveCount(0);
+    await expect(page.locator("html")).toHaveAttribute("data-app-state", "ready");
+    expect(blanked, "partner: the served page had one island, blanked").toBe(1);
+    expect(await page.locator("#drawn-identity").textContent()).toBe('""');
+    expect(bootstrapAccount).toBe(bAccount); // partner: the bootstrap named B
+
+    await ageById(request, bCookie.value, 12 * HOUR - 10 * MINUTE);
+    await pressRun(page, QUESTION);
+    await expect(page.locator("#error-region-message")).toHaveText(SIGNED_IN_LATE_RUN);
+    const started = page.waitForResponse((r) => r.url().endsWith("/v1/auth/google/start"));
+    await page.locator("#error-region-actions").getByRole("button", { name: SIGN_IN_LABEL, exact: true }).click();
+    expect((await started).status()).toBe(200);
+    await expect.poll(() => savedQuestion(page)).not.toBeNull();
+    const saved = JSON.parse((await savedQuestion(page)) ?? "{}");
+    expect(saved.account).toBe(bAccount);
+    expect(saved.question).toBe(QUESTION);
+    expect(saved).not.toHaveProperty("anonymous");
     await other.close();
   });
 

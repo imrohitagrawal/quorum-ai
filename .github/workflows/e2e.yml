@@ -573,9 +573,12 @@ jobs:
       # tabs-share-token.spec.ts adds 3 tests, added to the old floor
       # (`playwright test --list` printed "Total: 57 tests in 9 files").
       # 57 -> 63 (the W105 guard, ADR-0178): tabs-drawn-identity.spec.ts adds
-      # 6 tests (`--list` printed "Total: 63 tests in 10 files").
+      # 6 tests (the lane printed "63 passed" on 87233ec). 63 -> 64 (W105
+      # review round 3): delete-recent-sign-in.spec.ts adds 1 test (a page
+      # drawn unknown saves under the bootstrap's account); `playwright test
+      # --list` with this lane's command printed "Total: 64 tests in 10 files".
       - name: "signed-in History lane: floor on tests actually executed"
-        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 63 --lane "signed-in History lane"
+        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 64 --lane "signed-in History lane"
 
       - name: Clear the previous lane's JUnit report
         # Adversarial review (#162/#166): without this, a Playwright run that

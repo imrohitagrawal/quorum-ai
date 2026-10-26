@@ -19,6 +19,8 @@ reviews and the plans are kept outside the repository and none has a committed r
 - ADR-0131, Consequences, first bullet ("Two tabs still invalidate each other's token"): for open
   tabs of the same person this no longer holds; for the cases in Known limits below it still does.
 - ADR-0177, Known limits, "The second-tab token effect" (its lines 224-228): handled here.
+- ADR-0175, decision 12 (the late-run card saves under the account the bootstrap names, not the
+  markup): for a page drawn as a known identity whose bootstrap names another, see decision 8.
 
 ## Context
 
@@ -70,10 +72,12 @@ left the first tab holding a retired token: its next protected request got 403 `
    a `drawn-identity` JSON data island (every `<` written `\u003c`, like the other islands). The
    island holds the account id, `"anonymous"` only when the store says the id is certainly in no
    accounts row, or `""` (unknown): `/v1/session`'s rule, now one function, `_drawn_identity`.
-   The page reads it (`readDrawnIdentity`), and both renewal paths keep a token only through
-   `keepRenewedToken`. When an answer's identity and the drawn one are both known and differ, the
-   tab sets `drawnMismatch` for the rest of the page load, and `pageIdentityChanged`, so nothing is
-   saved. It then keeps no token on that renewal or any later one, takes none from another tab,
+   That is one account lookup; for a page with no account, when there is a store, one more store
+   read (`is_anonymous`) tells `"anonymous"` from `""`. The page reads the island
+   (`readDrawnIdentity`), and both renewal paths keep a token only through `keepRenewedToken`.
+   When an answer's identity and the drawn one are both known and differ, the tab sets
+   `drawnMismatch` for the rest of the page load, and `pageIdentityChanged`, so nothing is saved.
+   It then keeps no token on that renewal or any later one, takes none from another tab,
    puts no saved late-run question back (the stored entry is still removed), and "Start a session"
    reloads the page instead of saying "Session started". Its next write gets today's "Security
    check failed" and "Refresh session". A refused LOCKED renewal still posts its token under the
@@ -95,6 +99,8 @@ left the first tab holding a retired token: its next protected request got 403 `
 | Flake count | each new spec with `--repeat-each=10` | navigation `100 passed`; signed-in `30 passed`; 0 failed |
 | The guard's tests, before and after | the marker and guard test files, and `tabs-drawn-identity.spec.ts`, on `5574730` (the designer) and on the build | `81 failed, 3 passed`, then `84 passed`; e2e `3 failed`, `3 passed`, then `6 passed` |
 | The guard's tests bite | the designer's mutations of its own reference copy, kept outside the repository | unit and server 19 of 19 killed; e2e 2 of 2 |
+| The signed-in History lane with the guard | as `e2e.yml` runs it, CI's settings, then `scripts/check_e2e_executed.py`; the logs are kept outside the repository | on `87233ec`: `63 passed`, `63 tests executed (floor 63)`; with review round 3's added test (2026-10-26): `64 passed`, `64 tests executed (floor 64)` |
+| The guard's flake count | each spec with `--repeat-each=10` on `87233ec`, CI's settings; the logs are kept outside the repository | `tabs-drawn-identity` `60 passed`; signed-in `tabs-share-token` `30 passed`; navigation `tabs-share-token` `100 passed`; 0 failed |
 | The late-run harness still bites | `test_late_run_question_rules.py` with `pageIdentityChanged = true;` removed from `initSession`, restored and checked with `diff -q` | `2 failed, 17 passed`; restored `19 passed` |
 | A clock cannot order the tabs | Codex's model of revision 3 (each page sets its own time offset); its two printed lines joined | `{"arrivalA":1000,"arrivalB":1001,"atA":101000,"atB":1001, "server":"T2","B":"T1","todayB":"T2"}` |
 | An unbounded counter step stops the boot | Codex's probe of revision 4 | `{"entered":true,"signalAborted":true,"sessionFetches":0,"todaySessionFetches":1}` |
@@ -133,7 +139,9 @@ session's. 5 s was not measured.
 - **Retry once, quietly** (case 2's other option, the session's recommendation): the owner chose
   today's refusal. ADR-0131 had already rejected a broad retry.
 - **A server tag, or a server sequence number** (case 3's and the design question's other options):
-  not page-only, which CHG-071 described.
+  the owner chose the page-only options instead (CHG-089 (c), "Keep W105 page-only", and (e)), as
+  CHG-071 described. The guard's island (decision 8) came later, under CHG-089 (h) and (i): it tells
+  the page which identity it was drawn for, and neither tags nor numbers a token.
 - **Ask the other tabs for the token** (case 4's other option): more code, untestable here (the
   test browser never uses the back/forward cache), and no help when no open tab holds the latest
   token.
@@ -195,8 +203,10 @@ session's. 5 s was not measured.
 - `tests/unit/test_late_run_question_rules.py` lifts the new functions with `initSession`, and names
   `navigator.locks` and `indexedDB` as undefined, so its bootstraps stay one plain fetch.
 - The navigation lane's floor rises from 62 to 72 and the signed-in History lane's from 54 to 57,
-  then to 63 with the guard's `tabs-drawn-identity.spec.ts`.
-- The guard: `main.py` draws `/ui` from one lookup (`_account_controls_for`, `_drawn_identity`)
+  then to 63 with the guard's `tabs-drawn-identity.spec.ts`, and to 64 with review round 3's
+  page drawn unknown in `delete-recent-sign-in.spec.ts`.
+- The guard: `main.py` draws `/ui` from one account lookup, plus the `is_anonymous` read for a page
+  with no account when there is a store (`_account_controls_for`, `_drawn_identity`)
   and `workspace.html` has the `drawn-identity` island; `app.js` adds `readDrawnIdentity`,
   `keepRenewedToken` and `drawnMismatch`.
 - ADR-0175's save under the bootstrap's account is superseded for a drawn known identity (decision

@@ -1,6 +1,6 @@
 """W105 guard (plan addendum, revision 3, design points 2 to 5; G1-G7b): a
-tab never keeps a renewed token for an identity other than the one its HTML
-was drawn for.
+tab drawn for a known identity never keeps a renewed token for another known
+identity.
 
 The test designer's tests, written before the build. Run under Node with the
 functions lifted out of the served ``app.js`` by the two existing harnesses
