@@ -38,6 +38,7 @@ rest; putting W114 before W113 is the session's reading of those answers.
    lines; past it, stop and ask). Continue branch `w113/owner-quote-check` in worktree
    `quorum-ai-w113`, after merging `main` into it. Amend `r2/root-cause-and-plan.md` with
    `r2/codex-plan-review.md`, have Codex review the amended plan, then failing tests first.
+   The owner's approval for W113 is CHG-090, on that branch, with CHG-094's new limit.
 4. **W80**: remove `/feedback/audit` (CHG-063 (c)); stop a cross-site link cancelling a sign-in.
    Write and review the plan first.
 5. **W75**, with the additions its row names.

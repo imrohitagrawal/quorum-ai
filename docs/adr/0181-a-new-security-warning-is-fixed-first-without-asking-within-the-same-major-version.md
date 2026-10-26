@@ -15,7 +15,7 @@ updated. Twice in one session that wait went to the owner as a separate question
 
 ## Measured
 
-| Case | Owner's answer | Update merged | Work that waited |
+| Case | Owner's answer | The update | Work that waited |
 |---|---|---|---|
 | CHG-085: pypdf and certifi | 2026-10-22, 19:22:31Z | #584, 2026-10-22, 20:49:42Z | W87-3 (#583) |
 | CHG-086: pypdf 6.21.1 to 6.21.2 | 2026-10-24, 13:18:55Z, asked 2026-10-23, 22:46:54Z | #586, 2026-10-24, 15:03:14Z | W88 (#587) |
@@ -58,9 +58,11 @@ Otherwise it asks the owner, as before.
 
 ## Rejected alternatives
 
-- **Adopt with no limits** (major versions included; ask only when no fixed version exists):
-  rejected by the owner. A major version can change behaviour that no test here pins.
-- **Keep asking each time:** rejected by the owner. It keeps the wait measured above.
+- **Adopt with no limits** (major versions included; ask only when no fixed version exists).
+  The owner did not choose it. The session's reason against it: a major version can change
+  behaviour that no test here pins.
+- **Keep asking each time.** The owner did not choose it. The session's reason against it: it
+  keeps the wait measured above.
 
 ## Related
 

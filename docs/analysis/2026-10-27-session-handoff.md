@@ -2,10 +2,11 @@
 
 Written by the session. The owner's decisions are the CHG rows named here.
 
-## Shipped, in production
+## Pull requests #582 to #589
 
-Production `/status` reported `build_sha` `d92f628ba6aa981a8882d6f058f5c1f7ab3d7df7` (the merge
-of #589) and `/ready` 200 on 2026-10-27, before this handoff pull request.
+Before this handoff pull request, production `/status` reported `build_sha`
+`d92f628ba6aa981a8882d6f058f5c1f7ab3d7df7`, the squash merge of #589, and `/ready` answered 200;
+`make readiness` read the same build at 2026-10-26T21:04:01Z (UTC).
 
 | Pull request | What |
 |---|---|
@@ -39,7 +40,7 @@ of #589) and `/ready` 200 on 2026-10-27, before this handoff pull request.
   request A ships.
 - **W113** (the owner's quoted decisions match the transcript): branch `w113/owner-quote-check`,
   local only, head `1e44865`, worktree `quorum-ai-w113`, a bundle backup in the owner's evidence
-  folder `2026-10-26/w113/`. Two review rounds ran; round 1's 18 findings were fixed; round 2
+  folder `2026-10-26/w113/`. Two review rounds ran; round 1's 18 findings were fixed or recorded in its fix plan; round 2
   reproduced that the check reads the log as lines of text, so Markdown can hide a row or the true
   answer. The folder's `STATE.md`, `r2/root-cause-and-plan.md` and `r2/codex-plan-review.md`
   ("sound with changes") are the starting point.
@@ -51,6 +52,8 @@ of #589) and `/ready` 200 on 2026-10-27, before this handoff pull request.
   CHG-092 to CHG-094 are here. ADR-0179 is on W113's branch; ADR-0181 is here. When W113 merges
   `main`, both logs end in appended rows: put them back in number order (W113's own check
   refuses rows out of order) and keep both sets of extracts.
+- **W113's check refuses a new row numbered below CHG-090.** So add CHG-088 (W114, pull
+  request A) before W113 merges, as the prompt's order does, or the check refuses it.
 - **The board anchor counts the branch's commits too.** A long branch can push it past 60 again;
   merge `main` and re-gate.
 - **Transcripts under `~/.claude/projects/` are read-only.** A test designer's command nearly
