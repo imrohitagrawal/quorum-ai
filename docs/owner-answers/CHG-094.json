@@ -1,0 +1,16 @@
+{
+  "chg": "CHG-094",
+  "entries": [
+    {
+      "kind": "question",
+      "transcript": "bda9c799",
+      "tool_use_id": "toolu_01RV1iXeU3NKwLVRVSMZWNju",
+      "asked_at": "2026-10-26T20:54:43.000Z",
+      "answered_at": "2026-10-26T20:55:57.353Z",
+      "header": "W113 next",
+      "answer": "Rebuild, fresh session, 2,900 (Recommended)",
+      "chosen_label": "Rebuild, fresh session, 2,900 (Recommended)",
+      "chosen_was_recommended": true
+    }
+  ]
+}

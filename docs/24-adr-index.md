@@ -182,6 +182,7 @@ ways, so the record shows what was believed on a date and what replaced it.
 | [ADR-0177](adr/0177-another-site-may-open-the-page-but-cannot-load-it-hidden-or-ask-for-a-session.md) | Another site may open the page, but cannot load it hidden or ask for a session | Architecture | Accepted — 2026-10-23, board row W88 |
 | [ADR-0178](adr/0178-open-tabs-of-the-same-person-share-a-renewed-anti-forgery-token.md) | Open tabs of the same person share a renewed anti-forgery token | Architecture | Accepted — 2026-10-25, board row W105 |
 | [ADR-0180](adr/0180-a-users-own-openrouter-key-is-connected-by-sign-in-stored-encrypted-per-account-and-spent-under-the-users-limits.md) | A user's own OpenRouter key is connected by OpenRouter's sign-in, stored encrypted per account, and spent under the user's own limits | Architecture | Accepted — 2026-10-17, for the parts the product owner decided: CHG-075 to CHG-080, and decision 3 of CHG-059 |
+| [ADR-0181](adr/0181-a-new-security-warning-is-fixed-first-without-asking-within-the-same-major-version.md) | A new security warning is fixed first, without asking, within the same major version | Architecture | Accepted — 2026-10-25 |
 
 **This index was itself stale** until 2026-07-30: ADR-0002 had existed since
 2026-07-19 and was never listed here. A hand-maintained index is a derived fact

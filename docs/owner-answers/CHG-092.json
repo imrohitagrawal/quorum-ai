@@ -1,0 +1,16 @@
+{
+  "chg": "CHG-092",
+  "entries": [
+    {
+      "kind": "question",
+      "transcript": "bda9c799",
+      "tool_use_id": "toolu_01HvK8yLQ6KTDWPCF1iTcRrY",
+      "asked_at": "2026-10-25T09:09:03.353Z",
+      "answered_at": "2026-10-25T09:19:13.316Z",
+      "header": "Update rule",
+      "answer": "Adopt as suggested (Recommended)",
+      "chosen_label": "Adopt as suggested (Recommended)",
+      "chosen_was_recommended": true
+    }
+  ]
+}
