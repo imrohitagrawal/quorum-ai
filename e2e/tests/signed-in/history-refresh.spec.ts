@@ -219,6 +219,8 @@ test.describe("signed-in History refresh (W33 slice D)", () => {
     // 10c4fd0: every GET /v1/session rotates the session's CSRF token, so a
     // tab that booted earlier gets 403 CSRF_INVALID on "Sign out" (a
     // pre-existing two-tab limit, not this slice's).
+    // Note, 2026-10-25 (W105, ADR-0178): open tabs of the same person now
+    // share the renewed token, so that limit no longer holds for them.
     test.setTimeout(120000);
     const account = freshAccount("two-tabs");
     const kept = await context.newPage();

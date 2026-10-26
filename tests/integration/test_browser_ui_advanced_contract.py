@@ -120,7 +120,9 @@ def test_workspace_html_contains_all_dom_hooks_used_by_javascript(
     assert app_js_response.status_code == 200
     js = app_js_response.text
     # Find every literal "..." passed to ``el(`` or ``getElementById(``.
-    requested_ids = set(re.findall(r'el\(["\']([a-z0-9-]+)["\']\)', js))
+    # W105: ``\b`` so ``new BroadcastChannel("...")`` is not read as ``el(``
+    # (the same 189 ids on 7e777d1's app.js either way).
+    requested_ids = set(re.findall(r'\bel\(["\']([a-z0-9-]+)["\']\)', js))
     requested_ids |= set(re.findall(r'getElementById\(["\']([a-z0-9-]+)["\']\)', js))
     # W33 slice D: the History refresh's own lookups. RED-IF: renaming
     # ``account-email`` or ``account-delete`` on either side (the server

@@ -162,3 +162,24 @@ A signed-in person opens History and presses "Delete my account…" more than 10
 - Google is asked for nothing new: no password prompt is forced.
 - Decided by the product owner on 2026-10-17 to 2026-10-19 (CHG-056 (d), CHG-063 (f)(1), CHG-066 (c), CHG-073 (d)); design ADR-0175.
 - Known limit: typing for more than 10 minutes after the new sign-in is refused again, and the visitor signs in again.
+
+## Journey J-010: Using Quorum in two tabs
+
+### Trigger
+
+A person has Quorum open in one tab, with a question typed or a run going, and opens Quorum again in a second tab of the same browser: by typing the address, from a bookmark, or from a link in a chat app or on another site.
+
+### Steps
+
+1. The second tab opens and starts as usual. If another tab of the site is renewing its session at the same moment, the second tab waits its turn, so it can start up to about 10 s later than it would today (about 20 s only in a rare order of its two waits, read from the code, not measured; ADR-0178, Known limits). Nothing appears in the first tab: no message, no reload.
+2. They go back to the first tab and press "Run now", "See the estimate", "Review & run" or "Stop run". It works, as it does in the second tab. "Sign out" and "Stay signed in" work there too.
+3. If, in the second tab, they signed out, signed in as another account, signed out everywhere or deleted the account, the first tab's next action is refused with "Security check failed" and the button "Refresh session". The reload shows who is signed in now. The same happens to a tab whose account changed in another tab while it was still starting: it is refused, even though its page looks ready, it puts back no saved question, and "Start a session" reloads it.
+4. If the first tab missed the change (a click sent at the very moment the second tab opened, a tab restored with the Back button, or a browser that cannot pass the change on), its next action is refused the same way, once, and "Refresh session" puts it right. The reload passes its new token to the other open tabs of the same person, so it does not break them, except when the browser cannot pass the token on, when the reload's wait for its turn runs out (10 s), after the site's stored data was cleared, or for a tab that itself had to renew without sharing: those tabs are refused the same way, as before (ADR-0178, Known limits).
+
+### Success Criteria
+
+- When it works, nothing new is on screen, at phone or desktop width.
+- A tab never takes over another person's session: a tab signed in as one account never runs, spends or saves History as another account, and a tab drawn signed out never does so as an account, except when the server could not tell who the page or its session answer was for (ADR-0178's first known limit). Two anonymous tabs count as the same person (a known, accepted limit).
+- A refused action is refused once and is never retried without the person; nothing is charged for it.
+- The session's anti-forgery token is never shown, stored in the page's storage or put in a URL.
+- Decided by the product owner on 2026-10-18 (CHG-071) and 2026-10-25 to 2026-10-26 (CHG-089); design ADR-0178.

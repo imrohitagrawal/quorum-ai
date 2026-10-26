@@ -373,16 +373,19 @@ test.describe("deleting an account needs a recent sign-in (W87-2)", () => {
     await context.close();
   });
 
-  test("the anonymous card saves under the account the bootstrap names, not the markup", async ({
+  test("a page drawn anonymous whose bootstrap names another account is refused and saves nothing", async ({
     browser,
     page,
     request,
   }) => {
-    // Codex finding 2. The page's HTML is anonymous, but its session
-    // bootstrap is answered with signed-in account B's cookie. RED-IF the
-    // card's "Sign in with Google" saves the question as anonymous (it could
-    // then be put back for another account), or saves nothing. Partners: the
-    // HTML really is anonymous, and the bootstrap really named B.
+    // Codex finding 2 (W87-2), superseded by the W105 guard (ADR-0178,
+    // decision 8): the page's HTML is anonymous, but its session bootstrap
+    // is answered with signed-in account B's cookie. The page keeps no token,
+    // so its run is refused with "Security check failed" and nothing is saved.
+    // RED-IF the page sends B's token, reaches the late-run card, or saves
+    // the question under any account or as anonymous. Partners: the HTML
+    // really is anonymous, the bootstrap really named B with a token, and B's
+    // session is old enough that a page using B's token would get the card.
     test.setTimeout(120000);
     const other = await browser.newContext();
     const otherPage = await other.newPage();
@@ -393,6 +396,7 @@ test.describe("deleting an account needs a recent sign-in (W87-2)", () => {
     expect(bAccount, "B's bootstrap names B").toBeTruthy();
 
     let bootstrapAccount = "";
+    let bootstrapToken = "";
     await page.route("**/v1/session", async (route) => {
       const origin = new URL(route.request().url()).origin;
       await page.context().addCookies([{ name: bCookie.name, value: bCookie.value, url: origin }]);
@@ -401,6 +405,7 @@ test.describe("deleting an account needs a recent sign-in (W87-2)", () => {
       const response = await route.fetch({ headers });
       const body = await response.json();
       bootstrapAccount = String(body.account_id ?? "");
+      bootstrapToken = String(body.csrf_token ?? "");
       await route.fulfill({ response, json: body });
     });
     await page.route("https://accounts.google.com/**", (route) => route.fulfill({ status: 204 }));
@@ -409,18 +414,22 @@ test.describe("deleting an account needs a recent sign-in (W87-2)", () => {
     await expect(page.locator("#account-email")).toHaveCount(0);
     await expect(page.locator("html")).toHaveAttribute("data-app-state", "ready");
     expect(bootstrapAccount).toBe(bAccount); // partner: the bootstrap named B
+    expect(bootstrapToken, "partner: the bootstrap brought a token").not.toBe("");
 
     await ageById(request, bCookie.value, 12 * HOUR - 10 * MINUTE);
+    const sent = page.waitForResponse(
+      (r) => new URL(r.url()).pathname.startsWith("/v1/query-runs") && r.request().method() === "POST",
+    );
     await pressRun(page, QUESTION);
-    await expect(page.locator("#error-region-message")).toHaveText(SIGNED_IN_LATE_RUN);
-    const started = page.waitForResponse((r) => r.url().endsWith("/v1/auth/google/start"));
-    await page.locator("#error-region-actions").getByRole("button", { name: SIGN_IN_LABEL, exact: true }).click();
-    expect((await started).status()).toBe(200);
-    await expect.poll(() => savedQuestion(page)).not.toBeNull();
-    const saved = JSON.parse((await savedQuestion(page)) ?? "{}");
-    expect(saved.account).toBe(bAccount);
-    expect(saved.question).toBe(QUESTION);
-    expect(saved).not.toHaveProperty("anonymous");
+    const refused = await sent;
+    expect(refused.status()).toBe(403);
+    expect(refused.request().headers()["x-csrf-token"], "the page did not send B's token").not.toBe(bootstrapToken);
+    await expect(page.locator("#error-region-title")).toHaveText("Security check failed");
+    await expect(
+      page.locator("#error-region-actions").getByRole("button", { name: "Refresh session", exact: true }),
+    ).toBeVisible();
+    await expect(page.locator("#error-region-message")).not.toHaveText(SIGNED_IN_LATE_RUN);
+    expect(await savedQuestion(page)).toBeNull();
     await other.close();
   });
 

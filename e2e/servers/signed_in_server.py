@@ -97,6 +97,24 @@ def _age_session(raw: bytes) -> tuple[int, dict[str, Any]]:
     return (200 if found else 404), {"cached": cached is not None, "rows": rows}
 
 
+def _session_account(raw: bytes) -> tuple[int, dict[str, Any]]:
+    """TEST-ONLY (W105): which account the running app's session belongs to.
+
+    An anonymous ``/v1/session`` answer names no account, so a spec cannot
+    otherwise show that one anonymous session was REPLACED by another (a new
+    random account, ``auth.issue_session``). Read-only; imported at call time,
+    as ``_age_session`` is."""
+    from product_app import auth
+
+    asked = json.loads(raw.decode() or "{}")
+    session_id = str(asked.get("session_id") or "")
+    with auth.session_repository._lock:
+        cached = auth.session_repository._sessions.get(session_id)
+    if cached is None:
+        return 404, {"found": False}
+    return 200, {"found": True, "account_id": str(cached.account_id)}
+
+
 def _bounce_target(request_path: str, callback: str) -> str | None:
     """TEST-ONLY (W88): where ``GET /bounce?to=...`` may send the browser.
 
@@ -137,6 +155,10 @@ class _TokenHandler(BaseHTTPRequestHandler):
         raw = self.rfile.read(length)
         if self.path == "/age-sessions":
             status, answer = _age_session(raw)
+            self._send(status, json.dumps(answer).encode())
+            return
+        if self.path == "/session-account":
+            status, answer = _session_account(raw)
             self._send(status, json.dumps(answer).encode())
             return
         form = {k: v[0] for k, v in parse_qs(raw.decode()).items()}

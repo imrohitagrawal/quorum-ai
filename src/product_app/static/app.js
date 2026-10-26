@@ -429,6 +429,20 @@
     // unknown one. Neither is cleared for the page load.
     pageIdentity: null,
     pageIdentityChanged: false,
+    // W105 guard (ADR-0178): ``true`` once a renewal answered for another
+    // identity than the one this page's HTML was drawn for. Never cleared for
+    // the page load: no token is kept or taken, nothing saved or restored.
+    drawnMismatch: false,
+    // W105 (ADR-0178): sharing the token with the site's other open tabs.
+    // ``sharingOff`` is set for the rest of the page load once a renewal ran
+    // without the lock or the counter; ``renewing`` while this tab's own
+    // answer is on its way; ``tokenGen``/``tokenSeq`` are the counter's
+    // per-reset id and the highest number this tab has held (``null``/0
+    // before its first numbered renewal).
+    sharingOff: false,
+    renewing: false,
+    tokenGen: null,
+    tokenSeq: 0,
     currentEstimate: null,
     currentRunId: null,
     pollingTimer: null,
@@ -8391,27 +8405,307 @@
   }
 
   // ---------------------------------------------------------------------------
+  // W105 (ADR-0178, CHG-071, CHG-089): open tabs share a renewed token
+  // ---------------------------------------------------------------------------
+  //
+  // Every ``/v1/session`` answer renews the anti-forgery token, so a second
+  // tab used to leave the first holding a retired token. Now the renewing tab
+  // passes its token to the site's other open tabs, and each takes it only
+  // when it is the same person (case 1) and newer than its own. Nothing is
+  // shown. A click already sent with the old token (case 2) and a tab that
+  // missed the message (case 4) are refused as today, with no retry. The
+  // token is never put in storage, a URL, the DOM or a log.
+
+  // The server makes tokens with ``secrets.token_urlsafe(24)`` (32 of these).
+  const SHARED_TOKEN_PATTERN = /^[A-Za-z0-9_-]{16,128}$/;
+  // The wait for the lock, and for the counter, before a tab renews without
+  // them and stops sharing for the rest of the page load.
+  const SESSION_TOKEN_WAIT_MS = 10000;
+
+  // The identity a renewal is shared under: the account the server names, or
+  // "anonymous" only when it said ``anonymous: true`` (W87-2, ADR-0175: a
+  // missing account alone is not proof), otherwise "" (unknown, never shared).
+  function sharedTokenIdentity(session) {
+    if (typeof session.account_id === "string" && session.account_id) return session.account_id;
+    return session.anonymous === true ? "anonymous" : "";
+  }
+
+  // W105 guard: the identity the server drew this page for, from the
+  // ``drawn-identity`` island (an account id, "anonymous", or "" unknown).
+  // A missing island or a value that is not a string is unknown.
+  function readDrawnIdentity(doc) {
+    try {
+      const node = doc.getElementById("drawn-identity");
+      const value = node ? JSON.parse(node.textContent) : "";
+      return typeof value === "string" ? value : "";
+    } catch (_) {
+      return "";
+    }
+  }
+
+  // W105 guard: the one place a renewed token is kept. An answer for another
+  // identity than the drawn one (both known) refuses it, and every later one
+  // on this page load: the token is cleared, so the next write gets today's
+  // "Security check failed" and "Refresh session". An unknown side alone
+  // refuses nothing.
+  function keepRenewedToken(session, tab, drawnIdentity) {
+    const identity = sharedTokenIdentity(session);
+    const drawn = typeof drawnIdentity === "string" ? drawnIdentity : "";
+    if (drawn && identity && identity !== drawn) {
+      tab.drawnMismatch = true;
+      tab.pageIdentityChanged = true;
+    }
+    if (tab.drawnMismatch) {
+      tab.csrfToken = "";
+      return false;
+    }
+    tab.csrfToken = session.csrf_token;
+    return true;
+  }
+
+  // Whether this tab takes a token another tab passed on. Every condition
+  // must hold; a malformed message is refused, never thrown on.
+  function acceptSharedToken(message, tab) {
+    if (!message || typeof message !== "object" || message.kind !== "csrf-token") return false;
+    // A value that cannot be one of the server's tokens (a newline could not
+    // even be sent as a header) is refused.
+    if (typeof message.token !== "string" || !SHARED_TOKEN_PATTERN.test(message.token)) {
+      return false;
+    }
+    // Case 1: the same person as this page load's first answer; an unknown
+    // identity on either side matches nothing, and after a change nothing is
+    // taken into this page load (W87-2's rule).
+    if (typeof message.identity !== "string" || !message.identity) return false;
+    if (message.identity !== tab.pageIdentity || tab.pageIdentityChanged) return false;
+    // A page drawn for another identity takes nothing (the W105 guard).
+    if (tab.drawnMismatch) return false;
+    // A tab that renewed without the lock or the counter takes nothing; a tab
+    // whose own answer is on its way waits for it.
+    if (tab.sharingOff || tab.renewing) return false;
+    // The order: the same counter (a storage reset gives a new ``gen``), and
+    // a number above the highest this tab has held. No clock is read.
+    if (typeof message.gen !== "string" || message.gen !== tab.tokenGen) return false;
+    return Number.isSafeInteger(message.seq) && message.seq > tab.tokenSeq;
+  }
+
+  // The next number from the counter all the site's tabs share: one
+  // IndexedDB record ``{gen, seq}`` (never the token), read and raised by one
+  // in a single readwrite transaction, so the numbers follow the order of the
+  // locked renewals. A missing record is created with a new ``gen``. Gives
+  // ``null`` (renew as today, without sharing) on a refused or failed open or
+  // transaction, ``blocked``, a malformed or exhausted record, or after
+  // ``timeoutMs``: an open can stay pending behind another tab's upgrade. A
+  // late answer after that is ignored. It never rejects.
+  function takeTokenNumber(factory, timeoutMs = SESSION_TOKEN_WAIT_MS) {
+    return new Promise((resolve) => {
+      let settled = false;
+      const finish = (number) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(number);
+      };
+      const timer = setTimeout(() => finish(null), timeoutMs);
+      let request;
+      try {
+        request = factory.open("quorum-session-token", 1);
+      } catch (_) {
+        finish(null);
+        return;
+      }
+      request.onupgradeneeded = () => {
+        const db = request.result;
+        if (!db.objectStoreNames.contains("counter")) db.createObjectStore("counter");
+      };
+      request.onblocked = () => finish(null);
+      request.onerror = () => finish(null);
+      request.onsuccess = () => {
+        const db = request.result;
+        // Another tab's upgrade waits for this connection to close.
+        db.onversionchange = () => db.close();
+        if (settled) {
+          db.close();
+          return;
+        }
+        let number = null;
+        const fail = () => {
+          db.close();
+          finish(null);
+        };
+        try {
+          const tx = db.transaction("counter", "readwrite");
+          const store = tx.objectStore("counter");
+          const read = store.get("counter");
+          read.onsuccess = () => {
+            try {
+              const record = read.result;
+              const seq = record ? record.seq : undefined;
+              if (record === undefined) {
+                number = { gen: crypto.randomUUID(), seq: 1 };
+              } else if (record && typeof record.gen === "string" && record.gen
+                && Number.isSafeInteger(seq) && seq >= 0 && seq < Number.MAX_SAFE_INTEGER) {
+                number = { gen: record.gen, seq: seq + 1 };
+              } else {
+                tx.abort();
+                return;
+              }
+              store.put(number, "counter");
+            } catch (_) {
+              tx.abort();
+            }
+          };
+          // The number is given only once the write is durable.
+          tx.oncomplete = () => {
+            db.close();
+            finish(number);
+          };
+          tx.onerror = fail;
+          tx.onabort = fail;
+        } catch (_) {
+          fail();
+        }
+      };
+    });
+  }
+
+  // One renewal of this tab's token, resolving to the parsed ``/v1/session``
+  // answer. Inside the Web Lock (one tab at a time, so the messages follow
+  // the server's order): the counter's number, then exactly one
+  // ``fetchSession()``, then the token, then one post. The waits for the lock
+  // and for the counter are bounded (10 s each); the fetch inside the lock
+  // waits as long as the network takes, as today. A tab with no lock, a lock
+  // refused before its callback runs, a wait that times out, or no number
+  // renews once without them and stops sharing for the rest of the page load.
+  // From then on it behaves as today, but a timed-out wait has cost it 10 s,
+  // and a tab that got the lock late can wait up to 10 s more for the counter
+  // (about 20 s in the worst order). A failure INSIDE the lock is thrown out
+  // as today; nothing renews twice and nothing is retried. Both paths keep
+  // the token only through ``keepRenewedToken``; a refused locked renewal
+  // still posts it under the ANSWER's identity, since the server has retired
+  // the old one for that identity's tabs.
+  async function renewSessionToken({
+    locks,
+    indexedDB: factory,
+    channel,
+    fetchSession,
+    state: tab,
+    lockTimeoutMs = SESSION_TOKEN_WAIT_MS,
+    counterTimeoutMs = SESSION_TOKEN_WAIT_MS,
+    drawnIdentity = "",
+  }) {
+    let entered = false;
+    const renewAlone = async () => {
+      tab.sharingOff = true;
+      const session = await fetchSession();
+      keepRenewedToken(session, tab, drawnIdentity);
+      return session;
+    };
+    const renewLocked = async () => {
+      entered = true;
+      tab.renewing = true;
+      try {
+        const number = tab.sharingOff ? null : await takeTokenNumber(factory, counterTimeoutMs);
+        if (!number) tab.sharingOff = true;
+        const session = await fetchSession();
+        keepRenewedToken(session, tab, drawnIdentity);
+        if (!tab.sharingOff) {
+          tab.tokenGen = number.gen;
+          tab.tokenSeq = number.seq;
+          // The identity is the one answered inside the lock, not the one
+          // this tab held before it waited.
+          const identity = sharedTokenIdentity(session);
+          if (identity && channel) {
+            try {
+              const { gen, seq } = number;
+              const token = session.csrf_token;
+              channel.postMessage({ kind: "csrf-token", token, identity, gen, seq });
+            } catch (_) {
+              // A closed channel: the other tabs keep today's behaviour.
+            }
+          }
+        }
+        return session;
+      } finally {
+        tab.renewing = false;
+      }
+    };
+    if (!locks || typeof locks.request !== "function") return renewAlone();
+    let held;
+    try {
+      const signal = AbortSignal.timeout(lockTimeoutMs);
+      held = locks.request("quorum-session-token", { signal }, renewLocked);
+    } catch (_) {
+      return renewAlone();
+    }
+    try {
+      return await held;
+    } catch (error) {
+      if (entered) throw error;
+      return renewAlone();
+    }
+  }
+
+  // The channel, opened once as the script starts (before the first
+  // bootstrap, so a booting tab cannot miss a neighbour). Without
+  // ``BroadcastChannel`` the page neither sends nor receives a token, so its
+  // tabs are refused as before W105; its renewals still take the lock and a
+  // number. Taking a token changes the token and its number only: no
+  // request, no post, no notice.
+  function openSessionTokenChannel() {
+    if (typeof BroadcastChannel !== "function") return null;
+    try {
+      const channel = new BroadcastChannel("quorum-session-token");
+      channel.onmessage = (event) => {
+        const message = event ? event.data : null;
+        if (!acceptSharedToken(message, state)) return;
+        state.csrfToken = message.token;
+        state.tokenSeq = message.seq;
+      };
+      return channel;
+    } catch (_) {
+      return null;
+    }
+  }
+  const sessionTokenChannel = openSessionTokenChannel();
+
+  // ---------------------------------------------------------------------------
   // Run lifecycle
   // ---------------------------------------------------------------------------
 
   async function initSession() {
     try {
-      const response = await fetch("/v1/session", { credentials: "same-origin" });
-      if (!response.ok) {
-        throw new ApiError({
-          status: response.status,
-          code: "AUTH_REQUIRED",
-          message: STATUS_COPY[response.status] || "Could not start a session.",
-        });
+      // ``window.indexedDB`` can throw in some private modes: no counter then.
+      let storage = null;
+      try {
+        storage = window.indexedDB;
+      } catch (_) {
+        storage = null;
       }
-      const session = await response.json();
-      state.csrfToken = session.csrf_token;
+      const session = await renewSessionToken({
+        locks: navigator.locks,
+        indexedDB: storage,
+        channel: sessionTokenChannel,
+        state,
+        drawnIdentity: readDrawnIdentity(document),
+        fetchSession: async () => {
+          const response = await fetch("/v1/session", { credentials: "same-origin" });
+          if (!response.ok) {
+            throw new ApiError({
+              status: response.status,
+              code: "AUTH_REQUIRED",
+              message: STATUS_COPY[response.status] || "Could not start a session.",
+            });
+          }
+          return response.json();
+        },
+      });
       // W87-1 round 2: the signed-in account the server names ("" anonymous).
       state.sessionAccountId = typeof session.account_id === "string" ? session.account_id : "";
       // W87-2 (ADR-0175): anonymity only when the server says so; a missing
       // ``account_id`` alone is not proof (a failed read gives neither).
       state.sessionAnonymous = !state.sessionAccountId && session.anonymous === true;
-      const identity = state.sessionAccountId || (state.sessionAnonymous ? "anonymous" : "");
+      // W105: the same rule the shared token's identity uses.
+      const identity = sharedTokenIdentity(session);
       if (state.pageIdentity === null || state.pageIdentity === undefined) {
         state.pageIdentity = identity;
       } else if (!identity || identity !== state.pageIdentity) {
@@ -10138,6 +10432,12 @@
   async function retrySession() {
     try {
       await initSession();
+      // W105 guard: a page drawn for another identity reloads, as "Refresh
+      // session" does, so the reload shows who is signed in now.
+      if (state.drawnMismatch) {
+        location.reload();
+        return;
+      }
       await refreshDefaults();
       clearError();
       toast({ message: "Session started. You can run a query now.", tone: "success" });
@@ -11694,6 +11994,9 @@
       return;
     }
     if (!saved || !queryTextarea) return;
+    // W105 guard: the entry is removed above, but a page drawn for another
+    // identity puts nothing back and shows no line.
+    if (state.drawnMismatch) return;
     const accountId = state.sessionAccountId;
     const { question, notice } = lateRunQuestionToRestore(saved, {
       accountId,
