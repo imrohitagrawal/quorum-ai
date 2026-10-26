@@ -1,7 +1,7 @@
 # Session Handoff
 
 ## Date/time
-2026-10-19T23:24:07+05:30
+2026-10-27T02:33:44+05:30
 
 ## Open work
 `docs/65-open-work.md` — the source of truth for what is open, what blocks what,
@@ -11,24 +11,24 @@ line further down this file is the factory router's view of the lifecycle, not a
 work status.
 
 ## Latest narrative handoff
-`docs/analysis/2026-10-19-session-handoff.md` — read this for full context before editing. (today)
+`docs/analysis/2026-10-27-session-handoff.md` — read this for full context before editing. (today)
 
 This file is a mechanical snapshot (branch/git-status/skill-route/live state) —
 regenerated fresh every `make handoff`. The narrative above (what happened,
 what's next, the traps) lives in the dated doc it points to, not here.
 
 ## Current branch/worktree
-docs/handoff-2026-10-19
+handoff/2026-10-27
 
 ## Live state (measured fresh by this run, not hand-carried)
 Run `make handoff` again for current numbers instead of trusting this file
 once it ages -- every value below is read from git/gh/`/status` at
 generation time, per #134.
 
-- **`origin/main` tip:** `5e8676df7401`
-- **Last commit touching `src/`:** `5e8676df7401`
-- **Production vs. last `src/` commit:** production build_sha 5e8676d is in sync with last src/ commit
-- **pytest collected (no execution):** 7683
+- **`origin/main` tip:** `d92f628ba6aa`
+- **Last commit touching `src/`:** `d92f628ba6aa`
+- **Production vs. last `src/` commit:** production build_sha d92f628 is in sync with last src/ commit
+- **pytest collected (no execution):** 8256
 - **e2e lane spec counts:** invariants: 27, ops: 2, degraded: 1
 - **Open issues:** 2
 - **Changed-lines coverage:** not computed here -- `make diff-cover` shares
@@ -44,7 +44,7 @@ product readiness: verdict Not ready, written to docs/product-readiness.md
 
 ## Board and GitHub
 From `make board-github-check`: DONE rows whose issue is still open, and open issues no row cites.
-board vs GitHub: 107 board rows, 2 open issues
+board vs GitHub: 110 board rows, 2 open issues
   the board and GitHub agree
 
 ## Root prompt check
@@ -54,11 +54,11 @@ Prompt write hook: not installed in `.claude/settings.json`; run `.venv/bin/pyth
 ## Parked work and branches
 From `make parked-check`:
 ```text
-Parked work check: 1 remote branches, 0 open pull requests, 4 Parked lines, 0 branches with no open pull request, 0 Parked items due
+Parked work check: 1 remote branches, 0 open pull requests, 5 Parked lines, 0 branches with no open pull request, 1 Parked items due
 Remote branches with no open pull request (merge, park or delete each):
   - none
 Parked items whose resume-when has come (resume, re-park or close each):
-  - none
+  - W114
 PASSED
 ```
 
@@ -67,7 +67,7 @@ There are 2 validly named root prompts; only one should be left for the next ses
 The lines of those that pass:
 ```text
 Read CONTINUE-BYOK-BUILD-W28-PROMPT.md in the repo root and follow it exactly.
-Read CONTINUE-SECURITY-W87-W76-PROMPT.md in the repo root and follow it exactly.
+Read CONTINUE-SECURITY-W114-W113-W80-W75-W76-PROMPT.md in the repo root and follow it exactly.
 ```
 
 ## Leftovers
@@ -75,6 +75,11 @@ From `make session-clean`, which reports and never deletes.
 ```text
 Feature branches and worktrees:
 - `worktree ~/Projects/quorum-ai-handoff` — remove with 'git worktree remove' once its branch is merged
+- `worktree ~/Projects/quorum-ai-w113` — remove with 'git worktree remove' once its branch is merged
+- `worktree ~/Projects/quorum-ai-w873f` — remove with 'git worktree remove' once its branch is merged
+
+Containers and images:
+- `image quorum-ai:local` — built by this repo. Remove by name: docker image rm quorum-ai:local
 ```
 
 ## Current phase
