@@ -561,9 +561,10 @@ class SessionRepository:
         #: CHG-088 (W114): session id -> when :meth:`revoke` was called for it
         #: (a sign-out, a sign-in's rotation, a sign-in refused for a deleted
         #: account), held in the cache or not. Unlike a natural end, a revoke
-        #: must also stop the sign-in callback's 12-hour recovery (:meth:`max_age_account`), which reads
-        #: the row: a revoke whose row delete failed left the row in place, and
-        #: before this list a callback already under way recovered it. Same
+        #: must also stop the sign-in callback's 12-hour recovery
+        #: (:meth:`max_age_account`), which reads the row: a revoke whose row
+        #: delete failed left the row in place, and before this list a
+        #: callback already under way recovered it. Same
         #: lifetime and prune as ``_ended_ids``; a held sign-in-only session is
         #: left out; lost at a restart.
         self._signed_out_ids: dict[str, datetime] = {}
