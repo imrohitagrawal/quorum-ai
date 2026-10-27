@@ -1024,6 +1024,12 @@ class SessionRepository:
             return stored.account_id
         return None
 
+    def was_revoked(self, session_id: str) -> bool:
+        """Whether :meth:`revoke` was called for ``session_id`` in this
+        process within the last 24 hours (``_signed_out_ids``)."""
+        with self._lock:
+            return session_id in self._signed_out_ids
+
     def upsert_if_recoverable(
         self, session_id: str, account_id: UUID, upsert: Callable[[], UUID | None]
     ) -> UUID | None:
@@ -1423,7 +1429,9 @@ def _mint(
     return session_repository.create(account_id=account_id)
 
 
-def issue_signed_in_session(previous_session_id: str, *, account_id: UUID) -> SessionIssueResponse:
+def issue_signed_in_session(
+    previous_session_id: str, *, account_id: UUID
+) -> SessionIssueResponse | None:
     """Replace the caller's session with a NEW one bound to a signed-in account.
 
     W7 (ADR-0130). Session fixation is the failure this exists for: a session
@@ -1443,16 +1451,24 @@ def issue_signed_in_session(previous_session_id: str, *, account_id: UUID) -> Se
     day, which is the common case for anyone who came back.
     """
     _enforce_production_guards(require_legacy_disabled=True)
-    session_repository.revoke(previous_session_id)
-    # W87-1 (ADR-0174): a signed-in session's 12 hours start here, at the
-    # rotation, whatever the age of the session it replaces.
-    return _issued(
-        session_repository.create(
-            account_id=account_id,
-            idle_limit=signed_in_idle_limit(),
-            max_age=SIGNED_IN_MAX_AGE,
+    # W114 review round 1 (Codex): ``None``, creating nothing, when the
+    # previous session was revoked (a sign-out) after the callback's last
+    # check. The check, the revoke and the create share one hold of the
+    # repository lock, which ``revoke`` also takes, so a sign-out lands
+    # either before (refused here) or after (it then finds its cookie ended).
+    with session_repository._lock:
+        if session_repository.was_revoked(previous_session_id):
+            return None
+        session_repository.revoke(previous_session_id)
+        # W87-1 (ADR-0174): a signed-in session's 12 hours start here, at the
+        # rotation, whatever the age of the session it replaces.
+        return _issued(
+            session_repository.create(
+                account_id=account_id,
+                idle_limit=signed_in_idle_limit(),
+                max_age=SIGNED_IN_MAX_AGE,
+            )
         )
-    )
 
 
 def issued_response(session: _Session) -> SessionIssueResponse:

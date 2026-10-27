@@ -211,3 +211,77 @@ def test_a_second_callback_cannot_recover_a_session_the_first_rotated(
     assert second.status_code == 303, second.text
     assert len(issued) == 1, "the second callback recovered the rotated session"
     assert second.headers["location"] == FAILED
+
+
+@pytest.mark.parametrize("crossing", [True, False], ids=["recovering", "live"])
+@pytest.mark.parametrize("delete", ["row deleted", "row delete failed"])
+def test_a_sign_out_landing_just_before_the_rotation_is_not_undone(
+    sign_in: SignIn, clock: Clock, monkeypatch: pytest.MonkeyPatch, crossing: bool, delete: str
+) -> None:
+    """Codex, W114 review round 1: the callback's last recovery check runs
+    under the repository lock, but the rotation that creates the new
+    signed-in session ran after that lock was released, so a sign-out whose
+    ``revoke`` landed in between was undone (its probe printed
+    ``recovery_after_revoke True``). Here the sign-out's ``revoke`` lands as
+    ``issue_signed_in_session`` starts, after every check of the callback,
+    for a recovering session and for a live one. The callback must create
+    nothing and fail plainly. Partner: without the sign-out, each crossing
+    signs in (1 session, the plain location).
+    Red when: the rotation does not refuse, under the same lock as its
+    revoke and create, a previous session that was revoked."""
+    client = signed_in_client(sign_in)
+    session_id = sid(client)
+    age(session_id, H12 - MINUTE, now=clock.at)
+    csrf = _boot(client)
+    query = _start(client, csrf)
+    store = session_store.get_store()
+    assert store is not None
+    if crossing:
+        age(session_id, H12 + MINUTE, now=clock.at)
+    if delete == "row delete failed":
+        monkeypatch.setattr(store, "delete", lambda _id: False)
+    created: list[Any] = []
+    real_create = auth.session_repository.create
+
+    def counted_create(**kwargs: Any) -> Any:
+        made = real_create(**kwargs)
+        created.append(made)
+        return made
+
+    monkeypatch.setattr(auth.session_repository, "create", counted_create)
+    real_guard = auth._enforce_production_guards
+    signed_out: list[str] = []
+
+    def sign_out_lands(**kwargs: Any) -> None:
+        real_guard(**kwargs)
+        if not signed_out:
+            signed_out.append(session_id)
+            auth.session_repository.revoke(session_id)
+
+    monkeypatch.setattr(auth, "_enforce_production_guards", sign_out_lands)
+    back = _callback(client, code="stub-auth-code-2", state=query["state"])
+    assert back.status_code == 303, back.text
+    assert signed_out == [session_id], "partner: the sign-out landed inside the rotation"
+    assert created == [], "the rotation undid a sign-out that landed before it"
+    assert back.headers["location"] == FAILED
+    assert COOKIE not in back.cookies
+
+
+@pytest.mark.parametrize("crossing", [True, False], ids=["recovering", "live"])
+def test_without_a_sign_out_the_callback_still_signs_in(
+    sign_in: SignIn, clock: Clock, crossing: bool
+) -> None:
+    """The partner of the test above: the same callback, nothing revoked,
+    creates exactly 1 signed-in session and lands on the plain location.
+    Red when: the rotation refuses a previous session nobody revoked."""
+    client = signed_in_client(sign_in)
+    session_id = sid(client)
+    age(session_id, H12 - MINUTE, now=clock.at)
+    csrf = _boot(client)
+    query = _start(client, csrf)
+    if crossing:
+        age(session_id, H12 + MINUTE, now=clock.at)
+    back = _callback(client, code="stub-auth-code-2", state=query["state"])
+    assert back.status_code == 303, back.text
+    assert back.headers["location"] == PLAIN
+    assert back.cookies.get(COOKIE) not in (None, session_id)

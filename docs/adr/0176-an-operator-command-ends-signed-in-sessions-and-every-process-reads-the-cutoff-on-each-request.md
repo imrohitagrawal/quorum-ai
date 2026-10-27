@@ -383,7 +383,13 @@ A17. **A revoked session cannot be recovered by a callback that crosses the 12 h
     `revoke`, and a recovery's rotation revokes a session that is not cached; without this, the
     first case recovered and the second let a second callback create a second signed-in session
     (`test_a_second_callback_cannot_recover_a_session_the_first_rotated`). A held sign-in-only
-    session is left out, as for the ended list.
+    session is left out, as for the ended list. The rotation that ends the callback
+    (`issue_signed_in_session`) checks for a revoke, revokes the old session and creates the new
+    one in one hold of the repository lock, and creates nothing when the old session was revoked
+    (W114 review round 1, Codex): before this, a sign-out whose `revoke` landed after the
+    callback's last check was undone, for a recovering session and a live one alike, with the row
+    deleted or not (`test_a_sign_out_landing_just_before_the_rotation_is_not_undone`, 4 cases red
+    before the change). A sign-out that lands after the rotation finds its cookie already ended.
 
 The labels "Codex F1" to "Codex F5", FM-1.21 to FM-1.24 and FM-5.8 above are defined in the last
 section of `docs/analysis/2026-10-25-w87-3-followup-failure-modes.md`.
