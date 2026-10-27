@@ -1452,7 +1452,9 @@ class PreviousSessionRevoked(Exception):
     created (W114 review round 1, Codex)."""
 
 
-def issue_signed_in_session(previous_session_id: str, *, account_id: UUID) -> SessionIssueResponse:
+def issue_signed_in_session(
+    previous_session_id: str, *, account_id: UUID, from_sign_in_only: bool = False
+) -> SessionIssueResponse:
     """Replace the caller's session with a NEW one bound to a signed-in account.
 
     W7 (ADR-0130). Session fixation is the failure this exists for: a session
@@ -1478,12 +1480,17 @@ def issue_signed_in_session(previous_session_id: str, *, account_id: UUID) -> Se
     # repository lock, which ``revoke`` also takes, so a revoke of the
     # previous session lands either before the check (refused here) or after
     # this revoke. A held sign-in-only session's sign-out is not recorded
-    # (``revoke``), so it is not refused here; that session cannot spend.
+    # (``revoke``), so for one (``from_sign_in_only``, the callback saw it
+    # held at its start) the session must still be held: it lives in memory
+    # only, so gone means signed out or expired (CHG-088 (n), the owner's
+    # "Fix it in A now (Recommended)"; Codex round 2 finding 2).
     # The create is outside the hold (review round 2, break-it R2-F1): each
     # write can wait the store's busy timeout, and one hold across both
     # writes made every lookup in the process wait for the two.
     with session_repository._lock:
-        if session_repository.was_revoked(previous_session_id):
+        if session_repository.was_revoked(previous_session_id) or (
+            from_sign_in_only and previous_session_id not in session_repository._sessions
+        ):
             raise PreviousSessionRevoked
         session_repository.revoke(previous_session_id)
     # W87-1 (ADR-0174): a signed-in session's 12 hours start here, at the

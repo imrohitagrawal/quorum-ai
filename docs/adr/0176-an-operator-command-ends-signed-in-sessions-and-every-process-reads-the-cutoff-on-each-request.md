@@ -407,10 +407,12 @@ A17. **A revoked session cannot be recovered by a callback that crosses the 12 h
     break-it R2-F1): with both writes in one hold, each able to wait the 5 s busy timeout, the
     review measured a lookup waiting 10.07 s behind a busy database file, against 4.9 s on `main`.
     A sign-out whose check comes after the rotation finds its cookie already ended; one whose check
-    came before it and whose `revoke` lands after it revokes nothing, and the new session, from a
-    sign-in the person also made, stays. A held sign-in-only session's sign-out is not recorded,
-    so a callback under way for it is not refused; that session cannot spend (review round 2,
-    R2-F2; also on `main`).
+    came before it and whose `revoke` lands after it revokes nothing, and the new session stays (Known
+    limits: until pull request B, CHG-088 (m)). A held sign-in-only session's sign-out is not
+    recorded, so no list grows with those sessions; instead the rotation refuses when the callback
+    started from a sign-in-only session that is no longer held, since such a session lives in
+    memory only (CHG-088 (n), the owner's "Fix it in A now (Recommended)"; Codex round 2 finding 2,
+    break-it R2-F2; on `main` the sign-in completed).
 
 The labels "Codex F1" to "Codex F5", FM-1.21 to FM-1.24 and FM-5.8 above are defined in the last
 section of `docs/analysis/2026-10-25-w87-3-followup-failure-modes.md`.
@@ -463,6 +465,15 @@ section of `docs/analysis/2026-10-25-w87-3-followup-failure-modes.md`.
   someone who signs out during the window keeps the cookie until a sign-out after the store
   recovers; (i)'s question described the page then saying "Sign-out did not complete. Please try
   again." The owner accepted this as temporary (CHG-088 (l)).
+- **A sign-out that races a sign-in's rotation, until pull request B (CHG-088 (m)).** When a
+  sign-out's cookie check passes just before a Google sign-in's rotation and its `revoke` lands
+  just after, the rotation has already ended the old session, so the sign-out ends nothing, and the
+  new signed-in session stays valid. The sign-out's reply clears the cookie; if the callback's
+  reply reaches the browser later, the browser keeps the new cookie. It needs the person's own
+  cookie and their own Google sign-in at the same moment. Reproduced by the session's probe on
+  this branch and on `main` (`s2_live_after_sign_out=True` on both); on `main` every sign-out during
+  the Google exchange is undone. The fix needs the server to remember which session replaced the
+  old one, which is a cell of pull request B's table, as the owner chose.
 - **The revoked list (A17)** is lost at a restart and pruned after 24 hours, like the ended list.
   A restart does not reopen the recovery: the callback also needs the pending sign-in it started,
   which is kept in this process's memory only (`google_signin.pending_sign_ins`), so after a

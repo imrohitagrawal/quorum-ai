@@ -143,9 +143,9 @@ def test_c1_a_sign_out_during_a_crossing_callback_is_not_undone(
     real_issue = auth.issue_signed_in_session
     issued: list[str] = []
 
-    def counted(previous_session_id: str, *, account_id: Any) -> Any:
+    def counted(previous_session_id: str, *, account_id: Any, **kwargs: Any) -> Any:
         issued.append(previous_session_id)
-        return real_issue(previous_session_id, account_id=account_id)
+        return real_issue(previous_session_id, account_id=account_id, **kwargs)
 
     monkeypatch.setattr(auth, "issue_signed_in_session", counted)
     back = _callback(client, code="stub-auth-code-2", state=query["state"])
@@ -192,9 +192,9 @@ def test_a_second_callback_cannot_recover_a_session_the_first_rotated(
     real_issue = auth.issue_signed_in_session
     issued: list[str] = []
 
-    def counted(previous_session_id: str, *, account_id: Any) -> Any:
+    def counted(previous_session_id: str, *, account_id: Any, **kwargs: Any) -> Any:
         issued.append(previous_session_id)
-        return real_issue(previous_session_id, account_id=account_id)
+        return real_issue(previous_session_id, account_id=account_id, **kwargs)
 
     monkeypatch.setattr(auth, "issue_signed_in_session", counted)
     monkeypatch.setattr(store, "delete", lambda _id: False)

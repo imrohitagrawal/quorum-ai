@@ -50,6 +50,7 @@ from tests.integration.test_query_run_cost_guardrails import (
     DEFAULT_MODEL_IDS,
     acknowledged_request,
 )
+from tests.integration.test_sign_in_recovery import _interfering_exchange
 
 from product_app import (
     auth,
@@ -1312,3 +1313,42 @@ def test_the_estimate_refusal_names_sign_in_and_no_money(net: Network) -> None:
     assert detail["code"] == "SIGN_IN_REQUIRED"
     assert re.search(r"sign(ing)? in", detail["message"], re.IGNORECASE), detail
     assert "$" not in detail["message"]
+
+
+@pytest.mark.parametrize("signed_out", [True, False], ids=["signed out", "not signed out"])
+def test_a_sign_out_during_the_exchange_stops_a_sign_in_from_the_capped_page(
+    net: Network, monkeypatch: pytest.MonkeyPatch, signed_out: bool
+) -> None:
+    """W114 (CHG-088 (n), the owner's "Fix it in A now (Recommended)"; Codex
+    round 2 finding 2, break-it R2-F2). A sign-in started from the capped
+    page's sign-in-only session; during the Google exchange the same browser
+    signs that session out (the real route, its own cookie and token). A
+    sign-in-only session lives in memory only and the sign-out is not listed
+    (ADR-0176 A17), so the rotation refuses because the session it started
+    from is gone: the callback fails plainly, sets no cookie and records no
+    sign-in. Partner ("not signed out"): the same sign-in completes.
+    Red when: the callback lets a sign-in finish from a sign-in-only session
+    that ended during the exchange."""
+    client, token = _sign_in_only(net)
+    session_id = _session_id(client)
+    query = _start_with(client, token)
+    outcomes: list[int] = []
+
+    def sign_out_elsewhere() -> None:
+        other = TestClient(app)
+        other.cookies.set(COOKIE, session_id)
+        outcomes.append(_sign_out(other, token).status_code)
+
+    calls = _interfering_exchange(monkeypatch, sign_out_elsewhere if signed_out else lambda: None)
+    back = _callback(client, code="c", state=query["state"])
+    assert calls == [1], "partner: the exchange ran"
+    assert back.status_code == 303, back.text
+    if signed_out:
+        assert outcomes == [200], "partner: the sign-out landed during the exchange"
+        assert back.headers["location"] == "/ui?sign_in=failed"
+        assert COOKIE not in back.cookies
+        assert _events(net.sign_in) == []
+    else:
+        assert back.headers["location"] == "/ui"
+        assert back.cookies.get(COOKIE) not in (None, session_id)
+        assert _events(net.sign_in) == ["signed_in"]

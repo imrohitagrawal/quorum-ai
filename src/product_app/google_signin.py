@@ -765,7 +765,8 @@ def google_sign_in_callback(request: Request) -> RedirectResponse:
     # hours during this round trip ("recovered"); every other end (sign-out,
     # sign-out everywhere, deletion, idle, the anonymous 24 hours) fails.
     recovered = None
-    if auth.session_repository.get(session_id) is None:
+    started = auth.session_repository.get(session_id)
+    if started is None:
         recovered = auth.session_repository.max_age_account(session_id)
         if recovered is None:
             return _failed("no_session")
@@ -817,9 +818,14 @@ def google_sign_in_callback(request: Request) -> RedirectResponse:
     # history (carry_over refuses a session already signed in).
     previous = auth.session_repository.get(session_id)
     try:
-        session = auth.issue_signed_in_session(session_id, account_id=account_id)
+        session = auth.issue_signed_in_session(
+            session_id,
+            account_id=account_id,
+            from_sign_in_only=started is not None and started.sign_in_only,
+        )
     except auth.PreviousSessionRevoked:
-        # W114 review round 1 (Codex): signed out after the last check above.
+        # W114 review round 1 (Codex): signed out after the last check above;
+        # or, for a sign-in-only session, ended during the exchange (CHG-088 (n)).
         return _failed("no_session")
     if previous is not None and previous.account_id != account_id:
         from product_app import account_history
