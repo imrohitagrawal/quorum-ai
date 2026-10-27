@@ -342,6 +342,39 @@ def test_a1_a_restore_that_expires_during_its_cutoff_wait_is_ended(
     assert unchecked.status_code == 401 and _code(unchecked) == "SESSION_UNCHECKED", unchecked.text
 
 
+@pytest.mark.parametrize("ending", ["sign-out", "deletion", "none"])
+def test_a_cached_session_ended_while_its_cutoff_read_waits_is_ended_not_unchecked(
+    db: Path, live: SessionStore, monkeypatch: pytest.MonkeyPatch, ending: str
+) -> None:
+    """S18 on the cache-hit path (W114 falsification F1). A cached signed-in
+    session's cutoff read fails, and while it waited another request signed
+    the session out (``revoke``) or deleted its account (``revoke_account``):
+    the answer is the ended 401, never ``SESSION_UNCHECKED``. Partner
+    ("none"): the same failed read with no ending is unchecked.
+    Red when: ``_check_cached`` stops re-checking the ended list after a
+    failed cutoff read."""
+    account_id, _email, session = _signed_in_cookie(db, f"f1-{ending}")
+    sid = session.session_id
+    assert sid in auth.session_repository._sessions, "partner: the session is cached"
+
+    def ends_during_the_wait(call: int) -> None:
+        if call == 1 and ending == "sign-out":
+            auth.session_repository.revoke(sid)
+        elif call == 1 and ending == "deletion":
+            auth.session_repository.revoke_account(account_id)
+
+    spy = ScriptedCutoff(live, account_id, [NOT_READ], on_call=ends_during_the_wait)
+    monkeypatch.setattr(live, "sessions_valid_after", spy)
+    response = client(sid).get(ACTIVE)
+    assert spy.calls >= 1, "partner: the cache hit's scripted read ran"
+    if ending == "none":
+        assert response.status_code == 401, response.text
+        assert _code(response) == "SESSION_UNCHECKED", response.text
+    else:
+        assert sid not in auth.session_repository._sessions
+        _ended_codes(response)
+
+
 @pytest.mark.parametrize("ending", ["sign-out", "deletion"])
 def test_a2_sign_out_and_deletion_record_the_ended_id(
     db: Path, live: SessionStore, monkeypatch: pytest.MonkeyPatch, ending: str
@@ -385,8 +418,10 @@ def test_a3_the_ended_list_forgets_an_id_only_after_24_hours(
     24 hours and 1 microsecond ago is forgotten, one that ended exactly 24
     hours ago is kept (the test is "older than"). Then, with the session-row
     read failing, the kept id is still ended (401 ``SESSION_EXPIRED``) and
-    the forgotten one is unchecked (S8: 401 ``SESSION_UNCHECKED``).
-    Red when: the purge prunes every entry, or none, or the boundary moves."""
+    the forgotten one is unchecked (S8: 401 ``SESSION_UNCHECKED``). The
+    signed-out list (``_signed_out_ids``) is pruned at the same boundary.
+    Red when: the purge prunes every entry, or none, or the boundary moves,
+    in either list."""
     clock = freeze(monkeypatch)
     forgotten = signed_in_session(account(db, "old-a3")[0])
     kept = signed_in_session(account(db, "kept-a3")[0])
@@ -396,15 +431,53 @@ def test_a3_the_ended_list_forgets_an_id_only_after_24_hours(
             repository._sessions.pop(session.session_id)
         repository._record_ended_locked(forgotten, clock.at - timedelta(hours=24, microseconds=1))
         repository._record_ended_locked(kept, clock.at - timedelta(hours=24))
+        repository._signed_out_ids["old-a3-out"] = clock.at - timedelta(hours=24, microseconds=1)
+        repository._signed_out_ids["kept-a3-out"] = clock.at - timedelta(hours=24)
     repository.purge_expired()
     assert forgotten.session_id not in repository._ended_ids
     assert kept.session_id in repository._ended_ids
+    assert "old-a3-out" not in repository._signed_out_ids
+    assert "kept-a3-out" in repository._signed_out_ids
     with failing_session_reads(live):
         gone = client(kept.session_id).get(ACTIVE)
         assert gone.status_code == 401 and _code(gone) == "SESSION_EXPIRED", gone.text
         unchecked = client(forgotten.session_id).get(ACTIVE)
         assert unchecked.status_code == 401, unchecked.text
         assert _code(unchecked) == "SESSION_UNCHECKED", unchecked.text
+
+
+def test_a_sign_in_only_session_is_in_neither_list_however_it_ends(
+    db: Path, live: SessionStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ADR-0176: a sign-in-only session lives in memory only, so neither the
+    ended list nor the signed-out list records it, whether it is signed out
+    (``revoke``) or ends by age (the GC purge). Partner: the same two endings
+    for signed-in sessions grow the lists by exactly one entry per session
+    (a sign-out: both lists; an age-out: the ended list only).
+    Red when: ``revoke`` or ``_record_ended_locked`` stops leaving sign-in-only
+    sessions out."""
+    clock = freeze(monkeypatch)
+    repository = auth.session_repository
+
+    def sizes() -> tuple[int, int]:
+        return len(repository._ended_ids), len(repository._signed_out_ids)
+
+    only = [repository.create(account_id=uuid4(), sign_in_only=True) for _ in range(4)]
+    signed = [signed_in_session(account(db, f"only-{n}")[0]) for n in range(4)]
+    before = sizes()
+    for session in only[:2]:
+        repository.revoke(session.session_id)
+    for session in only[2:]:
+        age(session.session_id, auth.ANONYMOUS_MAX_AGE + timedelta(seconds=1), now=clock.at)
+    assert repository.purge_expired()[0] == 2, "partner: the purge dropped both"
+    assert sizes() == before
+    for session in signed[:2]:
+        repository.revoke(session.session_id)
+    assert sizes() == (before[0] + 2, before[1] + 2)
+    for session in signed[2:]:
+        age(session.session_id, auth.SIGNED_IN_MAX_AGE + timedelta(seconds=1), now=clock.at)
+    assert repository.purge_expired()[0] == 2, "partner: the purge dropped both"
+    assert sizes() == (before[0] + 4, before[1] + 2)
 
 
 # -- Sign-out while unchecked: refused until pull request B (CHG-088 (i), (l)) ---------------
