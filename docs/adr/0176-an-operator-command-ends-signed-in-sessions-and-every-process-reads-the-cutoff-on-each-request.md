@@ -295,7 +295,11 @@ A3. **The ended list.** `SessionRepository._ended_ids` records each session this
     against `fe96d1e`, which resumed it).
 A4. **A known signed-in row past its 12 hours is ended first** (FM-1.8), before the not-ready
     exit. A row whose kind is unknown is not ended by the signed-in limits there: it may be an
-    anonymous session inside its 24 hours.
+    anonymous session inside its 24 hours. Nor anywhere else (W114 review round 2): the restore
+    answers it unchecked (of unknown kind) after a cutoff read that succeeded too (Codex finding 4:
+    it was ended, and `/ui` started a new session over a live anonymous cookie), and so does a
+    cache hit whose cutoff read failed (A3). The row read has already refused one past the
+    anonymous limits.
 A5. **Both doors (CHG-088 (c)).** `/ui` answers a 503 page (A6); `/v1/session` and every API route
     answer 401 `SESSION_UNCHECKED` (the owner's "Still a 401 (your CHG-083 choice)", CHG-088
     (e)). Neither sets a cookie, mints, touches or rotates anything. `/v1/session` answers 401,

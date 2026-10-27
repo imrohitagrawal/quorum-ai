@@ -10,24 +10,27 @@ Every wait and join is bounded (``pytest-timeout`` is not installed).
 
 from __future__ import annotations
 
+import sqlite3
 import threading
 from collections.abc import Iterator
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 from tests.security.test_unchecked_session_keeps_its_cookie import (  # noqa: F401
     NOT_READ,
     _daemon_never_refreshes,
     _no_daily_cap,
+    _uncached_row,
+    _unknown_kind,
 )
 from tests.session_clock import age, freeze
 from tests.unchecked_harness import ScriptedCutoff, account, anonymous_session
 
 from product_app import auth, session_store
-from product_app.session_store import SessionStore
+from product_app.session_store import SessionStore, _digest
 
 
 @pytest.fixture
@@ -46,6 +49,18 @@ def live(db: Path) -> Iterator[SessionStore]:
         auth.session_repository._sessions.clear()
         auth.session_repository._valid_after.clear()
         store.close()
+
+
+def _rows(db: Path, session_id: str) -> int:
+    connection = sqlite3.connect(str(db))
+    try:
+        return int(
+            connection.execute(
+                "SELECT COUNT(*) FROM sessions WHERE session_digest = ?", (_digest(session_id),)
+            ).fetchone()[0]
+        )
+    finally:
+        connection.close()
 
 
 def test_r2_f1_the_sign_in_rotation_lets_lookups_in_before_it_creates(
@@ -121,23 +136,32 @@ def _revoke_during_the_kind_read(
     return calls
 
 
-@pytest.mark.parametrize("revoked", [True, False])
+@pytest.mark.parametrize(("revoked", "delete_fails"), [(True, False), (True, True), (False, False)])
 def test_r2_f3_a_restore_does_not_put_back_a_session_revoked_while_not_held(
-    db: Path, live: SessionStore, monkeypatch: pytest.MonkeyPatch, revoked: bool
+    db: Path,
+    live: SessionStore,
+    monkeypatch: pytest.MonkeyPatch,
+    revoked: bool,
+    delete_fails: bool,
 ) -> None:
-    """R2-F3 (break-it round 2; SC-104, ADR-0176 A3). An uncached session's
-    restore has read its row when a sign-out revokes it; the cache does not
-    hold it, so the revoke records it in the signed-out list only. The
-    restore must not cache it again, and the next lookup finds nothing.
-    Partner (``revoked=False``): the same restore with no sign-out serves the
-    session.
+    """R2-F3 (break-it round 2, and Codex round 2 finding 3 with the row
+    delete failing; SC-104, ADR-0176 A3). An uncached session's restore has
+    read its row when a sign-out revokes it; the cache does not hold it, so
+    the revoke records it in the signed-out list only. The restore must not
+    cache it again, and the next lookup finds nothing, even when the row is
+    still there. Partner (``revoked=False``): the same restore with no
+    sign-out serves the session.
     Red when: the restore's last check stops asking the signed-out list."""
     session = anonymous_session()
     sid = session.session_id
     auth.session_repository._sessions.pop(sid)
+    if delete_fails:
+        monkeypatch.setattr(live, "delete", lambda session_id: False)
     if revoked:
         calls = _revoke_during_the_kind_read(live, monkeypatch, session.account_id, sid)
     found = auth.session_repository.lookup(sid)
+    if delete_fails:
+        assert _rows(db, sid) == 1, "partner: the row survived the failed delete"
     if revoked:
         assert calls == [1], "partner: the revoke landed during the restore"
         assert found.session is None and found.unchecked is None
@@ -185,3 +209,30 @@ def test_r2_f4_a_cached_session_of_unknown_kind_is_not_ended_by_the_signed_in_li
         served = auth.session_repository.lookup(sid)
         assert served.session is not None and served.session.session_id == sid
         assert served.session.max_age == auth.ANONYMOUS_MAX_AGE
+
+
+@pytest.mark.parametrize("kind_read", ["fails", "works"])
+def test_codex_r2_4_a_restore_of_unknown_kind_past_12_hours_is_unchecked_not_ended(
+    db: Path, live: SessionStore, monkeypatch: pytest.MonkeyPatch, kind_read: str
+) -> None:
+    """Codex round 2, finding 4 (ADR-0176 A4, CHG-088 (c) "Both doors"). An
+    uncached anonymous row 13 hours old, inside its 24 hours; its kind
+    lookup fails and its cutoff read succeeds. The restore gives it the
+    signed-in limits for want of its kind, and must not end it by them: it is
+    unchecked (of unknown kind), so ``/ui`` keeps the cookie and starts
+    nothing. Partner (``works``): with the kind read working, the same row is
+    served with the anonymous 24 hours.
+    Red when: the restore's last expiry check ends a row of unknown kind by
+    the signed-in limits."""
+    anonymous_id = uuid4()
+    sid = _uncached_row(db, anonymous_id, age_by=timedelta(hours=13))
+    if kind_read == "fails":
+        _unknown_kind(live, monkeypatch, anonymous_id)
+    found = auth.session_repository.lookup(sid)
+    if kind_read == "fails":
+        assert found.session is None
+        assert found.unchecked is auth.Unchecked.UNKNOWN_KIND
+        assert sid not in auth.session_repository._sessions
+    else:
+        assert found.session is not None and found.session.session_id == sid
+        assert found.session.max_age == auth.ANONYMOUS_MAX_AGE

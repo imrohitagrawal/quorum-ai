@@ -939,6 +939,13 @@ class SessionRepository:
                     return Lookup(None)
                 return Lookup(None, kind)
         if session.is_expired(now=_now()):
+            # A row of unknown kind carries the signed-in limits for want of
+            # its kind, but the read above already refused one past the
+            # anonymous limits: it may be an anonymous session inside its 24
+            # hours, so it is unchecked, not ended (A4; W114 review round 2,
+            # Codex finding 4).
+            if anonymous is None:
+                return Lookup(None, Unchecked.UNKNOWN_KIND)
             return Lookup(None)
         with self._lock:
             # W7 (ADR-0136): re-checked under the lock, after the disk read,
