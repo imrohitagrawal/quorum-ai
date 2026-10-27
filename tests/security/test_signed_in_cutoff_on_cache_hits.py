@@ -174,7 +174,9 @@ def test_with_the_app_latched_not_ready_no_signed_in_row_comes_back(
             cached.persisted_last_used_at = None  # the touch write-back is due
         response = _client(session_id).get(ACTIVE)
         assert response.status_code == 401
-        assert response.json()["detail"]["code"] == "SESSION_EXPIRED"
+        # CHG-088 (W87-3 follow-up): not ready, the cutoff is unread, so the
+        # 401 is SESSION_UNCHECKED, not an end.
+        assert response.json()["detail"]["code"] == "SESSION_UNCHECKED"
         assert rows_of(db, person) == 0
     finally:
         auth.session_repository._sessions.clear()
@@ -412,7 +414,9 @@ def test_a_request_meeting_a_held_store_lock_is_refused_with_its_cutoff_unread(
     assert reached, "the guard never gave up on the held lock"
     ((response, took),) = got
     assert response.status_code == 401, (response.status_code, took)
-    assert response.json()["detail"]["code"] == "SESSION_EXPIRED"
+    # CHG-088 (W87-3 follow-up): the guard gave up on the lock, so the cutoff
+    # is unread and the 401 is SESSION_UNCHECKED; no reason is looked up.
+    assert response.json()["detail"]["code"] == "SESSION_UNCHECKED"
     assert (counters.not_read, counters.cutoff_found) == (1, 0), took
 
 
@@ -504,10 +508,12 @@ def test_a_request_behind_a_held_repository_lock_finds_the_cutoff_and_is_refused
 
 
 def test_the_bound_is_the_measured_constant() -> None:
-    """Rule 7a: the bound is pinned with a literal. Red when it is changed
-    without re-measuring (the plan's 1.0 s, above every routine hold measured
-    and well under the 5 s a stuck write can take)."""
-    assert session_store.SIGNED_IN_CUTOFF_LOCK_TIMEOUT_S == 1.0
+    """T50 (CHG-088 (b), the owner's "Raise to 6 seconds"). Rule 7a: the
+    bound is pinned with a literal. 6.0 s is above the app connection's own
+    5 s busy timeout (``session_store.APP_BUSY_TIMEOUT_S``): shorter signs
+    people out while that write waits inside the store lock. Red when it is
+    changed without an owner decision."""
+    assert session_store.SIGNED_IN_CUTOFF_LOCK_TIMEOUT_S == 6.0
 
 
 def test_an_unreadable_cutoff_on_a_cache_hit_refuses_it(

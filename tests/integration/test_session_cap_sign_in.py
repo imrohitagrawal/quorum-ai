@@ -1257,16 +1257,19 @@ def test_with_no_feedback_store_nobody_is_capped_and_sign_in_works(net: Network)
 
 def test_with_no_session_store_the_capped_page_still_offers_sign_in(net: Network) -> None:
     """RED-IF: the sign-in-only session needs the durable store (it is in
-    memory), or the failed callback lands on a page without the control
-    (rows 8, 17). Partner: with the store back the same session signs in."""
+    memory), or the refused start leaves a page without the control
+    (rows 8, 17). Partner: with the store back the same session signs in.
+    CHG-088 (f)(1): with no store the start is refused before Google (503
+    ``SIGN_IN_UNAVAILABLE``) instead of failing at the callback."""
     _spend(net.feedback, HERE, age=timedelta(hours=1))
     session_store.configure(None)
     try:
         client = net.client()
         token = _capped_page(client.get("/ui"))
-        failed = _complete(client, token)
-        assert failed.headers["location"] == "/ui?sign_in=failed"
-        retry = client.get("/ui?sign_in=failed")
+        refused = client.post("/v1/auth/google/start", headers={"X-CSRF-Token": token})
+        assert refused.status_code == 503, refused.text
+        assert refused.json()["detail"]["code"] == "SIGN_IN_UNAVAILABLE"
+        retry = client.get("/ui")
         again = _capped_page(retry)
         assert _rows(net.feedback, HERE) == 2
     finally:

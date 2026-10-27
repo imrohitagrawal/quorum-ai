@@ -172,17 +172,19 @@ def test_a_session_being_restored_during_the_delete_is_not_put_back(
     auth.session_repository._sessions.pop(laptop_session)  # a cold cache
     store = session_store.get_store()
     assert store is not None
-    real_fetch = store.fetch
+    # CHG-088: the restore reads its row with ``fetch_checked`` (``fetch``
+    # wraps it), so the delete lands after that read.
+    real_fetch = store.fetch_checked
 
     def fetch_then_delete(*args: Any, **kwargs: Any) -> Any:
-        stored = real_fetch(*args, **kwargs)
-        assert stored is not None and stored.account_id == account
+        read, stored = real_fetch(*args, **kwargs)
+        assert read and stored is not None and stored.account_id == account
         from product_app import account_deletion
 
         assert account_deletion.delete_account(account) is True
-        return stored
+        return read, stored
 
-    monkeypatch.setattr(store, "fetch", fetch_then_delete)
+    monkeypatch.setattr(store, "fetch_checked", fetch_then_delete)
     assert auth.session_repository.get(laptop_session) is None
 
 

@@ -560,6 +560,13 @@ _DOCUMENTED_ERRORS: dict[int | str, dict[str, object]] = {
         "model": SignInErrorResponse,
         "description": "Too many sign-in starts from this network; Retry-After says when.",
     },
+    503: {
+        "model": SignInErrorResponse,
+        "description": (
+            "The session store cannot record a sign-in just now (SIGN_IN_UNAVAILABLE); "
+            "Retry-After says when to try again. Nothing was started."
+        ),
+    },
 }
 
 #: W7 part 3 (ADR-0137, CHG-021 e): starting a sign-in is limited per visitor
@@ -659,8 +666,9 @@ def _start(
 ) -> SignInStartResponse:
     """Both starts, one set of checks in one order (W87-2, ADR-0175): on
     (404), a cookie session with its CSRF token (401/403), the redirect URI's
-    host (409), for a deletion a signed-in account (403), then the ONE
-    per-address limiter (429). The Google URL is the same for both: no
+    host (409), the session store ready to record the sign-in (503, CHG-088),
+    for a deletion a signed-in account (403), then the ONE per-address limiter
+    (429). The Google URL is the same for both: no
     ``prompt`` and no ``max_age``, so Google keeps the owner-approved "If you
     are still signed in to Google it takes one click." (CHG-063 (f)(1))."""
     _require_enabled()
@@ -674,6 +682,21 @@ def _start(
                 + sign_in_home()
                 + ". Open Quorum there to sign in.",
             },
+        )
+    # CHG-088 (f)(1), the owner's words: refused before Google when the store
+    # could not record the account or check its sessions, so nobody is sent
+    # away only to fail on the way back. Two flags, no lock and no statement;
+    # before the deletion check and the limiter, so a refused start spends
+    # nothing (ADR-0175).
+    store = session_store.get_store()
+    if store is None or not (store.accounts_available() and store.cutoffs_available()):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "SIGN_IN_UNAVAILABLE",
+                "message": "Sign-in is briefly unavailable. Try again in a minute.",
+            },
+            headers={"Retry-After": "60"},
         )
     expected_account_id = None
     if purpose == "delete_account":
@@ -898,11 +921,17 @@ def _idle_response(session_id: str) -> JSONResponse:
     session lifetime, never shortened (API calls do not renew it, and the page
     asks at least once per idle length, so an open page keeps its cookie), and
     the last use is written through so the answer survives a restart."""
-    session = auth.session_repository.get(session_id)
+    # CHG-088: one lookup. A session that could not be checked is refused as
+    # unchecked and its cookie is not renewed; the write-through below uses
+    # the session checked here, with no second cutoff read (Codex F2).
+    found = auth.session_repository.lookup(session_id)
+    if found.unchecked is not None:
+        raise auth.session_unchecked(found.unchecked)
+    session = found.session
     if session is None:
         # W87-1: the same reason any other route gives (ADR-0174).
         raise auth.session_ended(session_id)
-    auth.session_repository.flush(session.session_id)
+    auth.session_repository.flush_session(session)
     ends = session.ends_at()
     left = max(0, int((ends - auth._now()).total_seconds()))
     body = SessionIdleResponse(

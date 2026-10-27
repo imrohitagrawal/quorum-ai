@@ -35,6 +35,11 @@
                   window.location.assign(body.authorization_url);
                 } else if (response.status === 429 && body.detail && body.detail.message) {
                   fail(body.detail.message);
+                } else if (response.status === 503 && body.detail &&
+                           body.detail.code === "SIGN_IN_UNAVAILABLE" && body.detail.message) {
+                  // CHG-088 (f)(1): the store could not record a sign-in just
+                  // now; the server's sentence says to try again in a minute.
+                  fail(body.detail.message);
                 } else {
                   fail("Sign-in could not start. Reload this page and try again.");
                 }

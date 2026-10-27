@@ -163,6 +163,31 @@ A signed-in person opens History and presses "Delete my account…" more than 10
 - Decided by the product owner on 2026-10-17 to 2026-10-19 (CHG-056 (d), CHG-063 (f)(1), CHG-066 (c), CHG-073 (d)); design ADR-0175.
 - Known limit: typing for more than 10 minutes after the new sign-in is refused again, and the visitor signs in again.
 
+## Journey J-009: A signed-in visit while the session store cannot be checked
+
+### Trigger
+
+Asha is signed in. For a while the server cannot check signed-in sessions: the session database is not ready (for example after a start-up read error), busy for more than 6 seconds, or failing to read.
+
+### Steps
+
+1. She reloads the page. Instead of the workspace she sees "Your account is briefly unavailable" and "Quorum could not check your sign-in just now. This usually clears within a minute. Nothing has been deleted.", with one link, "Try again". Her cookie is kept and no new session is opened, however many times she reloads (`e2e/tests/signed-in/store-unchecked.spec.ts`, J1).
+2. She leaves the tab open. The page reloads itself every 60 seconds; once the server can check her session again, the reload brings back her workspace, still signed in with the same cookie (J1).
+3. In a tab that was already open, she presses Run. The card says "Briefly unavailable" and "We could not check your sign-in just now. Try again in a minute." Her question stays in the box; "Try again" sends the same question without reloading the page (J2). In History, the rows stay, with the same sentence and a "Try again" (J4).
+4. The idle check meets the same refusal. It does not tell her she was signed out; it checks again a minute later (J4c).
+5. An anonymous visitor who presses "Sign in with Google" in that time stays on Quorum and sees "Sign-in is briefly unavailable. Try again in a minute." (J3).
+6. Asha's open tab presses "Start a session" from the boot card: she lands on the "briefly unavailable" page, and after the window "Try again" brings back her same sign-in (J5, the owner's "Both doors" example).
+7. A short hold of the database (3 seconds) delays her reload and keeps her signed in (J6).
+
+### Success Criteria
+
+- A cookie that could not be checked is never swapped for a new anonymous session, never served the workspace, and never touched: its life is not extended and its CSRF token is not rotated.
+- No session is opened and none of the network's two daily sessions is spent while the window lasts.
+- The page carries no session id, CSRF token, email or form, and sets no cookie.
+- A session the server knows has ended (its 12 hours, its idle limit, sign-out, sign out everywhere, the operator command) is treated as ended, not as briefly unavailable.
+- Decided by the product owner on 2026-10-23 and 2026-10-25 (CHG-088); design ADR-0176's amendment of 2026-10-25.
+- Known limits: if the trouble lasts until a restart, the page keeps saying "usually clears within a minute" and keeps reloading; the operator sees `session_store` on `/status` and a log line. With no session database at all (it failed to open at start), a returning visitor gets a fresh anonymous session and must sign in again after the fix (CHG-088 (g)).
+
 ## Journey J-010: Using Quorum in two tabs
 
 ### Trigger

@@ -148,7 +148,9 @@ class TestResumeDoesNotConsumeAMintSlot:
 
         with configure_for_tests() as store:
             minted = issue_session(client_ip="1.2.3.4")
-            monkeypatch.setattr(session_repository, "rotate_csrf", lambda _id: None)
+            # CHG-088: the resume records its use (and the new token) with
+            # ``use`` after one lookup.
+            monkeypatch.setattr(session_repository, "use", lambda _s, *, rotate_csrf: None)
             issue_or_resume_session(minted.session_id, client_ip="1.2.3.4")
             # One mint from setup + one from the race fallback = 2.
             assert store.session_mint_count_for_ip("1.2.3.4") == SESSION_MINT_CAP_PER_IP

@@ -130,14 +130,16 @@ def test_a_session_that_ends_between_its_lookup_and_its_touch_is_refused(
     the session at exactly 12 h; the touch happens 1 us later, when it has
     ended. Red when: ``require_session`` ignores a failed touch and serves the
     request. Partner: one microsecond younger, the same request is served."""
-    real_touch = auth.session_repository.touch
+    # CHG-088: ``require_session`` now looks the session up once and records
+    # its use with ``use`` (one cutoff read), so the late step goes there.
+    real_use = auth.session_repository.use
 
-    def late_touch(session_id: str) -> auth._Session | None:
+    def late_use(session: auth._Session, *, rotate_csrf: bool) -> auth._Session | None:
         clock.advance(US)
-        return real_touch(session_id)
+        return real_use(session, rotate_csrf=rotate_csrf)
 
     client = _signed_in_client(sign_in)
-    monkeypatch.setattr(auth.session_repository, "touch", late_touch)
+    monkeypatch.setattr(auth.session_repository, "use", late_use)
 
     age(_sid(client), H12 - US, now=clock.at)
     assert client.get(ACTIVE).status_code == 200, "partner: 12 h at the touch, still alive"
@@ -151,14 +153,15 @@ def test_a_session_that_ends_between_its_lookup_and_its_touch_is_refused(
 def _step_after_lookup(monkeypatch: pytest.MonkeyPatch, clock: Clock, by: timedelta) -> None:
     """Every repository lookup moves the clock on by ``by`` once it returns,
     so a check that reads the clock again after its lookup sees a later time."""
-    real_get = auth.session_repository.get
+    # CHG-088: the request path looks up with ``lookup`` (``get`` wraps it).
+    real_lookup = auth.session_repository.lookup
 
-    def stepped(session_id: str) -> auth._Session | None:
-        found = real_get(session_id)
+    def stepped(session_id: str) -> auth.Lookup:
+        found = real_lookup(session_id)
         clock.advance(by)
         return found
 
-    monkeypatch.setattr(auth.session_repository, "get", stepped)
+    monkeypatch.setattr(auth.session_repository, "lookup", stepped)
 
 
 def test_the_touch_rechecks_the_12_hours_with_the_time_it_records(

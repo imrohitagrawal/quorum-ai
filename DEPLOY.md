@@ -338,10 +338,24 @@ It prints counts and the cutoff time only, and keeps no record of the run
 | Exit | Meaning | What to do |
 |---|---|---|
 | 0 | Written and read back; or `--help`, which changes nothing | Nothing |
-| 1 | No account has that email as of its last sign-in; nothing changed. (Python's `No module named 'product_app'` is also exit 1: see the environment, above) | Try the email the person last signed in with, or `--all` |
+| 1 | No account matched: `--email` found no account with that email as of its last sign-in, or `--all` found no account at all. Both print the database path they read; nothing changed. (Python's `No module named 'product_app'` is also exit 1: see the environment, above) | Check the printed path is the volume's file (`/data/sessions.sqlite3`); then try the email the person last signed in with, or `--all` |
 | 2 | Usage: neither flag, both, `--email` given twice, an extra argument, or not one `@`; nothing changed | Fix the command line |
-| 3 | `SESSION_DB_PATH` not set, no file, not writable, locked for more than 5 s, not migrated, or not the file's owner; nothing changed | Check `--user quorum`, `SESSION_DB_PATH`, the path, and that the machine is started; run again |
+| 3 | `SESSION_DB_PATH` not set, no file, not writable, busy for more than 5 s ("The sessions database is busy. Run the command again. Nothing was changed."), not migrated, or not the file's owner; nothing changed | When it says busy, run it again. Otherwise check `--user quorum`, `SESSION_DB_PATH`, the path, and that the machine is started; run again |
 | 4 | The cutoff is written, but the check after it found a session put back, a lower cutoff, or could not run | Run it again; that is safe |
+
+**While signed-in visitors are refused** (CHG-088, ADR-0176 amendment): when
+the app cannot check a signed-in session (the session database is not ready,
+busy past 6 s, or failing), it keeps the visitor's cookie and creates nothing.
+The page says "Your account is briefly unavailable" and reloads itself each
+minute; sign-in says "Sign-in is briefly unavailable. Try again in a minute."
+Two free signals: `/status` field `session_store` (`ready`, `not_ready`, or
+`absent` when the database failed to open at start), and a log line at most
+once a minute, `signed-in requests refused: the session cutoff could not be
+checked (not_ready=N not_read=M); K refused since the last line`. `not_ready`
+on `/status` clears by itself within about a minute of the file being usable
+again (a file whose migration never ran needs a restart on a writable volume);
+`absent` needs the volume fixed and a restart. A malformed cutoff value
+shows `ready` on `/status`, with `not_read` in the log line.
 
 **UNVERIFIED**, each free to check on the live machine and none mints a
 session:

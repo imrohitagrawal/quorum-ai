@@ -29,6 +29,15 @@ cache and its durable row), so a browser test can stand at 11 h 55 m of a
 spec can reach it. ``tests/unit/test_age_sessions_is_test_only.py`` keeps the
 handler out of ``src``.
 
+The W87-3 follow-up (CHG-088, plan §2.1.8) adds four more, on the same stub:
+``POST /store-ready`` (``{"ready": false|true}``: the session store's
+``_safety_ready`` flag, with the GC tick's readiness step stood down while
+false), ``POST /hold-store-lock`` (``{"seconds": n}``: a thread holds the store
+lock), ``POST /unchecked-refresh-seconds`` (``{"seconds": n}``: the "briefly
+unavailable" page's refresh interval) and ``GET /session-counts`` (the cached
+sessions and the mint rows). ``tests/unit/test_age_sessions_is_test_only.py``
+keeps every one of them out of the app and out of ``src``.
+
 W88 adds ``GET /bounce?to=<url>`` on the same stub: a 302 to ``to`` when it is
 the app's own sign-in callback (``GOOGLE_OAUTH_REDIRECT_URI``, any query), and
 400 for anything else. A spec addresses the stub as ``localhost`` while the app
@@ -115,6 +124,88 @@ def _session_account(raw: bytes) -> tuple[int, dict[str, Any]]:
     return 200, {"found": True, "account_id": str(cached.account_id)}
 
 
+#: TEST-ONLY (W87-3 follow-up): the GC tick's readiness step, kept while
+#: ``/store-ready`` holds the store not ready, so the tick cannot end the window.
+_SAVED_READINESS: dict[str, Any] = {}
+
+
+def _store_ready(raw: bytes) -> tuple[int, dict[str, Any]]:
+    """TEST-ONLY (W87-3 follow-up, plan §2.1.8): ``{"ready": false}`` sets the
+    session store's ``_safety_ready`` flag to ``False`` and stands the GC
+    tick's readiness step down (as ``tests/security/
+    test_restore_not_ready_unknown_kind.py`` does in process);
+    ``{"ready": true}`` puts both back."""
+    from product_app import auth, session_store
+
+    asked = json.loads(raw.decode() or "{}")
+    store = session_store.get_store()
+    if store is None:
+        return 409, {"error": "no session store"}
+    if asked.get("ready") is False:
+        _SAVED_READINESS.setdefault("step", auth._refresh_store_readiness)
+        auth._refresh_store_readiness = lambda _store: None
+        store._safety_ready = False
+    else:
+        if "step" in _SAVED_READINESS:
+            auth._refresh_store_readiness = _SAVED_READINESS.pop("step")
+        store._safety_ready = True
+    return 200, {"ready": store._safety_ready}
+
+
+def _hold_store_lock(raw: bytes) -> tuple[int, dict[str, Any]]:
+    """TEST-ONLY (W87-3 follow-up): a thread holds the session store's lock
+    for ``seconds`` (at most 30); answered once it holds it."""
+    from product_app import session_store
+
+    seconds = min(30.0, float(json.loads(raw.decode() or "{}").get("seconds") or 0))
+    store = session_store.get_store()
+    if store is None:
+        return 409, {"error": "no session store"}
+    held = threading.Event()
+
+    def hold() -> None:
+        with store._lock:
+            held.set()
+            threading.Event().wait(seconds)
+
+    threading.Thread(target=hold, name="lane-store-lock-holder", daemon=True).start()
+    return (200 if held.wait(5.0) else 504), {"held": held.is_set(), "seconds": seconds}
+
+
+def _unchecked_refresh_seconds(raw: bytes) -> tuple[int, dict[str, Any]]:
+    """TEST-ONLY (W87-3 follow-up): the "briefly unavailable" page's refresh
+    interval, ``main.UNCHECKED_PAGE_REFRESH_S``, read at render time. 409 when
+    the app has no such constant, so a spec fails plainly before the build."""
+    from product_app import main as app_main
+
+    if not hasattr(app_main, "UNCHECKED_PAGE_REFRESH_S"):
+        return 409, {"error": "the app has no UNCHECKED_PAGE_REFRESH_S"}
+    seconds = int(json.loads(raw.decode() or "{}").get("seconds") or 60)
+    app_main.UNCHECKED_PAGE_REFRESH_S = seconds
+    return 200, {"seconds": seconds}
+
+
+def _session_counts() -> dict[str, int]:
+    """TEST-ONLY (W87-3 follow-up): how many sessions the app holds in its
+    cache, and how many mints the feedback store has recorded (read as
+    ``tests/integration/test_end_sessions_command.py::_mint_count`` does)."""
+    from product_app import auth, feedback_store
+
+    mints = 0
+    feedback = feedback_store.get_store()
+    if feedback is not None:
+        with feedback._lock:
+            mints = int(
+                feedback._conn.execute(
+                    "SELECT COUNT(*) FROM events WHERE recorder = 'session' "
+                    "AND event_type = 'session_minted'"
+                ).fetchone()[0]
+            )
+    with auth.session_repository._lock:
+        cached = len(auth.session_repository._sessions)
+    return {"cached": cached, "mints": mints}
+
+
 def _bounce_target(request_path: str, callback: str) -> str | None:
     """TEST-ONLY (W88): where ``GET /bounce?to=...`` may send the browser.
 
@@ -138,6 +229,9 @@ def _bounce_target(request_path: str, callback: str) -> str | None:
 
 class _TokenHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802 - http.server's name
+        if urlsplit(self.path).path == "/session-counts":
+            self._send(200, json.dumps(_session_counts()).encode())
+            return
         if urlsplit(self.path).path != "/bounce":
             self._send(404, b"{}")
             return
@@ -159,6 +253,15 @@ class _TokenHandler(BaseHTTPRequestHandler):
             return
         if self.path == "/session-account":
             status, answer = _session_account(raw)
+        elif self.path == "/store-ready":
+            status, answer = _store_ready(raw)
+        elif self.path == "/hold-store-lock":
+            status, answer = _hold_store_lock(raw)
+        elif self.path == "/unchecked-refresh-seconds":
+            status, answer = _unchecked_refresh_seconds(raw)
+        else:
+            status, answer = 0, {}
+        if status:
             self._send(status, json.dumps(answer).encode())
             return
         form = {k: v[0] for k, v in parse_qs(raw.decode()).items()}

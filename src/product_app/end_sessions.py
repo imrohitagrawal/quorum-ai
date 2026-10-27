@@ -34,12 +34,19 @@ What it never does, on purpose:
 * keep a record of its runs (CHG-083 (b)): it prints counts and the cutoff.
 
 Exit codes: 0 done and read back (``--help`` also exits 0, and changes
-nothing); 1 no account has that email; 2 usage (a repeated ``--email`` too);
-3 nothing changed (``SESSION_DB_PATH`` not set, no file, not writable,
-locked past the busy timeout, not migrated, or not run as the file's owner);
-4 the cutoff is written but the read-back found a row put back, a lower
-cutoff, or could not run: run it again, which is safe (the cutoff never
-moves back). An output that cannot be written does not change the code.
+nothing); 1 no account matched: ``--email`` found no account with that email,
+or ``--all`` found no account at all (both print the database path, CHG-088
+(f)(3)); 2 usage (a repeated ``--email`` too); 3 nothing changed
+(``SESSION_DB_PATH`` not set, no file, not writable, busy past the busy
+timeout, which says "Run the command again" (CHG-088 (f)(2)), not migrated,
+or not run as the file's owner); 4 the cutoff is written but the read-back
+found a row put back, a lower cutoff, or could not run: run it again, which
+is safe (the cutoff never moves back). An output that cannot be written does
+not change the code.
+
+The database path is the one value printed that the operator did not type:
+it comes from ``SESSION_DB_PATH``, resolved, and only when nothing matched
+(CHG-088 (f)(3); ADR-0176 amendment, decision 4).
 """
 
 from __future__ import annotations
@@ -79,6 +86,22 @@ DELETE_ALL_SIGNED_IN_BEFORE_SQL = (
 USAGE = "Usage: python -m product_app.end_sessions (--email ADDRESS | --all). Nothing was changed."
 
 _OWNER_HINT = "Run as the file's owner: fly ssh console --user quorum"
+
+#: CHG-088 (f)(2), the owner's words: the database was busy past the busy
+#: timeout at the marker read or the write, so nothing was changed. Never said
+#: at the read-back, after the change is saved, where it would be false.
+BUSY = "The sessions database is busy. Run the command again. Nothing was changed."
+
+
+def _busy(exc: BaseException) -> bool:
+    """Whether ``exc`` is SQLite's ``SQLITE_BUSY``, by its code, never its
+    text: ``SQLITE_LOCKED`` ("database table is locked") is a different fault
+    and is not called busy (FM-4.1). ``sqlite_errorcode`` exists on Python
+    3.11 and later; its low byte is the primary code."""
+    return (
+        isinstance(exc, sqlite3.OperationalError)
+        and (getattr(exc, "sqlite_errorcode", 0) & 0xFF) == sqlite3.SQLITE_BUSY
+    )
 
 
 class _UsageError(Exception):
@@ -144,7 +167,17 @@ def _write(stream: IO[str], message: str) -> None:
     ``os.devnull``, so Python's own flush at exit cannot fail and exit 120
     instead."""
     try:
-        print(message, file=stream, flush=True)
+        try:
+            print(message, file=stream, flush=True)
+        except UnicodeError:
+            # CHG-088 (FM-4.7): a path the stream cannot encode (an undecodable
+            # byte in SESSION_DB_PATH) is printed escaped, never raised.
+            encoding = getattr(stream, "encoding", None) or "utf-8"
+            print(
+                message.encode(encoding, "backslashreplace").decode(encoding),
+                file=stream,
+                flush=True,
+            )
     except OSError:
         with suppress(OSError, ValueError):
             devnull = os.open(os.devnull, os.O_WRONLY)
@@ -205,7 +238,7 @@ def main(argv: list[str] | None = None, *, now: datetime | None = None) -> int:
         )
         return 3
     try:
-        return _end(connection, wanted=wanted, cutoff=cutoff)
+        return _end(connection, wanted=wanted, cutoff=cutoff, path=Path(path).resolve())
     finally:
         connection.close()
 
@@ -216,7 +249,9 @@ def _rollback(connection: sqlite3.Connection) -> None:
             connection.execute("ROLLBACK")
 
 
-def _end(connection: sqlite3.Connection, *, wanted: str | None, cutoff: datetime) -> int:
+def _end(
+    connection: sqlite3.Connection, *, wanted: str | None, cutoff: datetime, path: Path
+) -> int:
     stamp = cutoff.isoformat()
     marker = session_store.SessionStore._SESSION_SAFETY_MIGRATION
     try:
@@ -226,9 +261,13 @@ def _end(connection: sqlite3.Connection, *, wanted: str | None, cutoff: datetime
             "SELECT 1 FROM schema_migrations WHERE name = ?", (marker,)
         ).fetchone()
     except sqlite3.Error as exc:
-        _say(
-            f"The sessions database could not be read ({type(exc).__name__}). Nothing was changed."
-        )
+        if _busy(exc):
+            _say(BUSY)
+        else:
+            _say(
+                f"The sessions database could not be read ({type(exc).__name__}). "
+                "Nothing was changed."
+            )
         return 3
     if migrated is None:
         _say(
@@ -240,6 +279,12 @@ def _end(connection: sqlite3.Connection, *, wanted: str | None, cutoff: datetime
         connection.execute("BEGIN IMMEDIATE")
         if wanted is None:
             matched = [str(row[0]) for row in connection.execute("SELECT account_id FROM accounts")]
+            if not matched:
+                # CHG-088 (f)(3): before anything is written, so the file is
+                # untouched (FM-4.5); the path says WHICH file had none (FM-4.6).
+                connection.execute("ROLLBACK")
+                _say(f"No account is recorded in {path}. Nothing was changed.")
+                return 1
             connection.execute(RAISE_ALL_CUTOFFS_SQL, (stamp,))
             ended = int(connection.execute(DELETE_ALL_SIGNED_IN_BEFORE_SQL, (stamp,)).rowcount)
         else:
@@ -255,7 +300,8 @@ def _end(connection: sqlite3.Connection, *, wanted: str | None, cutoff: datetime
             if not matched:
                 connection.execute("ROLLBACK")
                 _say(
-                    "No account has that email address as of its last sign-in. Nothing was changed."
+                    "No account has that email address as of its last sign-in in "
+                    f"{path}. Nothing was changed."
                 )
                 return 1
             ended = 0
@@ -264,8 +310,13 @@ def _end(connection: sqlite3.Connection, *, wanted: str | None, cutoff: datetime
                 ended += int(connection.execute(DELETE_SESSIONS_BEFORE_SQL, (key, stamp)).rowcount)
         connection.execute("COMMIT")
     except sqlite3.Error as exc:
+        # A busy COMMIT is rolled back here too, so "Nothing was changed"
+        # stays true (FM-4.2).
         _rollback(connection)
-        _say(f"The sessions could not be ended ({type(exc).__name__}). Nothing was changed.")
+        if _busy(exc):
+            _say(BUSY)
+        else:
+            _say(f"The sessions could not be ended ({type(exc).__name__}). Nothing was changed.")
         return 3
     found, lower = _read_back(connection, matched=matched, every=wanted is None, stamp=stamp)
     if found is None or found or lower:

@@ -229,12 +229,21 @@ BUCKET_A_LITERAL_PIN = (
     # W86 (ADR-0172): the same reason; renaming it re-runs the VACUUM, a
     # rewrite of the whole file, on every database.
     "session_store.SECURE_DELETE_VACUUM_MARKER",
-    # W87-3 (ADR-0176): how long a signed-in cache hit waits for the store
-    # lock before its cutoff counts as unread and the request is refused
-    # (CHG-083 (a)). Longer makes a busy request wait; shorter signs people
-    # out under routine holds the plan measured. Pinned in tests/security/
-    # test_signed_in_cutoff_on_cache_hits.py.
+    # W87-3 (ADR-0176, CHG-088 (b)): how long a signed-in cache hit waits for
+    # the store lock before its cutoff counts as unread and the request is
+    # refused unchecked. 6 s: above the app connection's 5 s busy timeout;
+    # shorter signs people out while that write waits. Pinned in tests/
+    # security/test_signed_in_cutoff_on_cache_hits.py and tests/unit/
+    # test_cutoff_bound_six_seconds.py.
     "session_store.SIGNED_IN_CUTOFF_LOCK_TIMEOUT_S",
+    # W87-3 follow-up (ADR-0176, CHG-088): the app connection's busy timeout,
+    # now explicit. The cutoff bound above must stay over it; shorter loses
+    # writes (ADR-0002). Pinned in tests/unit/test_cutoff_bound_six_seconds.py.
+    "session_store.APP_BUSY_TIMEOUT_S",
+    # W87-3 follow-up (CHG-088, the owner's "Same, plus auto-reload"): how
+    # often the "briefly unavailable" page reloads. Pinned in tests/security/
+    # test_unchecked_session_keeps_its_cookie.py.
+    "main.UNCHECKED_PAGE_REFRESH_S",
     # W86 (ADR-0172): how often the daemon sweeps history for every account.
     # Longer keeps a question past history_keep_days for longer, the direction
     # the approved keep rule forbids; pinned in tests/unit/test_history_sweep.py.
@@ -430,6 +439,11 @@ BUCKET_B_PIN_BEHAVIOUR = {
         "how to run as the file's owner; pinned on the exit-3 owner case: "
         "tests/integration/test_end_sessions_command.py::"
         "test_each_exit_code_and_nothing_changes_unless_it_is_0"
+    ),
+    "end_sessions.BUSY": (
+        "the owner's busy sentence (CHG-088); pinned word for word on exit 3: "
+        "tests/integration/test_end_sessions_command.py::"
+        "test_t40_busy_at_the_marker_read_says_busy_and_changes_nothing"
     ),
     # --- Added 2026-10-19 with W87-1 (ADR-0174) ---
     "auth.SESSION_MAX_AGE_MESSAGE": (

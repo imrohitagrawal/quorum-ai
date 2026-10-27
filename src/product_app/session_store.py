@@ -92,17 +92,28 @@ SESSION_TOUCH_PERSIST_INTERVAL_S = 300.0
 #: re-run the ``VACUUM`` (a rewrite of the whole file) on every database.
 SECURE_DELETE_VACUUM_MARKER = "w86_secure_delete_vacuum"
 
-#: W87-3 (ADR-0176): the most a signed-in cache hit waits for this store's
-#: lock to read its account's durable cutoff. Past it the cutoff counts as
-#: "not read" and the request is refused as an expired session (CHG-083 (a):
-#: "while the database is busy"). It bounds that one read's lock wait, not the
-#: request. Why 1.0 s: above every routine hold measured for the plan (the
-#: first history sweep 297 ms with ``secure_delete`` on, which this store
-#: always sets, ADR-0172; the operator command's whole 10,000-account
-#: transaction 68 ms; 205 ms behind a 0.3 s outside write lock), and well
-#: under the 5 s busy timeout a stuck write can take. A constant, not a
-#: setting, like ``_CLOSE_LOCK_TIMEOUT_S``. Read at call time.
-SIGNED_IN_CUTOFF_LOCK_TIMEOUT_S = 1.0
+#: CHG-088 (the W87-3 follow-up, ADR-0176 amendment): the busy timeout of this
+#: store's own connection, passed to ``sqlite3.connect`` explicitly. It was
+#: Python's default before, the same 5 s (a default ``sqlite3.connect`` reports
+#: ``PRAGMA busy_timeout`` 5000: measured for the plan, and pinned by
+#: ``tests/unit/test_cutoff_bound_six_seconds.py``), so making it explicit
+#: changes nothing. A statement of this store that meets another connection's
+#: lock waits up to this long, and it waits while holding ``SessionStore._lock``;
+#: :data:`SIGNED_IN_CUTOFF_LOCK_TIMEOUT_S` is set above it for that reason.
+#: Read at call time.
+APP_BUSY_TIMEOUT_S = 5.0
+
+#: W87-3 (ADR-0176), raised by CHG-088 (b), the owner's "Raise to 6 seconds":
+#: the most a signed-in request waits for this store's lock to read its
+#: account's durable cutoff. Past it the cutoff counts as "not read" and the
+#: request is refused as unchecked (``auth.Unchecked``): the cookie is kept and
+#: nothing is minted (CHG-088 (a)). It bounds that one read's lock wait, not
+#: the request. Why 6.0 s: above :data:`APP_BUSY_TIMEOUT_S`, how long this
+#: store's own statement can wait on another connection's lock while it holds
+#: this lock; a bound below it refuses signed-in requests while that one write
+#: waits. A constant, not a setting, like ``_CLOSE_LOCK_TIMEOUT_S``. Read at
+#: call time.
+SIGNED_IN_CUTOFF_LOCK_TIMEOUT_S = 6.0
 
 #: W7 part 3 (ADR-0137), shared since W87-3 (ADR-0176): the two statements of
 #: :meth:`SessionStore.end_sessions_before`, which the operator command
@@ -290,6 +301,46 @@ def _is_implausibly_future(when: datetime, *, now: datetime, tolerance: timedelt
     return when - now > tolerance
 
 
+class _ReadWarnings:
+    """At most one warning line per read kind per minute, for one store
+    (CHG-088 (f)(5), the W87-3 follow-up; ADR-0176 amendment).
+
+    A failed read of a session row or of a sessions cutoff happens once per
+    refused request, and while the store is failing that is every signed-in
+    request: the plan measured 10 lines for 5 refused requests before this
+    (FM P3). The first failure logs at once; later ones inside the window are
+    counted, and the first line after it says how many were left out. The
+    window is 60 s on the monotonic clock, read as ``time.monotonic()`` at
+    call time, measured from the last line, inclusive (a failure exactly 60 s
+    after a line logs). Fixed words and a count only: no session id, account
+    id or email ever reaches the line."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._window_s = 60.0
+        self._last_line: dict[str, float] = {}
+        self._left_out: dict[str, int] = {}
+
+    def warn(self, what: str, detail: str) -> None:
+        now = time.monotonic()
+        with self._lock:
+            last = self._last_line.get(what)
+            if last is not None and now - last < self._window_s:
+                self._left_out[what] = self._left_out.get(what, 0) + 1
+                return
+            left_out = self._left_out.pop(what, 0)
+            self._last_line[what] = now
+        if left_out:
+            _log.warning(
+                "session_store: could not %s: %s; %d more since the last line",
+                what,
+                detail,
+                left_out,
+            )
+        else:
+            _log.warning("session_store: could not %s: %s", what, detail)
+
+
 class SessionStore:
     """One connection, one lock, autocommit, no WAL — the shape ADR-0002 pinned."""
 
@@ -421,10 +472,14 @@ class SessionStore:
         self._db_path = db_path
         self._lock = threading.RLock()
         self._closed = False
+        # CHG-088: one throttle per store for its read warnings, set first so
+        # every later ``_warn`` can reach it.
+        self._read_warnings = _ReadWarnings()
         self._conn = sqlite3.connect(
             db_path,
             check_same_thread=False,
             isolation_level=None,
+            timeout=APP_BUSY_TIMEOUT_S,
         )
         self._conn.row_factory = sqlite3.Row
         with self._lock:
@@ -689,7 +744,8 @@ class SessionStore:
                     (str(account_id),),
                 ).fetchone()
             except sqlite3.Error as exc:
-                self._warn("read a sessions cutoff", exc)
+                # CHG-088 (f)(5): throttled; SQLite's own fixed text only.
+                self._read_warnings.warn("read a sessions cutoff", f"{type(exc).__name__}: {exc}")
                 return False, None
         finally:
             self._lock.release()
@@ -698,7 +754,8 @@ class SessionStore:
         try:
             return True, _require_aware(row[0])
         except (TypeError, ValueError) as exc:
-            self._warn("read a sessions cutoff", exc)
+            # The type only: the parse error's text quotes the stored value.
+            self._read_warnings.warn("read a sessions cutoff", type(exc).__name__)
             return False, None
 
     def record_sign_in_event(
@@ -1136,7 +1193,24 @@ class SessionStore:
         not_used_before: datetime,
         not_created_before: datetime | None = None,
     ) -> StoredSession | None:
-        """Return the stored session, or ``None``.
+        """Return the stored session, or ``None`` (:meth:`fetch_checked`,
+        without saying whether the read ran)."""
+        return self.fetch_checked(
+            session_id, not_used_before=not_used_before, not_created_before=not_created_before
+        )[1]
+
+    def fetch_checked(
+        self,
+        session_id: str,
+        *,
+        not_used_before: datetime,
+        not_created_before: datetime | None = None,
+    ) -> tuple[bool, StoredSession | None]:
+        """``(read, session)``: the stored session, or ``None`` when no usable
+        row is there; ``read`` is ``False`` when the read could not run (the
+        store is closed, or SQLite raised). CHG-088 (the W87-3 follow-up,
+        FM-1.21): a failed read is not "no row", so the caller can keep the
+        cookie instead of minting a new session over it.
 
         W87-1 (ADR-0174): with ``not_created_before``, a row created before it
         is refused too (``created_at >= not_created_before``, inclusive like
@@ -1166,7 +1240,7 @@ class SessionStore:
         """
         with self._lock:
             if self._closed:
-                return None
+                return False, None
             try:
                 row = self._conn.execute(
                     "SELECT * FROM sessions WHERE session_digest = ? AND last_used_at >= ? "
@@ -1180,10 +1254,11 @@ class SessionStore:
                     ),
                 ).fetchone()
             except sqlite3.Error as exc:
-                self._warn("read a session", exc)
-                return None
+                # CHG-088 (f)(5): throttled; SQLite's own fixed text only.
+                self._read_warnings.warn("read a session", f"{type(exc).__name__}: {exc}")
+                return False, None
         if row is None:
-            return None
+            return True, None
         now = datetime.now(UTC)
         try:
             for column in ("last_used_at", "created_at"):
@@ -1195,9 +1270,9 @@ class SessionStore:
                     raise ValueError(f"session row {column} {row[column]!r} is in the future")
         except (TypeError, ValueError) as exc:
             _log.warning("session_store: discarding an unusable session row: %s", exc)
-            return None
+            return True, None
         try:
-            return StoredSession(
+            return True, StoredSession(
                 session_id=session_id,
                 account_id=UUID(row["account_id"]),
                 csrf_token=row["csrf_token"],
@@ -1206,7 +1281,7 @@ class SessionStore:
             )
         except (TypeError, ValueError) as exc:
             _log.warning("session_store: discarding an unreadable session row: %s", exc)
-            return None
+            return True, None
 
     def count(self) -> int:
         """How many rows the table holds. Used by tests as the positive
@@ -1506,6 +1581,7 @@ def get_store() -> SessionStore | None:
 
 
 __all__ = [
+    "APP_BUSY_TIMEOUT_S",
     "DEFAULT_DB_PATH",
     "DELETE_SESSIONS_BEFORE_SQL",
     "RAISE_SESSIONS_CUTOFF_SQL",

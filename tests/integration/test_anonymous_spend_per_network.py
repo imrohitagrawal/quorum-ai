@@ -974,8 +974,9 @@ def test_with_no_usable_accounts_table_a_signed_in_session_is_refused_not_metere
     W87-3 it was RESTORED and metered under its own id (ADR-0144 decision 3).
     W87-3 (CHG-083 a, ADR-0176, amending that decision): no cutoff can be
     read for a signed-in session on a database without the session-safety
-    migration, so it is refused as an expired session, and so it is never
-    metered at all, least of all under the network. RED-IF the cookie
+    migration, so it is refused (as unchecked since CHG-088, 401
+    ``SESSION_UNCHECKED``), and so it is never metered at all, least of all
+    under the network. RED-IF the cookie
     resolves, its estimate is answered (with the network's meter or its own),
     or the network is charged for it. Partners: the anonymous spender on the
     same network really was charged, so a network key would show it, and the
@@ -997,7 +998,7 @@ def test_with_no_usable_accounts_table_a_signed_in_session_is_refused_not_metere
             refused = restored.post(ESTIMATE, json=_estimate_body(), headers={"X-CSRF-Token": csrf})
 
             assert refused.status_code == 401, refused.text
-            assert refused.json()["detail"]["code"] == "SESSION_EXPIRED"
+            assert refused.json()["detail"]["code"] == "SESSION_UNCHECKED"
             assert spender_rows == 1
             assert _charge_rows(ledger, _key(spender_run)) == 1
     finally:
