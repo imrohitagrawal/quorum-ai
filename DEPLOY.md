@@ -346,12 +346,19 @@ It prints counts and the cutoff time only, and keeps no record of the run
 **While signed-in visitors are refused** (CHG-088, ADR-0176 amendment): when
 the app cannot check a signed-in session (the session database is not ready,
 busy past 6 s, or failing), it keeps the visitor's cookie and creates nothing.
-The page says "Your account is briefly unavailable" and reloads itself each
-minute; sign-in says "Sign-in is briefly unavailable. Try again in a minute."
-Two free signals: `/status` field `session_store` (`ready`, `not_ready`, or
-`absent` when the database failed to open at start), and a log line at most
-once a minute, `signed-in requests refused: the session cutoff could not be
-checked (not_ready=N not_read=M); K refused since the last line`. `not_ready`
+The page says "Your account is briefly unavailable" ("Your session is briefly
+unavailable" when the app cannot tell whether the cookie was signed in) and
+reloads itself each minute; sign-in says "Sign-in is briefly unavailable. Try
+again in a minute." Sign out, sign out everywhere and account deletion are
+refused until the database is back, and the cookie stays (a temporary limit
+until W114's second pull request, CHG-088 (l)). Two free signals:
+`/status` field `session_store` (`ready`, `not_ready`, or `absent` when the
+database failed to open at start), and a log line at most once a minute,
+`signed-in requests refused: the session cutoff could not be checked
+(not_ready=N not_read=M); K refused since the last line`. The line counts
+cookie checks, not people: each refused request counts once, and a cookie of unknown kind is counted as
+signed-in. The store's own read warnings say how many were left out only when
+the next one is printed. `not_ready`
 on `/status` clears by itself within about a minute of the file being usable
 again (a file whose migration never ran needs a restart on a writable volume);
 `absent` needs the volume fixed and a restart. A malformed cutoff value

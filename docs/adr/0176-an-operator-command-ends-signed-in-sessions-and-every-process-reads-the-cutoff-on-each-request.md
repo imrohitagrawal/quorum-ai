@@ -243,17 +243,21 @@ from CHG-088 is the session's design.**
 | S16 | any presented cookie | **no store object** (it failed to open at start) | no session, the mint path, as before: the owner's exception (CHG-088 (g)) |
 | S17 | a session this process saw end (12 hours, idle, sign-out, sign out everywhere, deletion, the command's cutoff read on a cache hit) | any, a failing read included | ended, from memory, before any read |
 | S18 | cached signed-in whose cutoff read failed and whose 12 hours or idle limit ran out during the wait | — | ended |
+| S19 | a plain sign-out (`POST /v1/auth/sign-out`) for a session in S5, S6, S8, S12 or S13 | — | refused: the 401 `SESSION_UNCHECKED`, and the cookie stays, until pull request B (A14) |
 
 ### Measured
 
 | What | How | Result |
 |---|---|---|
 | The new tests fail without the change | the test designer's run of the 9 test files on `a236b31`, before any source change | `78 failed, 150 passed, 1 skipped` |
-| The same files with the change | the builder's run on the build commit | `2 failed, 226 passed, 1 skipped`: the two failures are test-designer defects the builder reported rather than fixed (T7c's partner, and two constants missing from the risk-constant registry), each to be settled before merge |
+| The same files with the change | the builder's run on the build commit | `2 failed, 226 passed, 1 skipped`: the two failures were test-designer defects the builder reported rather than fixed (T7c's partner, and two constants missing from the risk-constant registry); both were fixed before review |
+| The same 9 files plus the review round's `test_unchecked_round1_fixes.py`, at the round-1 fix commit `b4af7d1` | `uv run --no-sync pytest -q -p no:cacheprovider --no-cov` on the 10 files | `251 passed, 1 skipped` |
 | `/ui` for a cached signed-in cookie behind a held store lock, at the 6.0 s bound | the builder's in-process probe (`TestClient`, another thread holds `SessionStore._lock`), load average 9.7 | 3.0 s hold: 200 with the same cookie in 3.008 to 3.021 s (3 runs); 5.5 s hold: 200 in 5.511 s; 7.0 s hold: the 503 page in 6.013 s, no `Set-Cookie` |
-| A refused unchecked API request ends at the bound | `tests/security/test_unchecked_session_keeps_its_cookie.py::test_t14_an_unchecked_api_refusal_ends_at_the_bound_not_the_hold` (bound patched to 0.2 s, 1.5 s hold) | under 0.7 s; before the change it waited for the hold (the test designer's red run: `1.508` s, `SESSION_EXPIRED`) |
-| The timing-sensitive files, ten times | the builder's runs of `test_signed_in_cutoff_on_cache_hits.py`, `test_session_store_not_ready_fails_closed.py` and `test_unchecked_session_keeps_its_cookie.py`, load average 6.9 to 11.8 | `1 failed, 81 passed` in each of the 10 runs; the one failure is T7c's partner every time (deterministic, not timing) |
-| Threads behind a long hold | inherited from the failure-modes agent (P2), not re-measured: anyio's 40 threads, an 8.0 s hold, 45 signed-in requests | `/ready` answered in 7.70 s at the 6.0 s bound and 7.71 s at 1.0 s; a 3.0 s hold at 6.0 s: `codes={200: 45}` |
+| A refused unchecked API request ends at the bound | `tests/security/test_unchecked_session_keeps_its_cookie.py::test_t14_an_unchecked_api_refusal_ends_at_the_bound_not_the_hold` (bound patched to 0.2 s, 1.5 s hold) | under 0.7 s; before the change it waited for the hold (the test designer's red run: `1.510` s, from `1.5098625000100583`, `SESSION_EXPIRED`) |
+| The timing-sensitive files, ten times | the builder's runs of `test_signed_in_cutoff_on_cache_hits.py`, `test_session_store_not_ready_fails_closed.py` and `test_unchecked_session_keeps_its_cookie.py`, load average 6.9 to 11.8 | `1 failed, 81 passed` in each of the 10 runs; the one failure was T7c's partner every time (deterministic, not timing), since fixed |
+| The same three files plus `test_unchecked_round1_fixes.py`, ten times, at `b4af7d1` | the same `pytest` command, run 10 times in a row, one-minute load average 9.7 to 17.4 | `105 passed` in each of the 10 runs |
+| An estimate or a run creation refused at its second read waits one bound, not two | `test_unchecked_round1_fixes.py::test_b1_a_refused_estimate_or_run_creation_waits_one_bound_not_two` (bound patched to 1.0 s; the store lock held from the second read) | between 0.9 s and 1.6 s with 2 reads; with the early late-run guard handing the read on, as first built, 2.03 s with 3 reads |
+| Threads behind a long hold | inherited from the failure-modes agent (P2), measured BEFORE the change, not re-measured here: anyio's 40 threads, an 8.0 s hold, 45 signed-in requests | `/ready` answered in 7.70 s at the 6.0 s bound and 7.71 s at 1.0 s; a 3.0 s hold at 6.0 s: `codes={200: 45}` |
 
 ### Decisions
 
@@ -278,6 +282,9 @@ A3. **The ended list.** `SessionRepository._ended_ids` records each session this
     session known to have ended is never called "briefly unavailable" when the store then fails
     (Codex F3). A cached session whose cutoff read failed and whose 12 hours or idle limit passed
     during the wait is ended too; a cutoff written elsewhere that cannot be read stays unchecked.
+    A restore that was reading a session's row when that session signed out no longer caches it
+    again: its last check under the lock also asks the ended list (review round 1; older than
+    CHG-088).
 A4. **A known signed-in row past its 12 hours is ended first** (FM-1.8), before the not-ready
     exit. A row whose kind is unknown is not ended by the signed-in limits there: it may be an
     anonymous session inside its 24 hours.
@@ -286,7 +293,10 @@ A5. **Both doors (CHG-088 (c)).** `/ui` answers a 503 page (A6); `/v1/session` a
     (e)). Neither sets a cookie, mints, touches or rotates anything. `/v1/session` answers 401,
     not 503, so every JSON door has one code and one status: the session's choice. The unchecked
     branches never call `end_reason`, whose `store.fetch` has no time bound, so a refused request
-    ends at the cutoff read's bound (T14). Admission keeps today's durable read inside the run
+    waits on its failed cutoff read for at most the bound (T14), unless a session write in the same
+    process is queued behind the store lock (Known limits). Every unchecked read refuses at once, the estimate's and the run creation's early late-run check included (review round 1: it used to
+    hand the read on to the spend key, so an estimate waited two bounds, and one whose next read
+    worked skipped the "ends soon" check). Admission keeps today's durable read inside the run
     store's lock; its unchecked branch refuses with `SESSION_UNCHECKED`.
 A6. **The page (CHG-088 (d), "Same, plus auto-reload").** `templates/session-unchecked.html`:
     503, `Retry-After: 60`, `Cache-Control: no-store`, no `Set-Cookie`. A meta refresh to `/ui`
@@ -315,8 +325,13 @@ A10. **The log line and `/status` (CHG-088 (f)(4), (5)).** One limiter per proce
     session's words: `signed-in requests refused: the session cutoff could not be checked
     (not_ready=N not_read=M); K refused since the last line`. No id, email or traceback. The
     store's own "could not read a sessions cutoff" and "could not read a session" warnings are
-    throttled the same way, per store, and the first line after a window says how many were left
-    out. `/status` gains `session_store`: `ready`, `not_ready` or `absent`, from the flags only;
+    throttled per store: the first line after a 60 s window says how many were left out. Unlike the
+    refusal line, nothing flushes them, so that count is printed only with the next warning, if one
+    comes. The refusal line counts unchecked LOOKUPS, not requests (review round 1, measured at
+    `b4af7d1` on the first branch by a probe that counts `note` calls; not re-measured on W114): one for each refused request on every route
+    measured (`/ui`, `/v1/query-runs/active`, "Stay signed in", an estimate, and a run creation
+    whose first 1, 2 or 3 reads worked), and a cookie
+    of unknown kind, which may be anonymous, is counted under "signed-in" too. `/status` gains `session_store`: `ready`, `not_ready` or `absent`, from the flags only;
     `/ready` is unchanged.
 A11. **The command (CHG-088 (f)(2), (3)).** Busy is SQLite's code (`sqlite_errorcode & 0xFF ==
     SQLITE_BUSY`), never its text, so `SQLITE_LOCKED` is not called busy. Busy at the marker read
@@ -344,6 +359,29 @@ A13. **No store at all is today's behaviour (CHG-088 (g)).** When the store fail
     nothing can be checked and no cookie can be told from a made-up one, so a presented cookie gets
     a fresh anonymous session as before; sign-in is refused before Google (A9) and `/status` says
     `absent`. The owner's exception to "keep the cookie, create nothing".
+A14. **Sign-out while unchecked is refused, for now (CHG-088 (i), (l)).** The owner chose "Clear
+    the cookie anyway (Recommended)" for this case (i), then "Ship A first (Recommended)" (l): pull
+    request A (W114) ships without it, as a known, temporary limit. Until pull request B,
+    `POST /v1/auth/sign-out` for a session that could not be checked answers the 401
+    `SESSION_UNCHECKED`, as every route does, and the cookie stays; after the store recovers a
+    sign-out works as usual (`test_sign_out_while_unchecked_is_refused_and_keeps_the_cookie`). Sign
+    out everywhere and account deletion are refused then too: they need the database write.
+A15. **Wording approved (CHG-088 (h), "Approve all as written (Recommended)").** The "session"
+    variant for a cookie of unknown kind, the card title "Briefly unavailable" and the two tab
+    titles, which A7 called the session's, are now the owner's.
+A16. **"Try again" kept as built (CHG-088 (j), "Keep as built (Recommended)").** Run and History
+    offer it; the other cards show the line without a button.
+A17. **A revoked session cannot be recovered by a callback that crosses the 12 hours** (W114,
+    from the W87-3 follow-up's review round 2, Codex). `revoke` (a sign-out, a sign-in's rotation, a
+    sign-in refused for a deleted account) records the id in `_signed_out_ids`, kept apart from
+    natural ends, and `max_age_account`, which the Google callback's W87-2 recovery asks, refuses
+    those ids even when the row is still there. Before this, a sign-out whose row delete failed was
+    recovered by a callback already under way: measured on `main` at `fe96d1e`,
+    `test_sign_out_stops_the_12_hour_recovery.py`'s case "checked, row delete failed" printed
+    `assert 1 == 0`. Sign-in-only sessions are left out, as for the ended list.
+
+The labels "Codex F1" to "Codex F5", FM-1.21 to FM-1.24 and FM-5.8 above are defined in the last
+section of `docs/analysis/2026-10-25-w87-3-followup-failure-modes.md`.
 
 ### Rejected alternatives
 
@@ -376,21 +414,43 @@ A13. **No store at all is today's behaviour (CHG-088 (g)).** When the store fail
 - **Threads.** anyio's default limiter is 40 threads (measured in the `.venv` by the failure-modes
   agent; the production image's is UNVERIFIED). Behind a store-lock hold longer than 6 s, more
   than 40 concurrent signed-in requests still delay `/ready` (7.70 s, inherited; Fly's check times
-  out at 5 s, `fly.toml`). Refused unchecked requests now end at the bound, but an ended session's
-  401 still looks up its reason with no time bound, and a restore's row read, kind read and cutoff
-  read have no bound either.
+  out at 5 s, `fly.toml`; 7.70 s was measured before the change). A refused unchecked request's
+  failed cutoff read now waits at most the bound, but an ended session's 401 still looks up its
+  reason with no time bound, a restore's row read, kind read and cutoff read have no bound either,
+  and a queued session write makes every lookup wait for the whole hold (below).
 - **The page's latency.** A cached signed-in page load waits for a held store lock up to 6.0 s
   before the page or the workspace (measured above: 3.0 s for a 3 s hold). Before the amendment
   it was refused after 1.0 s and minted a new session, whose save then waited for the rest of the
   hold (the plan's journeys measurement, 2.52 s at a 2.5 s hold, inherited).
 - **The sign-in start as a whole is not bounded.** The pre-check takes no lock, but the start's
   own authentication can write a due touch under the store lock first (Codex F4).
-- **The ended list** is lost at a restart and an entry is pruned after 24 hours; a failing read of
-  that cookie afterwards gives "unchecked" (the page or the 401), never access. Its memory has no
-  fixed bound: one entry per session that ended in this process in 24 hours, which grows with the
-  number of addresses seen (UNVERIFIED in size). Sign-in-only sessions are left out.
+- **The ended list** is lost at a restart and an entry is pruned after 24 hours (by the GC purge,
+  `test_a3_...`); a failing read of that cookie afterwards gives "unchecked" (the page or the
+  401), never access.
+- **Sign-out while unchecked is refused until pull request B (A14).** On a shared computer,
+  someone who signs out during the window keeps the cookie until a sign-out after the store
+  recovers; (i)'s question described the page then saying "Sign-out did not complete. Please try
+  again." The owner accepted this as temporary (CHG-088 (l)).
+- **The revoked list (A17)** is lost at a restart and pruned after 24 hours, like the ended list;
+  after a restart, a callback crossing the 12 hours for a session whose row delete had failed
+  would recover it again.
+- **The ended list's memory** has no fixed size: one entry per session this process held that
+  ended in the last 24 hours, and one in the revoked list per revoke of such a session.
+  Both grow with real sessions, not with requests. Sign-in-only sessions are left out.
+- **A queued session write holds every lookup for the whole store-lock hold** (review round 1,
+  older than CHG-088). While the store lock is held, a session write in the same process (a
+  mint, a due touch, a CSRF rotation, a sign-out) waits for it while holding the session
+  repository's lock, and every lookup takes that lock first. So every lookup in that process
+  waits for the whole hold and is then served or refused; the bound never starts. Measured by
+  the review: a 10 s hold with one queued mint, a signed-in request served after 9.70 s, and
+  admission holding the run store's lock 9.7 s. The fix needs its own plan: not holding the
+  repository lock across the save reopens the race `_persist` guards against (a dropped session
+  written back). It needs a store-lock hold. No outside cause of one is known; the routine holds
+  measured for the plan were under 1 s (the published failure-modes list, FM-2.4: 0.03 to 1.7 ms,
+  the largest 0.69 s).
 - **Admission holds the run store's lock longer.** During a session-store hold, admission's
-  durable read can hold `InMemoryQueryRunRepository._lock` up to the 6 s bound (it was 1 s), and
+  durable read can hold `InMemoryQueryRunRepository._lock` up to the 6 s bound (it was 1 s), or
+  for the whole hold when a session write is queued (above), and
   every run operation behind that lock waits: 15 `with self._lock:` statements in
   `query_run_orchestration.py` (`grep -cE "^\s+with self\._lock:"`), polling reads included. Pre-existing: an ended
   session's reason lookup there has no time bound either.

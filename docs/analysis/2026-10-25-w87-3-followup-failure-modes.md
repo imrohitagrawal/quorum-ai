@@ -3,7 +3,9 @@
 > Published with the W87-3 follow-up (CHG-088, ADR-0176 amendment of 2026-10-25) as the
 > session's record of the failure modes listed before any design. Unchanged except that
 > local folder paths were removed. One count here was corrected by the plan: the bound was
-> stated 10 times in **5** files, not 6 (the files listed below are those 5).
+> stated 10 times in **5** files, not 6 (the files listed below are those 5). Review round 1
+> corrected FM-1.4's call-site count (12, not 15) and added the last section, which defines the
+> labels the code, the tests and ADR-0176's amendment use for modes found after this list.
 
 
 Role: failure modes, read-only. Written 2026-10-25. Tree: a read-only copy of
@@ -102,7 +104,7 @@ Probe scripts were kept in a scratch folder outside the repository
 | 1.1 | "Could not check" resumes the session: it renders signed in, is touched, or serves the cached copy. That is the fail-open the owner refused. | Attacker gains access with an ended cookie | `auth.py:508`, `:1665-1689` | CHG-083 (a) | While unreadable, `/ui` has no account email, no "Sign out" and no CSRF, and `/v1/query-runs/active` is 401. Partner: the same cookie after recovery shows "Sign out". Red when the friendly path calls `touch` or `_issued`. |
 | 1.2 | **`/v1/session` still mints.** Fixing `/ui` alone fails in two ways. If the friendly page is the workspace template, its boot runs `initSession` (`app.js:8399`) → `/v1/session` mints and replaces the cookie. And a page that `/ui` resumed a moment earlier can get the refusal on its `/v1/session` call. | Signed-in user (cookie lost, one of the 2 daily mints spent) | `main.py:2068`, `auth.py:1684-1689` | **M (P1)** | GET `/v1/session` with an unreadable signed-in cookie: no `Set-Cookie`, no mint row (assert the mint-event **count** is unchanged, rule 6b), and a non-200. Red today (P1 prints 200 with a new cookie). |
 | 1.3 | Two reads per load, and the second one fails. `get` reads OK (`:1665`), then `touch` → `get` reads again and fails → `resumed is None` → mint (`:1679`). The rotate path does the same (`:1689`). Classifying only the first `get` leaves this path minting. | Signed-in user | `auth.py:1677-1689` | R | Make the cutoff read answer `(True, None)` once, then `(False, None)`. `/ui` must not mint. Red when only the first read is classified. |
-| 1.4 | `get()`'s return type changes, to a sentinel or tuple. 15 call sites test `is None` (`grep` of `session_repository.(get\|touch\|rotate_csrf)(` printed 15). A truthy "refused" object at `auth.py:1424` (`spend_meter_for`) or at `google_signin.py:745` **lets a refused session through** | Attacker (spend under an ended session; sign-in "recovery") | 15 sites in `auth.py`, `google_signin.py`, `account_deletion.py` | R | Keep `get()` returning `None`, and expose the reason through a separate call that only `issue_or_resume_session` uses. A mutation test returns a sentinel and expects every protected route to stay 401. |
+| 1.4 | `get()`'s return type changes, to a sentinel or tuple. 12 call sites test `is None` (`git grep -cE "session_repository\.(get\|touch\|rotate_csrf)\(" c40159e -- src` printed 8 in `auth.py`, 3 in `google_signin.py`, 1 in `account_deletion.py`; this list first said 15, which counts `auth.py`'s own `self.get/touch/rotate_csrf(` calls too). A truthy "refused" object at `auth.py:1424` (`spend_meter_for`) or at `google_signin.py:745` **lets a refused session through** | Attacker (spend under an ended session; sign-in "recovery") | 12 sites in `auth.py`, `google_signin.py`, `account_deletion.py` | R | Keep `get()` returning `None`, and expose the reason through a separate call that only `issue_or_resume_session` uses. A mutation test returns a sentinel and expects every protected route to stay 401. |
 | 1.5 | The page carries the session's token or id: a CSRF token in the HTML, or the session id echoed. | Attacker who can read the page (cache, extension) | `main.py:2224-2243` (the capped page embeds a token) | Plan; ADR-0131 | The friendly body contains neither `csrf_token` nor `session_id`. Red if the capped-page renderer is reused. |
 | 1.6 | `Set-Cookie` on the friendly page. `attach_session_cookie` re-sets `max_age=SESSION_TTL`, which **extends the browser cookie's life**. `clear_session_cookie` would end it. | Signed-in user (logout); or an ended cookie lives longer | `auth.py:1609-1627`, `main.py:2318` | Plan | No `Set-Cookie` header at all. Partner: a normal load has one. |
 | 1.7 | The friendly path extends the session's life server-side (`_use_locked` sets `last_used_at`, or a persist touch). An ended or stolen cookie then never idles out. | Attacker (an ended cookie kept alive) | `auth.py:541-565` | Plan | `last_used_at` and the durable row are unchanged after N friendly loads. Partner: a normal load moves it. P1 shows it does not move today (`last_used moved: False`). |
@@ -184,7 +186,7 @@ and needs no test. Most serious:
 1. **FM-1.2**: `/v1/session` mints and replaces the cookie for an unreadable signed-in cookie (P1).
    The plan's "API requests keep the 401" premise is false there, so a `/ui`-only fix still loses the
    cookie on the page's own boot call.
-2. **FM-1.4**: changing `get()`'s return type. A truthy "refused" value at any of 15 `is None` sites
+2. **FM-1.4**: changing `get()`'s return type. A truthy "refused" value at any of 12 `is None` sites
    (for example `auth.py:1424`, the spend key) fails open.
 3. **FM-1.3**: `/ui` reads the cutoff twice (`get`, then `touch`). The second refusal falls into the
    mint at `auth.py:1679`.
@@ -197,3 +199,21 @@ Owner decisions this list surfaces (not the session's to make): whether the API'
 the page can tell apart, so the idle poller stops saying "signed out" (FM-1.12, which touches CHG-083
 (a)'s "Your session has expired"); and whether "try again in a minute" is approved wording when some
 causes never clear (FM-1.9).
+
+## Labels added after this list
+
+The plan, its review by Codex, and the build added these. The code, the tests and ADR-0176's
+amendment refer to them by these labels.
+
+| Label | What it is | Where it is handled |
+|---|---|---|
+| FM-1.21 | A session-row read that fails (`sqlite3.Error`, or a closed store) was read as "no row", so the page minted over the cookie. | `SessionStore.fetch_checked`; state S8; T18 |
+| FM-1.22 | No store object at all (it failed to open at start): a presented cookie mints. Same as Codex F1. | The owner kept today's behaviour, CHG-088 (g); state S16; T60 |
+| FM-1.23 | A later cutoff read's refusal was ignored: `/ui`'s two time-left helpers and the idle route's write-through read again. Same as Codex F2. | The helpers and `flush_session` take the session already checked; T3, T3b |
+| FM-1.24 | A cached session known to have ended became "unchecked" when the store then failed. Same as Codex F3. | The ended list; the expiry re-check after a failed read; states S17, S18; T7b, T7c |
+| FM-5.8 | The run creation's admission check reads the cutoff inside the run store's lock, so the 6 s bound can hold that lock longer than the old 1 s. | Kept as a known limit; the durable check stays; T61 |
+| Codex F1 | The plan's review: no state for a failed store open. | FM-1.22 |
+| Codex F2 | The plan's review: later reads ignored. | FM-1.23 |
+| Codex F3 | The plan's review: a known-ended session becomes unchecked. | FM-1.24 |
+| Codex F4 | The plan's review: the sign-in start's bound was overstated, because the start's own authentication can save a due touch under the store lock first. | Recorded as a known limit; T20 and T23 test a fresh and a persistence-due session apart |
+| Codex F5 | The plan's review: two planned tests passed for the defect they named (a text match for "busy"; "at most 2" log lines passing with 0). | T44 pairs a real `SQLITE_BUSY` with a real `SQLITE_LOCKED`; T33 requires exactly 1 line of each kind |
