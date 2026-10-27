@@ -1429,9 +1429,13 @@ def _mint(
     return session_repository.create(account_id=account_id)
 
 
-def issue_signed_in_session(
-    previous_session_id: str, *, account_id: UUID
-) -> SessionIssueResponse | None:
+class PreviousSessionRevoked(Exception):
+    """:func:`issue_signed_in_session` found the session it would replace
+    revoked (a sign-out after the sign-in callback's last check); nothing was
+    created (W114 review round 1, Codex)."""
+
+
+def issue_signed_in_session(previous_session_id: str, *, account_id: UUID) -> SessionIssueResponse:
     """Replace the caller's session with a NEW one bound to a signed-in account.
 
     W7 (ADR-0130). Session fixation is the failure this exists for: a session
@@ -1451,14 +1455,14 @@ def issue_signed_in_session(
     day, which is the common case for anyone who came back.
     """
     _enforce_production_guards(require_legacy_disabled=True)
-    # W114 review round 1 (Codex): ``None``, creating nothing, when the
-    # previous session was revoked (a sign-out) after the callback's last
+    # W114 review round 1 (Codex): :class:`PreviousSessionRevoked`, creating
+    # nothing, when the previous session was revoked (a sign-out) after the callback's last
     # check. The check, the revoke and the create share one hold of the
     # repository lock, which ``revoke`` also takes, so a sign-out lands
     # either before (refused here) or after (it then finds its cookie ended).
     with session_repository._lock:
         if session_repository.was_revoked(previous_session_id):
-            return None
+            raise PreviousSessionRevoked
         session_repository.revoke(previous_session_id)
         # W87-1 (ADR-0174): a signed-in session's 12 hours start here, at the
         # rotation, whatever the age of the session it replaces.

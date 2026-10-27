@@ -813,8 +813,9 @@ def google_sign_in_callback(request: Request) -> RedirectResponse:
     # revokes it, so an ANONYMOUS session's runs can join the account's
     # history (carry_over refuses a session already signed in).
     previous = auth.session_repository.get(session_id)
-    session = auth.issue_signed_in_session(session_id, account_id=account_id)
-    if session is None:
+    try:
+        session = auth.issue_signed_in_session(session_id, account_id=account_id)
+    except auth.PreviousSessionRevoked:
         # W114 review round 1 (Codex): signed out after the last check above.
         return _failed("no_session")
     if previous is not None and previous.account_id != account_id:
