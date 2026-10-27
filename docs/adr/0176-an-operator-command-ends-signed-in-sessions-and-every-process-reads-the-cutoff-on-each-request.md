@@ -431,9 +431,12 @@ section of `docs/analysis/2026-10-25-w87-3-followup-failure-modes.md`.
   someone who signs out during the window keeps the cookie until a sign-out after the store
   recovers; (i)'s question described the page then saying "Sign-out did not complete. Please try
   again." The owner accepted this as temporary (CHG-088 (l)).
-- **The revoked list (A17)** is lost at a restart and pruned after 24 hours, like the ended list;
-  after a restart, a callback crossing the 12 hours for a session whose row delete had failed
-  would recover it again.
+- **The revoked list (A17)** is lost at a restart and pruned after 24 hours, like the ended list.
+  A restart does not reopen the recovery: the callback also needs the pending sign-in it started,
+  which is kept in this process's memory only (`google_signin.pending_sign_ins`), so after a
+  restart it fails with `no_pending_sign_in` (case "row delete failed, then a restart" in
+  `test_sign_out_stops_the_12_hour_recovery.py`). The app runs one worker on one machine
+  (`tests/unit/test_one_machine_deployment.py`); a second process would need this revisited.
 - **The ended list's memory** has no fixed size: one entry per session this process held that
   ended in the last 24 hours, and one in the revoked list per revoke of such a session.
   Both grow with real sessions, not with requests. Sign-in-only sessions are left out.

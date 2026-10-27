@@ -64,7 +64,10 @@ def _sign_out(sign_in: SignIn, session_id: str, csrf: str) -> Any:
     return other_tab.post("/v1/auth/sign-out", headers={"X-CSRF-Token": csrf})
 
 
-@pytest.mark.parametrize("sign_out", ["none", "checked", "checked, row delete failed"])
+@pytest.mark.parametrize(
+    "sign_out",
+    ["none", "checked", "checked, row delete failed", "row delete failed, then a restart"],
+)
 def test_c1_a_sign_out_during_a_crossing_callback_is_not_undone(
     sign_in: SignIn, clock: Clock, monkeypatch: pytest.MonkeyPatch, sign_out: str
 ) -> None:
@@ -74,9 +77,15 @@ def test_c1_a_sign_out_during_a_crossing_callback_is_not_undone(
     - "checked" (partner): an ordinary sign-out, store ready. Refused, 0.
     - "checked, row delete failed": an ordinary sign-out whose row delete
       fails, so the row stays. Refused, 0.
+    - "row delete failed, then a restart": the same, then the process's
+      memory is lost as at a restart (the revoked list AND the pending
+      sign-ins, both in memory only). Refused, 0: the callback has no
+      pending sign-in left to finish (ADR-0176 A17's limit).
     Red when: ``max_age_account`` stops refusing an id this process revoked
     ("checked, row delete failed" then creates 1), or ``revoke`` stops
-    recording the id."""
+    recording the id; the restart case turns red if the callback can finish
+    without the pending sign-in this process kept (for example, pending
+    sign-ins made durable while the revoked list is not)."""
     client = signed_in_client(sign_in)
     session_id = sid(client)
     age(session_id, H12 - MINUTE, now=clock.at)
@@ -92,10 +101,15 @@ def test_c1_a_sign_out_during_a_crossing_callback_is_not_undone(
         entry = real_take(taken_id, now=now)
         if sign_out == "checked":
             signed_out.append(_sign_out(sign_in, session_id, csrf).status_code)
-        elif sign_out == "checked, row delete failed":
+        elif sign_out in ("checked, row delete failed", "row delete failed, then a restart"):
             with monkeypatch.context() as patch:
                 patch.setattr(store, "delete", lambda _id: False)
                 signed_out.append(_sign_out(sign_in, session_id, csrf).status_code)
+        if sign_out == "row delete failed, then a restart":
+            auth.session_repository._signed_out_ids.clear()
+            auth.session_repository._ended_ids.clear()
+            google_signin.pending_sign_ins._entries.clear()
+            entry = None
         rows_after_sign_out.append(digest_rows(sign_in, session_id))
         # The session crosses its 12 hours before the callback checks it.
         age(session_id, H12 + MINUTE, now=clock.at)
@@ -121,6 +135,10 @@ def test_c1_a_sign_out_during_a_crossing_callback_is_not_undone(
     assert signed_out == [200], "the sign-out answered as a sign-out"
     assert len(issued) == 0, "the callback undid the sign-out"
     assert back.headers["location"] == FAILED
+    if sign_out == "row delete failed, then a restart":
+        assert auth.session_repository.max_age_account(session_id) is not None, (
+            "partner: with the mark gone, only the lost pending sign-in refuses it"
+        )
     assert COOKIE not in back.cookies
     # Partner: in these two cases the row stayed, so only the remembered
     # sign-out can have refused the recovery.
