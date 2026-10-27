@@ -19,6 +19,7 @@ from collections.abc import Iterator
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import pytest
 from tests.helpers import isolated_run_semaphore
@@ -441,3 +442,48 @@ def test_sign_out_while_unchecked_is_refused_and_keeps_the_cookie(
     signed_out = client(sid).post(SIGN_OUT, headers={"X-CSRF-Token": csrf})
     assert signed_out.status_code == 200, signed_out.text
     _ended_codes(client(sid).get(ACTIVE))
+
+
+# -- W114 review round 1, break-it F1: an unknown kind is not ended by time --------------------
+
+
+@pytest.mark.parametrize("ends_by", ["purge", "lookup"])
+def test_a_session_of_unknown_kind_past_the_signed_in_limits_is_read_again_not_ended(
+    db: Path, live: SessionStore, monkeypatch: pytest.MonkeyPatch, ends_by: str
+) -> None:
+    """Break-it F1 (W114 review round 1): an ANONYMOUS session restored while
+    its kind lookup failed is cached with the signed-in limits and
+    ``kind_known=False``. When that copy passes the signed-in 12 hours, by
+    the GC purge or on the next lookup, it is dropped, but must NOT join the
+    ended list: the next lookup reads the row again, finds it anonymous and
+    resumes the same session (ADR-0176 A4: an unknown kind is not ended by
+    the signed-in limits). Partner: the first restore really was of unknown
+    kind (``kind_known`` False), and the session really is anonymous.
+    Red when: a time-based drop records a session of unknown kind in
+    ``_ended_ids`` (the second lookup then answers ended, ``session`` None)."""
+    clock = freeze(monkeypatch)
+    anonymous = auth.session_repository.create(account_id=uuid4())
+    sid = anonymous.session_id
+    age(sid, timedelta(hours=12) - timedelta(minutes=1), now=clock.at)
+    auth.session_repository._sessions.pop(sid)
+    real = live.is_anonymous
+    failed: list[int] = []
+
+    def fails_once(account_id: Any) -> bool | None:
+        if not failed:
+            failed.append(1)
+            return None
+        return real(account_id)
+
+    monkeypatch.setattr(live, "is_anonymous", fails_once)
+    first = auth.session_repository.lookup(sid)
+    assert first.session is not None, first
+    assert first.session.kind_known is False, "partner: the restore did not know the kind"
+    clock.advance(timedelta(minutes=2))
+    if ends_by == "purge":
+        auth.session_repository.purge_expired()
+    again = auth.session_repository.lookup(sid)
+    assert sid not in auth.session_repository._ended_ids
+    assert again.session is not None, again
+    assert again.session.session_id == sid
+    assert again.session.max_age == auth.ANONYMOUS_MAX_AGE, "partner: it is anonymous"

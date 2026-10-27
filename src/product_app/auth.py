@@ -1136,7 +1136,12 @@ class SessionRepository:
         """Drop a session that has ended from the cache, keeping a signed-in
         one's last use for :meth:`end_reason` (round 1, break-it F1)."""
         self._sessions.pop(session.session_id, None)
-        self._record_ended_locked(session, _now())
+        # W114 review round 1 (break-it F1): a session of unknown kind ended
+        # here only by the signed-in limits it was given for want of its kind;
+        # it may be anonymous inside its 24 hours, so it is not remembered as
+        # ended, and the next lookup reads its row again (A4).
+        if session.kind_known:
+            self._record_ended_locked(session, _now())
         if session.max_age != ANONYMOUS_MAX_AGE:
             self._ended_last_used[session.session_id] = session.last_used_at
 

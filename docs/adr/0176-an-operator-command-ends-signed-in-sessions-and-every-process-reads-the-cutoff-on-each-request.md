@@ -285,6 +285,10 @@ A3. **The ended list.** `SessionRepository._ended_ids` records each session this
     A restore that was reading a session's row when that session signed out no longer caches it
     again: its last check under the lock also asks the ended list (review round 1; older than
     CHG-088).
+    A session of unknown kind that runs out of the signed-in limits it was given is dropped but
+    not listed: it may be anonymous inside its 24 hours, so the next lookup reads its row again
+    (W114 review round 1, break-it F1: listing it replaced a live anonymous cookie, measured
+    against `fe96d1e`, which resumed it).
 A4. **A known signed-in row past its 12 hours is ended first** (FM-1.8), before the not-ready
     exit. A row whose kind is unknown is not ended by the signed-in limits there: it may be an
     anonymous session inside its 24 hours.
