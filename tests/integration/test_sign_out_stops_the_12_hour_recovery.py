@@ -66,7 +66,13 @@ def _sign_out(sign_in: SignIn, session_id: str, csrf: str) -> Any:
 
 @pytest.mark.parametrize(
     "sign_out",
-    ["none", "checked", "checked, row delete failed", "row delete failed, then a restart"],
+    [
+        "none",
+        "checked",
+        "checked, row delete failed",
+        "row delete failed, then a restart",
+        "purged before the revoke, row delete failed",
+    ],
 )
 def test_c1_a_sign_out_during_a_crossing_callback_is_not_undone(
     sign_in: SignIn, clock: Clock, monkeypatch: pytest.MonkeyPatch, sign_out: str
@@ -81,6 +87,10 @@ def test_c1_a_sign_out_during_a_crossing_callback_is_not_undone(
       memory is lost as at a restart (the revoked list AND the pending
       sign-ins, both in memory only). Refused, 0: the callback has no
       pending sign-in left to finish (ADR-0176 A17's limit).
+    - "purged before the revoke, row delete failed" (Codex, W114 plan
+      review): the sign-out passes its session check, then the 12 hours run
+      out and the GC drops the session from the cache before ``revoke``, so
+      ``revoke`` holds no session; its row delete fails. Refused, 0.
     Red when: ``max_age_account`` stops refusing an id this process revoked
     ("checked, row delete failed" then creates 1), or ``revoke`` stops
     recording the id; the restart case turns red if the callback can finish
@@ -99,7 +109,21 @@ def test_c1_a_sign_out_during_a_crossing_callback_is_not_undone(
 
     def take_then_sign_out(taken_id: str, *, now: Any) -> Any:
         entry = real_take(taken_id, now=now)
-        if sign_out == "checked":
+        if sign_out == "purged before the revoke, row delete failed":
+            real_revoke = auth.session_repository.revoke
+
+            def purged_then_revoke(revoked_id: str) -> None:
+                age(revoked_id, H12 + MINUTE, now=clock.at)
+                with auth.session_repository._lock:
+                    auth.session_repository._purge_expired_locked()
+                assert revoked_id not in auth.session_repository._sessions
+                real_revoke(revoked_id)
+
+            with monkeypatch.context() as patch:
+                patch.setattr(store, "delete", lambda _id: False)
+                patch.setattr(auth.session_repository, "revoke", purged_then_revoke)
+                signed_out.append(_sign_out(sign_in, session_id, csrf).status_code)
+        elif sign_out == "checked":
             signed_out.append(_sign_out(sign_in, session_id, csrf).status_code)
         elif sign_out in ("checked, row delete failed", "row delete failed, then a restart"):
             with monkeypatch.context() as patch:
@@ -143,3 +167,47 @@ def test_c1_a_sign_out_during_a_crossing_callback_is_not_undone(
     # Partner: in these two cases the row stayed, so only the remembered
     # sign-out can have refused the recovery.
     assert rows_after_sign_out == [0 if sign_out == "checked" else 1]
+
+
+def test_a_second_callback_cannot_recover_a_session_the_first_rotated(
+    sign_in: SignIn, clock: Clock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex, W114 plan review: a callback that recovers across the 12 hours
+    rotates the old session (``issue_signed_in_session`` revokes it, though
+    it is no longer cached), and that row delete fails. A second callback
+    holding a pending sign-in for the same old session must then create
+    nothing. Partner: the first callback recovers (1 session).
+    Red when: ``revoke`` records nothing for a session it does not hold
+    (the second callback then creates a second signed-in session)."""
+    client = signed_in_client(sign_in)
+    session_id = sid(client)
+    age(session_id, H12 - MINUTE, now=clock.at)
+    csrf = _boot(client)
+    query = _start(client, csrf)
+    store = session_store.get_store()
+    assert store is not None
+    with google_signin.pending_sign_ins._lock:
+        kept = google_signin.pending_sign_ins._entries[session_id]
+    age(session_id, H12 + MINUTE, now=clock.at)
+    real_issue = auth.issue_signed_in_session
+    issued: list[str] = []
+
+    def counted(previous_session_id: str, *, account_id: Any) -> Any:
+        issued.append(previous_session_id)
+        return real_issue(previous_session_id, account_id=account_id)
+
+    monkeypatch.setattr(auth, "issue_signed_in_session", counted)
+    monkeypatch.setattr(store, "delete", lambda _id: False)
+    first = _callback(client, code="stub-auth-code-2", state=query["state"])
+    assert first.status_code == 303, first.text
+    assert first.headers["location"] == PLAIN
+    assert len(issued) == 1, "partner: the first callback recovers"
+    assert digest_rows(sign_in, session_id) == 1, "partner: the old row stayed"
+    with google_signin.pending_sign_ins._lock:
+        google_signin.pending_sign_ins._entries[session_id] = kept
+    other_tab = sign_in.client()
+    other_tab.cookies.set(COOKIE, session_id)
+    second = _callback(other_tab, code="stub-auth-code-2", state=query["state"])
+    assert second.status_code == 303, second.text
+    assert len(issued) == 1, "the second callback recovered the rotated session"
+    assert second.headers["location"] == FAILED

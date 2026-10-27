@@ -378,7 +378,12 @@ A17. **A revoked session cannot be recovered by a callback that crosses the 12 h
     those ids even when the row is still there. Before this, a sign-out whose row delete failed was
     recovered by a callback already under way: measured on `main` at `fe96d1e`,
     `test_sign_out_stops_the_12_hour_recovery.py`'s case "checked, row delete failed" printed
-    `assert 1 == 0`. Sign-in-only sessions are left out, as for the ended list.
+    `assert 1 == 0`. The id is recorded even when the cache no longer holds the session (W114 plan
+    review, Codex): the GC can drop a session past its 12 hours between the sign-out's check and
+    `revoke`, and a recovery's rotation revokes a session that is not cached; without this, the
+    first case recovered and the second let a second callback create a second signed-in session
+    (`test_a_second_callback_cannot_recover_a_session_the_first_rotated`). A held sign-in-only
+    session is left out, as for the ended list.
 
 The labels "Codex F1" to "Codex F5", FM-1.21 to FM-1.24 and FM-5.8 above are defined in the last
 section of `docs/analysis/2026-10-25-w87-3-followup-failure-modes.md`.
@@ -438,7 +443,7 @@ section of `docs/analysis/2026-10-25-w87-3-followup-failure-modes.md`.
   `test_sign_out_stops_the_12_hour_recovery.py`). The app runs one worker on one machine
   (`tests/unit/test_one_machine_deployment.py`); a second process would need this revisited.
 - **The ended list's memory** has no fixed size: one entry per session this process held that
-  ended in the last 24 hours, and one in the revoked list per revoke of such a session.
+  ended in the last 24 hours, and one in the revoked list per revoke (a sign-out, a sign-in's rotation), whether the cache still held the session or not.
   Both grow with real sessions, not with requests. Sign-in-only sessions are left out.
 - **A queued session write holds every lookup for the whole store-lock hold** (review round 1,
   older than CHG-088). While the store lock is held, a session write in the same process (a

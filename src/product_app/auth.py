@@ -558,14 +558,14 @@ class SessionRepository:
         #: bounded by a fixed size: one entry per session ended here in the
         #: last 24 hours.
         self._ended_ids: dict[str, datetime] = {}
-        #: CHG-088 (W114): session id -> when :meth:`revoke` dropped it (a
-        #: sign-out, a sign-in's rotation, a sign-in refused for a deleted
-        #: account). Unlike a natural end, a revoke must also stop the sign-in
-        #: callback's 12-hour recovery (:meth:`max_age_account`), which reads
+        #: CHG-088 (W114): session id -> when :meth:`revoke` was called for it
+        #: (a sign-out, a sign-in's rotation, a sign-in refused for a deleted
+        #: account), held in the cache or not. Unlike a natural end, a revoke
+        #: must also stop the sign-in callback's 12-hour recovery (:meth:`max_age_account`), which reads
         #: the row: a revoke whose row delete failed left the row in place, and
         #: before this list a callback already under way recovered it. Same
-        #: entries, lifetime and prune as ``_ended_ids``, sign-in-only
-        #: sessions left out; lost at a restart.
+        #: lifetime and prune as ``_ended_ids``; a held sign-in-only session is
+        #: left out; lost at a restart.
         self._signed_out_ids: dict[str, datetime] = {}
         self._lock = RLock()
 
@@ -818,11 +818,17 @@ class SessionRepository:
         store = session_store.get_store()
         with self._lock:
             dropped = self._sessions.pop(session_id, None)
+            now = _now()
             if dropped is not None:
-                now = _now()
                 self._record_ended_locked(dropped, now)
-                if not dropped.sign_in_only:
-                    self._signed_out_ids[session_id] = now
+            # Also when nothing is held (W114 plan review, Codex): the GC can
+            # drop a session past its 12 hours between the caller's check and
+            # here, and a recovery's rotation revokes a session no longer
+            # cached. An id not held here is never a live sign-in-only
+            # session (those exist only in memory). Every caller holds a real
+            # session or a finished callback, so requests cannot grow this.
+            if dropped is None or not dropped.sign_in_only:
+                self._signed_out_ids[session_id] = now
             if store is not None:
                 store.delete(session_id)
 
