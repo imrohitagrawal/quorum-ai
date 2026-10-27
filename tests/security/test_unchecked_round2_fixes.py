@@ -68,10 +68,11 @@ def test_r2_f1_the_sign_in_rotation_lets_lookups_in_before_it_creates(
 ) -> None:
     """R2-F1 (break-it round 2). The rotation holds the repository lock for
     its check and its revoke only, as one write, so another request's lookup
-    never waits for the new session's write as well (each write can wait the
-    5 s busy timeout: 10.07 s measured with both under one hold, 4.9 s on
-    ``main``). The new session's creation is held open here; a lookup of
-    another session must answer meanwhile. Partners: the rotation then
+    does not also wait behind the new session's write in that hold (each
+    write can wait the 5 s busy timeout: the review measured 10.07 s with
+    both under one hold, 4.9 s on ``main``). The new session's creation is
+    held open here; a lookup of another session must answer meanwhile.
+    Partners: the rotation then
     finishes with a new signed-in session, and the lookup answered the cached
     session.
     Red when: the create is moved back inside the rotation's lock hold."""

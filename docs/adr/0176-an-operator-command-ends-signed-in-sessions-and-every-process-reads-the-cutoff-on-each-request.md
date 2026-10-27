@@ -471,8 +471,8 @@ section of `docs/analysis/2026-10-25-w87-3-followup-failure-modes.md`.
   new signed-in session stays valid. The sign-out's reply clears the cookie; if the callback's
   reply reaches the browser later, the browser keeps the new cookie. It needs the person's own
   cookie and their own Google sign-in at the same moment. Reproduced by the session's probe on
-  this branch and on `main` (`s2_live_after_sign_out=True` on both); on `main` every sign-out during
-  the Google exchange is undone. The fix needs the server to remember which session replaced the
+  this branch and on `main` (`s2_live_after_sign_out=True` on both); on `main`, a sign-out during
+  the live path's Google exchange is undone too (the test ADR-0175 pinned it with). The fix needs the server to remember which session replaced the
   old one, which is a cell of pull request B's table, as the owner chose.
 - **The revoked list (A17)** is lost at a restart and pruned after 24 hours, like the ended list.
   A restart does not reopen the recovery: the callback also needs the pending sign-in it started,
