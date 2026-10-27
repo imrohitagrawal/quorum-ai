@@ -52,7 +52,8 @@ SIGNED_IN_BODY = (
     "Nothing has been deleted."
 )
 SIGNED_IN_401 = "We could not check your sign-in just now. Try again in a minute."
-#: The session's variant for a cookie whose kind is unknown (plan §2.1.6): two
+#: The session's variant for a cookie whose kind is unknown (plan §2.1.6;
+#: approved by the owner in CHG-088 (h)): two
 #: nouns changed, nothing else.
 UNKNOWN_TITLE = "Quorum-AI: Your session is briefly unavailable"
 UNKNOWN_HEADING = "Your session is briefly unavailable"

@@ -373,31 +373,48 @@ def test_t3b_idle_makes_one_read_and_a_later_refusal_is_not_ignored(
     assert set_cookies(kept) == []
 
 
-@pytest.mark.parametrize("route", ["POST estimate", "POST create"])
-def test_t3b_a_refusal_at_the_spend_key_is_unchecked_and_stores_no_run(
-    db: Path, live: SessionStore, monkeypatch: pytest.MonkeyPatch, route: str
+@pytest.mark.parametrize(
+    ("route", "refusing", "reads"),
+    [
+        ("POST estimate", "early guard", 2),
+        ("POST estimate", "spend key", 3),
+        ("POST create", "early guard", 2),
+        ("POST create", "spend key", 3),
+    ],
+)
+def test_t3b_a_refusal_at_the_late_run_guard_or_the_spend_key_is_unchecked_and_stores_no_run(
+    db: Path,
+    live: SessionStore,
+    monkeypatch: pytest.MonkeyPatch,
+    route: str,
+    refusing: str,
+    reads: int,
 ) -> None:
     """T3b, the estimate and the run creation. Read 1 (``require_session``)
-    is good; read 2 (the early late-run guard, ``query_runs.py:725`` /
-    ``:788``) answers "not read" and HANDS ON (the guard returns, as it does
-    for an ended session); read 3, the spend key (``spend_meter_for``),
-    refuses with 401 ``SESSION_UNCHECKED``; no run is stored (delta 0).
-    Partner: with every read good the same request succeeds and a creation
-    stores exactly 1 run.
-    Red when: the spend key's refusal is reported as an ended session, or
-    the late-run guard's not-read refuses or is treated as a pass that
-    stores a run."""
+    is good. Case "early guard": read 2 (the early late-run guard,
+    ``query_runs.py:725`` / ``:788``) answers "not read" and REFUSES with 401
+    ``SESSION_UNCHECKED``, so 2 reads. Case "spend key": read 2 is good and
+    read 3, the spend key (``spend_meter_for``), answers "not read" and
+    refuses, so 3 reads. No run is stored (delta 0). Partner: with every
+    read good the same request succeeds and a creation stores exactly 1 run.
+    Changed in review round 1 (break-it F3, prose R2): this test used to pin
+    the early guard HANDING ON a "not read", which made a refused request
+    wait two bounds and let an estimate skip the guard.
+    Red when: either refusal is reported as an ended session, the early
+    guard hands a "not read" on again (the "early guard" cases read 3), or a
+    refusal stores a run."""
     account_id, _email, session = _signed_in_cookie(db, "spend3b")
     sid, csrf = session.session_id, session.csrf_token
     body = _create_body(client(sid), csrf) if route == "POST create" else None
-    spy = ScriptedCutoff(live, account_id, [OK, NOT_READ, NOT_READ], then=NOT_READ)
+    script = [OK, NOT_READ] if refusing == "early guard" else [OK, OK, NOT_READ]
+    spy = ScriptedCutoff(live, account_id, script, then=NOT_READ)
     monkeypatch.setattr(live, "sessions_valid_after", spy)
     runs = len(query_run_repository._query_runs)
     with isolated_run_semaphore(4):
         refused = _request(route, sid, csrf, body)
     assert refused.status_code == 401, refused.text
     assert _detail(refused)["code"] == "SESSION_UNCHECKED"
-    assert spy.calls == 3, "the third read is the one that refused"
+    assert spy.calls == reads, (refusing, spy.calls)
     assert len(query_run_repository._query_runs) == runs
     spy.calls, spy.script, spy.then = 0, [], OK
     with isolated_run_semaphore(4):
@@ -507,9 +524,13 @@ def test_t6_unchecked_loads_do_not_extend_the_sessions_life(
     the clock moves 301 s before each of three loads: each load is the 503
     page, and the cached ``last_used_at``, ``persisted_last_used_at`` and the
     durable row's ``last_used_at`` are unchanged. Partner: one healthy load
-    moves all three. Red when: the unchecked branch calls ``use``, ``touch``
-    or ``_persist_touch``. (Today the loads are not 503, so it is red on that
-    premise first.)"""
+    moves all three. Red when: the unchecked branch calls ``use`` (or
+    ``_use_locked``), which moves the last use that the touch save then
+    writes. ``touch`` or ``_persist_touch`` alone cannot turn it red:
+    ``touch`` looks the session up again and gets the same refusal, and
+    ``_persist_touch`` writes nothing while the last use has not moved
+    (review round 1, mutations note). (Today the loads are not 503, so it is
+    red on that premise first.)"""
     clock = freeze(monkeypatch)
     account_id, _email, session = _signed_in_cookie(db, "life6")
     sid = session.session_id

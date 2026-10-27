@@ -2325,7 +2325,7 @@ def _render_unchecked_html(kind: Unchecked) -> str:
     what the server knows of the session's kind, and the refresh interval;
     nothing from the request. For a session known to be signed in, the owner's
     words; otherwise the session's variant with "session" for "account" and
-    "sign-in" (ADR-0176 amendment)."""
+    "sign-in", which the owner approved too (CHG-088 (h); ADR-0176 amendment)."""
     if kind is Unchecked.SIGNED_IN:
         heading = "Your account is briefly unavailable"
         body = (

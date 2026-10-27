@@ -299,7 +299,8 @@ class Unchecked(StrEnum):
     #: The session is known to be signed in: the owner's words ("sign-in").
     SIGNED_IN = "signed_in"
     #: Its kind could not be read, so it may be anonymous: the same words with
-    #: "session" for "sign-in" and "account" (the session's variant).
+    #: "session" for "sign-in" and "account" (the session's variant, approved
+    #: by the owner in CHG-088 (h)).
     UNKNOWN_KIND = "unknown_kind"
 
 
@@ -557,6 +558,15 @@ class SessionRepository:
         #: bounded by a fixed size: one entry per session ended here in the
         #: last 24 hours.
         self._ended_ids: dict[str, datetime] = {}
+        #: CHG-088 (W114): session id -> when :meth:`revoke` dropped it (a
+        #: sign-out, a sign-in's rotation, a sign-in refused for a deleted
+        #: account). Unlike a natural end, a revoke must also stop the sign-in
+        #: callback's 12-hour recovery (:meth:`max_age_account`), which reads
+        #: the row: a revoke whose row delete failed left the row in place, and
+        #: before this list a callback already under way recovered it. Same
+        #: entries, lifetime and prune as ``_ended_ids``, sign-in-only
+        #: sessions left out; lost at a restart.
+        self._signed_out_ids: dict[str, datetime] = {}
         self._lock = RLock()
 
     def create(
@@ -809,7 +819,10 @@ class SessionRepository:
         with self._lock:
             dropped = self._sessions.pop(session_id, None)
             if dropped is not None:
-                self._record_ended_locked(dropped, _now())
+                now = _now()
+                self._record_ended_locked(dropped, now)
+                if not dropped.sign_in_only:
+                    self._signed_out_ids[session_id] = now
             if store is not None:
                 store.delete(session_id)
 
@@ -922,8 +935,14 @@ class SessionRepository:
             # W7 (ADR-0136): re-checked under the lock, after the disk read,
             # so an account deleted while this read was in flight stays out;
             # and the in-memory cutoff, for a sign-out everywhere that landed
-            # after the disk read (ADR-0137).
-            if self.account_was_deleted(session.account_id) or self._before_cutoff_locked(session):
+            # after the disk read (ADR-0137). CHG-088 review round 1
+            # (break-it F4): and a sign-out of this very session that landed
+            # during the reads, so a signed-out session is not put back.
+            if (
+                self.account_was_deleted(session.account_id)
+                or self._before_cutoff_locked(session)
+                or session_id in self._ended_ids
+            ):
                 return Lookup(None)
             # ``setdefault``, not assignment: two requests arriving together on
             # a cold process both restore, and the loser must return the SAME
@@ -980,8 +999,12 @@ class SessionRepository:
             return None
         with self._lock:
             memory_cutoff = self._valid_after.get(stored.account_id)
-            if self.account_is_going(stored.account_id) or (
-                memory_cutoff is not None and stored.created_at <= memory_cutoff
+            # CHG-088 (W114): a session revoked in this process is not a
+            # 12-hour end, even when its row is still there (its delete failed).
+            if (
+                session_id in self._signed_out_ids
+                or self.account_is_going(stored.account_id)
+                or (memory_cutoff is not None and stored.created_at <= memory_cutoff)
             ):
                 return None
             held = self._ended_last_used.get(session_id)
@@ -1126,10 +1149,9 @@ class SessionRepository:
         the GC purge only, not on every request, so the list's size never
         costs a request a walk over it."""
         now = _now()
-        for lapsed in [
-            sid for sid, ended in self._ended_ids.items() if now - ended > ANONYMOUS_MAX_AGE
-        ]:
-            del self._ended_ids[lapsed]
+        for kept in (self._ended_ids, self._signed_out_ids):
+            for lapsed in [sid for sid, ended in kept.items() if now - ended > ANONYMOUS_MAX_AGE]:
+                del kept[lapsed]
 
     def clear(self) -> None:
         """Empty BOTH halves.
@@ -1145,6 +1167,7 @@ class SessionRepository:
             self._valid_after.clear()
             self._ended_last_used.clear()
             self._ended_ids.clear()
+            self._signed_out_ids.clear()
             if store is not None:
                 store.delete_all()
 
@@ -1544,18 +1567,18 @@ def refuse_if_session_ends_soon(
     server-side session. A session that has already ended is refused by its
     own 401 further on, or, with ``ended_refuses`` (the run creation's second
     check, made just before the run is created, when nothing further on
-    would), here. One that could not be checked likewise (CHG-088): handed on
-    to the spend key's check, or with ``ended_refuses`` refused here as
-    ``SESSION_UNCHECKED``, without asking why a session ended (that lookup
-    has no time bound).
+    would), here. One that could not be checked is refused here, at either
+    check, as ``SESSION_UNCHECKED`` (CHG-088), without asking why a session
+    ended (that lookup has no time bound). Handing it on instead made a
+    refused request wait one bound here and another at the spend key, and,
+    when the spend key's read then worked, let an estimate skip this check
+    (review round 1: break-it F3, prose R2).
     """
     if session.legacy:
         return
     found = session_repository.lookup(session.session_id)
     if found.unchecked is not None:
-        if ended_refuses:
-            raise session_unchecked(found.unchecked)
-        return
+        raise session_unchecked(found.unchecked)
     live = found.session
     if live is None:
         if ended_refuses:
@@ -1578,19 +1601,13 @@ def refuse_if_session_ends_soon(
     )
 
 
-def max_age_seconds_left(session_id: str) -> int:
+def max_age_seconds_left_of(session: _Session) -> int:
     """Whole seconds until the session's maximum age, never below 0 (W87-1).
     The signed-in page carries it so its first check is due from the nearer
-    of the two ends; a session that no longer resolves has 0 left."""
-    session = session_repository.get(session_id)
-    if session is None:
-        return 0
-    return max_age_seconds_left_of(session)
-
-
-def max_age_seconds_left_of(session: _Session) -> int:
-    """:func:`max_age_seconds_left` for a session already checked (CHG-088,
-    Codex F2: ``/ui`` read the cutoff again here, and a refusal became 0)."""
+    of the two ends. It takes the session ``/ui`` has already checked
+    (CHG-088): the old ``max_age_seconds_left(session_id)`` looked the
+    session up again, read the cutoff a second time, and turned a refusal
+    into 0."""
     return max(0, int((session.max_age_end() - _now()).total_seconds()))
 
 
