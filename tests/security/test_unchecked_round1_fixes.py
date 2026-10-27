@@ -407,7 +407,7 @@ def test_a3_the_ended_list_forgets_an_id_only_after_24_hours(
         assert _code(unchecked) == "SESSION_UNCHECKED", unchecked.text
 
 
-# -- Sign-out while unchecked: refused until pull request B (CHG-088 (i), (k)) ---------------
+# -- Sign-out while unchecked: refused until pull request B (CHG-088 (i), (l)) ---------------
 
 
 @pytest.mark.parametrize("where", ["cached", "not cached", "everywhere"])

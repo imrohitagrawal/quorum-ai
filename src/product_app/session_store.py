@@ -744,7 +744,8 @@ class SessionStore:
                     (str(account_id),),
                 ).fetchone()
             except sqlite3.Error as exc:
-                # CHG-088 (f)(5): throttled; SQLite's own fixed text only.
+                # Throttled like the refusal line of CHG-088 (f)(5) (the session's
+                # design, ADR-0176 A10); SQLite's own fixed text only.
                 self._read_warnings.warn("read a sessions cutoff", f"{type(exc).__name__}: {exc}")
                 return False, None
         finally:
@@ -1254,7 +1255,8 @@ class SessionStore:
                     ),
                 ).fetchone()
             except sqlite3.Error as exc:
-                # CHG-088 (f)(5): throttled; SQLite's own fixed text only.
+                # Throttled like the refusal line of CHG-088 (f)(5) (the session's
+                # design, ADR-0176 A10); SQLite's own fixed text only.
                 self._read_warnings.warn("read a session", f"{type(exc).__name__}: {exc}")
                 return False, None
         if row is None:
