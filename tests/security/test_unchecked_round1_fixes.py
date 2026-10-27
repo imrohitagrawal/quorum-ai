@@ -69,6 +69,7 @@ pytestmark = pytest.mark.usefixtures("_stable_catalog_price")
 
 SIGN_OUT = "/v1/auth/sign-out"
 EVERYWHERE = "/v1/auth/sign-out-everywhere"
+DELETE_ACCOUNT = "/v1/account/delete"
 
 
 @pytest.fixture
@@ -483,21 +484,22 @@ def test_a_sign_in_only_session_is_in_neither_list_however_it_ends(
 # -- Sign-out while unchecked: refused until pull request B (CHG-088 (i), (l)) ---------------
 
 
-@pytest.mark.parametrize("where", ["cached", "not cached", "everywhere"])
+@pytest.mark.parametrize("where", ["cached", "not cached", "everywhere", "deletion"])
 def test_sign_out_while_unchecked_is_refused_and_keeps_the_cookie(
     db: Path, live: SessionStore, monkeypatch: pytest.MonkeyPatch, where: str
 ) -> None:
     """The temporary limit the owner accepted for pull request A ("Ship A
     first (Recommended)", 2026-10-25T19:41:03.195Z): while the store is not
     ready, a same-site sign-out with the session's own anti-forgery token
-    (cached or not), and sign out everywhere, answer 401
-    ``SESSION_UNCHECKED``, set no cookie and mint nothing; after recovery the
-    same cookie still works and a sign-out then ends it. Partner: the session
-    is unchecked before the sign-out, and live after recovery.
+    (cached or not), sign out everywhere, and an account deletion answer 401
+    ``SESSION_UNCHECKED``, set no cookie and mint nothing, and the deletion
+    deletes nothing; after recovery the same cookie still works and a
+    sign-out then ends it. Partner: the session is unchecked before the
+    sign-out, live after recovery, and its account row still there.
     Red when: sign-out clears the cookie while unchecked. Pull request B
     makes it do exactly that (the owner's "Clear the cookie anyway
     (Recommended)", CHG-088 (i)) and must change this test with it."""
-    _account_id, _email, session = _signed_in_cookie(db, "out-refused-a")
+    account_id, email, session = _signed_in_cookie(db, "out-refused-a")
     sid, csrf = session.session_id, session.csrf_token
     if where == "not cached":
         auth.session_repository._sessions.pop(sid)
@@ -505,12 +507,18 @@ def test_sign_out_while_unchecked_is_refused_and_keeps_the_cookie(
     not_ready(live)
     assert _code(client(sid).get(ACTIVE)) == "SESSION_UNCHECKED", "partner: it is unchecked"
     minted = mint_count()
-    response = client(sid).post(route, headers={"X-CSRF-Token": csrf})
+    if where == "deletion":
+        response = client(sid).post(
+            DELETE_ACCOUNT, json={"confirm_email": email}, headers={"X-CSRF-Token": csrf}
+        )
+    else:
+        response = client(sid).post(route, headers={"X-CSRF-Token": csrf})
     assert response.status_code == 401, response.text
     assert _code(response) == "SESSION_UNCHECKED", response.text
     assert set_cookies(response) == []
     assert mint_count() == minted
     ready(live)
+    assert live.account_for(account_id) is not None, "partner: the account is kept"
     assert client(sid).get(ACTIVE).status_code == 200, "partner: the cookie still works"
     signed_out = client(sid).post(SIGN_OUT, headers={"X-CSRF-Token": csrf})
     assert signed_out.status_code == 200, signed_out.text
