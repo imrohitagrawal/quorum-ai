@@ -53,6 +53,13 @@ def recent_sign_in_seconds_left(session_id: str) -> int:
     session = auth.session_repository.get(session_id)
     if session is None:
         return 0
+    return recent_sign_in_seconds_left_of(session)
+
+
+def recent_sign_in_seconds_left_of(session: auth._Session) -> int:
+    """:func:`recent_sign_in_seconds_left` for a session already checked
+    (CHG-088, Codex F2: ``/ui`` read the cutoff again here, and a refusal
+    became 0)."""
     left = session.created_at + RECENT_SIGN_IN_FOR_DELETION - auth._now()
     return max(0, int(left.total_seconds()))
 

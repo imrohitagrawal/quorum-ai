@@ -1083,3 +1083,329 @@ def test_the_command_busy_timeout_is_the_apps_default() -> None:
     Python's default busy timeout and the app's (ADR-0002 measured that
     ``timeout=0`` loses writes)."""
     assert _command().COMMAND_BUSY_TIMEOUT_S == 5.0
+
+
+# -- W87-3 follow-up, change 4 (CHG-088 (f)(2) and (3); plan §2.4) -------------------
+#
+# The owner's words: "(2) Command when busy: exit 3 as today, "The sessions
+# database is busy. Run the command again. Nothing was changed.", but not at
+# the read-back step after the change is saved, where it would be false.
+# (3) --all or --email matching no one: exit 1, and print the database path."
+# Busy is SQLite's code (``sqlite_errorcode & 0xFF == SQLITE_BUSY``), never its
+# text: ``SQLITE_LOCKED`` ("database table is locked") is not busy (FM-4.1).
+
+BUSY = "The sessions database is busy. Run the command again. Nothing was changed."
+
+
+def _no_account(path: Path) -> str:
+    return f"No account is recorded in {path.resolve()}. Nothing was changed."
+
+
+def _no_email(path: Path) -> str:
+    return (
+        "No account has that email address as of its last sign-in in "
+        f"{path.resolve()}. Nothing was changed."
+    )
+
+
+def _hold(path: Path, begin: str) -> sqlite3.Connection:
+    holder = sqlite3.connect(str(path), timeout=5.0, isolation_level=None)
+    holder.execute(begin)
+    return holder
+
+
+def test_t40_busy_at_the_marker_read_says_busy_and_changes_nothing(
+    db: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """T40 (FM-4.1, FM-4.2). Another connection holds ``BEGIN EXCLUSIVE``
+    (reads are refused too) and the busy timeout is 0.2 s: exit 3, stderr is
+    exactly the busy sentence, stdout is empty, nothing changes. Red when:
+    busy is not detected at the marker read (today: "could not be read
+    (OperationalError)")."""
+    now = _cutoff()
+    seed(db, created_at=now - timedelta(hours=1))
+    before = snapshot(db)
+    monkeypatch.setattr(_command(), "COMMAND_BUSY_TIMEOUT_S", 0.2)
+    holder = _hold(db, "BEGIN EXCLUSIVE")
+    try:
+        code, out, err = _run(["--email", PERSON_EMAIL], capsys, now=now)
+    finally:
+        holder.execute("ROLLBACK")
+        holder.close()
+    assert (code, out, err) == (3, "", BUSY + "\n")
+    assert snapshot(db) == before
+
+
+@pytest.mark.parametrize("argv", [["--all"], ["--email", PERSON_EMAIL]], ids=["all", "email"])
+def test_t41_busy_at_the_write_says_busy_and_changes_nothing(
+    argv: list[str], db: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """T41 (FM-4.2). Another connection holds ``BEGIN IMMEDIATE`` (the marker
+    read works, the write cannot start): exit 3, exactly the busy sentence,
+    nothing changes, for ``--all`` and ``--email``. Red when: the write site
+    misses it (today: "could not be ended (OperationalError)")."""
+    now = _cutoff()
+    seed(db, created_at=now - timedelta(hours=1))
+    before = snapshot(db)
+    monkeypatch.setattr(_command(), "COMMAND_BUSY_TIMEOUT_S", 0.2)
+    holder = _hold(db, "BEGIN IMMEDIATE")
+    try:
+        code, out, err = _run(argv, capsys, now=now)
+    finally:
+        holder.execute("ROLLBACK")
+        holder.close()
+    assert (code, out, err) == (3, "", BUSY + "\n")
+    assert snapshot(db) == before
+
+
+def test_t43_a_lock_at_the_read_back_is_exit_4_and_never_says_busy(
+    db: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """T43 (FM-4.3). The read-back meets a held lock (the shape of
+    ``test_exit_4_when_the_read_back_cannot_run``): exit 4, stderr neither
+    says "busy" nor "Nothing was changed" (the cutoff IS written), and the
+    person's session row is refused by the app afterwards (401). Partner:
+    T41 shows the busy sentence at the write. Red when: the busy helper is
+    used at the read-back."""
+    now = _cutoff()
+    seeded = seed(db, created_at=now - timedelta(hours=1))
+    monkeypatch.setattr(_command(), "COMMAND_BUSY_TIMEOUT_S", 0.2)
+    holders: list[sqlite3.Connection] = []
+    begun = 0
+
+    def block(seen: list[str], sql: str) -> None:
+        nonlocal begun
+        if _is(sql, "BEGIN", "IMMEDIATE"):
+            begun += 1
+            if begun == 2:
+                holder = tracer.real_connect(str(db), timeout=5.0, isolation_level=None)
+                holder.execute("BEGIN IMMEDIATE")
+                holders.append(holder)
+
+    try:
+        with traced(monkeypatch, block) as tracer:
+            code, out, err = _run(["--email", PERSON_EMAIL], capsys, now=now)
+    finally:
+        for holder in holders:
+            holder.execute("ROLLBACK")
+            holder.close()
+    assert len(holders) == 1
+    assert code == 4, (out, err)
+    assert "busy" not in err.casefold() and "Nothing was changed" not in err, err
+    assert cutoff_of(db, seeded.person) == now.isoformat()
+    store = SessionStore(str(db))
+    session_store.configure(store)
+    try:
+        stolen = _client(seeded.person_sessions[0]).get(ACTIVE)
+        assert stolen.status_code == 401
+    finally:
+        auth.session_repository._sessions.clear()
+        store.close()
+
+
+def _real_busy() -> sqlite3.OperationalError:
+    """A real ``SQLITE_BUSY``: another connection's ``BEGIN EXCLUSIVE``, then
+    a read with a 0.1 s timeout (measured: code 5)."""
+    import tempfile
+
+    folder = Path(tempfile.mkdtemp(prefix="w873f-busy-"))
+    path = folder / "busy.sqlite3"
+    first = sqlite3.connect(str(path), isolation_level=None)
+    first.execute("CREATE TABLE t (a)")
+    first.execute("BEGIN EXCLUSIVE")
+    second = sqlite3.connect(str(path), timeout=0.1)
+    try:
+        second.execute("SELECT * FROM t").fetchall()
+    except sqlite3.OperationalError as exc:
+        return exc
+    finally:
+        second.close()
+        first.execute("ROLLBACK")
+        first.close()
+        path.unlink()
+        folder.rmdir()
+    raise AssertionError("the read under BEGIN EXCLUSIVE did not fail")
+
+
+def _real_locked() -> sqlite3.OperationalError:
+    """A real ``SQLITE_LOCKED``: one connection, an open ``SELECT`` cursor on
+    a table, then ``DROP TABLE`` on it (measured for the plan: code 6,
+    "database table is locked", whose text contains "locked")."""
+    connection = sqlite3.connect(":memory:")
+    try:
+        connection.execute("CREATE TABLE t (a)")
+        connection.execute("INSERT INTO t VALUES (1), (2)")
+        cursor = connection.execute("SELECT * FROM t")
+        cursor.fetchone()
+        try:
+            connection.execute("DROP TABLE t")
+        except sqlite3.OperationalError as exc:
+            return exc
+    finally:
+        connection.close()
+    raise AssertionError("DROP TABLE under an open cursor did not fail")
+
+
+def test_t44_busy_is_sqlites_code_not_its_text(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """T44 (FM-4.1, Codex F5). ``end_sessions._busy`` is True for a real
+    ``SQLITE_BUSY`` and False for a real ``SQLITE_LOCKED`` (whose text says
+    "locked"), for a plain ``OperationalError`` and for a non-SQLite error.
+    The command's other refusals keep their measured text (2026-10-25, on
+    this tree): a directory as the path is "could not be opened", and a
+    ``chmod 444`` file is "could not be ended" (``SQLITE_READONLY``, an
+    ``OperationalError`` that is not busy). Partner: T40 and T41.
+    Red when: busy is matched on the text (the ``SQLITE_LOCKED`` case turns
+    True) or on every ``OperationalError``."""
+    busy, locked = _real_busy(), _real_locked()
+    assert (busy.sqlite_errorcode & 0xFF, locked.sqlite_errorcode & 0xFF) == (5, 6)
+    assert "locked" in str(locked), "partner: a text match WOULD call it busy"
+    command = _command()
+    assert command._busy(busy) is True
+    assert command._busy(locked) is False
+    assert command._busy(sqlite3.OperationalError("database is locked")) is False
+    assert command._busy(ValueError("busy")) is False
+    folder = tmp_path / "a-directory"
+    folder.mkdir()
+    monkeypatch.setenv("SESSION_DB_PATH", str(folder))
+    assert _run(["--all"], capsys) == (
+        3,
+        "",
+        "The sessions database could not be opened (OperationalError). Nothing was changed.\n",
+    )
+    if os.geteuid() == 0:
+        pytest.skip("root ignores file modes")
+    readonly = tmp_path / "readonly.sqlite3"
+    seed(readonly, created_at=_cutoff() - timedelta(hours=1))
+    readonly.chmod(stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH)
+    monkeypatch.setenv("SESSION_DB_PATH", str(readonly))
+    try:
+        assert _run(["--all"], capsys) == (
+            3,
+            "",
+            "The sessions could not be ended (OperationalError). Nothing was changed.\n",
+        )
+    finally:
+        readonly.chmod(0o644)
+
+
+def test_t45_all_with_no_account_is_exit_1_with_the_path_and_rolls_back(
+    db: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """T45 (FM-4.5, FM-4.6; today exit 0, journeys K6). A migrated file with
+    0 accounts: ``--all`` exits 1, stderr is exactly ``No account is recorded
+    in <resolved path>. Nothing was changed.``, stdout is empty; its write
+    transaction ends in ``ROLLBACK`` with no ``COMMIT``; the file's bytes are
+    unchanged. Partner: with 1 account it exits 0. Red when: the check comes
+    after ``COMMIT`` or is missing."""
+    import hashlib
+
+    SessionStore(str(db)).close()
+    digest = hashlib.sha256(db.read_bytes()).hexdigest()
+    with traced(monkeypatch) as tracer:
+        code, out, err = _run(["--all"], capsys, now=_cutoff())
+    assert (code, out, err) == (1, "", _no_account(db) + "\n")
+    statements = tracer.statements()
+    assert any(_is(sql, "ROLLBACK") for sql in statements), statements
+    assert not any(_is(sql, "COMMIT") for sql in statements), statements
+    assert hashlib.sha256(db.read_bytes()).hexdigest() == digest
+    plant_account(db, google_sub="sub-t45", email="t45@example.invalid", at=datetime.now(UTC))
+    code, out, err = _run(["--all"], capsys, now=_cutoff())
+    assert code == 0, (out, err)
+
+
+def test_t46_email_with_no_match_names_the_path(
+    db: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """T46. ``--email`` matching no account: exit 1 and ``No account has that
+    email address as of its last sign-in in <resolved path>. Nothing was
+    changed.`` Red when: the path is missing."""
+    seed(db, created_at=_cutoff() - timedelta(hours=1))
+    code, out, err = _run(["--email", "nobody@example.invalid"], capsys, now=_cutoff())
+    assert (code, out, err) == (1, "", _no_email(db) + "\n")
+
+
+def test_t47_an_undecodable_path_is_printed_escaped_and_never_crashes(
+    tmp_path: Path,
+) -> None:
+    """T47 (FM-4.7), through a real ``python -I -m`` child, whose stderr
+    escapes with ``backslashreplace``: a ``SESSION_DB_PATH`` holding the byte
+    ``0xff`` and 0 accounts exits 1 with no traceback, and stderr carries the
+    path escaped. Partner: T45, a plain path printed verbatim. Skipped where
+    the file system refuses such a name (macOS APFS: ``EILSEQ``, errno 92,
+    measured 2026-10-25); it runs on the Linux runner. Red when: the path
+    goes to stdout or a ``UnicodeError`` escapes."""
+    raw = os.fsencode(tmp_path) + b"/x\xff.sqlite3"
+    try:
+        os.close(os.open(raw, os.O_CREAT | os.O_WRONLY, 0o644))
+        os.unlink(raw)
+    except OSError as exc:
+        pytest.skip(f"this file system refuses an undecodable name ({exc.errno})")
+    path = Path(os.fsdecode(raw))
+    SessionStore(str(path)).close()
+    ran = run_command(path, "--all")
+    assert ran.returncode == 1, ran
+    assert "Traceback" not in ran.stderr, ran.stderr
+    assert ran.stdout == ""
+    assert "x\\udcff.sqlite3" in ran.stderr or "x\\xff.sqlite3" in ran.stderr, ran.stderr
+
+
+def test_t47_the_writer_survives_a_path_its_stream_cannot_encode() -> None:
+    """T47, in process: ``_write`` to a STRICT UTF-8 stream of a message
+    holding a lone surrogate (what ``os.fsdecode`` makes of byte ``0xff``)
+    neither raises nor stops the command (plan §2.4: "``_write`` also
+    catches ``UnicodeError``"). Partner: a plain message is written. Red
+    when: ``UnicodeEncodeError`` escapes."""
+    command = _command()
+    buffer = io.BytesIO()
+    stream = io.TextIOWrapper(buffer, encoding="utf-8", errors="strict")
+    command._write(stream, "No account is recorded in /data/x.sqlite3. Nothing was changed.")
+    command._write(stream, "No account is recorded in /data/x\udcff.sqlite3. Nothing was changed.")
+    stream.flush()
+    assert buffer.getvalue().startswith(b"No account is recorded in /data/x.sqlite3.")
+
+
+def _exit_table() -> list[list[str]]:
+    """DEPLOY.md's command exit table, parsed (memory: use a parser)."""
+    from markdown_it import MarkdownIt
+
+    root = Path(__file__).resolve().parents[2]
+    tokens = MarkdownIt("gfm-like").parse((root / "DEPLOY.md").read_text(encoding="utf-8"))
+    tables: list[list[list[str]]] = []
+    rows: list[list[str]] | None = None
+    row: list[str] | None = None
+    cell: list[str] | None = None
+    for token in tokens:
+        if token.type == "table_open":
+            rows = []
+        elif token.type == "table_close" and rows is not None:
+            tables.append(rows)
+            rows = None
+        elif token.type == "tr_open":
+            row = []
+        elif token.type == "tr_close" and rows is not None and row is not None:
+            rows.append(row)
+        elif token.type in ("th_open", "td_open"):
+            cell = []
+        elif token.type in ("th_close", "td_close") and row is not None and cell is not None:
+            row.append("".join(cell).strip())
+            cell = None
+        elif token.type == "inline" and cell is not None:
+            cell.append(token.content)
+    found = [t for t in tables if t and t[0][:2] == ["Exit", "Meaning"]]
+    assert len(found) == 1, f"one exit table in DEPLOY.md, found {len(found)}"
+    return found[0][1:]
+
+
+def test_t49_deploy_md_names_the_0_account_case_and_busy() -> None:
+    """T49 (FM-4.4). DEPLOY.md's exit table (parsed with markdown-it-py)
+    lists exits 0 to 4; row 1's meaning names ``--all`` finding no account
+    and the database path; row 3's meaning names busy and running it again.
+    Partner: the parser finds exactly 5 rows. Red when: the table and the
+    code drift."""
+    rows = _exit_table()
+    assert [row[0] for row in rows] == ["0", "1", "2", "3", "4"]
+    one, three = rows[1][1].casefold(), rows[3][1].casefold()
+    assert "--all" in one and "no account" in one and "database path" in one, rows[1]
+    assert "busy" in three and "run" in three and "again" in three, rows[3]

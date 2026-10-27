@@ -95,6 +95,7 @@ ENUM_MODULES = (
 
 _CLASSES_BY_QUALIFIED_NAME = {
     "auth.AuthError": auth.AuthError,
+    "auth.Unchecked": auth.Unchecked,
     "config.RuntimeEnvironment": config.RuntimeEnvironment,
     "costs.CostThresholdAction": costs.CostThresholdAction,
     "debate.DebateRoundStatus": debate.DebateRoundStatus,
@@ -163,8 +164,12 @@ ENUM_MEMBER_PINS: dict[str, frozenset[str]] = {
             # W87-1 (ADR-0174): the 12-hour end and the late-run refusal.
             "SESSION_MAX_AGE",
             "SESSION_ENDS_SOON",
+            # CHG-088 (W87-3 follow-up): a session that could not be checked.
+            "SESSION_UNCHECKED",
         }
     ),
+    # CHG-088: which words an unchecked refusal uses.
+    "auth.Unchecked": frozenset({"signed_in", "unknown_kind"}),
     "config.RuntimeEnvironment": frozenset({"local", "staging", "production"}),
     "costs.CostThresholdAction": frozenset({"allow", "require_confirmation", "block"}),
     "debate.DebateRoundStatus": frozenset({"completed", "skipped"}),

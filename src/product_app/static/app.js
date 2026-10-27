@@ -927,6 +927,10 @@
     // CHG-070 (a): a run refused in the session's last 12 minutes. Not
     // "Session expired": the session is still alive.
     SESSION_ENDS_SOON: "Your session ends soon",
+    // CHG-088 (e): the session could not be checked just now. Not "Session
+    // expired": it has not ended. No ERROR_ACTIONS entry on purpose: nothing
+    // for this code reloads the page (the typed question must stay).
+    SESSION_UNCHECKED: "Briefly unavailable",
     CSRF_INVALID: "Security check failed",
     INVALID_MODEL_SLOT: "One model slot needs a fix",
     SAFETY_ACK_REQUIRED: "Acknowledgement required",
@@ -9881,7 +9885,11 @@
       await estimateRun({ autoProceed, trigger });
     } catch (error) {
       // W33 row 26: no error card for a question the user has left.
-      if (generation === estimateGeneration) handleError(error);
+      // CHG-088 (e): "Try again" on a SESSION_UNCHECKED card runs this same
+      // flow again, which reads the question box again.
+      if (generation === estimateGeneration) {
+        handleError(error, { retry: () => startRun(autoProceed, trigger) });
+      }
     } finally {
       // A dropped flow's latch was released by dropInFlightEstimate, and a
       // newer flow may hold it now.
@@ -10083,7 +10091,8 @@
         return;
       }
       // W33 row 26: no error card for a question the user has left.
-      if (generation === estimateGeneration) handleError(error);
+      // CHG-088 (e): "Try again" approves the same priced run again.
+      if (generation === estimateGeneration) handleError(error, { retry: proceedWithRun });
     } finally {
       // Release the single-create latch. On the success path the run is now in
       // flight and ``setRunning(true)`` keeps every CTA disabled anyway; on the
@@ -10530,10 +10539,26 @@
   // when it is an ordinary error (handled by the generic banner). Every
   // field is derived from REAL server data — no fabricated slot suggestion,
   // provider status, or "why" reason.
-  function edgeStateFromError(error) {
+  function edgeStateFromError(error, { retry } = {}) {
     if (!(error instanceof ApiError)) return null;
     const code = error.code;
     const status = error.status;
+
+    // CHG-088 (e), the owner's "New code, retry in place": the session could
+    // not be checked just now. The server's sentence, and when the caller has
+    // a natural retry (the same function its button calls, which reads the
+    // question box again), one "Try again" that runs it in place: no reload,
+    // so the typed question stays. Without one, the sentence alone ("Try
+    // again in a minute"). Self-contained: the Node harness lifts this one
+    // function.
+    if (code === "SESSION_UNCHECKED") {
+      return {
+        code,
+        severity: "warning",
+        message: error.message,
+        actions: typeof retry === "function" ? [{ label: "Try again", primary: true, action: retry }] : [],
+      };
+    }
 
     // AC-032 Wrong session — the ONLY honest signal is 404 QUERY_RUN_NOT_FOUND
     // (the backend returns the SAME 404 for a missing OR a non-owned run, so
@@ -10694,7 +10719,7 @@
     return null;
   }
 
-  function handleError(error) {
+  function handleError(error, { retry } = {}) {
     // Re-enable the Proceed button so a transient failure does not
     // strand the user. The button is gated again on a fresh estimate
     // in the REQUIRE_CONFIRMATION band, but stays clickable in the
@@ -10705,7 +10730,7 @@
     }
     // Slice 6 (07 edge states): route recognised codes to their honest,
     // first-class edge treatment before the generic fallback.
-    const edge = edgeStateFromError(error);
+    const edge = edgeStateFromError(error, { retry });
     if (edge) {
       showError(edge);
       return;
@@ -12170,7 +12195,9 @@
         try {
           body = await api("/v1/session/idle");
         } catch (err) {
-          if (err && err.status === 401) {
+          // CHG-088 (e): a session that could not be checked has not ended,
+          // so it is never told it was signed out; the check keeps checking.
+          if (err && err.status === 401 && err.code !== "SESSION_UNCHECKED") {
             showExpired(err);
           } else {
             later(60000, idleCheck);
@@ -12199,7 +12226,10 @@
           hideReminder();
           later(idleCheckDelayMs(body.idle_seconds_left, warningSeconds), idleCheck);
         } catch (err) {
-          if (err && err.status === 401) {
+          if (err && err.status === 401 && err.code === "SESSION_UNCHECKED") {
+            // CHG-088 (e): not an end; the server's sentence says when to retry.
+            toast({ message: err.message, tone: "error" });
+          } else if (err && err.status === 401) {
             showExpired(err);
           } else {
             toast({ message: "Could not keep you signed in. Please try again.", tone: "error" });
@@ -12367,8 +12397,10 @@
       return p;
     };
     const clearError = () => {
-      const error = find("account-history-error");
-      if (error) error.remove();
+      for (const id of ["account-history-error", "account-history-unchecked"]) {
+        const error = find(id);
+        if (error) error.remove();
+      }
     };
     const place = (node) => {
       clearError();
@@ -12389,9 +12421,27 @@
     // A network or server error, a 503 included (row 10, decision 2a): the
     // rows stay, and a line says so.
     const showError = () => {
+      const unchecked = find("account-history-unchecked");
+      if (unchecked) unchecked.remove();
       if (find("account-history-error")) return;
       const error = line("account-history-error", "Your history could not be refreshed just now.");
       error.setAttribute("role", "status");
+      const current = slot();
+      panel.insertBefore(error, current ? current.nextSibling : controls);
+    };
+    // CHG-088 (e): the session could not be checked just now. The rows stay;
+    // one line with the server's sentence and a "Try again" that refreshes
+    // in place. Never the reload line: the sign-in has not changed.
+    const showUnchecked = (message, retry) => {
+      clearError();
+      const error = line("account-history-unchecked", message);
+      error.setAttribute("role", "status");
+      const again = document.createElement("button");
+      again.type = "button";
+      again.className = "button button-secondary button-compact";
+      again.textContent = "Try again";
+      again.addEventListener("click", retry);
+      error.append(" ", again);
       const current = slot();
       panel.insertBefore(error, current ? current.nextSibling : controls);
     };
@@ -12408,7 +12458,9 @@
         body = await api(HISTORY_ROUTE);
       } catch (err) {
         if (mine !== newest) return;
-        if (err && (err.status === 401 || err.status === 403)) showReload();
+        if (err && err.status === 401 && err.code === "SESSION_UNCHECKED") {
+          showUnchecked(err.message, () => refresh(true));
+        } else if (err && (err.status === 401 || err.status === 403)) showReload();
         else showError();
         return;
       }
@@ -12498,6 +12550,12 @@
   function signInStartMessage(err) {
     if (err && err.status === 429) {
       return "Too many sign-in attempts. Try again in a few minutes.";
+    }
+    // CHG-088 (f)(1) and (e): the store could not record a sign-in, or the
+    // session could not be checked, just now. The server's sentence says to
+    // try again in a minute.
+    if (err && (err.code === "SIGN_IN_UNAVAILABLE" || err.code === "SESSION_UNCHECKED") && err.message) {
+      return err.message;
     }
     return "Sign-in could not start. Please try again.";
   }

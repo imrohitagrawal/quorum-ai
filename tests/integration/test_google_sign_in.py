@@ -893,14 +893,20 @@ def test_with_no_accounts_table_the_callback_fails_plainly(
     sign_in: SignIn, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """RED-IF: a store that cannot record the account still signs the browser
-    in (to an account id nothing records)."""
+    in (to an account id nothing records). CHG-088 (f)(1): such a start is now
+    refused before Google, 503 ``SIGN_IN_UNAVAILABLE``, so no callback can
+    follow; the callback's own refusal is pinned by
+    ``tests/integration/test_sign_in_store_precheck.py::test_t22_...``.
+    Partner: the browser's session still resolves."""
     monkeypatch.setattr(sign_in.store, "_accounts_ready", False)
     client = sign_in.client()
-    before = _session_id(client) if client.cookies.get(COOKIE) else None
-    response = _signed_in(client)
-    assert response.headers["location"] == "/ui?sign_in=failed"
+    csrf = _boot(client)
+    before = _session_id(client)
+    response = client.post("/v1/auth/google/start", headers={"X-CSRF-Token": csrf})
+    assert response.status_code == 503, response.text
+    assert response.json()["detail"]["code"] == "SIGN_IN_UNAVAILABLE"
     assert COOKIE not in response.cookies
-    assert before is None or auth.session_repository.get(before) is not None
+    assert auth.session_repository.get(before) is not None
 
 
 # --- the remaining refusal paths ---------------------------------------------------

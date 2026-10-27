@@ -529,6 +529,7 @@ jobs:
           tests/signed-in/restored-question-scroll.spec.ts
           tests/signed-in/tabs-share-token.spec.ts
           tests/signed-in/tabs-drawn-identity.spec.ts
+          tests/signed-in/store-unchecked.spec.ts
           --config=playwright.signed-in.config.ts
           --project=chromium
           --retries=0
@@ -577,8 +578,12 @@ jobs:
       # review round 3): delete-recent-sign-in.spec.ts adds 1 test (a page
       # drawn unknown saves under the bootstrap's account); `playwright test
       # --list` with this lane's command printed "Total: 64 tests in 10 files".
+      # 64 -> 74 (the W87-3 follow-up, W114, CHG-088): store-unchecked.spec.ts
+      # adds 10 tests (J1 at 1440 and 390, J1p, J2, J3 at 1440 and 390, J4,
+      # J4c, J5, J6; `playwright test --list` on that spec counts 10), added
+      # to the old floor.
       - name: "signed-in History lane: floor on tests actually executed"
-        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 64 --lane "signed-in History lane"
+        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 74 --lane "signed-in History lane"
 
       - name: Clear the previous lane's JUnit report
         # Adversarial review (#162/#166): without this, a Playwright run that

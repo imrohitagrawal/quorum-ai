@@ -257,15 +257,17 @@ def test_a_session_being_restored_during_it_is_not_put_back(
     phone_csrf = _csrf(phone)
     laptop_session = laptop.cookies[COOKIE]
     auth.session_repository._sessions.pop(laptop_session)
-    real_fetch = sign_in.store.fetch
+    # CHG-088: the restore reads its row with ``fetch_checked`` (``fetch``
+    # wraps it), so the sign-out lands after that read.
+    real_fetch = sign_in.store.fetch_checked
 
     def fetch_then_sign_out(*args: Any, **kwargs: Any) -> Any:
         stored = real_fetch(*args, **kwargs)
-        monkeypatch.setattr(sign_in.store, "fetch", real_fetch)
+        monkeypatch.setattr(sign_in.store, "fetch_checked", real_fetch)
         assert _everywhere(phone, csrf=phone_csrf).status_code == 200
         return stored
 
-    monkeypatch.setattr(sign_in.store, "fetch", fetch_then_sign_out)
+    monkeypatch.setattr(sign_in.store, "fetch_checked", fetch_then_sign_out)
     assert auth.session_repository.get(laptop_session) is None
 
 

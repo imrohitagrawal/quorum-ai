@@ -119,7 +119,8 @@ def test_a_session_gone_between_lookup_and_resume_gets_a_new_one(
     client = TestClient(app)
     client.get("/ui")
     first = client.cookies.get(COOKIE)
-    monkeypatch.setattr(session_repository, "touch", lambda _session_id: None)
+    # CHG-088: the resume records its use with ``use`` after one lookup.
+    monkeypatch.setattr(session_repository, "use", lambda _session, *, rotate_csrf: None)
 
     page = client.get("/ui")
 

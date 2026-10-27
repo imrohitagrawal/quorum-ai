@@ -9,9 +9,9 @@
     <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
     <script>
       // Same pre-paint theme gate as workspace.html, copied rather than shared
-      // because this page must render with no app.js and no data islands. A
-      // visitor who has chosen dark should not be handed a white page at the
-      // one moment the app is refusing them.
+      // because this page must render without the workspace script and with
+      // no data islands. A visitor who has chosen dark should not be handed a
+      // white page at the one moment the app is refusing them.
       try {
         var stored = window.localStorage.getItem("quorum.theme");
         if (stored === "dark" || stored === "light") {

@@ -131,7 +131,8 @@ def test_a_latched_safety_flag_refuses_every_signed_in_path_and_serves_anonymous
     db: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Test 1. With ``_safety_ready`` latched ``False`` (the marker is on
-    disk): a cached signed-in session gets 401 ``SESSION_EXPIRED``; a signed-in
+    disk): a cached signed-in session gets 401 ``SESSION_UNCHECKED`` (CHG-088:
+    a cutoff that cannot be read is not an end); a signed-in
     row restored from disk gets ``None``; ``save`` of a signed-in session
     returns ``False`` and writes no row; ``upsert_google_account`` returns
     ``None``. Partner: an anonymous session is served, restored and saved
@@ -150,7 +151,7 @@ def test_a_latched_safety_flag_refuses_every_signed_in_path_and_serves_anonymous
         cached = _signed_in_session(person)
         response = _client(cached).get(ACTIVE)
         assert response.status_code == 401
-        assert response.json()["detail"]["code"] == "SESSION_EXPIRED"
+        assert response.json()["detail"]["code"] == "SESSION_UNCHECKED"
 
         now = datetime.now(UTC)
         plant_row(db, "w873-restore-signed", person, created_at=now, last_used_at=now)

@@ -161,8 +161,14 @@ def test_a_session_being_restored_during_the_delete_is_not_put_back(
     sign_in: SignIn, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Measured on main by the review map: a session read from disk just
-    before a delete was cached after it. Here the delete lands between the
-    disk read and the cache write. Turns red if the session comes back."""
+    before a delete was cached after it. Here the delete lands during the
+    restore's cutoff read, after every earlier check, so only the final
+    re-check under the lock can catch it. Partner: the cutoff read ran and
+    the delete happened inside it.
+    Red when: the final re-check before the cache write stops asking
+    ``account_was_deleted``. (CHG-088 review round 1, falsify F1: the delete
+    used to land after the row read, which the restore's new early check
+    catches first, so this test no longer pinned the final re-check.)"""
     phone = sign_in.client()
     laptop = sign_in.client()
     _signed_in(phone)
@@ -172,18 +178,21 @@ def test_a_session_being_restored_during_the_delete_is_not_put_back(
     auth.session_repository._sessions.pop(laptop_session)  # a cold cache
     store = session_store.get_store()
     assert store is not None
-    real_fetch = store.fetch
+    real_read = store.sessions_valid_after
+    deleted: list[UUID] = []
 
-    def fetch_then_delete(*args: Any, **kwargs: Any) -> Any:
-        stored = real_fetch(*args, **kwargs)
-        assert stored is not None and stored.account_id == account
+    def read_then_delete(account_id: UUID, **kwargs: Any) -> Any:
+        result = real_read(account_id, **kwargs)
+        monkeypatch.setattr(store, "sessions_valid_after", real_read)
         from product_app import account_deletion
 
         assert account_deletion.delete_account(account) is True
-        return stored
+        deleted.append(account_id)
+        return result
 
-    monkeypatch.setattr(store, "fetch", fetch_then_delete)
+    monkeypatch.setattr(store, "sessions_valid_after", read_then_delete)
     assert auth.session_repository.get(laptop_session) is None
+    assert deleted == [account], "partner: the delete landed inside the cutoff read"
 
 
 def test_operator_run_rows_lose_the_account(sign_in: SignIn) -> None:

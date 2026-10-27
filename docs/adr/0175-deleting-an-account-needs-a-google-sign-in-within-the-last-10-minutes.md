@@ -223,10 +223,14 @@ Facts the design rests on, read on `main` at `0f06765` unless marked:
   that lands between the last recovery check and `issue_signed_in_session` (a few statements, no
   network call) is not seen: the person who has just signed in with Google as that account gets a
   working new session. The result is the same as an ordinary sign-in, and recovery does not refuse
-  it. The live path has no check after the exchange at all (measured by the planner: a live session revoked during a stubbed exchange still gets `303 /ui` and a new cookie;
-  `tests/integration/test_sign_in_recovery.py::test_the_live_path_is_unchanged_by_a_revoke_during_the_exchange`
-  pins it). The same check on the live path is advisory, not built: the live path is W7's
+  it. The live path has no check after the exchange at all (measured by the planner: a live session revoked during a stubbed exchange still got `303 /ui` and a new cookie).
+  The same check on the live path is advisory, not built: the live path is W7's
   (ADR-0130), and it is left for the owner's backlog.
+  **Narrowed by W114 (ADR-0176 A17, 2026-10-27):** the rotation itself now refuses a previous
+  session that was revoked (a sign-out), on the recovery path and the live path alike, and creates
+  nothing; `tests/integration/test_sign_in_recovery.py::test_the_live_path_refuses_a_session_revoked_during_the_exchange`
+  pins it. A sign-out everywhere in that window is still not seen, on either path; a deletion on
+  the live path is the next item.
 - **Deletion during the live path's exchange** can let the account row step create a new account for
   the same Google identity (Codex). For a recovered session the locked check and write refuses it,
   or the deletion waits for the write and then removes the row (decision 5). On the live path it is

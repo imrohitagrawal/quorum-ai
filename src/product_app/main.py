@@ -47,16 +47,22 @@ from product_app import (
 from product_app.auth import (
     SessionContext,
     SessionMintCapExceeded,
+    SessionUnchecked,
+    SessionUncheckedResponse,
+    Unchecked,
     VisitorAddressMiddleware,
     _effective_session_mint_cap,
     attach_session_cookie,
     client_ip_of,
     get_session_cookie_from_request,
+    issue_or_resume_checked_session,
     issue_or_resume_session,
     issue_sign_in_only_session,
-    max_age_seconds_left,
+    issued_response,
+    max_age_seconds_left_of,
     require_session,
     resume_sign_in_only_session,
+    session_unchecked,
 )
 from product_app.config import (
     RuntimeEnvironment,
@@ -119,6 +125,11 @@ install_telemetry_sinks()
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 STATIC_DIR = Path(__file__).parent / "static"
+
+#: CHG-088 (d), the owner's "Same, plus auto-reload": the "briefly
+#: unavailable" page reloads itself after this many seconds (a meta refresh to
+#: ``/ui``), and its ``Retry-After`` says the same. Read at render time.
+UNCHECKED_PAGE_REFRESH_S = 60
 
 
 #: Field names from OUR domain model that carry user- or model-written prose.
@@ -1550,6 +1561,16 @@ def ready() -> dict[str, object]:
     return payload
 
 
+def _session_store_state() -> str:
+    """``ready``, ``not_ready`` or ``absent`` (CHG-088 (f)(4)). The SESSION
+    store (``session_store.get_store``), not ``get_store`` here, which is the
+    feedback store. Flags only: no lock, no statement, no path."""
+    store = session_store.get_store()
+    if store is None:
+        return "absent"
+    return "ready" if store.accounts_available() and store.cutoffs_available() else "not_ready"
+
+
 @app.get("/status", tags=["operations"])
 def status_snapshot() -> dict[str, object]:
     """Runtime snapshot of the app's current state.
@@ -1684,6 +1705,16 @@ def status_snapshot() -> dict[str, object]:
     ``error_tracking`` is likewise a generic ``active``/``inactive``
     health value: the concrete vendor (and anything else useful for
     targeting it) is deliberately not named on this public surface.
+
+    ``session_store`` (CHG-088 (f)(4)) is the SESSION store's state, not the
+    feedback store's: ``ready`` (signed-in sessions can be checked and sign-in
+    can start), ``not_ready`` (it is open but its accounts or session-safety
+    tables are not usable, so signed-in requests are refused as unchecked and
+    sign-in is refused before Google) or ``absent`` (it failed to open at
+    start; anonymous sessions do not survive a restart and no one can sign
+    in). Read from two flags, never the file, so it answers while the store
+    is busy. It does not show a refusal caused by a lock held too long or a
+    failed read while the flags say ready: the log line does.
     """
     # Use the live probe rather than the boot-time snapshot so /status
     # reflects current state, not "the state at process start".
@@ -1945,6 +1976,8 @@ def status_snapshot() -> dict[str, object]:
         # /v1/session since start, per route and per fixed class. Counts
         # only; no header value is ever a key.
         "cross_site_refusals": fetch_site.status_snapshot(),
+        # CHG-088 (f)(4): the session store's state, from its flags only.
+        "session_store": _session_store_state(),
         # ADR-0116, #458. The FLAG above says what is configured; this says
         # whether a critic call can actually be dispatched. They differed in
         # production from 2026-09-12 to 2026-09-24 — flag true, live execution
@@ -2053,7 +2086,21 @@ def _daily_cap_key(
     return f"invite:{invite}", invite_links.DAILY_SESSIONS_PER_LINK, invite
 
 
-@app.get("/v1/session", tags=["session"], responses=fetch_site.SESSION_RESPONSES)
+@app.get(
+    "/v1/session",
+    tags=["session"],
+    responses={
+        **fetch_site.SESSION_RESPONSES,
+        401: {
+            "model": SessionUncheckedResponse,
+            "description": (
+                "The presented session could not be checked just now "
+                "(SESSION_UNCHECKED). The cookie is kept and no session is opened; "
+                "the same request may work a minute later."
+            ),
+        },
+    },
+)
 def browser_session(
     request: Request,
 ) -> Response:
@@ -2089,6 +2136,14 @@ def browser_session(
     try:
         # No client_ip skips the daily cap (auth.issue_session) for them.
         session = issue_or_resume_session(session_id, client_ip=mint_key, mint_cap=mint_cap)
+    except SessionUnchecked as exc:
+        # CHG-088 (c) and (e): keep the cookie, open nothing. No Set-Cookie,
+        # no CSRF token; the page script shows its boot card.
+        return JSONResponse(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            content={"detail": session_unchecked(exc.kind).detail},
+            headers={"Cache-Control": "no-store"},
+        )
     except SessionMintCapExceeded as exc:
         if invite:
             return JSONResponse(
@@ -2265,6 +2320,47 @@ def _session_capped_response(
     return response
 
 
+def _render_unchecked_html(kind: Unchecked) -> str:
+    """The "briefly unavailable" page (CHG-088 (d)). Fixed words chosen by
+    what the server knows of the session's kind, and the refresh interval;
+    nothing from the request. For a session known to be signed in, the owner's
+    words; otherwise the session's variant with "session" for "account" and
+    "sign-in", which the owner approved too (CHG-088 (h); ADR-0176 amendment)."""
+    if kind is Unchecked.SIGNED_IN:
+        heading = "Your account is briefly unavailable"
+        body = (
+            "Quorum could not check your sign-in just now. This usually clears "
+            "within a minute. Nothing has been deleted."
+        )
+    else:
+        heading = "Your session is briefly unavailable"
+        body = (
+            "Quorum could not check your session just now. This usually clears "
+            "within a minute. Nothing has been deleted."
+        )
+    template = (TEMPLATES_DIR / "session-unchecked.html").read_text(encoding="utf-8")
+    return (
+        template.replace("__REFRESH_S__", str(int(UNCHECKED_PAGE_REFRESH_S)))
+        .replace("__TITLE__", "Quorum-AI: " + heading)
+        .replace("__HEADING__", heading)
+        .replace("__BODY__", body)
+    )
+
+
+def _unchecked_page(kind: Unchecked) -> HTMLResponse:
+    """``/ui``'s answer for a cookie it could not check (CHG-088 (c), (d)):
+    503 with ``Retry-After``, not cached, and NO ``Set-Cookie``: the browser
+    keeps the cookie it has, with its own expiry."""
+    return HTMLResponse(
+        _render_unchecked_html(kind),
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        headers={
+            "Retry-After": str(int(UNCHECKED_PAGE_REFRESH_S)),
+            "Cache-Control": "no-store",
+        },
+    )
+
+
 @app.get("/ui/ops", response_class=HTMLResponse, include_in_schema=False)
 def ops_dashboard() -> HTMLResponse:
     """OD-2: self-contained ops dashboard.
@@ -2279,7 +2375,20 @@ def ops_dashboard() -> HTMLResponse:
 
 
 @app.get(
-    "/ui", response_class=HTMLResponse, tags=["browser-ui"], responses=fetch_site.PAGE_RESPONSES
+    "/ui",
+    response_class=HTMLResponse,
+    tags=["browser-ui"],
+    responses={
+        **fetch_site.PAGE_RESPONSES,
+        503: {
+            "description": (
+                "The presented session could not be checked just now (CHG-088). "
+                "The page keeps the cookie, opens no session and reloads itself "
+                "after Retry-After seconds."
+            ),
+            "content": {"text/html": {"schema": {"type": "string"}}},
+        },
+    },
 )
 def browser_ui(request: Request) -> Response:
     # W88 (CHG-067): from another site this page may only be opened as a
@@ -2304,9 +2413,14 @@ def browser_ui(request: Request) -> Response:
     try:
         # No CSRF rotation here: the page gets its token from /v1/session,
         # and a second fetch of /ui must not retire it (2026-09-25).
-        session = issue_or_resume_session(
+        session = issue_or_resume_checked_session(
             session_id, client_ip=mint_key, mint_cap=mint_cap, rotate_csrf=False
         )
+    except SessionUnchecked as exc:
+        # CHG-088 (c), "Both doors": a cookie that could not be checked keeps
+        # the cookie and opens nothing. After W88's refusal above, by
+        # construction (FM-1.15).
+        return _unchecked_page(exc.kind)
     except SessionMintCapExceeded as exc:
         # A rendered page, not a bare sentence. This is the only 429 a real
         # visitor ever sees in their address bar, and it is the last thing
@@ -2327,13 +2441,13 @@ def browser_ui(request: Request) -> Response:
         account,
         sign_in_failed=request.query_params.get("sign_in") == "failed",
         on_sign_in_host=on_sign_in_host(request),
-        max_age_seconds_left=max_age_seconds_left(session.session_id),
+        # CHG-088 (Codex F2): both times from the session checked above, never
+        # from a second lookup whose refusal would read as 0.
+        max_age_seconds_left=max_age_seconds_left_of(session),
         # W87-2 (ADR-0175): the time left before deleting needs a new sign-in,
         # and the line after a sign-in for deletion came back as another
         # account. A fixed marker; nothing from the request reaches the page.
-        recent_sign_in_seconds_left=account_deletion.recent_sign_in_seconds_left(
-            session.session_id
-        ),
+        recent_sign_in_seconds_left=account_deletion.recent_sign_in_seconds_left_of(session),
         account_switched=request.query_params.get("account") == "switched",
     )
     response = HTMLResponse(
@@ -2347,7 +2461,7 @@ def browser_ui(request: Request) -> Response:
         # The page carries the signed-in email: no cache may keep it
         # (review round 1).
         response.headers["Cache-Control"] = "no-store"
-    attach_session_cookie(response, session)
+    attach_session_cookie(response, issued_response(session))
     return response
 
 

@@ -579,8 +579,8 @@ def _o_account_deleted_mid_sign_in(env: SignIn) -> Any:
     query = _start(client, _boot(client))
     real_issue = auth.issue_signed_in_session
 
-    def issue_then_delete(previous: str, *, account_id: UUID) -> Any:
-        issued = real_issue(previous, account_id=account_id)
+    def issue_then_delete(previous: str, *, account_id: UUID, **kwargs: Any) -> Any:
+        issued = real_issue(previous, account_id=account_id, **kwargs)
         account_deletion.delete_account(account_id)
         return issued
 

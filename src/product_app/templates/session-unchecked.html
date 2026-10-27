@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta http-equiv="refresh" content="__REFRESH_S__; url=/ui">
+    <title>__TITLE__</title>
+    <link rel="stylesheet" href="/static/tokens.css">
+    <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32.png">
+    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+    <script>
+      // Same pre-paint theme gate as workspace.html, copied rather than shared
+      // because this page must render without the workspace script and with
+      // no data islands. A visitor who has chosen dark should not be handed a
+      // white page at the one moment the app is refusing them.
+      try {
+        var stored = window.localStorage.getItem("quorum.theme");
+        if (stored === "dark" || stored === "light") {
+          document.documentElement.setAttribute("data-theme", stored);
+        } else if (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches) {
+          document.documentElement.setAttribute("data-theme", "dark");
+        }
+      } catch (e) {
+        /* storage disabled: keep the light default from the markup. */
+      }
+    </script>
+    <style>
+      /* CHG-088 (the W87-3 follow-up): the capped page's card, inline for
+         the same reason. This page carries nothing from the request: no
+         session id, no CSRF token, no email and no data island, and it loads
+         no page script. The refresh above is a meta refresh, not script. */
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 2rem 1.25rem;
+        background: var(--bg, #FFFFFF);
+        color: var(--ink, #14171C);
+        font-family: Geist, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+        line-height: 1.6;
+      }
+      main {
+        width: 100%;
+        max-width: 34rem;
+        background: var(--surface, #FFFFFF);
+        border: 1px solid var(--line, rgba(20, 23, 28, 0.14));
+        border-radius: 14px;
+        padding: 2rem;
+      }
+      .brand {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.5rem;
+        margin-bottom: 1.25rem;
+        font-weight: 600;
+        letter-spacing: 0.01em;
+      }
+      .brand-tile {
+        display: inline-grid;
+        place-items: center;
+        width: 1.75rem;
+        height: 1.75rem;
+        border-radius: 7px;
+        background: var(--brand-tile-bg, #0E6B50);
+        color: #FFFFFF;
+        font-weight: 700;
+      }
+      h1 { margin: 0 0 0.75rem; font-size: 1.5rem; line-height: 1.25; }
+      p { margin: 0 0 1rem; }
+      p:last-child { margin-bottom: 0; }
+      .lede { font-size: 1.0625rem; }
+      a.try-again {
+        display: inline-block;
+        font-weight: 600;
+        padding: 0.6rem 1rem;
+        border-radius: 8px;
+        border: 1px solid var(--line, rgba(20, 23, 28, 0.14));
+        background: var(--brand-tile-bg, #0E6B50);
+        color: #FFFFFF;
+        text-decoration: none;
+      }
+      a:focus-visible, :focus-visible { outline: 3px solid var(--focus-ring, #14171C); outline-offset: 3px; }
+      @media (max-width: 30rem) { main { padding: 1.5rem 1.25rem; } }
+    </style>
+  </head>
+  <body>
+    <main id="main-content">
+      <p class="brand"><span class="brand-tile" aria-hidden="true">Q</span>Quorum-AI</p>
+      <h1>__HEADING__</h1>
+      <p class="lede">__BODY__</p>
+      <p><a id="unchecked-try-again" class="try-again" href="/ui">Try again</a></p>
+    </main>
+  </body>
+</html>

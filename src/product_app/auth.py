@@ -284,6 +284,36 @@ class AuthError(StrEnum):
     SESSION_MAX_AGE = "SESSION_MAX_AGE"
     #: W87-1 (ADR-0174): a run refused in the session's last 12 minutes.
     SESSION_ENDS_SOON = "SESSION_ENDS_SOON"
+    #: CHG-088 (e), the owner's "New code, retry in place": the session could
+    #: not be checked just now (its cutoff or its row could not be read). Not
+    #: an end: the cookie is kept, and the same request may work a minute
+    #: later.
+    SESSION_UNCHECKED = "SESSION_UNCHECKED"
+
+
+class Unchecked(StrEnum):
+    """Why a presented session could not be checked (CHG-088, the W87-3
+    follow-up; ADR-0176 amendment), by what the server knows of its kind. It
+    chooses the words only; both refuse the same way."""
+
+    #: The session is known to be signed in: the owner's words ("sign-in").
+    SIGNED_IN = "signed_in"
+    #: Its kind could not be read, so it may be anonymous: the same words with
+    #: "session" for "sign-in" and "account" (the session's variant, approved
+    #: by the owner in CHG-088 (h)).
+    UNKNOWN_KIND = "unknown_kind"
+
+
+class SessionUnchecked(Exception):
+    """Raised by :func:`issue_or_resume_checked_session` instead of minting
+    over a cookie it could not check (CHG-088 (c), "Both doors"). A plain
+    exception, like :class:`SessionMintCapExceeded`: the route layer turns it
+    into ``/ui``'s 503 page or ``/v1/session``'s 401. The message is fixed and
+    carries no id."""
+
+    def __init__(self, kind: Unchecked) -> None:
+        super().__init__("the session could not be checked just now")
+        self.kind = kind
 
 
 #: CHG-063 (f)(2), verbatim: the 401 for a session ended by its 12 hours.
@@ -360,6 +390,11 @@ class _Session:
     #: however much it is used. ``ANONYMOUS_MAX_AGE`` unless the session is
     #: signed in, or a restore could not tell (the shorter one, the closed side).
     max_age: timedelta = ANONYMOUS_MAX_AGE
+    #: CHG-088 (the W87-3 follow-up): ``False`` for a session restored while
+    #: its kind lookup failed. Such a session carries the signed-in limits (the
+    #: closed side) and, when it cannot be checked, the "session" wording,
+    #: since it may be anonymous (``Unchecked.UNKNOWN_KIND``).
+    kind_known: bool = True
 
     def is_expired(self, *, now: datetime) -> bool:
         return (now - self.last_used_at) > self.idle_limit or (now - self.created_at) > self.max_age
@@ -383,6 +418,83 @@ class _Session:
 def signed_in_idle_limit() -> timedelta:
     """W7 part 3 (ADR-0138): the idle limit of a signed-in session."""
     return timedelta(minutes=settings.signed_in_idle_minutes)
+
+
+@dataclass(frozen=True)
+class Lookup:
+    """What :meth:`SessionRepository.lookup` found (CHG-088, the W87-3
+    follow-up; ADR-0176 amendment). Exactly one of three outcomes:
+
+    * ``session`` set: the session, checked, to be served;
+    * both ``None``: no session (none, ended, or refused): the mint path;
+    * ``unchecked`` set: it could not be checked just now. Keep the cookie,
+      mint nothing, touch nothing.
+
+    ``unchecked`` is never set together with a session."""
+
+    session: _Session | None
+    unchecked: Unchecked | None = None
+
+
+class _UncheckedRefusals:
+    """The rate-limited log line for requests refused because their session
+    could not be checked (CHG-088 (f)(5): "The log line at most once a
+    minute, with a count and no ids or emails"; ADR-0176 amendment).
+
+    :meth:`note` is called by :meth:`SessionRepository.lookup` at every
+    unchecked answer, with one of two fixed causes read from the store's
+    flags: ``not_ready`` (the session-safety tables are not ready) or
+    ``not_read`` (a lock not taken in time, a closed store or a failed read).
+    The first refusal logs at once; later ones are counted; the first line 60
+    s or more after the last one (the monotonic clock, read as
+    ``time.monotonic()`` at call time) reports the counts since that line.
+    The GC tick calls :meth:`flush`, so a trailing count is not held back
+    until the next refusal. Per process: a restart starts it again."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._window_s = 60.0
+        self._last_line: float | None = None
+        self._counts = {"not_ready": 0, "not_read": 0}
+
+    def note(self, cause: str) -> None:
+        with self._lock:
+            self._counts[cause] += 1
+            line = self._take_line_locked(_time_module.monotonic())
+        _emit_refusal_line(line)
+
+    def flush(self) -> None:
+        with self._lock:
+            line = self._take_line_locked(_time_module.monotonic())
+        _emit_refusal_line(line)
+
+    def _take_line_locked(self, now: float) -> tuple[int, int] | None:
+        due = self._last_line is None or now - self._last_line >= self._window_s
+        if not due or not any(self._counts.values()):
+            return None
+        line = (self._counts["not_ready"], self._counts["not_read"])
+        self._counts = {"not_ready": 0, "not_read": 0}
+        self._last_line = now
+        return line
+
+
+def _emit_refusal_line(line: tuple[int, int] | None) -> None:
+    """Log one refusal line (not a static method: a decorated function is
+    invisible to the mutation gate, and its cap is full)."""
+    if line is None:
+        return
+    not_ready, not_read = line
+    logging.getLogger(__name__).warning(
+        "signed-in requests refused: the session cutoff could not be checked "
+        "(not_ready=%d not_read=%d); %d refused since the last line",
+        not_ready,
+        not_read,
+        not_ready + not_read,
+    )
+
+
+#: The process's one refusal-line limiter (read by name at call time).
+_unchecked_refusals = _UncheckedRefusals()
 
 
 def _to_stored(session: _Session) -> StoredSession:
@@ -434,6 +546,28 @@ class SessionRepository:
         #: freshest time it has. An entry goes once its last use is older than
         #: ``SESSION_TTL``, the idle age at which the GC purge deletes the row.
         self._ended_last_used: dict[str, datetime] = {}
+        #: CHG-088 (the W87-3 follow-up, Codex F3): session id -> when this
+        #: process dropped it because it ENDED (its 12 hours, its idle limit,
+        #: sign-out, sign out everywhere, account deletion). :meth:`lookup`
+        #: answers "ended" for these before any store read, so a session known
+        #: to have ended is never called "briefly unavailable" when the store
+        #: then fails. Kept for ``ANONYMOUS_MAX_AGE``, past which no row can be
+        #: restored anyway, and pruned by the GC purge. Lost at a restart.
+        #: Sign-in-only sessions are left out: they never have a row, so for
+        #: one of them a failing row read gives "unchecked", never access. Not
+        #: bounded by a fixed size: one entry per session ended here in the
+        #: last 24 hours.
+        self._ended_ids: dict[str, datetime] = {}
+        #: CHG-088 (W114): session id -> when :meth:`revoke` was called for it
+        #: (a sign-out, a sign-in's rotation, a sign-in refused for a deleted
+        #: account), held in the cache or not. Unlike a natural end, a revoke
+        #: must also stop the sign-in callback's 12-hour recovery
+        #: (:meth:`max_age_account`), which reads the row: a revoke whose row
+        #: delete failed left the row in place, and before this list a
+        #: callback already under way recovered it. Same
+        #: lifetime and prune as ``_ended_ids``; a held sign-in-only session is
+        #: left out; lost at a restart.
+        self._signed_out_ids: dict[str, datetime] = {}
         self._lock = RLock()
 
     def create(
@@ -462,25 +596,45 @@ class SessionRepository:
         return session
 
     def get(self, session_id: str) -> _Session | None:
-        """Return the session for ``session_id``, restoring it if need be.
+        """Return the session for ``session_id``, restoring it if need be;
+        ``None`` for every refusal, an unchecked one included
+        (:meth:`lookup` says which).
 
         A presented id is only ever LOOKED UP, never adopted. There is no
         path here that writes a row for an id the caller supplied, so a
         visitor cannot pin a session id of their own choosing and have the
         server bless it — the fixation hazard a durable store makes tempting.
         """
+        return self.lookup(session_id).session
+
+    def lookup(self, session_id: str) -> Lookup:
+        """The session for ``session_id``, or why there is none (CHG-088, the
+        W87-3 follow-up; ADR-0176 amendment).
+
+        In order: the cache, after the purge; an id this process saw END
+        (``_ended_ids``) is ended with no store read (S17); a cached session is
+        checked against its account's durable cutoff (:meth:`_check_cached`);
+        anything else is restored from its row (:meth:`_restore_lookup`). Every
+        unchecked answer is counted for the rate-limited log line
+        (:class:`_UncheckedRefusals`), cache hit and restore alike. It never
+        touches the session: :meth:`use` does that."""
         with self._lock:
             self._purge_expired_locked()
             cached = self._sessions.get(session_id)
-        if cached is not None:
-            if self._refused_by_durable_cutoff(cached):
-                return None
-            return cached
-        return self._restore(session_id)
+            ended = cached is None and session_id in self._ended_ids
+        if ended:
+            return Lookup(None)
+        found = self._restore_lookup(session_id) if cached is None else self._check_cached(cached)
+        if found.unchecked is not None:
+            store = session_store.get_store()
+            not_ready = store is not None and not store.cutoffs_available()
+            # The cause from the flags only, never a second read.
+            _unchecked_refusals.note("not_ready" if not_ready else "not_read")
+        return found
 
-    def _refused_by_durable_cutoff(self, session: _Session) -> bool:
-        """Whether a signed-in cache hit must be refused by its account's
-        DURABLE cutoff (W87-3, ADR-0176), read on the request thread.
+    def _check_cached(self, session: _Session) -> Lookup:
+        """A cache hit, checked against its account's DURABLE cutoff (W87-3,
+        ADR-0176), read on the request thread, ONCE per lookup.
 
         The in-memory cutoff covers only sign-outs made in this process. The
         operator command (``product_app.end_sessions``), or a sign-out
@@ -495,22 +649,34 @@ class SessionRepository:
         start ends the account's cached sessions here as sign-out everywhere
         does. A cutoff that cannot be read (the store not ready, its lock not
         acquired within ``session_store.SIGNED_IN_CUTOFF_LOCK_TIMEOUT_S``,
-        closed, or a failed read) refuses this request and leaves the cached
-        copy, so the next request checks again (CHG-083 (a))."""
+        closed, or a failed read) is UNCHECKED (CHG-088): this request is
+        refused, the cached copy stays and is not touched, and the next
+        request checks again. A session that ended while the read waited
+        (its 12 hours or its idle limit, Codex F3, S18) is ended, not
+        unchecked, unless its kind is unknown: it may be an anonymous session
+        inside its 24 hours, so the signed-in limits do not end it here, as
+        on the restore (A4; W114 review round 2, break-it R2-F4)."""
         if session.max_age == ANONYMOUS_MAX_AGE:
-            return False
+            return Lookup(session)
         store = session_store.get_store()
         if store is None:
-            return False
+            return Lookup(session)
         read, cutoff = store.sessions_valid_after(
             session.account_id, lock_timeout=session_store.SIGNED_IN_CUTOFF_LOCK_TIMEOUT_S
         )
-        if not read:
-            return True
-        if cutoff is not None and session.created_at <= cutoff:
-            self.end_sessions_of(session.account_id, cutoff)
-            return True
-        return False
+        if read:
+            if cutoff is not None and session.created_at <= cutoff:
+                self.end_sessions_of(session.account_id, cutoff)
+                return Lookup(None)
+            return Lookup(session)
+        with self._lock:
+            if session.kind_known and session.is_expired(now=_now()):
+                if self._sessions.get(session.session_id) is session:
+                    self._drop_ended_locked(session)
+                return Lookup(None)
+            if session.session_id in self._ended_ids:
+                return Lookup(None)
+        return Lookup(None, Unchecked.SIGNED_IN if session.kind_known else Unchecked.UNKNOWN_KIND)
 
     def _before_cutoff_locked(self, session: _Session) -> bool:
         cutoff = self._valid_after.get(session.account_id)
@@ -531,12 +697,13 @@ class SessionRepository:
                 del self._valid_after[lapsed]
             current = self._valid_after.get(account_id)
             self._valid_after[account_id] = cutoff if current is None else max(current, cutoff)
-            for session_id in [
-                sid
-                for sid, session in self._sessions.items()
+            for session in [
+                session
+                for session in self._sessions.values()
                 if session.account_id == account_id and session.created_at <= cutoff
             ]:
-                self._sessions.pop(session_id, None)
+                self._sessions.pop(session.session_id, None)
+                self._record_ended_locked(session, now)
 
     def _use_locked(self, session: _Session) -> bool:
         """Record a use of ``session`` now, unless it has ended by now.
@@ -554,31 +721,43 @@ class SessionRepository:
         session.last_used_at = now
         return True
 
+    def use(self, session: _Session, *, rotate_csrf: bool) -> _Session | None:
+        """Record a use of a session :meth:`lookup` has just checked, with no
+        second cutoff read (CHG-088, the W87-3 follow-up; FM-1.3: two bounded
+        reads in a row could wait twice the bound, and a cutoff written
+        between them is applied from the next request, as ADR-0176 already
+        says of requests in flight). ``None`` when it ended by now, or is no
+        longer the cached session (ended or revoked meanwhile).
+
+        ``rotate_csrf``: a new CSRF token, written through unconditionally
+        (the token the client is about to be handed must be the one on disk:
+        a restart that restored a superseded token would 403 every mutating
+        request, the lockout in a different costume). Otherwise the touch
+        throttle decides whether the last use is written."""
+        with self._lock:
+            if self._sessions.get(session.session_id) is not session:
+                return None
+            if not self._use_locked(session):
+                return None
+            if rotate_csrf:
+                session.csrf_token = secrets.token_urlsafe(24)
+        if rotate_csrf:
+            self._persist(session)
+        else:
+            self._persist_touch(session)
+        return session
+
     def touch(self, session_id: str) -> _Session | None:
         session = self.get(session_id)
         if session is None:
             return None
-        with self._lock:
-            if not self._use_locked(session):
-                return None
-        self._persist_touch(session)
-        return session
+        return self.use(session, rotate_csrf=False)
 
     def rotate_csrf(self, session_id: str) -> _Session | None:
         session = self.get(session_id)
         if session is None:
             return None
-        with self._lock:
-            if not self._use_locked(session):
-                return None
-            session.csrf_token = secrets.token_urlsafe(24)
-        # UNCONDITIONAL, not throttled like :meth:`touch`. The token the
-        # client is about to be handed must be the one on disk: a restart
-        # that restored a superseded CSRF token would 403 every mutating
-        # request the visitor makes, which is the lockout in a different
-        # costume.
-        self._persist(session)
-        return session
+        return self.use(session, rotate_csrf=True)
 
     def revoke_account(self, account_id: UUID) -> None:
         """Refuse every session of ``account_id``, and drop the cached ones
@@ -591,10 +770,11 @@ class SessionRepository:
             for lapsed in [aid for aid, until in self._deleted_accounts.items() if until <= now]:
                 del self._deleted_accounts[lapsed]
             self._deleted_accounts[account_id] = now + SESSION_TTL
-            for session_id in [
-                sid for sid, session in self._sessions.items() if session.account_id == account_id
+            for session in [
+                session for session in self._sessions.values() if session.account_id == account_id
             ]:
-                self._sessions.pop(session_id, None)
+                self._sessions.pop(session.session_id, None)
+                self._record_ended_locked(session, now)
 
     def account_was_deleted(self, account_id: UUID) -> bool:
         """Whether ``account_id`` was deleted within the session lifetime."""
@@ -640,7 +820,18 @@ class SessionRepository:
         """
         store = session_store.get_store()
         with self._lock:
-            self._sessions.pop(session_id, None)
+            dropped = self._sessions.pop(session_id, None)
+            now = _now()
+            if dropped is not None:
+                self._record_ended_locked(dropped, now)
+            # Also when nothing is held (W114 plan review, Codex): the GC can
+            # drop a session past its 12 hours between the caller's check and
+            # here, and a recovery's rotation revokes a session no longer
+            # cached. An id not held here is never a live sign-in-only
+            # session (those exist only in memory). Every caller holds a real
+            # session or a finished callback, so requests cannot grow this.
+            if dropped is None or not dropped.sign_in_only:
+                self._signed_out_ids[session_id] = now
             if store is not None:
                 store.delete(session_id)
 
@@ -655,6 +846,7 @@ class SessionRepository:
         """
         with self._lock:
             cached = self._purge_expired_locked()
+            self._prune_ended_ids_locked()
         store = session_store.get_store()
         if store is None:
             return cached, 0
@@ -666,21 +858,36 @@ class SessionRepository:
             cutoff=now - SESSION_TTL, created_cutoff=now - ANONYMOUS_MAX_AGE
         )
 
-    def _restore(self, session_id: str) -> _Session | None:
+    def _restore_lookup(self, session_id: str) -> Lookup:
+        """A session this process does not hold, read back from its row.
+
+        CHG-088 (the W87-3 follow-up; ADR-0176 amendment), in this order: the
+        row (a read that cannot run is unchecked, of unknown kind, FM-1.21; a
+        row that is missing or will not parse is no session); its kind, asked
+        once; a known signed-in row past its 12 hours or its signed-in idle
+        limit is ended BEFORE anything can make it unchecked (FM-1.8); a
+        deletion or sign out everywhere this process saw is ended; then a
+        signed-in row, or one whose kind is unknown, is unchecked while the
+        session-safety tables are not ready or its cutoff cannot be read, and
+        ended when the cutoff covers it. With no store at all nothing is
+        read and there is no session: the owner's "Today's behaviour" for
+        that case (CHG-088 (g))."""
         store = session_store.get_store()
         if store is None:
-            return None
+            return Lookup(None)
         # W87-1 (ADR-0174): the read itself refuses a row older than the
         # longest maximum age, so a row no purge reached never resolves; the
         # signed-in 12 hours are checked below, once the kind is known.
         now = _now()
-        stored = store.fetch(
+        read, stored = store.fetch_checked(
             session_id,
             not_used_before=now - SESSION_TTL,
             not_created_before=now - ANONYMOUS_MAX_AGE,
         )
+        if not read:
+            return Lookup(None, Unchecked.UNKNOWN_KIND)
         if stored is None:
-            return None
+            return Lookup(None)
         # W7 part 3 (ADR-0138): the row does not say whether the session is
         # signed in, so ask once, here; a lookup that fails gets the signed-in
         # limits, the shorter ones (the closed side): the idle limit and,
@@ -694,17 +901,6 @@ class SessionRepository:
             if store.accounts_available()
             else store.has_no_account_row(stored.account_id)
         )
-        if anonymous is not True:
-            # W87-3 (CHG-083 (a)): with the session-safety tables not ready no
-            # cutoff can be read, so a signed-in row, or one whose kind is
-            # unknown, is refused. An id in no accounts row has no cutoff.
-            if not store.cutoffs_available():
-                return None
-            # W7 part 3 (ADR-0137): the durable sessions cutoff, read AFTER
-            # the session row; one that cannot be read refuses the session.
-            read, cutoff = store.sessions_valid_after(stored.account_id)
-            if not read or (cutoff is not None and stored.created_at <= cutoff):
-                return None
         session = _Session(
             session_id=stored.session_id,
             account_id=stored.account_id,
@@ -714,21 +910,64 @@ class SessionRepository:
             persisted_last_used_at=stored.last_used_at,
             idle_limit=SESSION_TTL if anonymous is True else signed_in_idle_limit(),
             max_age=ANONYMOUS_MAX_AGE if anonymous is True else SIGNED_IN_MAX_AGE,
+            kind_known=anonymous is not None,
         )
+        # CHG-088 (FM-1.8): a session KNOWN to be signed in that has passed
+        # its 12 hours or its idle limit has ended, whatever the store's state.
+        # A row of unknown kind may be an anonymous session inside its 24
+        # hours, so it is not ended by the signed-in limits here.
+        if anonymous is False and session.is_expired(now=_now()):
+            return Lookup(None)
+        with self._lock:
+            if self.account_was_deleted(session.account_id) or self._before_cutoff_locked(session):
+                return Lookup(None)
+        if anonymous is not True:
+            kind = Unchecked.SIGNED_IN if anonymous is False else Unchecked.UNKNOWN_KIND
+            # W87-3 (CHG-083 (a)): with the session-safety tables not ready no
+            # cutoff can be read, so a signed-in row, or one whose kind is
+            # unknown, is refused, unchecked since CHG-088. An id in no
+            # accounts row has no cutoff.
+            if not store.cutoffs_available():
+                return Lookup(None, kind)
+            # W7 part 3 (ADR-0137): the durable sessions cutoff, read AFTER
+            # the session row; one that cannot be read refuses the session.
+            read, cutoff = store.sessions_valid_after(stored.account_id)
+            if cutoff is not None and stored.created_at <= cutoff:
+                return Lookup(None)
+            if not read:
+                if anonymous is False and session.is_expired(now=_now()):
+                    return Lookup(None)
+                return Lookup(None, kind)
         if session.is_expired(now=_now()):
-            return None
+            # A row of unknown kind carries the signed-in limits for want of
+            # its kind, but the read above already refused one past the
+            # anonymous limits: it may be an anonymous session inside its 24
+            # hours, so it is unchecked, not ended (A4; W114 review round 2,
+            # Codex finding 4).
+            if anonymous is None:
+                return Lookup(None, Unchecked.UNKNOWN_KIND)
+            return Lookup(None)
         with self._lock:
             # W7 (ADR-0136): re-checked under the lock, after the disk read,
             # so an account deleted while this read was in flight stays out;
             # and the in-memory cutoff, for a sign-out everywhere that landed
-            # after the disk read (ADR-0137).
-            if self.account_was_deleted(session.account_id) or self._before_cutoff_locked(session):
-                return None
+            # after the disk read (ADR-0137). CHG-088 review round 1
+            # (break-it F4): and a sign-out of this very session that landed
+            # during the reads, so a signed-out session is not put back;
+            # W114 review round 2 (break-it R2-F3): also one the cache did
+            # not hold, which ``revoke`` lists as signed out only.
+            if (
+                self.account_was_deleted(session.account_id)
+                or self._before_cutoff_locked(session)
+                or session_id in self._ended_ids
+                or session_id in self._signed_out_ids
+            ):
+                return Lookup(None)
             # ``setdefault``, not assignment: two requests arriving together on
             # a cold process both restore, and the loser must return the SAME
             # object the winner cached or one of them mutates a copy nobody
             # else can see.
-            return self._sessions.setdefault(session_id, session)
+            return Lookup(self._sessions.setdefault(session_id, session))
 
     def end_reason(self, session_id: str) -> str:
         """Why the session behind ``session_id`` no longer resolves (W87-1,
@@ -779,8 +1018,12 @@ class SessionRepository:
             return None
         with self._lock:
             memory_cutoff = self._valid_after.get(stored.account_id)
-            if self.account_is_going(stored.account_id) or (
-                memory_cutoff is not None and stored.created_at <= memory_cutoff
+            # CHG-088 (W114): a session revoked in this process is not a
+            # 12-hour end, even when its row is still there (its delete failed).
+            if (
+                session_id in self._signed_out_ids
+                or self.account_is_going(stored.account_id)
+                or (memory_cutoff is not None and stored.created_at <= memory_cutoff)
             ):
                 return None
             held = self._ended_last_used.get(session_id)
@@ -792,6 +1035,12 @@ class SessionRepository:
         if _now() > max_age_end and max_age_end <= idle_end:
             return stored.account_id
         return None
+
+    def was_revoked(self, session_id: str) -> bool:
+        """Whether :meth:`revoke` was called for ``session_id`` in this
+        process within the last 24 hours (``_signed_out_ids``)."""
+        with self._lock:
+            return session_id in self._signed_out_ids
 
     def upsert_if_recoverable(
         self, session_id: str, account_id: UUID, upsert: Callable[[], UUID | None]
@@ -862,7 +1111,15 @@ class SessionRepository:
         # W87-3 (ADR-0176): through :meth:`get`, so the durable cutoff is
         # read first and an ended session is never written back.
         session = self.get(session_id)
-        if session is not None and session.persisted_last_used_at != session.last_used_at:
+        if session is not None:
+            self.flush_session(session)
+
+    def flush_session(self, session: _Session) -> None:
+        """:meth:`flush` for a session :meth:`lookup` has just checked, with
+        no second cutoff read (CHG-088, Codex F2: the idle route read again
+        and ignored a refusal). :meth:`_persist` writes nothing for a session
+        that is no longer the cached one."""
+        if session.persisted_last_used_at != session.last_used_at:
             self._persist(session)
 
     def _persist_touch(self, session: _Session) -> None:
@@ -891,8 +1148,20 @@ class SessionRepository:
         """Drop a session that has ended from the cache, keeping a signed-in
         one's last use for :meth:`end_reason` (round 1, break-it F1)."""
         self._sessions.pop(session.session_id, None)
+        # W114 review round 1 (break-it F1): a session of unknown kind ended
+        # here only by the signed-in limits it was given for want of its kind;
+        # it may be anonymous inside its 24 hours, so it is not remembered as
+        # ended, and the next lookup reads its row again (A4).
+        if session.kind_known:
+            self._record_ended_locked(session, _now())
         if session.max_age != ANONYMOUS_MAX_AGE:
             self._ended_last_used[session.session_id] = session.last_used_at
+
+    def _record_ended_locked(self, session: _Session, now: datetime) -> None:
+        """Remember that ``session`` ENDED here (CHG-088, ``_ended_ids``),
+        unless it is sign-in-only (memory only, never a row)."""
+        if not session.sign_in_only:
+            self._ended_ids[session.session_id] = now
 
     def _purge_expired_locked(self) -> int:
         now = _now()
@@ -904,6 +1173,15 @@ class SessionRepository:
         ]:
             del self._ended_last_used[lapsed]
         return len(expired)
+
+    def _prune_ended_ids_locked(self) -> None:
+        """Forget ended ids older than ``ANONYMOUS_MAX_AGE`` (CHG-088). Run by
+        the GC purge only, not on every request, so the list's size never
+        costs a request a walk over it."""
+        now = _now()
+        for kept in (self._ended_ids, self._signed_out_ids):
+            for lapsed in [sid for sid, ended in kept.items() if now - ended > ANONYMOUS_MAX_AGE]:
+                del kept[lapsed]
 
     def clear(self) -> None:
         """Empty BOTH halves.
@@ -918,6 +1196,8 @@ class SessionRepository:
             self._sessions.clear()
             self._valid_after.clear()
             self._ended_last_used.clear()
+            self._ended_ids.clear()
+            self._signed_out_ids.clear()
             if store is not None:
                 store.delete_all()
 
@@ -998,6 +1278,15 @@ def _gc_tick(
         logging.getLogger(__name__).warning(
             "session-gc: readiness check failed: %s", type(exc).__name__
         )
+    # CHG-088 (f)(5): the refusal line's trailing count, so it is not held
+    # back until the next refusal. Its own ``try``, before the sweep's
+    # throttle can return.
+    try:
+        _unchecked_refusals.flush()
+    except Exception as exc:  # noqa: BLE001 - the daemon must not die
+        logging.getLogger(__name__).warning(
+            "session-gc: refusal line flush failed: %s", type(exc).__name__
+        )
     state = _HISTORY_SWEEP_STATE if sweep_state is None else sweep_state
     now = _time_module.monotonic() if now_monotonic is None else now_monotonic
     try:
@@ -1044,6 +1333,18 @@ def _start_gc_thread() -> threading.Thread:
 
 
 _start_gc_thread()
+
+
+class SessionUncheckedDetail(BaseModel):
+    code: str
+    message: str
+
+
+class SessionUncheckedResponse(BaseModel):
+    """CHG-088: the 401 for a session that could not be checked just now
+    (``SESSION_UNCHECKED``), as ``/v1/session`` documents it."""
+
+    detail: SessionUncheckedDetail
 
 
 class SessionIssueResponse(BaseModel):
@@ -1109,6 +1410,16 @@ def issue_session(
     mint event can carry the real id in the same atomic step, rather than
     recording against a placeholder and reconciling after.
     """
+    return _issued(_mint(account_id=account_id, client_ip=client_ip, mint_cap=mint_cap))
+
+
+def _mint(
+    *,
+    account_id: UUID | None = None,
+    client_ip: str | None = None,
+    mint_cap: int | None = None,
+) -> _Session:
+    """:func:`issue_session`'s body: the new session itself."""
     _enforce_production_guards(require_legacy_disabled=True)
     if account_id is None:
         account_id = uuid4()
@@ -1132,10 +1443,18 @@ def issue_session(
                         ip=client_ip, cap=cap
                     ),
                 )
-    return _issued(session_repository.create(account_id=account_id))
+    return session_repository.create(account_id=account_id)
 
 
-def issue_signed_in_session(previous_session_id: str, *, account_id: UUID) -> SessionIssueResponse:
+class PreviousSessionRevoked(Exception):
+    """:func:`issue_signed_in_session` found the session it would replace
+    revoked (a sign-out after the sign-in callback's last check); nothing was
+    created (W114 review round 1, Codex)."""
+
+
+def issue_signed_in_session(
+    previous_session_id: str, *, account_id: UUID, from_sign_in_only: bool = False
+) -> SessionIssueResponse:
     """Replace the caller's session with a NEW one bound to a signed-in account.
 
     W7 (ADR-0130). Session fixation is the failure this exists for: a session
@@ -1155,7 +1474,25 @@ def issue_signed_in_session(previous_session_id: str, *, account_id: UUID) -> Se
     day, which is the common case for anyone who came back.
     """
     _enforce_production_guards(require_legacy_disabled=True)
-    session_repository.revoke(previous_session_id)
+    # W114 review round 1 (Codex): :class:`PreviousSessionRevoked`, creating
+    # nothing, when the previous session was revoked (a sign-out) after the
+    # callback's last check. The check and the revoke share one hold of the
+    # repository lock, which ``revoke`` also takes, so a revoke of the
+    # previous session lands either before the check (refused here) or after
+    # this revoke. A held sign-in-only session's sign-out is not recorded
+    # (``revoke``), so for one (``from_sign_in_only``, the callback saw it
+    # held at its start) the session must still be held: it lives in memory
+    # only, so gone means signed out or expired (CHG-088 (n), the owner's
+    # "Fix it in A now (Recommended)"; Codex round 2 finding 2).
+    # The create is outside the hold (review round 2, break-it R2-F1): each
+    # write can wait the store's busy timeout, and one hold across both
+    # writes made every lookup in the process wait for the two.
+    with session_repository._lock:
+        if session_repository.was_revoked(previous_session_id) or (
+            from_sign_in_only and previous_session_id not in session_repository._sessions
+        ):
+            raise PreviousSessionRevoked
+        session_repository.revoke(previous_session_id)
     # W87-1 (ADR-0174): a signed-in session's 12 hours start here, at the
     # rotation, whatever the age of the session it replaces.
     return _issued(
@@ -1165,6 +1502,12 @@ def issue_signed_in_session(previous_session_id: str, *, account_id: UUID) -> Se
             max_age=SIGNED_IN_MAX_AGE,
         )
     )
+
+
+def issued_response(session: _Session) -> SessionIssueResponse:
+    """The issue or resume answer for a session in hand (CHG-088: ``/ui``
+    renders from the session it checked, never from a second lookup)."""
+    return _issued(session)
 
 
 def _issued(session: _Session) -> SessionIssueResponse:
@@ -1280,11 +1623,19 @@ def refuse_if_session_ends_soon(
     server-side session. A session that has already ended is refused by its
     own 401 further on, or, with ``ended_refuses`` (the run creation's second
     check, made just before the run is created, when nothing further on
-    would), here.
+    would), here. One that could not be checked is refused here, at either
+    check, as ``SESSION_UNCHECKED`` (CHG-088), without asking why a session
+    ended (that lookup has no time bound). Handing it on instead made a
+    refused request wait one bound here and another at the spend key, and,
+    when the spend key's read then worked, let an estimate skip this check
+    (review round 1: break-it F3, prose R2).
     """
     if session.legacy:
         return
-    live = session_repository.get(session.session_id)
+    found = session_repository.lookup(session.session_id)
+    if found.unchecked is not None:
+        raise session_unchecked(found.unchecked)
+    live = found.session
     if live is None:
         if ended_refuses:
             raise session_ended(session.session_id)
@@ -1306,13 +1657,13 @@ def refuse_if_session_ends_soon(
     )
 
 
-def max_age_seconds_left(session_id: str) -> int:
+def max_age_seconds_left_of(session: _Session) -> int:
     """Whole seconds until the session's maximum age, never below 0 (W87-1).
     The signed-in page carries it so its first check is due from the nearer
-    of the two ends; a session that no longer resolves has 0 left."""
-    session = session_repository.get(session_id)
-    if session is None:
-        return 0
+    of the two ends. It takes the session ``/ui`` has already checked
+    (CHG-088): the old ``max_age_seconds_left(session_id)`` looked the
+    session up again, read the cutoff a second time, and turned a refusal
+    into 0."""
     return max(0, int((session.max_age_end() - _now()).total_seconds()))
 
 
@@ -1377,6 +1728,26 @@ def session_ended(session_id: str) -> HTTPException:
     return _session_expired()
 
 
+def _unchecked_message(kind: Unchecked) -> str:
+    """The 401's sentence. For a session known to be signed in, the owner's
+    words, verbatim (CHG-088 (e)); for one of unknown kind, the session's
+    variant with "session" for "sign-in" (ADR-0176 amendment)."""
+    if kind is Unchecked.SIGNED_IN:
+        return "We could not check your sign-in just now. Try again in a minute."
+    return "We could not check your session just now. Try again in a minute."
+
+
+def session_unchecked(kind: Unchecked) -> HTTPException:
+    """The 401 for a presented session that could not be checked just now
+    (CHG-088 (e), the owner's "New code, retry in place"). Never asks why a
+    session ended (:meth:`SessionRepository.end_reason` reads the row with no
+    time bound), so it answers at the cutoff read's bound."""
+    return HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail={"code": AuthError.SESSION_UNCHECKED.value, "message": _unchecked_message(kind)},
+    )
+
+
 def _spend_key_unavailable() -> HTTPException:
     return HTTPException(
         status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -1420,8 +1791,12 @@ def spend_meter_for(session: SessionContext, request: Request) -> SpendMeter:
     refuse_sign_in_only(session)
     # W7 part 3 (ADR-0137): a request already past its session check when the
     # account signed out everywhere (or was deleted) is refused here, before
-    # it can be estimated or charged.
-    if session_repository.get(session.session_id) is None:
+    # it can be estimated or charged. CHG-088: one that cannot be checked is
+    # refused as unchecked, never as ended.
+    found = session_repository.lookup(session.session_id)
+    if found.unchecked is not None:
+        raise session_unchecked(found.unchecked)
+    if found.session is None:
         raise session_ended(session.session_id)
     store = session_store.get_store()
     anonymous: bool | None
@@ -1475,9 +1850,18 @@ def require_session(request: Request) -> SessionContext:
     """
     session_id = get_session_cookie_from_request(request)
     if session_id:
-        # W87-1 (ADR-0174): what the touch returns is what the request uses,
-        # so a session that ends between a lookup and the touch is refused.
-        session = session_repository.touch(session_id)
+        # W87-1 (ADR-0174): what the use returns is what the request uses,
+        # so a session that ends between the lookup and the use is refused.
+        # CHG-088: one lookup (one cutoff read), and a session that could not
+        # be checked is refused as unchecked and not touched.
+        found = session_repository.lookup(session_id)
+        if found.unchecked is not None:
+            raise session_unchecked(found.unchecked)
+        session = (
+            None
+            if found.session is None
+            else session_repository.use(found.session, rotate_csrf=False)
+        )
         if session is None:
             raise session_ended(session_id)
         return SessionContext(
@@ -1634,11 +2018,31 @@ def issue_or_resume_session(
     rotate_csrf: bool = True,
     mint_cap: int | None = None,
 ) -> SessionIssueResponse:
-    """Return the active session or create a new one.
+    """Return the active session or create a new one: the answer of
+    :func:`issue_or_resume_checked_session`, which says what each argument
+    does."""
+    return _issued(
+        issue_or_resume_checked_session(
+            presented_session_id, client_ip=client_ip, rotate_csrf=rotate_csrf, mint_cap=mint_cap
+        )
+    )
+
+
+def issue_or_resume_checked_session(
+    presented_session_id: str | None,
+    *,
+    client_ip: str | None = None,
+    rotate_csrf: bool = True,
+    mint_cap: int | None = None,
+) -> _Session:
+    """Return the active session or create a new one; the session itself, so
+    ``/ui`` renders from what was checked (CHG-088, Codex F2).
 
     A malformed or expired cookie is treated as "no cookie" so the
-    caller can move on with a freshly minted session. The legacy
-    ``X-Account-Id`` header is *not* consulted here; that path lives in
+    caller can move on with a freshly minted session. A cookie that could not
+    be CHECKED is not: :class:`SessionUnchecked` is raised and nothing is
+    minted, touched or rotated (CHG-088 (c), the owner's "Both doors"). The
+    legacy ``X-Account-Id`` header is *not* consulted here; that path lives in
     ``require_session`` and is used by the legacy X-Account-Id tests.
 
     On a successful resume, the CSRF token is rotated, unless
@@ -1650,8 +2054,8 @@ def issue_or_resume_session(
     it would force every active client to drop their cookie.
 
     ``client_ip`` is passed straight through to :func:`issue_session` on
-    every path that actually mints (all three below) — a RESUME never touches
-    it, since resuming never consumes a mint-cap slot (issue #100 §2.3).
+    every path that actually mints — a RESUME never touches it, since
+    resuming never consumes a mint-cap slot (issue #100 §2.3).
 
     ``rotate_csrf=False`` resumes WITHOUT a new token. ``/ui`` passes it:
     the page never receives the token from ``/ui`` (it asks
@@ -1659,10 +2063,16 @@ def issue_or_resume_session(
     held and protected nothing. Measured in production on 2026-09-25: a
     second ``GET /ui`` that ran no page code arrived after the page had
     fetched its token, and every protected request then got 403.
+
+    One lookup, so one cutoff read, then :meth:`SessionRepository.use`
+    (CHG-088, FM-1.3).
     """
     _enforce_production_guards(require_legacy_disabled=True)
     if presented_session_id:
-        existing = session_repository.get(presented_session_id)
+        found = session_repository.lookup(presented_session_id)
+        if found.unchecked is not None:
+            raise SessionUnchecked(found.unchecked)
+        existing = found.session
         # W34 (ADR-0139, decision 4): a sign-in-only session is never
         # RESUMED here. It falls through to a counted mint, so a slot that
         # has aged out of the window is used and the visitor gets the full
@@ -1673,19 +2083,10 @@ def issue_or_resume_session(
             and not existing.sign_in_only
             and not existing.is_expired(now=_now())
         ):
-            if not rotate_csrf:
-                resumed = session_repository.touch(presented_session_id)
-                if resumed is None:
-                    return issue_session(client_ip=client_ip, mint_cap=mint_cap)
-                return _issued(resumed)
-            # C10: rotate CSRF on resume. The fresh token replaces
-            # the one previously issued for this session. See
-            # ``SessionRepository.rotate_csrf``.
-            rotated = session_repository.rotate_csrf(presented_session_id)
-            if rotated is None:
-                # Race: the session expired between ``get`` and
-                # ``rotate_csrf``. Fall through to issuing a new
-                # session.
-                return issue_session(client_ip=client_ip, mint_cap=mint_cap)
-            return _issued(rotated)
-    return issue_session(client_ip=client_ip, mint_cap=mint_cap)
+            # C10: rotate CSRF on resume, unless ``rotate_csrf=False``.
+            resumed = session_repository.use(existing, rotate_csrf=rotate_csrf)
+            if resumed is not None:
+                return resumed
+            # Race: the session ended between the lookup and the use. Fall
+            # through to issuing a new session.
+    return _mint(client_ip=client_ip, mint_cap=mint_cap)
