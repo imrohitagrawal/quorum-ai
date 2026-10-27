@@ -807,7 +807,10 @@ def google_sign_in_callback(request: Request) -> RedirectResponse:
         # W87-2: the recovery condition again, after the exchange, for a
         # session revoked, signed out everywhere or deleted DURING it (Codex
         # measured all three accepted without this). The live path has no
-        # such re-check; ADR-0175 records it as advisory.
+        # such re-check; since W114 the rotation below refuses a session
+        # revoked (signed out) during the exchange on both paths (ADR-0176
+        # A17), and a sign out everywhere or a deletion there is still not
+        # seen on the live path (ADR-0175, Known limits).
         return _failed("no_session")
     # W7 (ADR-0135): read the signing-in session's id BEFORE the rotation
     # revokes it, so an ANONYMOUS session's runs can join the account's

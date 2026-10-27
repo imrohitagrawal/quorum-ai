@@ -281,10 +281,14 @@ A3. **The ended list.** `SessionRepository._ended_ids` records each session this
     because it ended, for 24 hours. `lookup` answers "ended" for those before any store read, so a
     session known to have ended is never called "briefly unavailable" when the store then fails
     (Codex F3). A cached session whose cutoff read failed and whose 12 hours or idle limit passed
-    during the wait is ended too; a cutoff written elsewhere that cannot be read stays unchecked.
+    during the wait is ended too when its kind is known; one of unknown kind is unchecked, as on
+    the restore (A4; W114 review round 2, break-it R2-F4: it was ended, and `/ui` then started a new
+    session over a live anonymous cookie). A cutoff written elsewhere that cannot be read stays
+    unchecked.
     A restore that was reading a session's row when that session signed out no longer caches it
     again: its last check under the lock also asks the ended list (review round 1; older than
-    CHG-088).
+    CHG-088), and the revoked list (A17), for a session the cache did not hold when it was revoked
+    (W114 review round 2, break-it R2-F3; also on `main`).
     A session of unknown kind that runs out of the signed-in limits it was given is dropped but
     not listed: it may be anonymous inside its 24 hours, so the next lookup reads its row again
     (W114 review round 1, break-it F1: listing it replaced a live anonymous cookie, measured
@@ -388,12 +392,21 @@ A17. **A revoked session cannot be recovered by a callback that crosses the 12 h
     first case recovered and the second let a second callback create a second signed-in session
     (`test_a_second_callback_cannot_recover_a_session_the_first_rotated`). A held sign-in-only
     session is left out, as for the ended list. The rotation that ends the callback
-    (`issue_signed_in_session`) checks for a revoke, revokes the old session and creates the new
-    one in one hold of the repository lock, and creates nothing when the old session was revoked
-    (W114 review round 1, Codex): before this, a sign-out whose `revoke` landed after the
-    callback's last check was undone, for a recovering session and a live one alike, with the row
-    deleted or not (`test_a_sign_out_landing_just_before_the_rotation_is_not_undone`, 4 cases red
-    before the change). A sign-out that lands after the rotation finds its cookie already ended.
+    (`issue_signed_in_session`) checks for a revoke and revokes the old session in one hold of the
+    repository lock, and creates nothing when the old session was revoked (W114 review round 1,
+    Codex): before this, a sign-out whose `revoke` landed after the callback's last check was
+    undone, for a recovering session and a live one alike, with the row deleted or not
+    (`test_a_sign_out_landing_just_before_the_rotation_is_not_undone`, 4 cases red before the
+    change). This narrows ADR-0175's "Check to issue" limit; that ADR's test pinning the old
+    live-path behaviour now pins the refusal. The single hold is reasoned, not tested: no test
+    interleaves inside it. The new session is created after the hold (W114 review round 2,
+    break-it R2-F1): with both writes in one hold, each able to wait the 5 s busy timeout, the
+    review measured a lookup waiting 10.07 s behind a busy database file, against 4.9 s on `main`.
+    A sign-out whose check comes after the rotation finds its cookie already ended; one whose check
+    came before it and whose `revoke` lands after it revokes nothing, and the new session, from a
+    sign-in the person also made, stays. A held sign-in-only session's sign-out is not recorded,
+    so a callback under way for it is not refused; that session cannot spend (review round 2,
+    R2-F2; also on `main`).
 
 The labels "Codex F1" to "Codex F5", FM-1.21 to FM-1.24 and FM-5.8 above are defined in the last
 section of `docs/analysis/2026-10-25-w87-3-followup-failure-modes.md`.
@@ -463,7 +476,10 @@ section of `docs/analysis/2026-10-25-w87-3-followup-failure-modes.md`.
   the review: a 10 s hold with one queued mint, a signed-in request served after 9.70 s, and
   admission holding the run store's lock 9.7 s. The fix needs its own plan: not holding the
   repository lock across the save reopens the race `_persist` guards against (a dropped session
-  written back). It needs a store-lock hold. No outside cause of one is known; the routine holds
+  written back). It needs a store-lock hold, or another connection holding the database file's
+  write lock, which makes each such write wait up to the 5 s busy timeout (W114 review round 2
+  measured a lookup waiting 4.9 s behind one revoke on `main`). No outside cause of a long hold is
+  known; the routine holds
   measured for the plan were under 1 s (the published failure-modes list, FM-2.4: 0.03 to 1.7 ms,
   the largest 0.69 s).
 - **Admission holds the run store's lock longer.** During a session-store hold, admission's

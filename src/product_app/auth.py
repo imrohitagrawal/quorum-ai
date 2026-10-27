@@ -653,7 +653,9 @@ class SessionRepository:
         refused, the cached copy stays and is not touched, and the next
         request checks again. A session that ended while the read waited
         (its 12 hours or its idle limit, Codex F3, S18) is ended, not
-        unchecked."""
+        unchecked, unless its kind is unknown: it may be an anonymous session
+        inside its 24 hours, so the signed-in limits do not end it here, as
+        on the restore (A4; W114 review round 2, break-it R2-F4)."""
         if session.max_age == ANONYMOUS_MAX_AGE:
             return Lookup(session)
         store = session_store.get_store()
@@ -668,7 +670,7 @@ class SessionRepository:
                 return Lookup(None)
             return Lookup(session)
         with self._lock:
-            if session.is_expired(now=_now()):
+            if session.kind_known and session.is_expired(now=_now()):
                 if self._sessions.get(session.session_id) is session:
                     self._drop_ended_locked(session)
                 return Lookup(None)
@@ -944,11 +946,14 @@ class SessionRepository:
             # and the in-memory cutoff, for a sign-out everywhere that landed
             # after the disk read (ADR-0137). CHG-088 review round 1
             # (break-it F4): and a sign-out of this very session that landed
-            # during the reads, so a signed-out session is not put back.
+            # during the reads, so a signed-out session is not put back;
+            # W114 review round 2 (break-it R2-F3): also one the cache did
+            # not hold, which ``revoke`` lists as signed out only.
             if (
                 self.account_was_deleted(session.account_id)
                 or self._before_cutoff_locked(session)
                 or session_id in self._ended_ids
+                or session_id in self._signed_out_ids
             ):
                 return Lookup(None)
             # ``setdefault``, not assignment: two requests arriving together on
@@ -1461,23 +1466,28 @@ def issue_signed_in_session(previous_session_id: str, *, account_id: UUID) -> Se
     """
     _enforce_production_guards(require_legacy_disabled=True)
     # W114 review round 1 (Codex): :class:`PreviousSessionRevoked`, creating
-    # nothing, when the previous session was revoked (a sign-out) after the callback's last
-    # check. The check, the revoke and the create share one hold of the
-    # repository lock, which ``revoke`` also takes, so a sign-out lands
-    # either before (refused here) or after (it then finds its cookie ended).
+    # nothing, when the previous session was revoked (a sign-out) after the
+    # callback's last check. The check and the revoke share one hold of the
+    # repository lock, which ``revoke`` also takes, so a revoke of the
+    # previous session lands either before the check (refused here) or after
+    # this revoke. A held sign-in-only session's sign-out is not recorded
+    # (``revoke``), so it is not refused here; that session cannot spend.
+    # The create is outside the hold (review round 2, break-it R2-F1): each
+    # write can wait the store's busy timeout, and one hold across both
+    # writes made every lookup in the process wait for the two.
     with session_repository._lock:
         if session_repository.was_revoked(previous_session_id):
             raise PreviousSessionRevoked
         session_repository.revoke(previous_session_id)
-        # W87-1 (ADR-0174): a signed-in session's 12 hours start here, at the
-        # rotation, whatever the age of the session it replaces.
-        return _issued(
-            session_repository.create(
-                account_id=account_id,
-                idle_limit=signed_in_idle_limit(),
-                max_age=SIGNED_IN_MAX_AGE,
-            )
+    # W87-1 (ADR-0174): a signed-in session's 12 hours start here, at the
+    # rotation, whatever the age of the session it replaces.
+    return _issued(
+        session_repository.create(
+            account_id=account_id,
+            idle_limit=signed_in_idle_limit(),
+            max_age=SIGNED_IN_MAX_AGE,
         )
+    )
 
 
 def issued_response(session: _Session) -> SessionIssueResponse:

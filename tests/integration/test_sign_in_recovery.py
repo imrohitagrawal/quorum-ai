@@ -304,22 +304,25 @@ def test_the_same_stubbed_exchange_without_interference_completes(
     assert back.cookies.get(COOKIE)
 
 
-def test_the_live_path_is_unchanged_by_a_revoke_during_the_exchange(
+def test_the_live_path_refuses_a_session_revoked_during_the_exchange(
     sign_in: SignIn, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """11e. Pins today's measured behaviour on the LIVE path (no re-check
-    after the exchange there; ADR-0175 records it as advisory), so a later
-    change to it is a decision, not an accident. Red when: the live path
-    starts refusing a session revoked during the exchange."""
+    """11e. On the LIVE path too, a sign-out (``revoke``) of the signing-in
+    session during the exchange is not undone: the rotation refuses it and
+    creates nothing (W114, ADR-0176 A17, the session's decision; ADR-0175's
+    "Check to issue" limit narrowed). This test pinned the opposite until
+    then, so that the change would be a decision. Partner:
+    ``test_sign_out_stops_the_12_hour_recovery.py::``
+    ``test_without_a_sign_out_the_callback_still_signs_in``.
+    Red when: the rotation stops refusing a previous session revoked during
+    the exchange."""
     client = signed_in_client(sign_in)
     live = sid(client)
     query = _start(client, _boot(client))
     calls = _interfering_exchange(monkeypatch, lambda: auth.session_repository.revoke(live))
     back = _callback(client, code="stub-auth-code-2", state=query["state"])
     assert calls == [1]
-    assert back.status_code == 303
-    assert back.headers["location"] == PLAIN
-    assert back.cookies.get(COOKIE)
+    _refused(back)
 
 
 # --- 11d. end_reason and max_age_account agree --------------------------------

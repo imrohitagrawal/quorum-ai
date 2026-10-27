@@ -227,8 +227,9 @@ def test_a_sign_out_landing_just_before_the_rotation_is_not_undone(
     for a recovering session and for a live one. The callback must create
     nothing and fail plainly. Partner: without the sign-out, each crossing
     signs in (1 session, the plain location).
-    Red when: the rotation does not refuse, under the same lock as its
-    revoke and create, a previous session that was revoked."""
+    Red when: the rotation does not refuse a previous session that was
+    revoked. (The single lock hold over the check and the revoke is
+    reasoned, ADR-0176 A17; no test interleaves inside it.)"""
     client = signed_in_client(sign_in)
     session_id = sid(client)
     age(session_id, H12 - MINUTE, now=clock.at)
