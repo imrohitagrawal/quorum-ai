@@ -16,9 +16,11 @@ Two durable invariants, enforced here so the class of bug cannot recur:
 1. The deploy gate's ``GATE_TIMEOUT_SECONDS`` must be >= the longest a required PUSH
    job may legitimately run — its declared ``timeout-minutes`` ceiling. The gate was
    raised 900s → 1500s (to 1800s on 2026-10-07, ADR-0151, for a 25-minute
-   ceiling, and to 2400s on 2026-10-10, ADR-0157, for a 35-minute ceiling) so
-   it clears the ceiling of the blocking push jobs
-   (perf-gate, api-contract, e2e) with headroom.
+   ceiling, to 2400s on 2026-10-10, ADR-0157, for a 35-minute ceiling, and to
+   3000s on 2026-10-28, ADR-0182, which supersedes ADR-0157 in part, for a
+   45-minute ceiling) so it clears the longest push-job ceiling, the 45 minutes
+   of ``validate-and-test`` and ``pytest (Python 3.12)``, with five minutes to
+   spare.
 2. The pathological advisory ``mutation-baseline`` job (30-minute ceiling, a per-PR
    changed-function concept meaningless on a push to main) is gated to
    ``pull_request`` only, so it never runs on push and cannot stall the gate at
@@ -136,12 +138,16 @@ def test_deploy_gate_waits_at_least_as_long_as_any_required_push_job_may_run() -
 
     A push job with NO ``timeout-minutes`` runs up to GitHub's default of 360
     minutes, far past any gate wait. It used to be skipped here unseen
-    (``fr-completeness`` declared none until ADR-0157). RED IF: any job that
-    runs on push in a required workflow (pull-request-only jobs excepted)
-    declares no ``timeout-minutes``, or any declared ceiling exceeds the gate's
+    (``fr-completeness`` declared none until ADR-0157). The gate must also
+    keep five minutes (300 s) to spare over every such ceiling, not only over
+    the four suite jobs pinned below: a job like ``api-contract`` raised to 46
+    minutes would otherwise eat the margin unseen. RED IF: any job that runs on
+    push in a required workflow (pull-request-only jobs excepted) declares no
+    ``timeout-minutes``, or any declared ceiling plus 300 s exceeds the gate's
     wait. Partner: the check sees the declared ceilings of the other jobs
-    (``CI``'s ``validate-and-test`` at 35 minutes among them), so it is not
-    passing over an empty list."""
+    (``CI``'s ``validate-and-test`` at 45 minutes among them since ADR-0182,
+    35 under ADR-0157), so it is not passing over an empty list. RED IF, for
+    the partner: ``validate-and-test`` declares other than 45 minutes."""
     required, gate_timeout = _deploy_gate()
     by_name = _workflow_files_by_name()
 
@@ -163,13 +169,14 @@ def test_deploy_gate_waits_at_least_as_long_as_any_required_push_job_may_run() -
     assert unbounded == [], (
         f"push jobs with no timeout-minutes (GitHub's default is 360 minutes): {unbounded}"
     )
-    assert dict(ceilings).get("CI:validate-and-test") == 35 * 60, ceilings
+    assert dict(ceilings).get("CI:validate-and-test") == 45 * 60, ceilings
     assert len(ceilings) >= 5, ceilings
     worst = max(ceilings, key=lambda kv: kv[1], default=("<none>", 0))
-    assert gate_timeout >= worst[1], (
+    assert gate_timeout >= worst[1] + 300, (
         f"deploy-gate timeout {gate_timeout}s < {worst[0]} declared ceiling "
-        f"{worst[1]}s. A push job may run that long and stall the gate. Raise "
-        "GATE_TIMEOUT_SECONDS above the ceiling, or gate the job to pull_request."
+        f"{worst[1]}s plus the five minutes (300 s) to spare. A push job may run "
+        "that long and leave the gate no margin. Raise GATE_TIMEOUT_SECONDS to "
+        "the ceiling plus 300 s, or gate the job to pull_request."
     )
 
 
@@ -215,7 +222,8 @@ def test_the_drift_grace_outlasts_the_gates_whole_wait_plus_a_deploy() -> None:
 
 
 # ---------------------------------------------------------------------------
-# ADR-0157: the values themselves, pinned with literals (rule 8b)
+# ADR-0182 (superseding ADR-0157 in part): the values themselves, pinned with
+# literals (rules 7a and 8b)
 # ---------------------------------------------------------------------------
 
 #: The four jobs that run the whole suite, by workflow file and job id.
@@ -236,24 +244,59 @@ def _load_script(name: str) -> Any:
     return module
 
 
-@pytest.mark.parametrize(("workflow", "job_id"), _FULL_SUITE_JOBS)
-def test_each_full_suite_job_has_35_minutes(workflow: str, job_id: str) -> None:
-    """ADR-0157: ``validate-and-test`` was cancelled by its 25-minute limit
-    twice on the push of ``dbf314e``. RED IF: any of the four full-suite jobs
-    declares other than 35 minutes (25 before ADR-0157). Partner: the job
-    exists in that workflow, so the pin is not passing over a renamed job."""
+@pytest.mark.parametrize(
+    ("workflow", "job_id"),
+    [
+        ("ci.yml", "validate-and-test"),
+        ("ci.yml", "diff-cover"),
+        ("test.yml", "test"),
+    ],
+)
+def test_each_of_the_three_suite_jobs_has_45_minutes(workflow: str, job_id: str) -> None:
+    """ADR-0182 (superseding ADR-0157 in part): ``validate-and-test`` reached
+    33.3 minutes of its 35-minute limit, so the three jobs that run the whole
+    pytest suite get 45 minutes. RED IF: ``validate-and-test`` or ``diff-cover``
+    (ci.yml) or ``test`` (test.yml) declares other than 45 minutes (35 under
+    ADR-0157, 25 before it). Partner: the job exists in that workflow, so the
+    pin is not passing over a renamed job."""
     jobs = _load(_WORKFLOWS / workflow)["jobs"]
     assert job_id in jobs, f"{workflow} has no job {job_id!r}"
-    assert jobs[job_id].get("timeout-minutes") == 35, (workflow, job_id)
+    assert jobs[job_id].get("timeout-minutes") == 45, (workflow, job_id)
 
 
-def test_the_gate_waits_2400_seconds_in_deploy_yml_and_in_the_script() -> None:
-    """ADR-0157: the gate waits the 35-minute job limit plus five minutes.
-    RED IF: deploy.yml's ``GATE_TIMEOUT_SECONDS`` or the gate script's
-    fallback ``DEFAULT_TIMEOUT_SECONDS`` is other than 2400 (1800 before
-    ADR-0157)."""
-    assert _deploy_gate()[1] == 2400
-    assert _load_script("deploy_gate").DEFAULT_TIMEOUT_SECONDS == 2400.0
+def test_the_e2e_job_keeps_35_minutes() -> None:
+    """ADR-0182: the e2e job's slowest run was 26.6 minutes, so its limit stays
+    at ADR-0157's 35 while the suite jobs move to 45. RED IF: ``e2e``
+    (e2e.yml) declares other than 35 minutes. Partner: the job exists in
+    ``e2e.yml``."""
+    jobs = _load(_WORKFLOWS / "e2e.yml")["jobs"]
+    assert "e2e" in jobs, "e2e.yml has no job 'e2e'"
+    assert jobs["e2e"].get("timeout-minutes") == 35
+
+
+def test_the_limit_pins_cover_exactly_the_full_suite_jobs() -> None:
+    """ADR-0182: the two pins above name their jobs literally, so a fifth
+    full-suite job added to ``_FULL_SUITE_JOBS`` would be in the gate relation
+    below but pinned by nothing. RED IF: ``_FULL_SUITE_JOBS`` gains or loses a
+    job without the pins above being edited to match. Partner: the list is
+    not empty."""
+    pinned = {
+        ("ci.yml", "validate-and-test"),
+        ("ci.yml", "diff-cover"),
+        ("test.yml", "test"),
+        ("e2e.yml", "e2e"),
+    }
+    assert _FULL_SUITE_JOBS
+    assert set(_FULL_SUITE_JOBS) == pinned
+
+
+def test_the_gate_waits_3000_seconds_in_deploy_yml_and_in_the_script() -> None:
+    """ADR-0182 (superseding ADR-0157 in part): the gate waits the 45-minute
+    job limit plus five minutes. RED IF: deploy.yml's ``GATE_TIMEOUT_SECONDS``
+    or the gate script's fallback ``DEFAULT_TIMEOUT_SECONDS`` is other than
+    3000 (2400 under ADR-0157, 1800 before it)."""
+    assert _deploy_gate()[1] == 3000
+    assert _load_script("deploy_gate").DEFAULT_TIMEOUT_SECONDS == 3000.0
 
 
 def test_fr_completeness_has_10_minutes() -> None:
@@ -266,18 +309,22 @@ def test_fr_completeness_has_10_minutes() -> None:
     assert jobs["fr-completeness"].get("timeout-minutes") == 10
 
 
-def test_the_drift_grace_is_2700_seconds() -> None:
-    """ADR-0157: the drift grace is the gate's wait plus five minutes. RED IF:
-    ``DEFAULT_GRACE_SECONDS`` is other than 2700 (2100 before ADR-0157)."""
-    assert _load_script("deploy_drift_check").DEFAULT_GRACE_SECONDS == 2700.0
+def test_the_drift_grace_is_3300_seconds() -> None:
+    """ADR-0182 (superseding ADR-0157 in part): the drift grace is the gate's
+    wait plus five minutes. RED IF: ``DEFAULT_GRACE_SECONDS`` is other than
+    3300 (2700 under ADR-0157, 2100 before it)."""
+    assert _load_script("deploy_drift_check").DEFAULT_GRACE_SECONDS == 3300.0
 
 
 def test_the_gate_is_the_slowest_full_suite_limit_plus_five_minutes() -> None:
-    """ADR-0151's rule, kept by ADR-0157, as a tie between the parsed values:
-    the gate's wait is the longest full-suite job limit plus 300 s, and the
-    drift grace is the gate's wait plus 300 s. RED IF: a job limit moves
-    without the gate (or the gate without the grace), in either direction.
-    Partner: all four jobs declare a limit, so the maximum is over real
+    """ADR-0157's rule, kept by ADR-0182, checked on the parsed values (ADR-0151
+    required only that the gate wait at least the longest limit; the exact
+    five-minute gaps are ADR-0157's): the gate's wait is the longest of these
+    four job limits plus 300 s, and the drift grace is the gate's wait plus
+    300 s. RED IF: the longest of the four limits moves without the gate, or
+    the gate moves without the grace. A limit that is not the longest, moved
+    to any value at or below the longest, leaves this green; the per-job pins
+    above catch that. Partner: all four jobs declare a limit, so the maximum is over real
     values."""
     limits = [
         _load(_WORKFLOWS / workflow)["jobs"][job_id].get("timeout-minutes")

@@ -46,9 +46,13 @@ jobs:
     # the suite keeps growing; validate-and-test, which runs the same suite with
     # coverage, was cancelled at 20. 35, not 25 (ADR-0157): validate-and-test was
     # cancelled at 25 min twice on the push of dbf314e and took 23.9 min on
-    # 8d9a60b. The deploy gate's wait (GATE_TIMEOUT_SECONDS, 2400s, deploy.yml)
-    # and the drift alarm's grace (2700s) moved with it.
-    timeout-minutes: 35
+    # 8d9a60b; the deploy gate's wait moved to 2400s and the drift alarm's
+    # grace to 2700s with it. 45, not 35 (ADR-0182, superseding ADR-0157 in
+    # part): from 2026-10-20 to 2026-10-27 this job's slowest successful run took
+    # 30.6 min and validate-and-test's 33.3. The deploy gate's wait
+    # (GATE_TIMEOUT_SECONDS, 3000s, deploy.yml) and the drift alarm's grace
+    # (3300s) moved with it.
+    timeout-minutes: 45
     steps:
       - name: Check out repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
