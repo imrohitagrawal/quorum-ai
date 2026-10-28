@@ -12,7 +12,7 @@ and follow it for roles, review rounds, gates, merging, production checks and cl
 2. `docs/65-open-work.md`: rows W115, W116, W114, W80, W75, W76, W45 and W112, and the Parked
    table (`make parked-check`). W113's row is on its branch, `w113/owner-quote-check`.
 3. `docs/19-change-control-log.md`: CHG-049, CHG-060, CHG-061, CHG-063, CHG-083, CHG-085,
-   CHG-086, CHG-088, CHG-089, and CHG-092 to CHG-097.
+   CHG-086, CHG-088, CHG-089, and CHG-092 to CHG-098.
 4. `git ls-remote origin 'refs/heads/*'` and `gh pr list --state open`.
 5. The private evidence, outside the repository: `~/Projects/quorum-ai-evidence/` —
    `2026-10-28/ci-limits/` (W115: `plan.md` and its three Codex reviews, `measure.py` and its
@@ -47,7 +47,8 @@ them; the rest keep the previous prompt's order (CHG-061, CHG-094).
    Read-only on CI logs (runner image, CPU count, the slowest test files per run). Report to the
    owner before any change; no pull request unless the owner asks for one.
 5. **W114, pull request B: the sign-out part.** Build it table-first from plan revision 3, with
-   CHG-096 ("Refuse when not held") and the sign-out/sign-in race of CHG-088 (m). Have Codex
+   CHG-098 ("Cap 1,000, oldest out", which replaces CHG-096) and the sign-out/sign-in race of
+   CHG-088 (m). Have Codex
    review the amended plan before code.
 6. **W113: rebuild the owner-quote check on a Markdown parser** (CHG-094: limit 2,900 changed
    lines; past it, stop and ask). Continue branch `w113/owner-quote-check` in worktree

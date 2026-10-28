@@ -20,6 +20,11 @@ gates and e2e lanes are in the pull request's description.
 - **CHG-096**: W114's pull request B signs out, while the database cannot be read, only a session
   the server holds in memory (*"Refuse when not held"*, not the session's recommendation). The
   W114 row had planned to record this with B; it is recorded now so it does not wait on a session.
+- **CHG-098** (recorded in the follow-up to this handoff): the owner was asked CHG-096's question
+  again, with what each option does to the example's sign-out, and chose *"Cap 1,000, oldest
+  out (Recommended)"*. It replaces CHG-096. Under CHG-096, nearly every sign-out in the minute
+  after a restart would have been refused, because a restart empties the server's memory of
+  sessions; the first question did not say so.
 - **CHG-097**: the broken mutation check becomes W116, built right after W115; this session hands
   off to a fresh one.
 - Extracts `docs/owner-answers/CHG-095.json` to `CHG-097.json`, made and checked with
@@ -48,7 +53,7 @@ gates and e2e lanes are in the pull request's description.
 - **W115's investigation (c)**: not started. Read-only on CI logs; report to the owner before any
   change.
 - **W114 pull request B**: not started. Plan revision 3 in `2026-10-24/w873-followup/` in the
-  evidence folder; it must now take in CHG-096 and the sign-out/sign-in race (CHG-088 (m)), which
+  evidence folder; it must now take in CHG-098 and the sign-out/sign-in race (CHG-088 (m)), which
   was reproduced on `main` with probes saved in `2026-10-27/w114a/race-probes/`. The first branch,
   `w87-3/unchecked-cookie` (local only, `bc9dc49`), is still in worktree `quorum-ai-w873f`.
 - **W113**: unchanged since the last handoff. Branch `w113/owner-quote-check`, local only, head

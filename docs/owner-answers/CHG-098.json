@@ -1,0 +1,16 @@
+{
+  "chg": "CHG-098",
+  "entries": [
+    {
+      "kind": "question",
+      "transcript": "16de928d",
+      "tool_use_id": "toolu_0181CmFVwX5aTyw7qN8RWrLj",
+      "asked_at": "2026-10-28T09:50:09.508Z",
+      "answered_at": "2026-10-28T09:50:58.495Z",
+      "header": "B sign-out",
+      "answer": "Cap 1,000, oldest out (Recommended)",
+      "chosen_label": "Cap 1,000, oldest out (Recommended)",
+      "chosen_was_recommended": true
+    }
+  ]
+}
