@@ -1,0 +1,16 @@
+{
+  "chg": "CHG-096",
+  "entries": [
+    {
+      "kind": "question",
+      "transcript": "16de928d",
+      "tool_use_id": "toolu_01NhDnn4rChWUtRNp8eYhqJP",
+      "asked_at": "2026-10-27T07:43:35.393Z",
+      "answered_at": "2026-10-27T15:20:00.051Z",
+      "header": "B eviction",
+      "answer": "Refuse when not held",
+      "chosen_label": "Refuse when not held",
+      "chosen_was_recommended": false
+    }
+  ]
+}
