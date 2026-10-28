@@ -182,7 +182,7 @@ def test_a_reading_at_or_above_2_to_the_33_is_refused(
     """From a start of 2**33 - 1, a reading 0.5 s later is allowed (partner:
     the bound is not hit by the start itself), a reading 1.0 s later (exactly
     2**33) raises, and so does one 2.0 s later. From 2**33 up, a multiple of
-    2**-20 can need more than 53 bits, so a sum is no longer sure to be
+    2**-20 can need more than 53 bits, so a reading is no longer sure to be
     exact. Red when: only the start is checked, or the bound is ``>``
     instead of ``>=``."""
     start = 2**33 - 1
@@ -228,3 +228,48 @@ def test_a_start_at_2_to_the_33_is_refused_when_the_clock_is_made(
     above). Red when: the start is not checked when the clock is made."""
     with pytest.raises(ValueError):
         Clock(monkeypatch, frozen=True, start=2**33)
+
+
+def test_a_start_a_time_or_a_step_below_0_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A start of -1, a frozen ``set(-GRID)`` and a moving ``advance(-GRID)``
+    each raise ValueError, and leave the reading as it was; partners: a
+    start of 0, ``set(0.0)`` and ``advance(0.0)`` are accepted and read
+    exactly 0.0. Below 0 the parts of a reading can cancel and a sum can
+    round (from 0, readings at 2**33 - 2**-20 and -2 * 2**-20 subtract to
+    8589934592.0, one grid step off). Red when: any of the three checks
+    for a value below 0 is removed."""
+    with pytest.raises(ValueError):
+        Clock(monkeypatch, frozen=True, start=-1)
+    frozen = Clock(monkeypatch, frozen=True, start=0)
+    frozen.set(0.0)
+    assert frozen() == 0.0
+    with pytest.raises(ValueError):
+        frozen.set(-GRID)
+    assert frozen() == 0.0
+    moving = Clock(monkeypatch, start=0, real=FakeReal(5.0))
+    moving.advance(0.0)
+    assert moving() == 0.0
+    with pytest.raises(ValueError):
+        moving.advance(-GRID)
+    assert moving() == 0.0
+
+
+def test_a_step_that_takes_the_offset_to_2_to_the_33_is_refused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """On a moving clock from 0, ``advance(2**33 - GRID)`` is accepted, then
+    ``advance(GRID)`` (an offset of exactly 2**33) raises and moves nothing,
+    and so does ``advance(2**40)`` on a fresh clock. Without the check, steps
+    of 2**40, GRID and back would lose the GRID (the offset reads 0.0, not
+    2**-20). Red when: ``advance`` does not check the offset, or checks it
+    with ``>`` instead of ``>=``."""
+    clock = Clock(monkeypatch, start=0, real=FakeReal(5.0))
+    clock.advance(2**33 - GRID)
+    assert clock() == 2**33 - GRID
+    with pytest.raises(ValueError):
+        clock.advance(GRID)
+    assert clock() == 2**33 - GRID
+    fresh = Clock(monkeypatch, start=0, real=FakeReal(5.0))
+    with pytest.raises(ValueError):
+        fresh.advance(2.0**40)
+    assert fresh() == 0.0
