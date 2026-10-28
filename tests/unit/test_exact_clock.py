@@ -231,15 +231,19 @@ def test_a_start_at_2_to_the_33_is_refused_when_the_clock_is_made(
 
 
 def test_a_start_a_time_or_a_step_below_0_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A start of -1, a frozen ``set(-GRID)`` and a moving ``advance(-GRID)``
-    each raise ValueError, and leave the reading as it was; partners: a
-    start of 0, ``set(0.0)`` and ``advance(0.0)`` are accepted and read
-    exactly 0.0. Below 0 the parts of a reading can cancel and a sum can
-    round (from 0, readings at 2**33 - 2**-20 and -2 * 2**-20 subtract to
-    8589934592.0, one grid step off). Red when: any of the three checks
-    for a value below 0 is removed."""
+    """A start of -1, -0.5 or -GRID, a frozen ``set(-GRID)`` and a moving
+    ``advance(-GRID)`` each raise ValueError, and leave the reading as it
+    was; partners: a start of 0, ``set(0.0)`` and ``advance(0.0)`` are
+    accepted and read exactly 0.0. Below 0 the parts of a reading can
+    cancel and a sum can round (from 0, readings at 2**33 - 2**-20 and
+    -2 * 2**-20 subtract to 8589934592.0, one grid step off). Red when: any
+    of the three checks for a value below 0 is removed, or the start is
+    checked after it is rounded up (-0.5 would become 0)."""
     with pytest.raises(ValueError):
         Clock(monkeypatch, frozen=True, start=-1)
+    for below in (-0.5, -GRID):  # rounding up would make each of these 0
+        with pytest.raises(ValueError):
+            Clock(monkeypatch, frozen=True, start=below)
     frozen = Clock(monkeypatch, frozen=True, start=0)
     frozen.set(0.0)
     assert frozen() == 0.0

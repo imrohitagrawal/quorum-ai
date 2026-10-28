@@ -58,9 +58,13 @@ class Clock:
         self._real_at_start = self._real()
         # Rounded UP, so the clock never reads earlier than the value it was
         # made from (a real reading taken before the patch, say).
-        self._start = float(math.ceil(self._real_at_start if start is None else start))
-        if not 0 <= self._start < LIMIT:
-            raise ValueError(f"start {self._start} is not from 0 up to 2**33")
+        # Checked before rounding, so a start of -0.5 is refused, not made 0.
+        given = self._real_at_start if start is None else start
+        if not given >= 0:
+            raise ValueError(f"start {given} is below 0")
+        self._start = float(math.ceil(given))
+        if self._start >= LIMIT:
+            raise ValueError(f"start {self._start} is at or above 2**33")
         self._frozen = frozen
         self._set_to = 0.0
         self._offset = 0.0
