@@ -277,4 +277,5 @@ pytest_add_cli_args = [
   "-q",
   "-m", "not env_oracle and not repo_introspection",
   "--ignore", "tests/perf",
+  "--maxfail=10000",
 ]

@@ -334,7 +334,7 @@ MUTMUT_MAX_CHILDREN ?= 8
 # own setup steps (checkout, fetch base ref, setup-uv, python install, uv
 # sync) are comfortably under a minute in the existing measured baseline
 # above, so the margin here is intentionally generous.
-MUTATION_RUN_DEADLINE_SECONDS ?= 1440
+MUTATION_RUN_DEADLINE_SECONDS ?= 3000
 
 # #337. scripts/run_with_deadline.py drops this file when it kills the run for
 # exceeding the deadline above, and deletes any stale one when it does not.

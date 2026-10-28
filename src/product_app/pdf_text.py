@@ -124,8 +124,8 @@ def is_garbled(text: str) -> bool:
     is not): what a font read with the wrong single-byte table looks like, or
     a font pypdf cannot read at all (one U+FFFD for each character). Other
     characters above U+00FF (curly quotes, dashes, CJK) are not counted."""
-    garbled = sum(1 for char in text if "\x80" <= char <= "\xff" or char == "\ufffd")
-    return 5 * garbled > len(text)
+    garbled_count = sum(1 for char in text if "\x80" <= char <= "\xff" or char == "\ufffd")
+    return 5 * garbled_count > len(text)
 
 
 def extract_text(data: bytes) -> str:

@@ -391,7 +391,7 @@ jobs:
     # runs and always scores whatever mutants/**/*.py.meta state exists --
     # partial or complete -- instead of this external timeout silently
     # eating the whole job.
-    timeout-minutes: 30
+    timeout-minutes: 60
     env:
       OPENROUTER_LIVE_EXECUTION_ENABLED: "false"
       QUORUM_RUNTIME_ENVIRONMENT: "ci"
