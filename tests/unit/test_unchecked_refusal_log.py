@@ -33,7 +33,6 @@ from __future__ import annotations
 import logging
 import re
 import threading
-import time
 from collections.abc import Callable, Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -43,6 +42,7 @@ from uuid import uuid4
 import pytest
 from fastapi.testclient import TestClient
 from tests.end_sessions_harness import plant_row
+from tests.exact_clock import GRID, Clock
 from tests.unchecked_harness import (
     ACTIVE,
     FailingConnection,
@@ -89,28 +89,6 @@ def live(db: Path) -> Iterator[SessionStore]:
         store.close()
 
 
-class Clock:
-    """``time.monotonic`` replaced by the real clock plus an offset that only
-    grows, or (``frozen``) a value the test sets."""
-
-    def __init__(self, monkeypatch: pytest.MonkeyPatch, *, frozen: bool = False) -> None:
-        self._real = time.monotonic
-        self.offset = 0.0
-        self.frozen_at: float | None = self._real() if frozen else None
-        monkeypatch.setattr(time, "monotonic", self)
-
-    def __call__(self) -> float:
-        if self.frozen_at is not None:
-            return self.frozen_at
-        return self._real() + self.offset
-
-    def advance(self, seconds: float) -> None:
-        if self.frozen_at is not None:
-            self.frozen_at += seconds
-        else:
-            self.offset += seconds
-
-
 def _instance_name() -> str:
     names = [
         name for name, value in vars(auth).items() if isinstance(value, auth._UncheckedRefusals)
@@ -150,8 +128,8 @@ def test_t30_forty_refusals_at_once_log_one_line_and_the_flush_reports_39(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     """T30 (FM-3.3). 40 threads released by one barrier each note a refusal:
-    exactly 1 line (the first, reporting 1); ``flush()`` with the clock past
-    60 s gives exactly 1 more, reporting 39; 40 counted in all. Red when:
+    exactly 1 line (the first, reporting 1); ``flush()`` with the clock set
+    to 60.0 s gives exactly 1 more, reporting 39; 40 counted in all. Red when:
     the check-then-set races (more lines) or a count is lost."""
     caplog.set_level(logging.WARNING)
     clock = Clock(monkeypatch, frozen=True)
@@ -169,37 +147,49 @@ def test_t30_forty_refusals_at_once_log_one_line_and_the_flush_reports_39(
         thread.join(5.0)
     assert not any(thread.is_alive() for thread in threads)
     assert _lines(caplog) == [(1, 0, 1)], "the first refusal logs at once, alone"
-    clock.advance(60.0)
+    clock.set(60.0)
     limiter.flush()
     assert _lines(caplog) == [(1, 0, 1), (39, 0, 39)]
     assert sum(k for _r, _u, k in _lines(caplog)) == 40
 
 
+@pytest.mark.parametrize("start", [None, 8133], ids=["start_real_reading", "start_8133"])
 def test_t31_the_window_is_60_monotonic_seconds_from_the_last_line(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, start: int | None
 ) -> None:
-    """T31 (FM-3.5). On the monotonic clock: a line at 0; silence for a
-    refusal at 59.9 s and for a ``flush()`` at 59.95 s; a ``flush()`` at
-    exactly 60.0 s reports the one suppressed; a refusal at 120.0 s (60 s
-    after that line) logs at once, reporting itself. Red when: wall-clock
-    time is used (the patched clock would not move it), the window is not 60
-    s, or it is measured from the first refusal rather than the last line."""
+    """T31 (FM-3.5). On the monotonic clock, frozen and SET to each time (not
+    stepped, so no sum of steps falls short of 60.0): a line at 0; silence
+    for a refusal at 59.5 s and for a ``flush()`` at 60.0 - 2**-20 s (one
+    grid step under 60); a ``flush()`` at exactly 60.0 s reports the one
+    suppressed; silence for a refusal at 119.5 s (59.5 s after that line,
+    119.5 s after the first); a refusal at 120.0 s (60 s after the last line)
+    logs at once, reporting both. Run from the real reading and from 8133,
+    the start where the OLD test's steps of 59.9 + 0.05 + 0.05 read
+    59.99999999999818 s after it. Red when: wall-clock time is used (the
+    patched clock would not move it), the window is shorter than 60 s by a
+    grid step (2**-20 s) or more, or longer than 60 s, the window is
+    exclusive (``>`` for ``>=``), it is measured from the first line or from
+    the last refusal rather than the last line, or ``set`` adds to the
+    reading instead of replacing it."""
     caplog.set_level(logging.WARNING)
-    clock = Clock(monkeypatch, frozen=True)
+    clock = Clock(monkeypatch, frozen=True, start=start)
     limiter = auth._UncheckedRefusals()
     limiter.note("not_read")
     assert _lines(caplog) == [(0, 1, 1)]
-    clock.advance(59.9)
+    clock.set(59.5)
     limiter.note("not_read")
-    clock.advance(0.05)
+    clock.set(60.0 - GRID)
     limiter.flush()
-    assert _lines(caplog) == [(0, 1, 1)], "silence inside the window"
-    clock.advance(0.05)
+    assert _lines(caplog) == [(0, 1, 1)], "silence inside the window, one grid step under 60"
+    clock.set(60.0)
     limiter.flush()
     assert _lines(caplog) == [(0, 1, 1), (0, 1, 1)]
-    clock.advance(60.0)
+    clock.set(119.5)
+    limiter.note("not_read")
+    assert _lines(caplog) == [(0, 1, 1), (0, 1, 1)], "59.5 s after the last line: silence"
+    clock.set(120.0)
     limiter.note("not_ready")
-    assert _lines(caplog) == [(0, 1, 1), (0, 1, 1), (1, 0, 1)]
+    assert _lines(caplog) == [(0, 1, 1), (0, 1, 1), (1, 1, 2)]
 
 
 def test_t31b_the_gc_tick_flushes_the_trailing_count(monkeypatch: pytest.MonkeyPatch) -> None:
