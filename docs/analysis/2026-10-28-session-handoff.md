@@ -83,6 +83,14 @@ gates and e2e lanes are in the pull request's description.
 - **The owner's CHG-095 answer is dated 2026-10-27 in UTC** (19:10:06.838Z). The local clock read
   the next day.
 
+## For the owner
+
+- GitHub lists five open Dependabot alerts, created 2026-10-17 and 2026-10-22: two high for
+  graphql-core, and one medium each for Werkzeug, pytest and brace-expansion. None is in the
+  production image: `uv export --frozen --no-dev` pins none of them, and `make vuln-audit` reports
+  31 packages, 0 known vulnerabilities. They come from the test tools and the e2e packages. No
+  board row or CHG row names them; whether to update them is yours to decide.
+
 ## Not verified
 
 - Any mutation score for code changed since #580 (W116).
