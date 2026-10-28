@@ -6,6 +6,10 @@ Accepted — 2026-10-10. Changes ADR-0151's values; its ordering (the gate's wai
 slowest job, the drift grace outlasts the gate) stays. The values are the session's; the owner
 may change them.
 
+Superseded in part by ADR-0182 (2026-10-28): its values for the three full-suite jobs, the gate
+and the drift grace are changed (45 minutes, 3000 s, 3300 s); the e2e job's 35 minutes,
+`fr-completeness`'s 10 minutes, its ordering and its five-minute ties stand.
+
 ## Context
 
 On 2026-10-09 the merge of #552 (`dbf314e`) was stranded and production stayed on `8d9a60b`.

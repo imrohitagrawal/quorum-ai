@@ -30,9 +30,11 @@ jobs:
     # 25, not 20 (ADR-0151): the last 11 green runs before 2026-10-07 took 15.7 to
     # 19.5 min, and PR #546 was cancelled at the 20-min limit twice (20.2 and 20.3 min).
     # 35, not 25 (ADR-0157): this job was cancelled at 25 min twice on the push of
-    # dbf314e and took 23.9 min on 8d9a60b. The deploy gate's wait (2400s) and the
-    # drift grace (2700s) cover 35.
-    timeout-minutes: 35
+    # dbf314e and took 23.9 min on 8d9a60b. 45, not 35 (ADR-0182, superseding
+    # ADR-0157 in part): from 2026-10-20 to 2026-10-27 its slowest successful run
+    # took 33.3 min of the 35. The deploy gate's wait (3000s) and the drift grace
+    # (3300s) cover 45.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -251,9 +253,11 @@ jobs:
     # 25, not 20 (ADR-0151): it runs the full suite with coverage and took 18.1
     # min on PR #546. 35, not 25 (ADR-0157): validate-and-test, the same suite
     # with coverage, was cancelled at 25 min twice on the push of dbf314e and
-    # took 23.9 min on 8d9a60b. Pull-request only, so the deploy gate never
-    # waits on it.
-    timeout-minutes: 35
+    # took 23.9 min on 8d9a60b. 45, not 35 (ADR-0182, superseding ADR-0157 in
+    # part): from 2026-10-20 to 2026-10-27 its slowest successful run took 30.0
+    # min, and validate-and-test's 33.3. Pull-request only, so the deploy gate
+    # never waits on it.
+    timeout-minutes: 45
     env:
       OPENROUTER_LIVE_EXECUTION_ENABLED: "false"
       QUORUM_RUNTIME_ENVIRONMENT: "ci"
