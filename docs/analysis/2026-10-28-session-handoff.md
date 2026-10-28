@@ -23,21 +23,28 @@ gates and e2e lanes are in the pull request's description.
 - **CHG-097**: the broken mutation check becomes W116, built right after W115; this session hands
   off to a fresh one.
 - Extracts `docs/owner-answers/CHG-095.json` to `CHG-097.json`, made and checked with
-  `scripts/owner_answers.py` from W113's branch (`check-rows`: 6 extracts, 0 problems; a copy of the
+  the owner-answers script on W113's branch (`check-rows`: 6 extracts, 0 problems; a copy of the
   log with one quote altered gave 1 problem).
 - **The board**: new rows W115 and W116; W114's row and Parked line updated (A merged as #591;
-  B resumes after W115 and W116); anchor re-stamped to `e6d5300`.
+  B resumes after W115 and W116); its "Verified at" commit moved to `e6d5300`.
 - The session's prompt moved to `docs/archive/2026-10/`; the next prompt is at the root.
 
 ## Not finished
 
+- **A test that #591 shipped fails on clock rounding**:
+  `tests/unit/test_unchecked_refusal_log.py::test_t31_the_window_is_60_monotonic_seconds_from_the_last_line`
+  steps a frozen clock, started at the real `time.monotonic()`, by 59.9, 0.05 and 0.05 seconds and
+  expects the 60-second window to have passed. For some start values the sum is just under 60: on
+  this Mac on 2026-10-28 it was 59.999999999970896, and the test failed 30 of 30 runs, on `main`
+  too. On CI it depends on the runner's clock, so it can fail the required `pytest` job of any pull
+  request. This handoff is docs only, so the fix is the next prompt's first item.
 - **W115** (CI limits): not started in the repository. The plan, its measurement script and
   output, and three Codex reviews are in the owner's evidence folder,
   `~/Projects/quorum-ai-evidence/2026-10-28/ci-limits/`. Codex's last re-check asked for one change
   (the timing table was labelled measured before it was re-measured); it is applied in `plan.md`
   and needs Codex's confirmation before code. ADR-0182 is reserved for it.
-- **W116** (the mutation check): not started. Cause found from the CI logs of #583, #587, #589
-  and #591, written in the row.
+- **W116** (the mutation check): not started. No pull request that changed Python code has had a
+  mutation score since #580; the CI logs show two causes, both in the row.
 - **W115's investigation (c)**: not started. Read-only on CI logs; report to the owner before any
   change.
 - **W114 pull request B**: not started. Plan revision 3 in `2026-10-24/w873-followup/` in the
@@ -70,7 +77,7 @@ gates and e2e lanes are in the pull request's description.
   with 429s. Delete the worktree's `.data/feedback_events.sqlite3` (gitignored) between lanes.
 - **Chain a commit after lint with `&&`, not `;`.** One commit landed after a failed lint and had
   to be amended.
-- **Numbering across branches**: CHG-095 to CHG-097 are on `main` now; CHG-090, CHG-091 and
+- **Numbering across branches**: CHG-095 to CHG-097 are in this handoff pull request; CHG-090, CHG-091 and
   ADR-0179 are still only on W113's branch. When W113 merges `main`, put both logs back in number
   order. ADR-0182 is W115's.
 - **The owner's CHG-095 answer is dated 2026-10-27 in UTC** (19:10:06.838Z). The local clock read
@@ -78,5 +85,5 @@ gates and e2e lanes are in the pull request's description.
 
 ## Not verified
 
-- Any mutation score for code changed since #583 (W116).
+- Any mutation score for code changed since #580 (W116).
 - W114 A in Firefox and Safari.

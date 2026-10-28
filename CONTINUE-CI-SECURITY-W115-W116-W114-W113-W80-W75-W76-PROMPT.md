@@ -25,31 +25,39 @@ and follow it for roles, review rounds, gates, merging, production checks and cl
 
 Each is its own pull request, deployed and checked live before the next starts. Route each
 with `make skill-route ITEM=<row>`, and again with `make skill-route DIFF=origin/main` once the
-change exists. The order is CHG-095 and CHG-097 for W115, W116 and (c), then the previous
-prompt's order for the rest (CHG-061, CHG-094).
+change exists. Item 1 comes first because it can fail any pull request's required `pytest` job. The order
+of W115 and W116 is CHG-095 and CHG-097; putting (c) after W116 is the session's reading of
+them; the rest keep the previous prompt's order (CHG-061, CHG-094).
 
-1. **W115: raise the CI time limits together** (CHG-095). Have Codex confirm the one change
+1. **W114: the clock-rounding test** (the W114 row; #591 shipped it). Make
+   `test_t31_the_window_is_60_monotonic_seconds_from_the_last_line` set the clock to exact
+   values instead of adding steps, and make every other test in that file that adds steps safe
+   the same way. Show it red first for a start value where the sum falls under 60. The
+   handoff has the measurement.
+2. **W115: raise the CI time limits together** (CHG-095). Have Codex confirm the one change
    applied after its last re-check of `plan.md`, then build from it: tests red first, ADR-0182,
    ADR-0157 superseded in part. The pull request's own CI shows the new limits apply.
-2. **W116: the mutation check measures again** (CHG-097). Write the plan and have Codex review it
-   first. Other test files also change folder (`grep -rln "monkeypatch.chdir\|os.chdir" tests`):
-   find which of them the mutation run reaches before writing the guard. Done when the pull
-   request's own mutation job prints a score; read the number in its log.
-3. **W115's investigation (c): the roughly 7-minute swing between runs of the same suite.**
+3. **W116: the mutation check measures again** (CHG-097). Two causes are in the row; the run
+   stops at the first failing test, so more may sit behind them. Write the plan and have Codex
+   review it first. Other test files also change folder
+   (`grep -rln "monkeypatch.chdir\|os.chdir" tests`): find which of them the mutation run
+   reaches before writing the guard. Done when the pull request's own mutation job prints a
+   score; read the number in its log.
+4. **W115's investigation (c): the roughly 7-minute swing between runs of the same suite.**
    Read-only on CI logs (runner image, CPU count, the slowest test files per run). Report to the
    owner before any change; no pull request unless the owner asks for one.
-4. **W114, pull request B: the sign-out part.** Build it table-first from plan revision 3, with
+5. **W114, pull request B: the sign-out part.** Build it table-first from plan revision 3, with
    CHG-096 ("Refuse when not held") and the sign-out/sign-in race of CHG-088 (m). Have Codex
    review the amended plan before code.
-5. **W113: rebuild the owner-quote check on a Markdown parser** (CHG-094: limit 2,900 changed
+6. **W113: rebuild the owner-quote check on a Markdown parser** (CHG-094: limit 2,900 changed
    lines; past it, stop and ask). Continue branch `w113/owner-quote-check` in worktree
    `quorum-ai-w113`, after merging `main` into it. Amend `r2/root-cause-and-plan.md` with
    `r2/codex-plan-review.md`, have Codex review the amended plan, then failing tests first.
    The owner's approval for W113 is CHG-090, on that branch, with CHG-094's new limit.
-6. **W80**: remove `/feedback/audit` (CHG-063 (c)); stop a cross-site link cancelling a sign-in.
+7. **W80**: remove `/feedback/audit` (CHG-063 (c)); stop a cross-site link cancelling a sign-in.
    Write and review the plan first.
-7. **W75**, with the additions its row names.
-8. **W76.** Its parts are agents' reports: reproduce each first. Sentry's FastAPI integration
+8. **W75**, with the additions its row names.
+9. **W76.** Its parts are agents' reports: reproduce each first. Sentry's FastAPI integration
    reads request bodies by default (`max_request_body_size` unset).
 
 A new security warning that fails `make vuln-audit` follows CHG-092 and ADR-0181.
@@ -57,7 +65,7 @@ A new security warning that fails `make vuln-audit` follows CHG-092 and ADR-0181
 ## Approvals
 
 Sending this prompt approves the following for one pull request per item above (none for item
-3 unless the owner asks), any update pull request CHG-092 allows, and the end-of-session handoff
+4 unless the owner asks), any update pull request CHG-092 allows, and the end-of-session handoff
 (docs only).
 - Push and open the pull request.
 - Squash-merge through `make close-guard`, with `EXPECT_CLOSE=""` (or the issues it closes).
