@@ -70,7 +70,7 @@ jobs:
     # five runs, and up to 19.85 min on pull requests. 35, not 25 (ADR-0157),
     # moved with the full-suite jobs: validate-and-test was cancelled at 25 min
     # twice on the push of dbf314e and took 23.9 min on 8d9a60b. It stays at 35
-    # under ADR-0182, which moved the three full-suite jobs to 45: from
+    # under ADR-0182, which moved the three suite jobs to 45: from
     # 2026-10-20 to 2026-10-27 its slowest successful run took 26.6 min. The
     # deploy gate's wait (3000s) covers 35.
     timeout-minutes: 35

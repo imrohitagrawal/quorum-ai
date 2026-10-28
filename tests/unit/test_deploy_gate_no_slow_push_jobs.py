@@ -18,8 +18,9 @@ Two durable invariants, enforced here so the class of bug cannot recur:
    raised 900s → 1500s (to 1800s on 2026-10-07, ADR-0151, for a 25-minute
    ceiling, to 2400s on 2026-10-10, ADR-0157, for a 35-minute ceiling, and to
    3000s on 2026-10-28, ADR-0182, which supersedes ADR-0157 in part, for a
-   45-minute ceiling) so it clears the ceiling of the blocking push jobs
-   (perf-gate, api-contract, e2e) with headroom.
+   45-minute ceiling) so it clears the longest push-job ceiling, the 45 minutes
+   of ``validate-and-test`` and ``pytest (Python 3.12)``, with five minutes to
+   spare.
 2. The pathological advisory ``mutation-baseline`` job (30-minute ceiling, a per-PR
    changed-function concept meaningless on a push to main) is gated to
    ``pull_request`` only, so it never runs on push and cannot stall the gate at
@@ -137,9 +138,12 @@ def test_deploy_gate_waits_at_least_as_long_as_any_required_push_job_may_run() -
 
     A push job with NO ``timeout-minutes`` runs up to GitHub's default of 360
     minutes, far past any gate wait. It used to be skipped here unseen
-    (``fr-completeness`` declared none until ADR-0157). RED IF: any job that
-    runs on push in a required workflow (pull-request-only jobs excepted)
-    declares no ``timeout-minutes``, or any declared ceiling exceeds the gate's
+    (``fr-completeness`` declared none until ADR-0157). The gate must also
+    keep five minutes (300 s) to spare over every such ceiling, not only over
+    the four suite jobs pinned below: a job like ``api-contract`` raised to 46
+    minutes would otherwise eat the margin unseen. RED IF: any job that runs on
+    push in a required workflow (pull-request-only jobs excepted) declares no
+    ``timeout-minutes``, or any declared ceiling plus 300 s exceeds the gate's
     wait. Partner: the check sees the declared ceilings of the other jobs
     (``CI``'s ``validate-and-test`` at 45 minutes among them since ADR-0182,
     35 under ADR-0157), so it is not passing over an empty list. RED IF, for
@@ -168,10 +172,11 @@ def test_deploy_gate_waits_at_least_as_long_as_any_required_push_job_may_run() -
     assert dict(ceilings).get("CI:validate-and-test") == 45 * 60, ceilings
     assert len(ceilings) >= 5, ceilings
     worst = max(ceilings, key=lambda kv: kv[1], default=("<none>", 0))
-    assert gate_timeout >= worst[1], (
+    assert gate_timeout >= worst[1] + 300, (
         f"deploy-gate timeout {gate_timeout}s < {worst[0]} declared ceiling "
-        f"{worst[1]}s. A push job may run that long and stall the gate. Raise "
-        "GATE_TIMEOUT_SECONDS above the ceiling, or gate the job to pull_request."
+        f"{worst[1]}s plus the five minutes (300 s) to spare. A push job may run "
+        "that long and leave the gate no margin. Raise GATE_TIMEOUT_SECONDS to "
+        "the ceiling plus 300 s, or gate the job to pull_request."
     )
 
 
@@ -312,12 +317,14 @@ def test_the_drift_grace_is_3300_seconds() -> None:
 
 
 def test_the_gate_is_the_slowest_full_suite_limit_plus_five_minutes() -> None:
-    """ADR-0151's rule, kept by ADR-0157 and ADR-0182, as a tie between the
-    parsed values:
-    the gate's wait is the longest full-suite job limit plus 300 s, and the
-    drift grace is the gate's wait plus 300 s. RED IF: a job limit moves
-    without the gate (or the gate without the grace), in either direction.
-    Partner: all four jobs declare a limit, so the maximum is over real
+    """ADR-0157's rule, kept by ADR-0182, checked on the parsed values (ADR-0151
+    required only that the gate wait at least the longest limit; the exact
+    five-minute gaps are ADR-0157's): the gate's wait is the longest of these
+    four job limits plus 300 s, and the drift grace is the gate's wait plus
+    300 s. RED IF: the longest of the four limits moves without the gate, or
+    the gate moves without the grace. A limit that is not the longest, moved
+    to any value at or below the longest, leaves this green; the per-job pins
+    above catch that. Partner: all four jobs declare a limit, so the maximum is over real
     values."""
     limits = [
         _load(_WORKFLOWS / workflow)["jobs"][job_id].get("timeout-minutes")
