@@ -4,16 +4,20 @@ exactly.
 Why it exists: a frozen float clock stepped by 59.9, then 0.05, then 0.05 does
 not always land 60 seconds after its start. From a start of 167123 it lands
 59.999999999970896 seconds later (measured 2026-10-28), so a test that expects
-a 60-second window to have passed failed on some machines and not others.
+a 60-second window to have passed failed or passed depending on where the real
+clock read when the test started (on this Mac, the time since it last started
+up), not on which machine ran it.
 
 This clock keeps every reading on a grid of 2**-20 seconds, starting from a
-whole second, and refuses any reading at or above 2**33. On that grid, below
-that bound, a sum or difference of two readings needs fewer than 53 bits, so
-it is exact: two readings 60.0 apart differ by exactly 60.0.
+whole second, and refuses any reading at or above 2**33. Below that bound a
+reading is a whole number of grid steps that needs at most 53 bits, so it is
+an exact float, and the DIFFERENCE of two readings is exact too: two readings
+set 60.0 apart differ by exactly 60.0. A sum of two readings is not sure to
+be exact (it can pass 2**33).
 
-* Frozen: ``set(seconds)`` puts the reading at start + seconds. It replaces
-  the reading, never adds to it, so steps cannot pile up rounding.
-  ``advance`` is refused.
+* Frozen: ``set(seconds)`` puts the reading at start + seconds and is refused
+  off the grid (60.0 is on it, 0.1 is not). It replaces the reading, never
+  adds to it, so steps cannot pile up rounding. ``advance`` is refused.
 * Moving: the real elapsed time, rounded down to the grid, plus an offset.
   ``advance(seconds)`` adds to the offset and is refused off the grid (60.0 is
   on it, 0.05 is not). ``set`` is refused.
@@ -30,7 +34,8 @@ import pytest
 #: Every reading is a whole multiple of this many seconds.
 GRID = 2.0**-20
 #: Readings at or above this are refused: past it, a multiple of ``GRID`` can
-#: need more than 53 bits, and a sum is no longer sure to be exact.
+#: need more than 53 bits, so a reading, and the difference of two, is no
+#: longer sure to be exact.
 LIMIT = 2.0**33
 
 
@@ -69,9 +74,12 @@ class Clock:
         return reading
 
     def set(self, seconds: float) -> None:
-        """Frozen only: read ``seconds`` after the start from now on."""
+        """Frozen only: read ``seconds`` after the start from now on;
+        ``seconds`` is a multiple of ``GRID``."""
         if not self._frozen:
             raise RuntimeError("set() is for a frozen clock; a moving clock uses advance()")
+        if not (seconds / GRID).is_integer():
+            raise ValueError(f"{seconds} is not a multiple of 2**-20, so the reading may round")
         self._set_to = seconds
 
     def advance(self, seconds: float) -> None:

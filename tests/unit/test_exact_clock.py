@@ -3,7 +3,8 @@
 
 The defect it fixes (plan, measured 2026-10-28): a frozen clock stepped by
 59.9, 0.05 and 0.05 from a start of 8133 reads 59.99999999999818 s later,
-not 60.0, so a ">= 60 s" window test failed on some machines and not others.
+not 60.0, so a ">= 60 s" window test failed or passed depending on where the
+real clock read when the test started, not on which machine ran it.
 
 The interface (plan, revision 3):
 
@@ -12,7 +13,8 @@ The interface (plan, revision 3):
 * The start is ``float(math.ceil(start if given else real()))``: a whole
   second, never earlier than the value it was made from.
 * Frozen: ``clock.set(seconds)`` sets the reading to start + seconds
-  (absolute, never a sum); ``advance`` is refused.
+  (absolute, never a sum) and refuses a ``seconds`` that is not a multiple
+  of 2**-20; ``advance`` is refused.
 * Moving: start + the real elapsed time rounded DOWN to a multiple of 2**-20
   + an offset; ``clock.advance(seconds)`` adds to the offset and refuses a
   ``seconds`` that is not a multiple of 2**-20; ``set`` is refused.
@@ -33,7 +35,7 @@ from tests.exact_clock import Clock
 REFUSED = (ValueError, RuntimeError, AssertionError)
 GRID = 2**-20
 
-#: Found by a seeded search over [1e3, 2e6] at test-writing time: adding
+#: Found by a search over [1e3, 2e6] at test-writing time and pinned: adding
 #: 60.0 to it and taking it away again gives 59.999999999999886, and its
 #: fraction is under 0.5, so rounding to the NEAREST second would go down.
 FLOAT_START = 1008.3038611573548
@@ -54,8 +56,8 @@ class FakeReal:
 def test_frozen_readings_set_60_apart_subtract_to_exactly_60(
     monkeypatch: pytest.MonkeyPatch, start: int
 ) -> None:
-    """Frozen at a whole-second start, ``set`` is absolute: 59.9 then 59.95
-    stay below start + 60.0; ``set(60.0)`` reads exactly start + 60.0 (also
+    """Frozen at a whole-second start, ``set`` is absolute: 59.5 then
+    60.0 - 2**-20 stay below start + 60.0; ``set(60.0)`` reads exactly start + 60.0 (also
     through the patched ``time.monotonic``); the difference to ``set(0.0)``
     is exactly 60.0, in both orders. Red when: ``set`` adds to the reading
     instead of replacing it, or the clock is not what ``time.monotonic``
@@ -63,8 +65,8 @@ def test_frozen_readings_set_60_apart_subtract_to_exactly_60(
     clock = Clock(monkeypatch, frozen=True, start=start)
     zero = clock()
     assert zero == float(start)
-    clock.set(59.9)
-    clock.set(59.95)
+    clock.set(59.5)
+    clock.set(60.0 - GRID)
     assert clock() < start + 60.0
     clock.set(60.0)
     sixty = clock()
@@ -111,7 +113,7 @@ def test_frozen_advance_is_refused_and_moves_nothing(monkeypatch: pytest.MonkeyP
     assert clock() == 8143.0
 
 
-def test_moving_readings_are_quantized_and_advance_is_exact(
+def test_moving_readings_are_rounded_down_to_the_grid_and_advance_is_exact(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Moving, with a fake real clock at 8133.4: the start is 8134.0. The
@@ -198,3 +200,31 @@ def test_a_reading_at_or_above_2_to_the_33_is_refused(
         else:
             with pytest.raises(REFUSED):
                 clock()
+
+
+def test_frozen_set_off_the_grid_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Frozen from 1000, ``set(0.1)`` raises ``ValueError`` (0.1 is not a
+    multiple of 2**-20) and the reading does not change. Without the check,
+    ``set(0.1)`` and ``set(60.1)`` read 59.999999999999886 apart. Partner:
+    ``set(60.0 - 2**-20)`` and ``set(0.5)`` are accepted and read start plus
+    that value exactly. Red when: ``set`` has no grid check, or the check
+    refuses a value that IS on the grid."""
+    clock = Clock(monkeypatch, frozen=True, start=1000)
+    with pytest.raises(ValueError):
+        clock.set(0.1)
+    assert clock() == 1000.0
+    clock.set(60.0 - GRID)
+    assert clock() == 1000.0 + (60.0 - GRID)
+    assert clock() - 1000.0 == 60.0 - GRID
+    clock.set(0.5)
+    assert clock() == 1000.5
+
+
+def test_a_start_at_2_to_the_33_is_refused_when_the_clock_is_made(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``Clock(monkeypatch, frozen=True, start=2**33)`` raises ``ValueError``
+    as it is made, before any reading (2**33 - 1 is accepted: see the test
+    above). Red when: the start is not checked when the clock is made."""
+    with pytest.raises(ValueError):
+        Clock(monkeypatch, frozen=True, start=2**33)

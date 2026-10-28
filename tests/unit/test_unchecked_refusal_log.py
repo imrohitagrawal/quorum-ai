@@ -42,7 +42,7 @@ from uuid import uuid4
 import pytest
 from fastapi.testclient import TestClient
 from tests.end_sessions_harness import plant_row
-from tests.exact_clock import Clock
+from tests.exact_clock import GRID, Clock
 from tests.unchecked_harness import (
     ACTIVE,
     FailingConnection,
@@ -159,32 +159,34 @@ def test_t31_the_window_is_60_monotonic_seconds_from_the_last_line(
 ) -> None:
     """T31 (FM-3.5). On the monotonic clock, frozen and SET to each time (not
     stepped, so no sum of steps falls short of 60.0): a line at 0; silence
-    for a refusal at 59.9 s and for a ``flush()`` at 59.95 s; a ``flush()`` at
-    exactly 60.0 s reports the one suppressed; silence for a refusal at
-    119.9 s (59.9 s after that line, 119.9 s after the first); a refusal at
-    120.0 s (60 s after the last line) logs at once, reporting both. Run from
-    the real reading and from 8133, a start where 59.9 + 0.05 + 0.05 summed
-    onto the clock reads 59.99999999999818 s after it. Red when: wall-clock
-    time is used (the patched clock would not move it), the window is not
-    60 s, the window is exclusive (``>`` for ``>=``), it is measured from the
-    first line or from the last refusal rather than the last line, or the
-    test steps the clock instead of setting it (the 8133 case)."""
+    for a refusal at 59.5 s and for a ``flush()`` at 60.0 - 2**-20 s (one
+    grid step under 60); a ``flush()`` at exactly 60.0 s reports the one
+    suppressed; silence for a refusal at 119.5 s (59.5 s after that line,
+    119.5 s after the first); a refusal at 120.0 s (60 s after the last line)
+    logs at once, reporting both. Run from the real reading and from 8133,
+    the start where the OLD test's steps of 59.9 + 0.05 + 0.05 read
+    59.99999999999818 s after it. Red when: wall-clock time is used (the
+    patched clock would not move it), the window is shorter than 60 s by a
+    grid step (2**-20 s) or more, or longer than 60 s, the window is
+    exclusive (``>`` for ``>=``), it is measured from the first line or from
+    the last refusal rather than the last line, or ``set`` adds to the
+    reading instead of replacing it."""
     caplog.set_level(logging.WARNING)
     clock = Clock(monkeypatch, frozen=True, start=start)
     limiter = auth._UncheckedRefusals()
     limiter.note("not_read")
     assert _lines(caplog) == [(0, 1, 1)]
-    clock.set(59.9)
+    clock.set(59.5)
     limiter.note("not_read")
-    clock.set(59.95)
+    clock.set(60.0 - GRID)
     limiter.flush()
-    assert _lines(caplog) == [(0, 1, 1)], "silence inside the window"
+    assert _lines(caplog) == [(0, 1, 1)], "silence inside the window, one grid step under 60"
     clock.set(60.0)
     limiter.flush()
     assert _lines(caplog) == [(0, 1, 1), (0, 1, 1)]
-    clock.set(119.9)
+    clock.set(119.5)
     limiter.note("not_read")
-    assert _lines(caplog) == [(0, 1, 1), (0, 1, 1)], "59.9 s after the last line: silence"
+    assert _lines(caplog) == [(0, 1, 1), (0, 1, 1)], "59.5 s after the last line: silence"
     clock.set(120.0)
     limiter.note("not_ready")
     assert _lines(caplog) == [(0, 1, 1), (0, 1, 1), (1, 1, 2)]
