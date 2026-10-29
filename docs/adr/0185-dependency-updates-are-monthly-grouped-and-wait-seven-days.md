@@ -37,8 +37,8 @@ for `88f618d`, run 40868586655), so the number of update pull requests matters.
 
 - **Weekly or ungrouped updates.** Each pull request costs a full CI run; up to three grouped
   pull requests a month keep the cost bounded.
-- **No wait.** A malicious or broken release is usually found within days; proposing it the day
-  it appears gives that no time.
+- **No wait.** Proposing a release the day it appears leaves no time for a malicious or broken
+  release to be found and withdrawn before it reaches a pull request.
 
 ## Consequences
 
