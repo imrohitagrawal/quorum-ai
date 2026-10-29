@@ -2,7 +2,8 @@
 
 ## Status
 
-Accepted — 2026-10-29, board rows W118 and W122.
+Accepted — 2026-10-29, board rows W118 and W122. It carries out the product owner's decision
+CHG-105.
 
 **Supersedes**, without editing it (`docs/README.md`: "superseded never edited"): ADR-0185,
 decision 1, the clause "major versions are ignored". The rest of ADR-0185 stands.
