@@ -3,8 +3,8 @@
 Red when: ``.github/CODEOWNERS`` holds a placeholder owner or loses its
 catch-all rule; ``.github/dependabot.yml`` misses a lock file the tree has (the
 root ``uv.lock``, a tracked ``package-lock.json``, or the workflows folder), or
-an entry stops being monthly, grouped to minor and patch updates, with
-majors ignored and a 7-day cooldown; ``SECURITY.md`` stops pointing at this
+an entry stops being monthly, grouped to minor and patch updates with a
+7-day cooldown, or ignores major versions (ADR-0186); ``SECURITY.md`` stops pointing at this
 repository's private vulnerability report form; a setting that
 ``src/product_app/config.py`` hides from ``repr`` or types as ``SecretStr`` (a
 secret), or a ``secrets.*`` a workflow reads, is missing from the "Replacing a
@@ -96,9 +96,13 @@ def test_every_dependabot_entry_is_monthly_grouped_and_waits_seven_days() -> Non
         assert group["patterns"] == ["*"], name
         assert group["update-types"] == ["minor", "patch"], name
         assert update["cooldown"]["default-days"] == 7, name
-        assert {"dependency-name": "*", "update-types": ["version-update:semver-major"]} in update[
-            "ignore"
-        ], name
+        # ADR-0186: a major is never ignored, so Dependabot opens it on its own.
+        # A rule with no update-types ignores every update, majors included.
+        for rule in update.get("ignore", []):
+            types = rule.get("update-types")
+            assert types and "version-update:semver-major" not in types, (name, rule)
+        # The default limit, 5, would hold back a sixth open major.
+        assert update["open-pull-requests-limit"] >= 10, name
 
 
 def test_security_policy_points_at_the_private_report_form() -> None:
