@@ -19,7 +19,8 @@ CI = Path(__file__).resolve().parents[2] / ".github" / "workflows" / "ci.yml"
 
 def _steps() -> list[dict[str, Any]]:
     jobs = yaml.safe_load(CI.read_text(encoding="utf-8"))["jobs"]
-    return jobs["validate-and-test"]["steps"]
+    steps: list[dict[str, Any]] = jobs["validate-and-test"]["steps"]
+    return steps
 
 
 def test_the_secret_scan_is_the_step_right_after_the_install() -> None:
