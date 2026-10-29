@@ -1,0 +1,46 @@
+# Grouped, monthly minor and patch updates for every lock file in the
+# repository (W118). Major versions are left out: each is its own work item.
+# Each waits 7 days after a release before it is proposed (zizmor's
+# dependabot-cooldown audit). Alerts for known vulnerabilities are separate
+# from this schedule.
+version: 2
+updates:
+  - package-ecosystem: "uv"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    cooldown:
+      default-days: 7
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+    groups:
+      python:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+  - package-ecosystem: "npm"
+    directory: "/e2e"
+    schedule:
+      interval: "monthly"
+    cooldown:
+      default-days: 7
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+    groups:
+      e2e:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    cooldown:
+      default-days: 7
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+    groups:
+      actions:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]

@@ -217,9 +217,9 @@ the other 3 appear only as example text in the requirement-traceability gate's o
   The old release blocker "any query execution path available to anonymous users" no longer applies.
 - **CTRL-012, "secret scanning, dependency scanning, SAST, and redaction checks before release".**
   Taken one part at a time: the secret scan runs on every pull request (SC-82); the library audit runs
-  on every pull request (SC-83); log and Sentry redaction are tested (SC-75, SC-76); no SAST tool
-  (static code analysis such as CodeQL or Semgrep) runs anywhere, and ruff's security rules are not
-  turned on (row W92).
+  on every pull request (SC-83); log and Sentry redaction are tested (SC-75, SC-76); CodeQL's default
+  setup (static code analysis) is on as a repository setting since 2026-10-29, advisory, not a
+  required check; ruff's security rules are not turned on (row W92).
 - **CTRL-005, "redact from … prompts … analytics".** No step redacts prompts: the key is simply never
   put into one, and no test checks that (SC-77). There is no analytics code.
 - **CTRL-008, warnings before execution.** In place (SC-68). The page gap of row W100 was fixed by W100 (ADR-0173).

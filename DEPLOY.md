@@ -35,7 +35,8 @@ This creates the Fly app (`quorum-ai`) but does not deploy yet. If it asks for a
 ### 3. Set production secrets
 
 ```bash
-# Required: secret used to sign session tokens. Generate a random value:
+# Required: signs cost-confirmation tokens and keys the anonymous spend records
+# (see "Rotate the token secret" below). Generate a random value:
 fly secrets set QUORUM_TOKEN_SECRET="$(openssl rand -hex 32)"
 
 # Optional:  API key for live LLM execution.
@@ -209,12 +210,17 @@ fly scale vm shared-cpu-2x
 
 ### Rotate the token secret
 
-**Rotating this is cheap — it does NOT log anyone out.** `QUORUM_TOKEN_SECRET`
-signs cost-confirmation tokens, which live for `CONFIRMATION_TOKEN_TTL`
-(5 minutes, `src/product_app/costs.py`). Rotating invalidates only the
-confirmation tokens outstanding in that window; the worst a user sees is that
-one cost-confirmation click needs repeating. Sessions are unaffected — they do
-not use this secret (see the table below).
+**Rotating it does NOT log anyone out, but it restarts every network's
+anonymous allowance.** `QUORUM_TOKEN_SECRET` signs cost-confirmation tokens,
+which live for `CONFIRMATION_TOKEN_TTL` (5 minutes, `src/product_app/costs.py`);
+those outstanding in that window stop working, so one confirmation click may
+need repeating. It also keys each network's anonymous daily allowance and a
+deleted account's 24-hour spend carry (`src/product_app/session_store.py`):
+after a rotation every network's allowance, and its running total held in
+memory, starts again (ADR-0144), and an
+account deleted before it and re-created after it starts fresh (ADR-0136).
+Sessions and live accounts' allowances are unaffected. The full list of
+secrets is in `docs/84-incident-response.md`.
 
 ```bash
 # Generate a new secret
@@ -412,7 +418,7 @@ Two caveats, read from the help text of flyctl 0.4.113, not tested:
 
 | Variable | Required in prod? | Source | Notes |
 |----------|-------------------|--------|-------|
-| `QUORUM_TOKEN_SECRET` | **Yes** | `fly secrets set` | Random 32+ byte hex. HMAC key for **cost-confirmation** tokens (`CostEstimationService`, `src/product_app/costs.py`) — **not** sessions. App refuses to start if missing. |
+| `QUORUM_TOKEN_SECRET` | **Yes** | `fly secrets set` | Random 32+ byte hex. HMAC key for **cost-confirmation** tokens (`CostEstimationService`, `src/product_app/costs.py`) and for each network's anonymous spend key and a deleted account's spend carry (`src/product_app/session_store.py`) — **not** sessions. App refuses to start if missing. See "Rotate the token secret" above. |
 | `RUNTIME_ENVIRONMENT` | **Yes** | `fly.toml` (env) | Set to `production`. Triggers stricter validation. |
 | `SESSION_COOKIE_SECURE` | **Yes** | `fly.toml` (env) | `true` in production. App refuses to start if `false` in prod. |
 | `ACCOUNT_LEGACY_HEADER_ENABLED` | No | `fly.toml` (env) | `false` (default). Allows old clients to send `X-Account-Id` header. Disabled by default for security. |

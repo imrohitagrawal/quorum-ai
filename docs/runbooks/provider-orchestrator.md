@@ -255,10 +255,14 @@ A typical live query run emits four `provider_initial_answer_completed` events (
 
 ### Rotate keys
 
-1. Generate a new key at the provider (, Tavily).
-2. `fly secrets set OPENROUTER_API_KEY=sk-new-key --app quorum-ai`
+The order (revoke first when a key leaked) and every secret's effects are in
+`docs/84-incident-response.md`, "Replacing a secret".
+
+1. Generate a new key at the provider (OpenRouter, Tavily).
+2. `fly secrets set OPENROUTER_API_KEY="$NEW_KEY" --app quorum-ai`, with the key in a variable,
+   never typed as a literal.
 3. **Verify the secret changed:** `fly secrets list --app quorum-ai` — check the digest.
-4. **Verify with a live run:** confirm `live_count=4`, `fallback_used=False`, non-zero `token_usage`.
+4. **Verify with a live run** (a paid call, so only with the owner's approval): confirm `live_count=4`, `fallback_used=False`, non-zero `token_usage`.
 5. **Lesson from #26:** never skip step 3 — a `fly secrets set` can silently fail to apply.
 
 ### Run a scheduled job manually

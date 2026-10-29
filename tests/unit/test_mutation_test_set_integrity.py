@@ -170,6 +170,11 @@ DESELECTED_FROM_THE_MUTANT_RUN = (
     # only `scripts/security_scan.py` (stdlib imports only) and imports nothing
     # from `product_app`, so it can kill no `src/` mutant.
     "tests/unit/test_security_scan_w70.py",
+    # W118 (ADR-0185). Asks git which lock files are tracked and reads root
+    # files (CODEOWNERS, SECURITY.md, dependabot.yml) that mutmut does not copy.
+    # It imports nothing from the application and only parses config.py as
+    # text, so it can kill no `src/` mutant.
+    "tests/unit/test_w118_repository_hygiene_files.py",
 )
 
 MARKER = "repo_introspection"
