@@ -376,6 +376,10 @@
   const demoModeBanner = el("demo-mode-banner");
   const demoModeTarget = demoModeBanner ? demoModeBanner.querySelector("[data-demo-mode-target]") : null;
   const demoModeTitle = el("demo-mode-banner-title");
+  // W127 (F10): the transcript caption as the template ships it, put back on
+  // a run whose rounds are not peer-shaped (``renderTranscript``).
+  const transcriptCaptionNode = document.querySelector(".transcript-debate-caption");
+  const TRANSCRIPT_CAPTION_SHIPPED = transcriptCaptionNode ? transcriptCaptionNode.textContent : "";
   const infoTooltip = el("info-tooltip");
   // Screen 03 (cost gate) elements. ``renderCostGate`` fills these from
   // ``cost_estimate.breakdown``; the confirm button reuses ``proceedWithRun``.
@@ -519,7 +523,18 @@
     // Slice 4a (05 Result): guards the terminal poll branch so a re-entrant
     // slow poll response cannot double-fire the completion toast + focus (C-A).
     // Reset to false on every run start (proceedWithRun, C-C).
+    // W127 (ADR-0187): now a mirror of ``runScope.terminalHandled``, written
+    // only by ``beginRunScope`` and ``finishRun``; the guards read the scope.
     terminalHandled: false,
+    // W127 (ADR-0187): the run the page is showing. ``{id, runId,
+    // terminalHandled, closed}``, REPLACED (never reset in place) by
+    // ``beginRunScope`` on every move that changes which run is current, so
+    // an answer captured against an older scope can always tell it is late.
+    // Navigation never clears it: Back to a kept result still names its run.
+    runScope: null,
+    // W127 (F8): increases on every session-list click; a restore's answer is
+    // drawn only while its own click is the latest one.
+    restoreToken: 0,
     liveElapsedBaseMs: 0,
     liveElapsedStamp: 0,
     liveElapsedTimer: null,
@@ -642,9 +657,131 @@
         target.querySelector('h1[tabindex="-1"]') || (name === "composer" ? queryTextarea : null);
       if (heading) heading.focus({ preventScroll: true });
     }
+    // W127 (ADR-0187): which run the visible view belongs to, derived here
+    // on every view change rather than stored, so no path can forget it.
+    syncPageRunId(name);
+    // W127: the composer's amounts are painted when it comes on screen (and
+    // on every input change while it is there), so arriving at it never shows
+    // an estimate priced for other inputs.
+    if (name === "composer") updatePerSlotEstimates();
     syncViewHistory(name);
     // W48 (ADR-0145 decision 2): each hint belongs to one view.
     syncHelpHints();
+  }
+
+  // ---------------------------------------------------------------------------
+  // W127 (ADR-0187) — one run scope
+  // ---------------------------------------------------------------------------
+  //
+  // The workspace is one page, so every region a run fills survives into the
+  // next run unless something clears it, and an answer that arrives late
+  // used to be drawn for whichever run was current by then. Every region a
+  // run fills carries ``data-run-scope`` in workspace.html, and the renderer
+  // that fills it sets ``data-run-id`` from the result it was given, at the
+  // moment it writes. ``<html data-run-id>`` names the run the visible view
+  // belongs to. The e2e invariant (run-scope.spec.ts) checks after every
+  // transition that each visible region with text carries that same id.
+
+  const RUN_VIEWS = new Set(["live-run", "result", "transcript"]);
+
+  function activeViewName() {
+    const shell = document.getElementById("main-content");
+    return (shell && shell.dataset.activeView) || null;
+  }
+
+  // ``<html data-run-id>``: the scope's run on the live-run, result and
+  // transcript views; absent on the composer, cost confirmation and landing,
+  // which show no run.
+  function syncPageRunId(viewName) {
+    const root = document.documentElement;
+    const scope = state.runScope;
+    if (RUN_VIEWS.has(viewName) && scope && scope.runId) {
+      root.dataset.runId = scope.runId;
+    } else {
+      delete root.dataset.runId;
+    }
+  }
+
+  // The run a renderer is drawing. Only ``query_run_id``: the correlation id
+  // is a different value, and a region tagged with it would read as foreign.
+  function runIdOf(result) {
+    return (result && result.query_run_id) || null;
+  }
+
+  // Called by each renderer right after it writes a ``[data-run-scope]``
+  // region, never centrally: a region nobody re-rendered keeps no tag, which
+  // is exactly what the invariant is there to catch.
+  function tagRunRegion(node, runId) {
+    if (!node) return;
+    if (runId) node.dataset.runId = runId;
+    else delete node.dataset.runId;
+  }
+
+  // Start the scope of ``runId``: a new run, an adopted one ("Go to run", the
+  // boot path) or a restored one. Replaces ``state.runScope`` (an answer
+  // captured against the old one is then late by identity), drops everything
+  // the page kept for the previous run, untags every run-scoped region and
+  // empties the live view's run content, so nothing from that run can show
+  // under this one. ``question`` is this run's own question when the caller
+  // knows it; an adopted run's answer carries none
+  // (``ActiveQueryRunResponse``), so it shows "—" rather than whatever the
+  // composer holds. ``finished`` marks a restored run, which is never polled.
+  function beginRunScope(runId, question, { finished = false } = {}) {
+    const previous = state.runScope;
+    state.runScope = {
+      id: (previous && Number.isInteger(previous.id) ? previous.id : 0) + 1,
+      runId: runId || null,
+      terminalHandled: finished,
+      closed: false,
+    };
+    state.currentRunId = runId || null;
+    state.terminalHandled = finished;
+    state.liveQueryText = question ? String(question) : "";
+    state.lastLiveStatus = null;
+    state.liveSig = { stage: null, debate: null, models: null, fallback: null, notices: null };
+    state.liveElapsedBaseMs = 0;
+    state.liveElapsedStamp = nowMs();
+    // Copy/Export, the transcript snapshot and the demo banner's cache all
+    // belong to the previous run.
+    state.lastResult = null;
+    state.lastResultSummary = null;
+    state.lastResultMarkdown = null;
+    state.lastResultRunId = null;
+    state.lastDemoMode = null;
+    for (const node of qsa("[data-run-scope]")) node.removeAttribute("data-run-id");
+    // The live view's run content, back to its template state. Its static
+    // children (the eyebrows, the buttons) are not run content and stay.
+    const liveContent = [
+      "live-stage-strip",
+      "live-debate",
+      "live-model-status",
+      "live-cap",
+      "live-notices-list",
+      "live-fallback",
+    ];
+    for (const id of liveContent) {
+      const node = el(id);
+      if (node) node.replaceChildren();
+    }
+    for (const id of ["live-notices", "live-fallback"]) {
+      const node = el(id);
+      if (node) node.hidden = true;
+    }
+    for (const id of ["live-query", "live-corr"]) {
+      const node = el(id);
+      if (node) node.textContent = "";
+    }
+    const statusText = el("live-status-text");
+    if (statusText) statusText.textContent = "Starting…";
+    // A new scope is a run in progress until its first answer says otherwise.
+    const stopBtn = el("live-stop");
+    if (stopBtn) {
+      stopBtn.hidden = false;
+      stopBtn.disabled = false;
+    }
+    const liveNewQuestion = el("live-new-question");
+    if (liveNewQuestion) liveNewQuestion.hidden = true;
+    syncPageRunId(activeViewName());
   }
 
   // ---------------------------------------------------------------------------
@@ -857,6 +994,9 @@
     const audience = el("follow-up-context-audience");
     if (audience) audience.textContent = followUpAudience();
     if (line) line.hidden = !context;
+    // W127 (F9): the context is part of what an estimate priced, so the
+    // running total follows it.
+    updatePerSlotEstimates();
   }
 
   // W37 review round 1: a card action that starts something new ("Start a
@@ -2040,20 +2180,92 @@
   // Recompute the pre-run per-slot estimates from the current query + model
   // selection and paint them onto the slot cards' estimate cells. Updates only
   // the ``.model-slot-estimate`` text (never rebuilds the cards) so a focused
-  // ``<select>`` or the user's typing is never disrupted. A live estimate
-  // response later overwrites ``state.perModelEstimates`` with the authoritative
-  // server figures (see ``estimateRun``); this owns the composer pre-run view.
+  // ``<select>`` or the user's typing is never disrupted.
+  //
+  // W127 (ADR-0187, F9): the server's estimate is shown, in the cells and in
+  // the running total, only while the inputs on screen are the inputs it
+  // priced (``renderComposerTotal``); otherwise the cells show this client
+  // figure and the total "—". Its ``by_model`` rows used to be laid onto
+  // the cards BY POSITION whatever the panel was by then, so a model swapped
+  // while the estimate loaded showed the priced panel's costs on other cards.
+  // Painted only while the composer is on screen; ``setView("composer")``
+  // paints on arrival, so a box emptied behind a result is priced afresh
+  // when the user comes back to it.
   function updatePerSlotEstimates() {
     if (!modelInputs) return;
-    const modelIds = getModelIds();
-    state.perModelEstimates = computePerSlotEstimatesUsd(
-      modelIds,
-      queryTextarea ? queryTextarea.value : "",
-    );
+    const view = activeViewName();
+    if (view && view !== "composer") return;
+    // Until ``refreshDefaults`` draws the slot cards, the template's
+    // placeholders carry no model ids to read and no cells to paint (and the
+    // total still reads the template's "—").
     const cells = modelInputs.querySelectorAll(".model-slot-estimate");
+    if (!cells.length) return;
+    const modelIds = getModelIds();
+    const priced = renderComposerTotal();
+    const byModel =
+      priced && state.currentEstimate.cost_estimate.breakdown
+        ? state.currentEstimate.cost_estimate.breakdown.by_model
+        : null;
+    if (Array.isArray(byModel)) {
+      // ``by_model`` emits the slot rows first, in slot order, so they map to
+      // slots BY POSITION — keying by model_id would collapse two slots that
+      // pick the same model.
+      //
+      // ALLOWLIST, NOT DENYLIST, and the difference is load-bearing. This
+      // used to read ``kind !== "synthesis"`` — "everything that is not the
+      // writer row is a slot". That stopped being true when the estimate
+      // gained a priced Layer-B advisory row (ADR-0064): the server now emits
+      // SIX rows when one is configured, and the denylist let the sixth into
+      // an array that is indexed by slot position. Naming the kinds that ARE
+      // slots cannot rot the same way.
+      state.perModelEstimates = byModel
+        .filter((row) => row.kind === "model")
+        .map((row) => row.usd);
+    } else {
+      state.perModelEstimates = computePerSlotEstimatesUsd(
+        modelIds,
+        queryTextarea ? queryTextarea.value : "",
+      );
+    }
     cells.forEach((cell, index) => {
       cell.textContent = perModelEstimateText(index);
     });
+  }
+
+  // W127 (ADR-0187, F9): the running total beside "Run now", DERIVED: the
+  // current estimate's amount while the inputs on screen equal the inputs it
+  // priced (``state.pricedRun``: the trimmed question, the ordered model ids,
+  // quick mode and both follow-up values, every one of which enters the
+  // estimate request), else "—", which is what the template ships. It used
+  // to be written once by ``estimateRun`` and reset only by the high-stakes
+  // hold, so "New question", an edit, a swapped model, the quick toggle or a
+  // dropped follow-up left an amount priced for something else. Returns
+  // whether the inputs are the priced ones, which the slot cells follow too.
+  // The comparison is written out here, not in a helper: the unit test runs
+  // this function on its own (tests/unit/test_w127_run_scope_functions.py).
+  function renderComposerTotal() {
+    const out = composerTotalEstimate || el("composer-total-estimate");
+    const priced = state.pricedRun;
+    const estimate = state.currentEstimate;
+    let same = Boolean(priced && estimate && estimate.cost_estimate);
+    if (same) {
+      const text = queryTextarea ? queryTextarea.value.trim() : "";
+      const ids = getModelIds();
+      const pricedIds = Array.isArray(priced.modelIds) ? priced.modelIds : [];
+      const context = state.followUpContext || null;
+      const pricedContext = priced.context || null;
+      same =
+        text === priced.queryText &&
+        ids.length === pricedIds.length &&
+        ids.every((id, i) => id === pricedIds[i]) &&
+        Boolean(state.quickMode) === Boolean(priced.quick) &&
+        (context && pricedContext
+          ? context.prior_question === pricedContext.prior_question &&
+            context.prior_synthesis === pricedContext.prior_synthesis
+          : !context && !pricedContext);
+    }
+    if (out) out.textContent = same ? gateUsd(estimate.cost_estimate.estimated_cost_usd) : "—";
+    return same;
   }
 
   // Slice 1 (02 Composer): the four model slots render as a 2x2 grid of
@@ -2493,6 +2705,7 @@
       return item;
     });
     strip.replaceChildren(...items);
+    tagRunRegion(strip, runIdOf(result));
   }
 
   function renderLiveDebateCard(round) {
@@ -2589,7 +2802,15 @@
     host.hidden = quick;
     const caption = document.querySelector(".live-debate-caption");
     if (caption) caption.hidden = quick;
-    if (quick) return;
+    if (quick) {
+      // W127 (F6): emptied as well as hidden. ``hidden`` alone did not hide
+      // it (``.live-debate`` sets a display, which beat the attribute until
+      // its ``[hidden]`` rule was added), so a quick run after a panel run
+      // showed that run's round cards as its own.
+      host.replaceChildren();
+      tagRunRegion(host, runIdOf(result));
+      return;
+    }
     const debate = (result.result && result.result.debate_outputs) || [];
     const byRound = new Map(debate.map((r) => [r.round_number, r]));
     const stages = (result.progress && result.progress.stages) || [];
@@ -2620,12 +2841,13 @@
       );
     });
     host.replaceChildren(...cards);
+    tagRunRegion(host, runIdOf(result));
   }
 
   // Honest model status: a slot NOT yet in model_answers = "pending"; present
   // = "done" (completed, with real latency) or "failed"; a fallback answer is
   // tagged "search fallback". Nothing else (no "queued"/"responding"/"live").
-  function renderLiveModelStatus(slots, answers) {
+  function renderLiveModelStatus(slots, answers, runId) {
     const host = el("live-model-status");
     if (!host) return;
     const bySlot = new Map(answers.map((a) => [a.slot_number, a]));
@@ -2693,12 +2915,13 @@
       return row;
     });
     host.replaceChildren(...rows);
+    tagRunRegion(host, runId);
   }
 
   // Amber search-fallback disclosure — hidden unless some answer used a
   // fallback. Prefers the server ``provider_notice`` text, else an honest
   // default (no provider brand names fabricated).
-  function renderLiveFallback(answers) {
+  function renderLiveFallback(answers, runId) {
     const host = el("live-fallback");
     if (!host) return;
     const fallbackAnswer = answers.find(
@@ -2711,6 +2934,7 @@
     );
     if (sig === state.liveSig.fallback) return;
     state.liveSig.fallback = sig;
+    tagRunRegion(host, runId);
     if (!fallbackAnswer) {
       host.hidden = true;
       host.replaceChildren();
@@ -2810,6 +3034,7 @@
     reconcile.textContent = "Final cost reconciles on the receipt.";
     nodes.push(reconcile);
     host.replaceChildren(...nodes);
+    tagRunRegion(host, runIdOf(result));
   }
 
   // Fix 1: surface failure notices inside the live-run card. While the live
@@ -2850,6 +3075,7 @@
     });
     if (sig === state.liveSig.notices) return;
     state.liveSig.notices = sig;
+    tagRunRegion(host, runIdOf(result));
     const hasContent = liveNoticesHaveContent(result);
     if (!hasContent) {
       host.hidden = true;
@@ -2880,6 +3106,7 @@
     if (!result) return;
     const status = result.status || "accepted";
     const isTerminal = LIVE_TERMINAL.has(status);
+    const runId = runIdOf(result);
 
     // Header status pill.
     const pill = el("live-status-pill");
@@ -2915,17 +3142,18 @@
       } else {
         delete corr.dataset.correlationId;
       }
+      tagRunRegion(corr, runId);
     }
 
     // Running-query echo. The poll payload carries no query_text, so use the
-    // value captured at run start (falling back to the composer field).
+    // value captured at run start. W127 (W49): no fallback to the composer
+    // box any more. A run adopted through "Go to run" has no question the
+    // page knows, and the box then holds another question entirely, which
+    // was shown as this run's; "—" is honest.
     const queryEl = el("live-query");
     if (queryEl) {
-      const queryText =
-        state.liveQueryText ||
-        (queryTextarea ? queryTextarea.value.trim() : "") ||
-        "";
-      queryEl.textContent = queryText || "—";
+      queryEl.textContent = state.liveQueryText || "—";
+      tagRunRegion(queryEl, runId);
     }
 
     // Live elapsed ticker. Store the REAL server elapsed + a local timestamp;
@@ -2969,8 +3197,8 @@
 
     renderLiveStageStrip(result, answersReceived);
     renderLiveDebate(result);
-    renderLiveModelStatus(slots, answers);
-    renderLiveFallback(answers);
+    renderLiveModelStatus(slots, answers, runId);
+    renderLiveFallback(answers, runId);
     renderLiveCap(result);
     renderLiveNotices(result);
   }
@@ -3684,6 +3912,7 @@
       renderQuickResult(result, res, question);
       // W48: a quick answer has no trust score, so no trust-score hint.
       syncHelpHints();
+      tagResultRegions(result, true);
       return;
     }
     // A panel run after a quick one: show the three surfaces nothing else
@@ -3748,6 +3977,30 @@
       // band had just dropped — the #128 defect exactly.
       noLiveAnswers,
     });
+    tagResultRegions(result, false);
+  }
+
+  // W127 (ADR-0187): the result view's run-scoped regions, tagged by
+  // ``renderResult`` with the run it was given once it has written them. A
+  // panel run writes every one but the quick region (which it only hides), a
+  // quick run writes its own region and empties the panel's surfaces, so each
+  // tags exactly what it wrote.
+  const RESULT_RUN_REGIONS = [
+    "result-completion-text",
+    "result-degraded",
+    "result-question",
+    "result-meta",
+    "result-receipt",
+    "result-verdict",
+    "result-trust",
+    "result-trust-score",
+    "result-debate",
+    "result-synthesis",
+  ];
+  function tagResultRegions(result, quick) {
+    const runId = runIdOf(result);
+    for (const id of RESULT_RUN_REGIONS) tagRunRegion(el(id), runId);
+    if (quick) tagRunRegion(el("result-quick"), runId);
   }
 
   // W5 (ADR-0128). The result surfaces a quick answer hides.
@@ -6629,11 +6882,19 @@
     const modelAnswers = Array.isArray(res.model_answers) ? res.model_answers : [];
     const debate = Array.isArray(res.debate_outputs) ? res.debate_outputs : [];
     const isConsensus = isConsensusResult(result);
+    const runId = runIdOf(result);
+
+    // W127 (ADR-0187, F5): the run-level disclosure of THIS run, drawn from
+    // the result shown rather than left as the last polled run's.
+    renderDemoModeBanner(result, { force: true });
 
     // Question echo (serif h1) — the submitted question, never the live
     // textarea (a rehydrated run holds unrelated in-progress text).
     const heading = el("transcript-heading");
-    if (heading) heading.textContent = state.liveQueryText || "The debate";
+    if (heading) {
+      heading.textContent = state.liveQueryText || "The debate";
+      tagRunRegion(heading, runId);
+    }
 
     // The debate caption is STATIC in workspace.html, and its shipped text
     // ("Quorum does not record a per-model, line-by-line transcript") is false
@@ -6650,8 +6911,13 @@
       "Below is the round-level critique; the per-model detail is recorded and " +
         "itemised on the receipt.",
     );
-    if (transcriptCaption && transcriptPeerSentence) {
-      transcriptCaption.textContent = transcriptPeerSentence;
+    // W127 (F10): written on EVERY render. It used to be written only when
+    // the run was peer-shaped, so a moderator-shaped run kept an earlier
+    // peer run's sentence; such a run gets the shipped sentence back, which
+    // is true of it.
+    if (transcriptCaption) {
+      transcriptCaption.textContent = transcriptPeerSentence || TRANSCRIPT_CAPTION_SHIPPED;
+      tagRunRegion(transcriptCaption, runId);
     }
 
     // Meta line: round count + model count + optional debate-stage ESTIMATE.
@@ -6684,6 +6950,7 @@
         parts.push(`debate ~${formatUsd(debateUsd, { suffix: false })} est.`);
       }
       metaEl.textContent = parts.join(" · ");
+      tagRunRegion(metaEl, runId);
     }
 
     // Status chip — GREEN only on real consensus (avoids the banned "converged"
@@ -6717,6 +6984,7 @@
       if (isConsensus) chipText = "Consensus reached";
       else if (panelReading === "split") chipText = "Panel divided";
       statusEl.append(dot, mkEl("span", null, chipText));
+      tagRunRegion(statusEl, runId);
     }
 
     // Opening positions — REAL per-model data.
@@ -6732,6 +7000,7 @@
           openings.appendChild(buildTranscriptOpening(answer));
         }
       }
+      tagRunRegion(openings, runId);
     }
 
     // The debate — round-level critiques only.
@@ -6747,6 +7016,7 @@
           rounds.appendChild(buildTranscriptRound(round));
         }
       }
+      tagRunRegion(rounds, runId);
     }
 
     // Footer link — green treatment ONLY on real consensus.
@@ -7108,14 +7378,22 @@
     // composer's question, so an estimate still loading for it is dropped —
     // its late answer must not open the cost confirmation over this result.
     if (state.submittingRun) dropInFlightEstimate();
-    state.currentRunId = runId;
-    state.terminalHandled = true;
     stopPolling();
     setRunning(false);
+    // W127 (ADR-0187, F8): until its answer is accepted, the click changes
+    // nothing on screen: the view, its run and its tags stay as they are. The
+    // answer is drawn only if this is still the latest click and the user is
+    // still on the view they clicked from. Without this, of two quick clicks
+    // whichever GET answered last was drawn, and a click followed by "New
+    // question" was pulled off the composer onto the result.
+    state.restoreToken += 1;
+    const token = state.restoreToken;
+    const viewAtClick = activeViewName();
+    const isCurrent = () => token === state.restoreToken && activeViewName() === viewAtClick;
     // Re-fetch the run to populate lastResult, then render.
     api(`/v1/query-runs/${runId}`, { method: "GET" })
       .then((result) => {
-        state.lastResult = result;
+        if (!isCurrent()) return;
         // THIS run's own question. There is no fallback on purpose: the old one
         // sliced the first model's ANSWER to 120 chars and printed it under
         // "You asked", which is reachable today (goToActiveRun starts polling
@@ -7124,7 +7402,12 @@
         // renderResult, which is honest; a model's answer presented as the
         // user's question is not.
         const question = entry.question ? String(entry.question) : "";
-        state.liveQueryText = question;
+        // The restored run's own scope (it is finished, so never polled).
+        beginRunScope(runId, question, { finished: true });
+        state.lastResult = result;
+        // W127 (F7): the error card of the run on screen before (a failed
+        // or timed-out run) does not belong above this one.
+        clearError();
         // W37 review round 1: text typed for another result must not be sent
         // as a follow-up to this one; the box opens empty, as after a run.
         const nextQuestionBox = el("result-next-input");
@@ -7135,7 +7418,7 @@
         renderSessionTrail();
       })
       .catch((err) => {
-        handleError(err);
+        if (isCurrent()) handleError(err);
       });
   }
 
@@ -7143,96 +7426,106 @@
     return String(str ?? "").replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch] || ch));
   }
 
-  function renderModelPanels(modelAnswers = [], result = null) {
-    // The demo-mode banner (#115: moved into the transcript view's own
-    // markup, above ``#transcript-heading``, so it is actually visible — it
-    // used to sit inside a `.panel.panel-section` that app.css hides on every
-    // view by design). We toggle its ``hidden`` attribute here and update
-    // the body copy. The banner has ``role="alert"`` and
-    // ``aria-live="assertive"`` so screen readers announce it before
-    // the polite model-panel announcements.
-    //
-    // The server now returns per-run ``live_count`` and ``local_count``
-    // so the banner copy can be honest about partial-live runs. Three
-    // states: all-live (hide), all-local (full copy), mixed (partial
-    // copy). The boolean ``result.demo_mode`` is preserved for
-    // back-compat but is no longer the sole signal.
-    //
-    // Pre-run (``refreshDefaults`` calls this with ``result = null``
-    // before any query has been issued) we hide the banner outright
-    // — there are no live/local counts yet, so the mixed branch would
-    // render "null of null model answers" which is dishonest copy.
-    // The pre-run disclosure is the job of the readiness banner.
-    if (demoModeBanner) {
-      if (result == null) {
-        if (!state.lastDemoMode || state.lastDemoMode !== "pre-run") {
-          state.lastDemoMode = "pre-run";
+  // The demo-mode banner (#115: moved into the transcript view's own
+  // markup, above ``#transcript-heading``, so it is actually visible — it
+  // used to sit inside a `.panel.panel-section` that app.css hides on every
+  // view by design). We toggle its ``hidden`` attribute here and update
+  // the body copy. The banner has ``role="alert"`` and
+  // ``aria-live="assertive"`` so screen readers announce it before
+  // the polite model-panel announcements.
+  //
+  // The server now returns per-run ``live_count`` and ``local_count``
+  // so the banner copy can be honest about partial-live runs. Three
+  // states: all-live (hide), all-local (full copy), mixed (partial
+  // copy). The boolean ``result.demo_mode`` is preserved for
+  // back-compat but is no longer the sole signal.
+  //
+  // Pre-run (``refreshDefaults`` calls this with ``result = null``
+  // before any query has been issued) we hide the banner outright
+  // — there are no live/local counts yet, so the mixed branch would
+  // render "null of null model answers" which is dishonest copy.
+  // The pre-run disclosure is the job of the readiness banner.
+  //
+  // W127 (ADR-0187, F5): its own function, so the transcript can draw the
+  // banner from the run it shows (``force``: past the cache, which belongs to
+  // whichever run was polled last). It used to be drawn only from
+  // ``pollRun``, so a restored run's transcript showed the banner of the
+  // last run polled: no disclosure over simulated answers, or a false one
+  // over live ones.
+  function renderDemoModeBanner(result, { force = false } = {}) {
+    if (!demoModeBanner) return;
+    if (result == null) {
+      if (!state.lastDemoMode || state.lastDemoMode !== "pre-run") {
+        state.lastDemoMode = "pre-run";
+        demoModeBanner.hidden = true;
+      }
+    } else {
+      const liveCount = Number.isFinite(result.live_count) ? result.live_count : null;
+      const localCount = Number.isFinite(result.local_count) ? result.local_count : null;
+      // RB-5/D3: the denominator is the TRUE slot count. A slot that FAILED on
+      // the OpenRouter path is counted in NEITHER live_count nor local_count,
+      // so ``live + local`` is < slot count on a provider-failure run. Keying
+      // the "N of M" and the all-live check on ``live + local`` produced the
+      // contradictory "3 of 3 ... remaining 0 from simulation" copy on such a
+      // run (and silently dropped the failed slot). Use the slot count, and
+      // surface the failed slots explicitly.
+      const slotCount =
+        Array.isArray(result.model_slots) && result.model_slots.length
+          ? result.model_slots.length
+          : null;
+      const total =
+        slotCount ?? (liveCount != null && localCount != null ? liveCount + localCount : null);
+      const failedCount =
+        slotCount != null && liveCount != null && localCount != null
+          ? Math.max(0, slotCount - liveCount - localCount)
+          : 0;
+      const readinessState =
+        state.lastReadiness && state.lastReadiness.state ? state.lastReadiness.state : null;
+      const hasFinalSynthesis = Boolean(result.result && result.result.final_synthesis);
+      const globalSpendCeilingReached = Boolean(result.global_spend_ceiling_reached);
+      const spendMeteringUnavailable = Boolean(result.spend_metering_unavailable);
+      const { bannerState, title, message } = computeDemoModeBannerCopy({
+        liveCount,
+        localCount,
+        failedCount,
+        total,
+        readinessState,
+        hasFinalSynthesis,
+        globalSpendCeilingReached,
+        spendMeteringUnavailable,
+      });
+      // #115 (adversarial review): the cache key used to be the coarse
+      // 3-value ``bannerState`` bucket alone, so two DIFFERENT "mixed"
+      // runs in one session (e.g. 2 live/2 simulated, then later 1
+      // live/3 simulated) both hash to "mixed" and the second run's DOM
+      // write was skipped — the banner kept showing the FIRST run's
+      // counts while the user was looking at the second run's transcript.
+      // That was always true of this code, but it was inert before #115
+      // moved the banner out of permanently-hidden markup; once visible,
+      // a stale count is a real, reachable false disclosure (the same
+      // mechanism #199 documents for the readiness banner). Key on the
+      // counts that actually appear in the copy, not just the bucket.
+      const cacheKey = `${bannerState}|${liveCount}|${localCount}|${failedCount}`;
+      if (force || cacheKey !== state.lastDemoMode) {
+        state.lastDemoMode = cacheKey;
+        if (bannerState === "all-live") {
           demoModeBanner.hidden = true;
-        }
-        // Fall through to render the (empty) model grid below.
-      } else {
-        const liveCount = Number.isFinite(result.live_count) ? result.live_count : null;
-        const localCount = Number.isFinite(result.local_count) ? result.local_count : null;
-        // RB-5/D3: the denominator is the TRUE slot count. A slot that FAILED on
-        // the OpenRouter path is counted in NEITHER live_count nor local_count,
-        // so ``live + local`` is < slot count on a provider-failure run. Keying
-        // the "N of M" and the all-live check on ``live + local`` produced the
-        // contradictory "3 of 3 ... remaining 0 from simulation" copy on such a
-        // run (and silently dropped the failed slot). Use the slot count, and
-        // surface the failed slots explicitly.
-        const slotCount =
-          Array.isArray(result.model_slots) && result.model_slots.length
-            ? result.model_slots.length
-            : null;
-        const total =
-          slotCount ?? (liveCount != null && localCount != null ? liveCount + localCount : null);
-        const failedCount =
-          slotCount != null && liveCount != null && localCount != null
-            ? Math.max(0, slotCount - liveCount - localCount)
-            : 0;
-        const readinessState =
-          state.lastReadiness && state.lastReadiness.state ? state.lastReadiness.state : null;
-        const hasFinalSynthesis = Boolean(result.result && result.result.final_synthesis);
-        const globalSpendCeilingReached = Boolean(result.global_spend_ceiling_reached);
-        const spendMeteringUnavailable = Boolean(result.spend_metering_unavailable);
-        const { bannerState, title, message } = computeDemoModeBannerCopy({
-          liveCount,
-          localCount,
-          failedCount,
-          total,
-          readinessState,
-          hasFinalSynthesis,
-          globalSpendCeilingReached,
-          spendMeteringUnavailable,
-        });
-        // #115 (adversarial review): the cache key used to be the coarse
-        // 3-value ``bannerState`` bucket alone, so two DIFFERENT "mixed"
-        // runs in one session (e.g. 2 live/2 simulated, then later 1
-        // live/3 simulated) both hash to "mixed" and the second run's DOM
-        // write was skipped — the banner kept showing the FIRST run's
-        // counts while the user was looking at the second run's transcript.
-        // That was always true of this code, but it was inert before #115
-        // moved the banner out of permanently-hidden markup; once visible,
-        // a stale count is a real, reachable false disclosure (the same
-        // mechanism #199 documents for the readiness banner). Key on the
-        // counts that actually appear in the copy, not just the bucket.
-        const cacheKey = `${bannerState}|${liveCount}|${localCount}|${failedCount}`;
-        if (cacheKey !== state.lastDemoMode) {
-          state.lastDemoMode = cacheKey;
-          if (bannerState === "all-live") {
-            demoModeBanner.hidden = true;
-          } else {
-            if (demoModeTitle) {
-              demoModeTitle.textContent = title;
-            }
-            if (demoModeTarget) {
-              demoModeTarget.textContent = message;
-            }
-            demoModeBanner.hidden = false;
+        } else {
+          if (demoModeTitle) {
+            demoModeTitle.textContent = title;
           }
+          if (demoModeTarget) {
+            demoModeTarget.textContent = message;
+          }
+          demoModeBanner.hidden = false;
         }
+        tagRunRegion(demoModeBanner, runIdOf(result));
       }
     }
+  }
+
+  function renderModelPanels(modelAnswers = [], result = null) {
+    renderDemoModeBanner(result);
     // W4: one card per REQUESTED slot. The run echoes its ``model_slots``; a
     // result-less call (the composer reset) falls back to the default panel.
     const panelModelIds =
@@ -9469,41 +9762,14 @@
       if (generation !== estimateGeneration) return null;
       state.currentEstimate = estimate;
       state.pricedRun = priced;
-      // Slice 1: fan the itemized ``by_model`` breakdown out onto the
-      // slot cards and surface the grand total in the composer footer.
-      // ``by_model`` emits the four slot rows first, in slot order, so we map
-      // them to slots BY POSITION — keying by model_id would collapse two
-      // slots that pick the same model.
-      //
-      // ALLOWLIST, NOT DENYLIST, and the difference is load-bearing. This
-      // used to read ``kind !== "synthesis"`` — "everything that is not the
-      // writer row is a slot". That stopped being true when the estimate
-      // gained a priced Layer-B advisory row (ADR-0064): the server now emits
-      // SIX rows when one is configured, and the denylist let the sixth into
-      // an array that is indexed by slot position. It is benign only while
-      // that row is emitted last, which is a property of the server that this
-      // code should not have to depend on. Naming the kinds that ARE slots
-      // cannot rot the same way.
-      //
-      // MEASURED: against a five-row breakdown (no advisory row — the
-      // configuration CI runs) the two filters return byte-identical arrays,
-      // so this changes no rendering the test suite or the visual baselines
-      // can see. They differ only on the six-row shape, which is production.
-      state.perModelEstimates = [];
-      const byModel =
-        estimate.cost_estimate.breakdown &&
-        estimate.cost_estimate.breakdown.by_model;
-      if (Array.isArray(byModel)) {
-        state.perModelEstimates = byModel
-          .filter((row) => row.kind === "model")
-          .map((row) => row.usd);
-      }
-      renderModelInputs(getModelIds());
-      if (composerTotalEstimate) {
-        composerTotalEstimate.textContent = gateUsd(
-          estimate.cost_estimate.estimated_cost_usd,
-        );
-      }
+      // Slice 1: fan the itemized ``by_model`` breakdown out onto the slot
+      // cards and surface the grand total in the composer footer. W127
+      // (ADR-0187, F9): both are derived in ``updatePerSlotEstimates`` and
+      // ``renderComposerTotal``, which show the server's figures only while
+      // the inputs on screen are still the ones just priced. An answer that
+      // lands after a model was swapped no longer lays the priced panel's
+      // rows onto the cards by position.
+      updatePerSlotEstimates();
       const { primary: usdPrimary, secondary: usdSecondary } = formatCostWithLocal(
         estimate.cost_estimate.estimated_cost_usd,
       );
@@ -9590,6 +9856,8 @@
       setButtonLoading(gateConfirmButton || proceedButton, false);
     }
     applyHighStakesGate();
+    // W127: with the estimate gone, the composer's amounts are not its any more.
+    updatePerSlotEstimates();
   }
 
   // W100 (ADR-0173): turn the final warnings check's answer into the create's
@@ -9782,9 +10050,9 @@
     state.currentEstimate = null;
     state.pricedRun = null;
     // W100 round 1: and the running total beside the buttons stops showing
-    // the dropped estimate's figure. "—" is what the template ships; no other
-    // path resets this total today (Cancel and going home leave it too).
-    if (composerTotalEstimate) composerTotalEstimate.textContent = "—";
+    // the dropped estimate's figure. W127: the total is derived now
+    // (``renderComposerTotal``), so with no estimate it reads "—", and
+    // ``setView("composer")`` below paints it.
     setView("composer");
     setHighStakesRequired(true);
     toastHighStakesAck();
@@ -10024,21 +10292,15 @@
           ),
         ),
       });
-      state.currentRunId = created.query_run_id;
-      // Slice 3 (04 Live run): capture the submitted question so the live-run
-      // running-query band can echo it (the poll payload has no query_text),
-      // and reset the live view's SR/elapsed state for a fresh run.
-      state.liveQueryText = queryText;
-      state.lastLiveStatus = null;
-      // Slice 4a (05 Result): a new run must never serve the previous run's
-      // Copy/Export text, and the terminal-branch guard must start fresh (C-C).
-      state.lastResultSummary = null;
-      state.lastResultMarkdown = null;
-      state.lastResultRunId = null;
-      // Slice 5 (06 Transcript): drop the previous run's transcript snapshot so
-      // the drill-down can never render stale openings/critiques for a new run.
-      state.lastResult = null;
-      state.terminalHandled = false;
+      // W127 (ADR-0187): the new run's scope. ``beginRunScope`` does what
+      // this path used to do field by field, and the same for every other
+      // way into a run: the submitted question is kept for the live-run echo
+      // (the poll payload has no query_text, Slice 3); the live view's
+      // SR/elapsed state, the previous run's Copy/Export text (Slice 4a) and
+      // transcript snapshot (Slice 5) and the terminal guard (C-C) are reset;
+      // every live block re-renders even if its first payload is
+      // byte-identical to the previous run's (Fix 3).
+      beginRunScope(created.query_run_id, queryText);
       // #126: do NOT clear the trail here. This fires on EVERY run creation,
       // including a follow-up (the same session thread continuing) — only the
       // panel's "Clear" button resets the trail (ADR-0140 decision 1; "Start
@@ -10046,17 +10308,6 @@
       // Clearing unconditionally here made SESSION_TRAIL_CAP and the
       // append/dedupe logic below unreachable: every run replaced the trail
       // instead of appending to it.
-      // Fix 3: a NEW run must re-render every live block even if its first
-      // payload is byte-identical to the previous run's — reset the guards.
-      state.liveSig = {
-        stage: null,
-        debate: null,
-        models: null,
-        fallback: null,
-        notices: null,
-      };
-      state.liveElapsedBaseMs = 0;
-      state.liveElapsedStamp = nowMs();
       setRunning(true);
       updateRunMeta(created);
       renderProgress(created.progress);
@@ -10133,7 +10384,9 @@
         renderProgress(null);
         return;
       }
-      state.currentRunId = active.query_run_id;
+      // W127 (ADR-0187): an adopted run starts its own scope. Its answer
+      // carries no question, so none is shown rather than the composer's.
+      beginRunScope(active.query_run_id);
       setRunning(true);
       // Fix 11: a run discovered here never went through proceedWithRun, so it
       // has not switched to the live card. Show it (otherwise we poll a hidden
@@ -10149,9 +10402,35 @@
       // and the user just navigated back to the tab).
       setRunStartTime(active.result_generated_at_utc);
     }
-    const result = await api(`/v1/query-runs/${state.currentRunId}`, {
-      method: "GET",
-    });
+    // W127 (ADR-0187): the scope this poll belongs to, captured as it is
+    // sent. Its answer (or its failure) is acted on only while that scope is
+    // still the page's, still open (Stop has not closed it) and not finished,
+    // and the answer is for that scope's run: checked BEFORE anything is
+    // drawn. Polls overlap (one every 750 ms, whether or not the last has
+    // answered), so without this a late answer for an earlier run was drawn
+    // as the current one (F3), a poll in flight when Stop was pressed brought
+    // the stopped run back as running (F4), and a failed one re-raised the
+    // connection notice after Stop (F13). ``false`` means "dropped".
+    const scope = state.runScope;
+    if (!scope || !scope.runId) return false;
+    let result;
+    try {
+      result = await api(`/v1/query-runs/${scope.runId}`, {
+        method: "GET",
+      });
+    } catch (error) {
+      if (scope !== state.runScope || scope.closed || scope.terminalHandled) return false;
+      throw error;
+    }
+    if (
+      scope !== state.runScope ||
+      scope.closed ||
+      scope.terminalHandled ||
+      !result ||
+      result.query_run_id !== scope.runId
+    ) {
+      return false;
+    }
     updateRunMeta(result);
     renderProgress(result.progress);
     renderLiveRun(result);
@@ -10169,123 +10448,141 @@
         result.status,
       )
     ) {
-      // C-A: a slow poll response (server latency > the 750ms poll interval)
-      // can re-enter this terminal branch after it already ran, double-firing
-      // the completion toast + focus move. Handle the transition exactly once.
-      if (state.terminalHandled) {
-        return;
-      }
-      state.terminalHandled = true;
-      // PR1/#14: the run is over — clear the post-submit error latch. A later
-      // empty "Review & run" or "New question" writes "" and dispatches an
-      // ``input`` event; without this
-      // reset that trips the "enter a question" error on an intentionally-empty
-      // composer the moment the user arrives (the flag never reset after submit).
-      state.submissionAttempted = false;
-      stopPolling();
-      setRunning(false);
-      // PR-0 / Bug 8: replace the displayed time with the
-      // completion time on the first terminal transition. Polling
-      // has already stopped, so this is the last time we touch
-      // the card for this run.
-      finalizeRunTime(result.result_generated_at_utc);
-      // Slice 4a (05 Result): if a real synthesis exists, transition to the
-      // result view (verdict band + trust triangle) and move focus to its
-      // heading. ``renderResult`` is called ONCE here (not per 750ms poll —
-      // polling has already stopped) so there is no aria-live spam. If there is
-      // NO final_synthesis (failed/timed_out/cancelled/blocked), STAY on the
-      // live-run view: its terminal error state + ``#live-notices`` handle that.
-      // W5: a quick answer has no synthesis by design and opens on its answer.
-      if (resultIsShowable(result)) {
-        // Slice 5 (06 Transcript): stash the terminal result so the transcript
-        // drill-down renders honest per-model openings + round critiques
-        // without a re-fetch. Captured only alongside a real synthesis (same
-        // guard as the result view), so the transcript link only ever opens a
-        // completed audit trail.
-        state.lastResult = result;
-        renderResult(result);
-        setView("result");
-        focusResultHeading();
-        // PR1/#10: the question has been answered — clear the composer so the
-        // old question does not linger behind the result on the next visit.
-        // ``submissionAttempted`` is already reset above, so this ``input``
-        // dispatch cannot paint a false error. Back-to-edit / Esc-from-cost-gate
-        // (which never enter the result view) keep their text — separate paths.
-        if (queryTextarea) {
-          queryTextarea.value = "";
-          queryTextarea.dispatchEvent(new Event("input", { bubbles: true }));
-        }
-        // W33 (ADR-0140 decision 2, bug 2): the next-question box opens empty
-        // after EVERY finished run, never holding the follow-up just answered.
-        const nextQuestionBox = el("result-next-input");
-        if (nextQuestionBox) nextQuestionBox.value = "";
-        // W37 review round 2 (decision 6, one step back): the context this run
-        // was sent belongs to it; the composer keeps none of it. Following up
-        // this result attaches THIS question and answer.
-        setFollowUpContext(null);
-      }
-      if (result.status === "completed") {
-        toast({
-          message:
-            result.mode === "quick"
-              ? "Run completed. See the answer below."
-              : "Run completed. See the synthesis below.",
-          tone: "success",
-        });
-      } else if (result.status === "partial") {
-        toast({
-          message: liveNoticesHaveContent(result)
-            ? "Run finished with partial results. See the run notices above."
-            : "Run finished with partial results — some steps did not complete.",
-          tone: "warn",
-          timeout: 6500,
-        });
-      } else if (result.status === "failed") {
-        // Slice 6 (07 provider failure · AC-015). First-class honest
-        // treatment driven ENTIRELY by server data: which step(s) failed,
-        // the server's user-safe failure notice(s), and the correlation +
-        // run ids. The mock's "Retry this step" / "Continue with 3 models"
-        // buttons are DROPPED — there is no per-step retry endpoint, so
-        // rendering them would be a lie. Only real actions are offered.
-        showProviderFailure(result);
-        toast({ message: "Run failed. See the banner above.", tone: "error", timeout: 8000 });
-      } else if (result.status === "timed_out") {
-        showError({
-          code: 'TIMEOUT',
-          message: "Run timed out. The request took too long to process.",
-          hint: "Try simplifying your question or wait a moment and retry."
-        });
-        toast({ message: "Run timed out. See error banner above.", tone: "warn", timeout: 6500 });
-      } else if (result.status === "cancelled") {
-        toast({ message: "Run cancelled.", tone: "info" });
-      }
-      noteFinishedQuestion(state.liveQueryText);
-      // PR8: record the terminal run in the session trail.
-      const demoMode = !!(result.demo_mode || (result.result && result.result.demo_mode));
-      const liveCount = Number(result.live_count ?? (result.result && result.result.live_count) ?? 0);
-      const trailStatus = demoMode && liveCount === 0 ? "simulated" : result.status;
-      appendSessionTrailEntry({
-        // The FULL question, not the 80-char display form. Restoring this run
-        // has to put the user's own words back under "You asked", and a
-        // truncated copy would print an ellipsised question into the result
-        // view and into the exported file. Truncation is a RENDER concern and
-        // now happens in renderSessionTrail.
-        question: state.liveQueryText ? String(state.liveQueryText).trim() : "",
-        runId: result.query_run_id || result.correlation_id,
-        timestamp: Date.now(),
-        status: trailStatus,
-      });
+      finishRun(result, scope);
     }
+    return true;
+  }
+
+  // A run's terminal answer, from a poll or from Stop's DELETE: stop polling,
+  // open the result when there is one to show, toast what the SERVER said
+  // happened, and list the run in "This session". W127 (ADR-0187): this was
+  // ``pollRun``'s terminal branch, moved out unchanged in behaviour so that
+  // Stop shares it. Stop used to toast "Run cancelled." whatever the DELETE
+  // returned, opened a result only when ``final_synthesis`` existed (so a
+  // quick answer that had already completed was never shown, ADR-0128) and
+  // listed nothing (F2).
+  function finishRun(result, scope) {
+    // C-A: a slow poll response (server latency > the 750ms poll interval)
+    // can re-enter this after it already ran, double-firing the completion
+    // toast + focus move. Handle the transition exactly once PER SCOPE: the
+    // page-wide flag this used to be outlived its run, so a run adopted
+    // through "Go to run" after another had finished never finished (W49).
+    if (!scope || scope !== state.runScope || scope.terminalHandled) return;
+    scope.terminalHandled = true;
+    state.terminalHandled = true;
+    // PR1/#14: the run is over — clear the post-submit error latch. A later
+    // empty "Review & run" or "New question" writes "" and dispatches an
+    // ``input`` event; without this
+    // reset that trips the "enter a question" error on an intentionally-empty
+    // composer the moment the user arrives (the flag never reset after submit).
+    state.submissionAttempted = false;
+    stopPolling();
+    setRunning(false);
+    // PR-0 / Bug 8: replace the displayed time with the
+    // completion time on the first terminal transition. Polling
+    // has already stopped, so this is the last time we touch
+    // the card for this run.
+    finalizeRunTime(result.result_generated_at_utc);
+    // Slice 4a (05 Result): if a real synthesis exists, transition to the
+    // result view (verdict band + trust triangle) and move focus to its
+    // heading. ``renderResult`` is called ONCE here (not per 750ms poll —
+    // polling has already stopped) so there is no aria-live spam. If there is
+    // NO final_synthesis (failed/timed_out/cancelled/blocked), STAY on the
+    // live-run view: its terminal error state + ``#live-notices`` handle that.
+    // W5: a quick answer has no synthesis by design and opens on its answer.
+    if (resultIsShowable(result)) {
+      // Slice 5 (06 Transcript): stash the terminal result so the transcript
+      // drill-down renders honest per-model openings + round critiques
+      // without a re-fetch. Captured only alongside a real synthesis (same
+      // guard as the result view), so the transcript link only ever opens a
+      // completed audit trail.
+      state.lastResult = result;
+      renderResult(result);
+      setView("result");
+      focusResultHeading();
+      // PR1/#10: the question has been answered — clear the composer so the
+      // old question does not linger behind the result on the next visit.
+      // ``submissionAttempted`` is already reset above, so this ``input``
+      // dispatch cannot paint a false error. Back-to-edit / Esc-from-cost-gate
+      // (which never enter the result view) keep their text — separate paths.
+      if (queryTextarea) {
+        queryTextarea.value = "";
+        queryTextarea.dispatchEvent(new Event("input", { bubbles: true }));
+      }
+      // W33 (ADR-0140 decision 2, bug 2): the next-question box opens empty
+      // after EVERY finished run, never holding the follow-up just answered.
+      const nextQuestionBox = el("result-next-input");
+      if (nextQuestionBox) nextQuestionBox.value = "";
+      // W37 review round 2 (decision 6, one step back): the context this run
+      // was sent belongs to it; the composer keeps none of it. Following up
+      // this result attaches THIS question and answer.
+      setFollowUpContext(null);
+    }
+    if (result.status === "completed") {
+      toast({
+        message:
+          result.mode === "quick"
+            ? "Run completed. See the answer below."
+            : "Run completed. See the synthesis below.",
+        tone: "success",
+      });
+    } else if (result.status === "partial") {
+      toast({
+        message: liveNoticesHaveContent(result)
+          ? "Run finished with partial results. See the run notices above."
+          : "Run finished with partial results — some steps did not complete.",
+        tone: "warn",
+        timeout: 6500,
+      });
+    } else if (result.status === "failed") {
+      // Slice 6 (07 provider failure · AC-015). First-class honest
+      // treatment driven ENTIRELY by server data: which step(s) failed,
+      // the server's user-safe failure notice(s), and the correlation +
+      // run ids. The mock's "Retry this step" / "Continue with 3 models"
+      // buttons are DROPPED — there is no per-step retry endpoint, so
+      // rendering them would be a lie. Only real actions are offered.
+      showProviderFailure(result);
+      toast({ message: "Run failed. See the banner above.", tone: "error", timeout: 8000 });
+    } else if (result.status === "timed_out") {
+      showError({
+        code: 'TIMEOUT',
+        message: "Run timed out. The request took too long to process.",
+        hint: "Try simplifying your question or wait a moment and retry."
+      });
+      toast({ message: "Run timed out. See error banner above.", tone: "warn", timeout: 6500 });
+    } else if (result.status === "cancelled") {
+      toast({ message: "Run cancelled.", tone: "info" });
+    }
+    noteFinishedQuestion(state.liveQueryText);
+    // PR8: record the terminal run in the session trail.
+    const demoMode = !!(result.demo_mode || (result.result && result.result.demo_mode));
+    const liveCount = Number(result.live_count ?? (result.result && result.result.live_count) ?? 0);
+    const trailStatus = demoMode && liveCount === 0 ? "simulated" : result.status;
+    appendSessionTrailEntry({
+      // The FULL question, not the 80-char display form. Restoring this run
+      // has to put the user's own words back under "You asked", and a
+      // truncated copy would print an ellipsised question into the result
+      // view and into the exported file. Truncation is a RENDER concern and
+      // now happens in renderSessionTrail.
+      question: state.liveQueryText ? String(state.liveQueryText).trim() : "",
+      runId: result.query_run_id || result.correlation_id,
+      timestamp: Date.now(),
+      status: trailStatus,
+    });
   }
 
   function startPolling() {
     stopPolling();
-    state.pollingTimer = window.setInterval(() => {
-      // Polling errors are non-blocking; keep the last good result on screen.
-      // A successful tick clears any sticky "connection lost" indicator.
-      pollRun().then(clearNetworkIndicator, handlePollError);
-    }, 750);
-    pollRun().then(clearNetworkIndicator, handlePollError);
+    // Polling errors are non-blocking; keep the last good result on screen.
+    // A successful tick clears any sticky "connection lost" indicator. W127:
+    // a poll ``pollRun`` dropped (it belonged to a scope that is no longer
+    // open) clears nothing and raises nothing.
+    const tick = () =>
+      pollRun().then((drawn) => {
+        if (drawn !== false) clearNetworkIndicator();
+      }, handlePollError);
+    state.pollingTimer = window.setInterval(tick, 750);
+    tick();
   }
 
   function stopPolling() {
@@ -10300,39 +10597,46 @@
     clearNetworkIndicator();
   }
 
+  // Stop. W127 (ADR-0187): Stop closes the run's scope while its DELETE is in
+  // flight, so a poll that answers meanwhile is dropped instead of putting
+  // the run back on screen as running (F4), and ``#live-stop`` (the control
+  // the page shows; ``cancelButton`` is the hidden aside one) is disabled, so
+  // a second click cannot send a second DELETE (F12). The DELETE's answer is
+  // the run's terminal answer and goes through ``finishRun``, which toasts
+  // what the server says happened: a run that had already finished is shown
+  // as finished, never as cancelled (F2). If the DELETE fails, the scope
+  // opens again, polling goes on and Stop can be pressed again.
   async function cancelRun() {
-    if (!state.currentRunId) return;
+    const scope = state.runScope;
+    if (!state.currentRunId || !scope || scope.closed || scope.terminalHandled) return;
+    scope.closed = true;
+    const liveStop = el("live-stop");
+    if (liveStop) liveStop.disabled = true;
     setButtonLoading(cancelButton, true);
     try {
-      const result = await api(`/v1/query-runs/${state.currentRunId}`, {
+      const result = await api(`/v1/query-runs/${scope.runId}`, {
         method: "DELETE",
       });
+      if (scope !== state.runScope) return;
       updateRunMeta(result);
       renderProgress(result.progress);
       // Slice 3 (04 Live run): reflect the cancelled state in the live-run
       // card (pill → "Cancelled", Stop hidden, elapsed frozen).
       renderLiveRun(result);
       renderNotices(result);
-      // PR-0 / Bug 8: cancel is a terminal transition; finalize
-      // the run time once so the card shows the cancel time
-      // rather than the start time.
-      finalizeRunTime(result.result_generated_at_utc);
-      stopPolling();
-      setRunning(false);
-      noteFinishedQuestion(state.liveQueryText);
-      // Slice 4a (05 Result): cancelled runs almost always have no synthesis, so
-      // we stay on the live-run view. Transition only if one somehow exists.
-      if (result.result && result.result.final_synthesis) {
-        state.lastResult = result;
-        renderResult(result);
-        setView("result");
-        focusResultHeading();
-      }
-      toast({ message: "Run cancelled.", tone: "info" });
+      // PR-0 / Bug 8 (a terminal transition finalises the run time once) and
+      // the result view when there is one to show: both in ``finishRun``. An
+      // answer that is somehow not terminal leaves the run open, and polling
+      // goes on.
+      if (LIVE_TERMINAL.has(result.status)) finishRun(result, scope);
+      else scope.closed = false;
     } catch (error) {
+      if (scope !== state.runScope) return;
+      scope.closed = false;
       handleError(error);
     } finally {
       setButtonLoading(cancelButton, false);
+      if (liveStop) liveStop.disabled = false;
     }
   }
 
@@ -10413,7 +10717,15 @@
       return;
     }
     clearError();
-    state.currentRunId = active.query_run_id;
+    // W127 (W49): the adopted run starts its own scope. Without it the scope
+    // of a run this tab had already finished was kept, so when this one
+    // finished its answer was taken for that one's and the page stayed on
+    // the live view for good, polling, with a "New question" that did
+    // nothing; and the earlier question was shown as this run's. The active
+    // run's answer has no question (``ActiveQueryRunResponse``), so it reads
+    // "—".
+    const runId = active.query_run_id;
+    beginRunScope(runId);
     setRunning(true);
     setView("live-run");
     focusLiveHeading();
@@ -10425,8 +10737,15 @@
   async function stopActiveRunAndCompose() {
     const active = await api("/v1/query-runs/active", { method: "GET" });
     if (active && active.query_run_id) {
-      await api(`/v1/query-runs/${active.query_run_id}`, { method: "DELETE" });
-      toast({ message: "Previous run stopped. Start a fresh query.", tone: "info" });
+      const stopped = await api(`/v1/query-runs/${active.query_run_id}`, { method: "DELETE" });
+      // W127: say what the DELETE answered. A run that had finished by then
+      // is returned as it is (completed, failed…), and calling it "stopped"
+      // was false.
+      if (stopped && stopped.status === "cancelled") {
+        toast({ message: "Previous run stopped. Start a fresh query.", tone: "info" });
+      } else {
+        toast({ message: "The other run had already finished. Start a fresh query.", tone: "info" });
+      }
     }
     stopPolling();
     state.currentRunId = null;
@@ -11558,6 +11877,9 @@
       dropInFlightEstimate();
       clearError();
       hideCostConfirmation();
+      // W127: the screen-reader announcement of the last estimate ("this run
+      // costs …") is that estimate's, not the new question's.
+      if (gateLive) gateLive.textContent = "";
       state.submissionAttempted = false;
       if (questionHasRun) {
         if (nextInput) nextInput.value = "";
@@ -11610,6 +11932,10 @@
     const audience = el("follow-up-context-audience");
     if (audience) audience.textContent = followUpAudience();
     renderFollowUpMode();
+    // W127 (F9): the mode is part of what an estimate priced; the slot cells
+    // and the running total follow it (the cells used to keep the other
+    // mode's figures).
+    updatePerSlotEstimates();
   }
 
   function initQuickMode() {

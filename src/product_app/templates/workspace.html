@@ -534,6 +534,11 @@
             </div>
           </section>
         </div>
+        <!-- W127 (ADR-0187): ``data-run-scope`` marks every region a run fills,
+             here and in the result and transcript views. The renderer that
+             fills one tags it with that run's ``data-run-id`` as it writes, and
+             ``<html data-run-id>`` names the run the visible view belongs to;
+             e2e/tests/invariants/run-scope.spec.ts checks the two agree. -->
         <div data-view="live-run" hidden>
           <section class="panel live-run" role="region" aria-labelledby="live-run-heading">
             <div class="live-run-header">
@@ -558,7 +563,7 @@
               </div>
             </div>
             <button
-              id="live-corr"
+              id="live-corr" data-run-scope
               type="button"
               class="live-corr live-corr-copy mono"
               aria-label="Copy run ID"
@@ -566,14 +571,14 @@
 
             <div class="live-query-band">
               <div class="live-eyebrow">Running query</div>
-              <div id="live-query" class="live-query"></div>
+              <div id="live-query" data-run-scope class="live-query"></div>
             </div>
 
-            <div id="live-stage-strip" class="live-stage-strip" aria-hidden="true"></div>
+            <div id="live-stage-strip" data-run-scope class="live-stage-strip" aria-hidden="true"></div>
 
             <div class="live-run-grid">
               <div class="live-run-main">
-                <div id="live-notices" class="live-notices" hidden>
+                <div id="live-notices" data-run-scope class="live-notices" hidden>
                   <div class="live-eyebrow">Run notices</div>
                   <div id="live-notices-list" class="live-notices-list"></div>
                 </div>
@@ -582,15 +587,15 @@
                   When the models critique each other, each one's own critique is
                   recorded and itemised on the receipt.
                 </p>
-                <div id="live-debate" class="live-debate"></div>
+                <div id="live-debate" data-run-scope class="live-debate"></div>
               </div>
               <div class="live-run-side">
                 <div class="live-side-section">
                   <div class="live-eyebrow">Model status</div>
-                  <div id="live-model-status" class="live-model-status"></div>
+                  <div id="live-model-status" data-run-scope class="live-model-status"></div>
                 </div>
-                <div id="live-fallback" class="live-fallback" role="status" hidden></div>
-                <div id="live-cap" class="live-cap"></div>
+                <div id="live-fallback" data-run-scope class="live-fallback" role="status" hidden></div>
+                <div id="live-cap" data-run-scope class="live-cap"></div>
               </div>
             </div>
           </section>
@@ -609,7 +614,7 @@
                 <span class="result-header-divider" aria-hidden="true"></span>
                 <span class="result-completion">
                   <span class="result-completion-dot" aria-hidden="true"></span>
-                  <span id="result-completion-text"></span>
+                  <span id="result-completion-text" data-run-scope></span>
                 </span>
               </div>
               <div class="result-header-actions">
@@ -631,7 +636,7 @@
                    fallback stub (live_count < 4) so a run can never silently
                    present simulated output as real. Toggled by renderResult. -->
               <div
-                id="result-degraded"
+                id="result-degraded" data-run-scope
                 class="callout callout-demo-mode result-degraded"
                 role="alert"
                 aria-live="assertive"
@@ -645,8 +650,8 @@
               </div>
               <div class="result-ask">
                 <span class="result-eyebrow">You asked</span>
-                <h1 id="result-heading" class="result-question" tabindex="-1"><span id="result-question"></span></h1>
-                <div id="result-meta" class="result-meta"></div>
+                <h1 id="result-heading" class="result-question" tabindex="-1"><span id="result-question" data-run-scope></span></h1>
+                <div id="result-meta" data-run-scope class="result-meta"></div>
                 <button
                   id="result-details-toggle"
                   type="button"
@@ -660,7 +665,7 @@
               </div>
 
               <div
-                id="result-receipt"
+                id="result-receipt" data-run-scope
                 class="result-receipt"
                 role="region"
                 aria-label="Run receipt and cost reconciliation"
@@ -672,16 +677,16 @@
                    checked, and the one answer with its sources. Populated by
                    renderQuickResult; hidden on every panel run. -->
               <section
-                id="result-quick"
+                id="result-quick" data-run-scope
                 class="result-quick"
                 data-mode="quick"
                 aria-label="The quick answer"
                 hidden
               ></section>
 
-              <div id="result-verdict" class="result-verdict" role="region" aria-label="Panel result"></div>
+              <div id="result-verdict" data-run-scope class="result-verdict" role="region" aria-label="Panel result"></div>
 
-              <div id="result-trust" class="result-trust" role="group" aria-label="Trust signals"></div>
+              <div id="result-trust" data-run-scope class="result-trust" role="group" aria-label="Trust signals"></div>
 
               <!-- W48 (ADR-0145 decision 2): the trust-score hint, above the
                    trust score and never inside it (its D-2 rendering contract
@@ -698,7 +703,7 @@
                    Rendering contract (D-2): zero digits, zero advisory-label
                    words. Hidden until renderTrustScore populates it. -->
               <section
-                id="result-trust-score"
+                id="result-trust-score" data-run-scope
                 class="result-trust-score"
                 role="group"
                 aria-label="What was and was not checked"
@@ -725,7 +730,7 @@
                    alignment state that never read a round-1 output. See
                    docs/adr/0063. -->
               <div
-                id="result-debate"
+                id="result-debate" data-run-scope
                 class="result-debate"
                 role="region"
                 aria-label="The debate rounds"
@@ -742,7 +747,7 @@
                    ``renderResultSynthesis`` from ``final_synthesis`` — labelled
                    rows + attribution + source chips. Real backend values only. -->
               <div
-                id="result-synthesis"
+                id="result-synthesis" data-run-scope
                 class="result-synthesis"
                 role="region"
                 aria-label="The synthesis"
@@ -810,9 +815,9 @@
                 <button id="transcript-back" type="button" class="transcript-back">&larr; Back to verdict</button>
                 <span class="transcript-header-divider" aria-hidden="true"></span>
                 <span class="transcript-header-title">The debate</span>
-                <span id="transcript-meta" class="transcript-meta mono"></span>
+                <span id="transcript-meta" data-run-scope class="transcript-meta mono"></span>
               </div>
-              <span id="transcript-status" class="transcript-status" data-consensus="false"></span>
+              <span id="transcript-status" data-run-scope class="transcript-status" data-consensus="false"></span>
               <!-- PR1/#6: see the result-header toggle for why this is
                    in-header rather than a fixed floating control. -->
               <button id="theme-toggle-transcript" class="toggle" data-theme-toggle type="button" aria-label="Toggle dark mode">&#9680;</button>
@@ -829,7 +834,7 @@
                    disclosure when a slot was simulated or produced nothing.
                    Toggled by renderModelPanels. -->
               <div
-                id="demo-mode-banner"
+                id="demo-mode-banner" data-run-scope
                 class="callout callout-demo-mode"
                 role="alert"
                 aria-live="assertive"
@@ -841,7 +846,7 @@
                   <div class="callout-message" data-demo-mode-target></div>
                 </div>
               </div>
-              <h1 id="transcript-heading" class="transcript-question" tabindex="-1"></h1>
+              <h1 id="transcript-heading" data-run-scope class="transcript-question" tabindex="-1"></h1>
 
               <section class="transcript-section" aria-label="Opening positions">
                 <div class="transcript-section-head">
@@ -849,7 +854,7 @@
                   <span class="transcript-section-rule" aria-hidden="true"></span>
                   <span class="transcript-section-note mono">opening answers</span>
                 </div>
-                <div id="transcript-openings" class="transcript-openings"></div>
+                <div id="transcript-openings" data-run-scope class="transcript-openings"></div>
               </section>
 
               <section class="transcript-section" aria-label="The debate rounds">
@@ -857,8 +862,8 @@
                   <span class="transcript-section-title">The debate</span>
                   <span class="transcript-section-rule" aria-hidden="true"></span>
                 </div>
-                <p class="transcript-debate-caption muted">The debate is captured as a per-round critique summary &mdash; Quorum does not record a per-model, line-by-line transcript.</p>
-                <div id="transcript-rounds" class="transcript-rounds"></div>
+                <p class="transcript-debate-caption muted" data-run-scope>The debate is captured as a per-round critique summary &mdash; Quorum does not record a per-model, line-by-line transcript.</p>
+                <div id="transcript-rounds" data-run-scope class="transcript-rounds"></div>
               </section>
 
               <button

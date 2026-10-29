@@ -2228,6 +2228,12 @@ html[data-theme="dark"] .landing-preview-caption {
   gap: var(--space-4);
 }
 
+/* W127 (ADR-0187): the display above beat the hidden attribute, so a quick
+   run after a panel run kept that run's round cards on screen. */
+.live-debate[hidden] {
+  display: none;
+}
+
 .live-round-card {
   border: 1px solid var(--line-2);
   border-radius: var(--radius-md);
