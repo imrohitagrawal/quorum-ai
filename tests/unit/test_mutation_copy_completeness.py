@@ -186,6 +186,27 @@ def _root_paths_in(tree: ast.AST) -> list[str]:
     return paths
 
 
+def _deselected_markers() -> set[str]:
+    """The markers ``[tool.mutmut].pytest_add_cli_args`` deselects with ``-m``
+    (``not env_oracle and not repo_introspection``): a module carrying one never
+    runs inside ./mutants/, so what it reads cannot stop the mutation run."""
+    args = _mutmut_config()["pytest_add_cli_args"]
+    expression = args[args.index("-m") + 1]
+    return set(re.findall(r"\bnot\s+(\w+)", expression))
+
+
+def _is_deselected(tree: ast.Module, deselected: set[str]) -> bool:
+    """True when a module-level ``pytestmark`` names a deselected marker."""
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and any(
+            isinstance(target, ast.Name) and target.id == "pytestmark" for target in node.targets
+        ):
+            names = {n.attr for n in ast.walk(node.value) if isinstance(n, ast.Attribute)}
+            if names & deselected:
+                return True
+    return False
+
+
 def _referenced_paths() -> dict[str, str]:
     """Repo-relative paths named by the suite -> the first module naming it.
 
@@ -199,12 +220,15 @@ def _referenced_paths() -> dict[str, str]:
     mutmut cannot copy it either.
     """
     entries = {entry.name for entry in REPO_ROOT.iterdir()}
+    deselected = _deselected_markers()
     found: dict[str, str] = {}
     for path in sorted(REPO_ROOT.joinpath("tests").rglob("test_*.py")):
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", SyntaxWarning)
             tree = ast.parse(path.read_text(encoding="utf-8"))
         module = str(path.relative_to(REPO_ROOT))
+        if _is_deselected(tree, deselected):
+            continue
         for named in _root_paths_in(tree):
             if named.split("/", 1)[0] in entries and (REPO_ROOT / named).exists():
                 found.setdefault(named, module)
@@ -231,6 +255,26 @@ def test_every_root_path_the_suite_reads_is_copied_into_mutants() -> None:
         "mutants — add them to [tool.mutmut].also_copy (or to EXEMPT with the "
         f"reason the absence is safe): {missing}"
     )
+
+
+def test_a_module_the_mutation_run_deselects_is_not_scanned() -> None:
+    """A module marked ``repo_introspection`` or ``env_oracle`` never runs
+    inside ./mutants/, so a path only it reads (``e2e/node_modules``, read by
+    ``test_negative_assertion_guard.py`` and present only where ``npm ci`` ran,
+    as in CI) must not be reported. Partners: the markers are read from the
+    real ``[tool.mutmut]`` selection, and an unmarked module is not skipped.
+
+    Red when: the scan stops skipping deselected modules, or reads the markers
+    from anywhere but the ``-m`` selection mutmut uses."""
+    assert _deselected_markers() == {"env_oracle", "repo_introspection"}
+    marked = ast.parse("import pytest\npytestmark = pytest.mark.repo_introspection\n")
+    oracle = ast.parse("import pytest\npytestmark = [pytest.mark.env_oracle]\n")
+    plain = ast.parse("import pytest\npytestmark = pytest.mark.slow\n")
+    deselected = _deselected_markers()
+    assert _is_deselected(marked, deselected)
+    assert _is_deselected(oracle, deselected)
+    assert not _is_deselected(plain, deselected)
+    assert not _is_deselected(ast.parse("x = 1\n"), deselected)
 
 
 def test_a_partly_copied_root_does_not_count_as_copied() -> None:
