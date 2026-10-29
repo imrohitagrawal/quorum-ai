@@ -22,8 +22,8 @@ is the rule only.
   `**Process:**` line naming that file; `make prompt-check` refuses a root
   prompt without it (ADR-0160).
 - **Decisions:** read `docs/19-change-control-log.md` before asking the owner
-  anything, and record each owner decision there as a CHG row in the owner's
-  exact words.
+  anything; record each decision there as a CHG row restating what, why and
+  the trade-offs, never quotes, ids or discussion (CHG-102).
 - **Board state comes from needles.** A row's state in `docs/65-open-work.md` is
   derived from its evidence needle by `scripts/check_open_work.py`; regenerate
   it, never type it.

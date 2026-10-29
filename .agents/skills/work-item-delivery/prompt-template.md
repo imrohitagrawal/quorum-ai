@@ -14,7 +14,7 @@ How to use this template (ADR-0169):
 - Delete this comment block when you fill the template in.
 -->
 
-Written by the session of DATE (transcript `SESSION-ID-8`). This file is
+Written by the session of DATE. This file is
 the session's wording. The owner's decisions are the CHG rows it names.
 
 **Process:** every item is built by `.agents/skills/work-item-delivery/SKILL.md`. Read it first,
