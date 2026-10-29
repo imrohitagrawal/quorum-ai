@@ -25,9 +25,16 @@ import pathlib
 import re
 
 import pytest
+from tests.repo_root import find_repo_root
 
 from product_app import providers
 from product_app.providers import PROVIDER_NOTICES
+
+#: The REAL source file, read through ``find_repo_root``: inside mutmut's
+#: ``./mutants/`` a module's ``__file__`` is the MUTATED copy, which also holds
+#: the original body as ``x_…__mutmut_orig``, so a structural count over it is
+#: wrong (W116, ADR-0183).
+_PROVIDERS_PY = find_repo_root(pathlib.Path(__file__)) / "src" / "product_app" / "providers.py"
 
 #: Vocabulary that only means something to someone holding the provider
 #: API docs. Each entry is a substring match, case-insensitive.
@@ -50,7 +57,7 @@ def _declared_notice_names() -> set[str]:
     Derived from the module, never retyped here — a hand-copied count goes
     stale silently the moment a notice is added or removed.
     """
-    tree = ast.parse(pathlib.Path(providers.__file__).read_text(encoding="utf-8"))
+    tree = ast.parse(_PROVIDERS_PY.read_text(encoding="utf-8"))
     return {
         node.targets[0].id
         for node in tree.body
@@ -156,7 +163,7 @@ def test_no_notice_is_written_inline_instead_of_registered() -> None:
     a literal. Parsed with ``ast`` rather than grepped, so a multi-line
     or implicitly-concatenated literal cannot slip past.
     """
-    source = pathlib.Path(providers.__file__).read_text(encoding="utf-8")
+    source = _PROVIDERS_PY.read_text(encoding="utf-8")
     offenders: list[str] = []
     for node in ast.walk(ast.parse(source)):
         if not isinstance(node, ast.Call):
@@ -184,7 +191,7 @@ def test_every_registered_notice_is_reachable_from_the_provider_layer() -> None:
     Pairs with the test above: that one stops copy escaping the registry,
     this one stops the registry accumulating copy no branch produces.
     """
-    source = pathlib.Path(providers.__file__).read_text(encoding="utf-8")
+    source = _PROVIDERS_PY.read_text(encoding="utf-8")
     tree = ast.parse(source)
     registered = {
         node.targets[0].id

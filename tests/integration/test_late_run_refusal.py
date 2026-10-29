@@ -15,7 +15,9 @@ an active run. A refusal must add none of these.
 
 from __future__ import annotations
 
+import threading
 from datetime import timedelta
+from functools import partial
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -332,18 +334,39 @@ def test_on_a_host_that_does_not_offer_sign_in_the_refusal_does_not_offer_it(
 class _LockWaitAdvancesClock:
     """The run store's lock, where waiting to enter it from ``create`` takes
     ``wait`` on the session clock: the time another request held the lock.
-    Every other use of the lock is the real lock, untouched."""
+    Every other use of the lock is the real lock, untouched.
+
+    ``create`` is recognised by the thread it runs on, not by a frame's
+    function name: :meth:`install` wraps the store's ``create`` so that it
+    records ``threading.get_ident()`` while it runs, and the first lock entry
+    on that thread is the ``with self._lock:`` that opens ``create``. mutmut
+    renames the original body (``x…create__mutmut_orig``), so a
+    ``co_name == "create"`` check never matched inside ``./mutants/`` (W116)."""
 
     def __init__(self, real: Any, clock: Clock, wait: timedelta) -> None:
         self._real = real
         self._clock = clock
         self._wait = wait
         self.waits = 0
+        self.creating_thread: int | None = None
+
+    def install(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Put this lock and the ``create`` wrapper on the run store."""
+        # From the class, so a second install never wraps the first wrapper.
+        real_create = partial(type(query_run_repository).create, query_run_repository)
+
+        def create(*args: Any, **kwargs: Any) -> Any:
+            self.creating_thread = threading.get_ident()
+            try:
+                return real_create(*args, **kwargs)
+            finally:
+                self.creating_thread = None
+
+        monkeypatch.setattr(query_run_repository, "_lock", self)
+        monkeypatch.setattr(query_run_repository, "create", create)
 
     def __enter__(self) -> Any:
-        import sys
-
-        if sys._getframe(1).f_code.co_name == "create" and self.waits == 0:
+        if self.creating_thread == threading.get_ident() and self.waits == 0:
             self.waits += 1
             self._clock.advance(self._wait)
         return self._real.__enter__()
@@ -369,7 +392,7 @@ def test_a_run_whose_creation_waits_on_the_lock_past_720_seconds_is_refused(
     real_lock = query_run_repository._lock
     with isolated_run_semaphore(1) as permits:
         slow = _LockWaitAdvancesClock(real_lock, clock, timedelta(seconds=2))
-        monkeypatch.setattr(query_run_repository, "_lock", slow)
+        slow.install(monkeypatch)
         _left(client, SIGNED_IN, 721, clock)
         before = _spend(account)
         refused = _post(client, CREATE, csrf)
@@ -382,7 +405,7 @@ def test_a_run_whose_creation_waits_on_the_lock_past_720_seconds_is_refused(
         permits.release()
 
         slow = _LockWaitAdvancesClock(real_lock, clock, timedelta(seconds=2))
-        monkeypatch.setattr(query_run_repository, "_lock", slow)
+        slow.install(monkeypatch)
         _left(client, SIGNED_IN, 723, clock)
         created = _post(client, CREATE, csrf)
         assert slow.waits == 1

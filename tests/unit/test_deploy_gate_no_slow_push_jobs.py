@@ -21,8 +21,8 @@ Two durable invariants, enforced here so the class of bug cannot recur:
    45-minute ceiling) so it clears the longest push-job ceiling, the 45 minutes
    of ``validate-and-test`` and ``pytest (Python 3.12)``, with five minutes to
    spare.
-2. The pathological advisory ``mutation-baseline`` job (30-minute ceiling, a per-PR
-   changed-function concept meaningless on a push to main) is gated to
+2. The pathological advisory ``mutation-baseline`` job (a 50-minute ceiling since
+   W116, a per-PR changed-function concept meaningless on a push to main) is gated to
    ``pull_request`` only, so it never runs on push and cannot stall the gate at
    all. (``codex-review`` used the same ``pull_request``-only gating before it
    was removed in #166 as vacuous by construction — its only real step was

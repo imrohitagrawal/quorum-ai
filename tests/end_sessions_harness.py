@@ -30,6 +30,7 @@ from uuid import UUID, uuid4
 
 import product_app
 from product_app.session_store import SessionStore, _digest
+from tests.mutmut_cwd import mutmut_can_run_in
 from tests.subprocess_env import env_without_coverage
 
 #: The ``product_app`` the test process imported, and the ``src`` it lives in.
@@ -137,13 +138,14 @@ def run_python(
     stdout: int | None = None,
     stderr: int | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    """Run ``script`` with ``-I`` in the database's directory; this tree's
-    ``src`` is ``sys.argv[1]``. ``stdout`` / ``stderr``: a file descriptor
-    for the child's standard output or error instead of a captured pipe
-    (then that field of the result is ``None``)."""
+    """Run ``script`` with ``-I`` in the database's directory (given an empty
+    ``src`` by :func:`mutmut_can_run_in`, so the child also starts inside
+    mutmut's copy); this tree's ``src`` is ``sys.argv[1]``. ``stdout`` /
+    ``stderr``: a file descriptor for the child's standard output or error
+    instead of a captured pipe (then that field of the result is ``None``)."""
     return subprocess.run(
         [sys.executable, "-I", "-c", script, str(SRC), *args],
-        cwd=str(db_path.parent),
+        cwd=str(mutmut_can_run_in(db_path.parent)),
         env=env_without_coverage({"PATH": "/usr/bin:/bin"}, SESSION_DB_PATH=str(db_path)),
         stdout=subprocess.PIPE if stdout is None else stdout,
         stderr=subprocess.PIPE if stderr is None else stderr,
@@ -173,7 +175,7 @@ class AppProcess:
         self._stderr = self._stderr_path.open("w", encoding="utf-8")
         self._proc = subprocess.Popen(
             [sys.executable, "-I", "-c", APP_PROCESS, str(SRC), str(db_path), account_a, account_b],
-            cwd=str(db_path.parent),
+            cwd=str(mutmut_can_run_in(db_path.parent)),
             env=env_without_coverage({"PATH": "/usr/bin:/bin"}, SESSION_DB_PATH=str(db_path)),
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
