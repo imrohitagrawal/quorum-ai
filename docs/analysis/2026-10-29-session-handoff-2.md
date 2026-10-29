@@ -53,7 +53,7 @@ Written by the session. Decisions are the CHG rows named here, each a plain rest
 ## Technical traps
 
 - **`make validate`'s completion-claims check reads only committed files.** A new, untracked ADR
-  with "released" in it passed `make validate`, then failed it once committed. Commit before
+  with "released" in it was not refused by `make validate`; once committed, it was. Commit before
   trusting it.
 - **zizmor requires a Dependabot cooldown.** `make workflow-audit` reports `dependabot-cooldown`
   and fails without `cooldown.default-days` on each update entry.
