@@ -188,7 +188,7 @@ ways, so the record shows what was believed on a date and what replaced it.
 | [ADR-0184](adr/0184-public-records-are-restatements-and-the-public-content-guard-is-shared.md) | Public records are restatements, and the public-content guard is shared | Architecture | Accepted — 2026-10-29, board row W117 |
 | [ADR-0185](adr/0185-dependency-updates-are-monthly-grouped-and-wait-seven-days.md) | Dependency updates are monthly, grouped, and wait seven days | Architecture | Accepted — 2026-10-29, board rows W118 and W79 |
 | [ADR-0186](adr/0186-each-major-version-arrives-as-its-own-dependabot-pull-request.md) | Each major version arrives as its own Dependabot pull request | Architecture | Accepted — 2026-10-29, board rows W118 and W122 |
-| [ADR-0187](adr/0187-the-workspace-shows-one-run-at-a-time.md) | The workspace shows one run at a time | Architecture | Proposed — 2026-10-30, board rows W127 and W49 |
+| [ADR-0187](adr/0187-the-workspace-shows-one-run-at-a-time.md) | The workspace shows one run at a time | Architecture | Accepted — 2026-10-30, board rows W127 and W49 |
 
 **This index was itself stale** until 2026-07-30: ADR-0002 had existed since
 2026-07-19 and was never listed here. A hand-maintained index is a derived fact

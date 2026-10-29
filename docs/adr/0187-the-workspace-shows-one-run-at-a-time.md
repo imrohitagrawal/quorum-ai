@@ -2,8 +2,11 @@
 
 ## Status
 
-Proposed — 2026-10-30, board rows W127 and W49. Its status is settled when the pull request that
-builds it is decided.
+Accepted — 2026-10-30, board rows W127 and W49. It makes the page meet rules the owner has already
+accepted: ADR-0140's calls (CHG-027 (b)), among them that going home drops anything still in flight
+for the question being left and that Back returns to the view the user left. No new owner decision
+was needed. Everything below about how those rules are met is the session's design; Codex reviewed
+the plan twice before any code.
 
 ## Context
 
@@ -83,8 +86,8 @@ failed and 2 positive partners passed on `f10c754`; 14 pass after).
 
 - **A global `[hidden] { display: none !important; }`.** It would have fixed the round cards in one
   line, but it changes every component at once: `.field-error[hidden]` keeps `display: flex` on
-  purpose and hides with visibility and opacity, and 48 other `[hidden]` rules are scoped to their
-  own component. A rule that outranks every author display is a change to the whole page, not to
+  purpose and hides with visibility and opacity, and every other `[hidden]` rule in `app.css` (48
+  lines name one) is scoped to its own component. A rule that outranks every author display is a change to the whole page, not to
   this defect.
 - **Stamping the tags centrally** (in `setView`, or in one pass after each render). A central stamp
   marks a region with the current run whether or not anything re-rendered it, so the leftover
