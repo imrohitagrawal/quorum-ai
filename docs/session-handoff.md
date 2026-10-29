@@ -1,7 +1,7 @@
 # Session Handoff
 
 ## Date/time
-2026-10-29T16:27:24+05:30
+2026-10-29T23:09:38+05:30
 
 ## Open work
 `docs/65-open-work.md` — the source of truth for what is open, what blocks what,
@@ -11,24 +11,24 @@ line further down this file is the factory router's view of the lifecycle, not a
 work status.
 
 ## Latest narrative handoff
-`docs/analysis/2026-10-29-session-handoff.md` — read this for full context before editing. (today)
+`docs/analysis/2026-10-29-session-handoff-2.md` — read this for full context before editing. (today)
 
 This file is a mechanical snapshot (branch/git-status/skill-route/live state) —
 regenerated fresh every `make handoff`. The narrative above (what happened,
 what's next, the traps) lives in the dated doc it points to, not here.
 
 ## Current branch/worktree
-handoff/2026-10-29
+docs/handoff-2026-10-29-2
 
 ## Live state (measured fresh by this run, not hand-carried)
 Run `make handoff` again for current numbers instead of trusting this file
 once it ages -- every value below is read from git/gh/`/status` at
 generation time, per #134.
 
-- **`origin/main` tip:** `0b3234fcbbd2`
+- **`origin/main` tip:** `e52646e0082d`
 - **Last commit touching `src/`:** `e6d5300e955f`
-- **Production vs. last `src/` commit:** production build_sha 0b3234f is in sync: it is `origin/main`'s tip, which holds the last src/ commit e6d5300
-- **pytest collected (no execution):** 8428
+- **Production vs. last `src/` commit:** production build_sha e52646e is in sync: it is `origin/main`'s tip, which holds the last src/ commit e6d5300
+- **pytest collected (no execution):** 8438
 - **e2e lane spec counts:** invariants: 27, ops: 2, degraded: 1
 - **Open issues:** 2
 - **Changed-lines coverage:** not computed here -- `make diff-cover` shares
@@ -36,7 +36,7 @@ generation time, per #134.
   concurrently (AGENTS.md rule 15), so this file does not run it. Run
   `make quality && make diff-cover DIFF_BASE=origin/main` for a current number.
 - **Remote branches not merged into `origin/main`:**
-- None (every remote branch merges into `main`)
+- `w118/hygiene-files`
 
 ## Product readiness
 `docs/product-readiness.md`, regenerated from production's `/status` and `/ready` by this run (`make readiness`):
@@ -54,9 +54,9 @@ Prompt write hook: not installed in `.claude/settings.json`; run `.venv/bin/pyth
 ## Parked work and branches
 From `make parked-check`:
 ```text
-Parked work check: 1 remote branches, 0 open pull requests, 6 Parked lines, 0 branches with no open pull request, 0 Parked items due
+Parked work check: 6 remote branches, 4 open pull requests, 6 Parked lines, 1 branches with no open pull request, 0 Parked items due
 Remote branches with no open pull request (merge, park or delete each):
-  - none
+  - w118/hygiene-files
 Parked items whose resume-when has come (resume, re-park or close each):
   - none
 PASSED
@@ -65,7 +65,7 @@ PASSED
 ## Next session
 Paste this line to start the next session:
 ```text
-Read CONTINUE-PUBLIC-CONTENT-W117-W118-PROMPT.md in the repo root and follow it exactly.
+Read CONTINUE-GUARD-HYGIENE-FLAKES-W117-W118-W121-W62-PROMPT.md in the repo root and follow it exactly.
 ```
 
 ## Leftovers
@@ -74,7 +74,9 @@ From `make session-clean`, which reports and never deletes.
 Feature branches and worktrees:
 - `worktree ~/Projects/quorum-ai-handoff` — remove with 'git worktree remove' once its branch is merged
 - `worktree ~/Projects/quorum-ai-w113` — remove with 'git worktree remove' once its branch is merged
+- `worktree ~/Projects/quorum-ai-w118` — remove with 'git worktree remove' once its branch is merged
 - `worktree ~/Projects/quorum-ai-w873f` — remove with 'git worktree remove' once its branch is merged
+- `branch w118/hygiene-files` — content already on refs/remotes/origin/main, squash-aware; CHECKED OUT at ~/Projects/quorum-ai-w118 -- remove that worktree first. Delete by hand: git branch -D -- w118/hygiene-files
 ```
 
 ## Current phase
@@ -132,12 +134,16 @@ Operate, learn, and improve
 
 ## Git status
 ```text
-clean
+M docs/65-open-work.md
+R  CONTINUE-PUBLIC-CONTENT-W117-W118-PROMPT.md -> docs/archive/2026-10/CONTINUE-PUBLIC-CONTENT-W117-W118-PROMPT.md
+?? CONTINUE-GUARD-HYGIENE-FLAKES-W117-W118-W121-W62-PROMPT.md
+?? docs/analysis/2026-10-29-session-handoff-2.md
 ```
 
 ## Diff stat
 ```text
-no unstaged diff
+docs/65-open-work.md | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
 ```
 
 ## Completed in this session
