@@ -47,7 +47,9 @@ def test_codeowners_names_a_real_owner_for_every_path() -> None:
         owners = parts[1:]
         assert owners, parts
         for owner in owners:
-            assert re.fullmatch(r"@[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:/[\w.-]+)?", owner), owner
+            assert re.fullmatch(r"@[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:/[\w.-]+)?", owner), (
+                owner
+            )
 
 
 def _updates() -> list[dict[str, Any]]:
