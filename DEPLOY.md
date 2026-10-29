@@ -215,7 +215,8 @@ which live for `CONFIRMATION_TOKEN_TTL` (5 minutes, `src/product_app/costs.py`);
 those outstanding in that window stop working, so one confirmation click may
 need repeating. It also keys each network's anonymous daily allowance and a
 deleted account's 24-hour spend carry (`src/product_app/session_store.py`):
-after a rotation every network's allowance starts again (ADR-0144), and an
+after a rotation every network's allowance, and its running total held in
+memory, starts again (ADR-0144), and an
 account deleted before it and re-created after it starts fresh (ADR-0136).
 Sessions and live accounts' allowances are unaffected. The full list of
 secrets is in `docs/84-incident-response.md`.
@@ -416,7 +417,7 @@ Two caveats, read from the help text of flyctl 0.4.113, not tested:
 
 | Variable | Required in prod? | Source | Notes |
 |----------|-------------------|--------|-------|
-| `QUORUM_TOKEN_SECRET` | **Yes** | `fly secrets set` | Random 32+ byte hex. HMAC key for **cost-confirmation** tokens (`CostEstimationService`, `src/product_app/costs.py`) — **not** sessions. App refuses to start if missing. |
+| `QUORUM_TOKEN_SECRET` | **Yes** | `fly secrets set` | Random 32+ byte hex. HMAC key for **cost-confirmation** tokens (`CostEstimationService`, `src/product_app/costs.py`) and for each network's anonymous spend key and a deleted account's spend carry (`src/product_app/session_store.py`) — **not** sessions. App refuses to start if missing. See "Rotate the token secret" above. |
 | `RUNTIME_ENVIRONMENT` | **Yes** | `fly.toml` (env) | Set to `production`. Triggers stricter validation. |
 | `SESSION_COOKIE_SECURE` | **Yes** | `fly.toml` (env) | `true` in production. App refuses to start if `false` in prod. |
 | `ACCOUNT_LEGACY_HEADER_ENABLED` | No | `fly.toml` (env) | `false` (default). Allows old clients to send `X-Account-Id` header. Disabled by default for security. |

@@ -19,9 +19,9 @@ Please keep the details private until a fix is in production.
 
 ## Supported versions
 
-Only the current `main` branch is supported. Production runs a commit from `main`, deployed
-after that commit's checks pass (`GET /status` reports it as `build_sha`), so a fix ships as a
-pull request to `main`.
+Only the current `main` branch is supported. Production runs a commit from `main` (`GET /status`
+reports it as `build_sha`): deployed automatically after that commit's checks pass, or by a
+manual deploy run from `main`. A fix ships as a pull request to `main`.
 
 ## How this repository is protected
 
