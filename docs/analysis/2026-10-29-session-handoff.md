@@ -55,12 +55,12 @@ Written by the session. Decisions are the CHG rows named here; each is a plain r
 
 - **zsh does not split an unquoted variable into words.** `cmd $ARGS` passes one argument, not
   several; use an array or write the arguments out.
-- **A gate's log is not available until the whole workflow run finishes.** To read one job early,
-  download that job's uploaded artifact instead of waiting for the log.
+- **`gh run view --log` for one job can answer "still in progress" until the whole workflow run
+  finishes.** To read a finished job early, download that job's uploaded artifact.
 - **A guard that skips paths missing locally behaves differently on CI.** `npm ci` creates
   `e2e/node_modules` on the runner, so a path that is absent on a fresh local copy exists there.
-- **`uv run` in a fresh copy of the tree builds an empty environment** unless
-  `UV_PROJECT_ENVIRONMENT` points at an existing one, and tests that start a child process then
-  fail.
+- **In a fresh copy of the tree, tests that start `make` or `uv run` as a child can fail** because
+  `uv` builds a new environment for the copy; pointing `UV_PROJECT_ENVIRONMENT` at the existing one
+  avoids it.
 - **Editing a pull request's body re-runs CI**, because the CI workflow fires on `edited`. Settle
   the body before the last push.
