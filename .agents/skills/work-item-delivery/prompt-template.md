@@ -2,8 +2,10 @@
 
 <!--
 How to use this template (ADR-0169):
-- Copy this file to the repository root as CONTINUE-AREA-ROWS-PROMPT.md, in capitals, digits
-  and dashes, with at least one board row: for example CONTINUE-SECURITY-W82-W71-W81-PROMPT.md.
+- Fill this in and keep it in the owner's private notes (CHG-102). Until W117 part 2, also commit a
+  short pointer at the root named CONTINUE-AREA-ROWS-PROMPT.md (capitals, digits and dashes, at
+  least one board row): the four headings and the Process line, "Read first" naming the full prompt
+  in the owner's private notes, and "Approvals" saying they are stated there. Nothing else from it.
 - Keep the four level-2 headings below exactly as written. `make prompt-check` refuses a root prompt
   without them, without the Process line, or with another name.
 - Name the items, the decisions to read and the approvals. Do not restate the process: it lives in

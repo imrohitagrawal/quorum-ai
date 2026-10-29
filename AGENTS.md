@@ -774,12 +774,12 @@ to different places:
 | Kind | Example | Home |
 |---|---|---|
 | Session **output** — a record of what happened | `HANDOFF-*`, `*-RESULT.md`, dated triage/analysis docs | `docs/archive/` (or `docs/analysis/` if it stays actively referenced) |
-| Executable **procedure** — text a future session runs | a root `*PROMPT*.md` with a `**Process:**` line; the process itself is `.agents/skills/work-item-delivery/SKILL.md` | root until its session has run, then `docs/archive/<month>/` |
+| Executable **procedure** — text a future session runs | the next-session prompt (kept privately, CHG-102; a short root pointer until W117 part 2); the process itself is `.agents/skills/work-item-delivery/SKILL.md` | the owner's private notes; a root pointer moves to `docs/archive/<month>/` once run |
 
 **The rule is "session output never accumulates at root," not "session
 artifacts never at root."** The blunt version would forbid
-the next session's prompt itself — an executable procedure correctly kept
-at root until it has run — and a rule that forbids the thing you're holding
+the next session's pointer file — kept at root until its session has run
+(the prompt itself is private, CHG-102) — and a rule that forbids the thing you're holding
 gets ignored rather than followed. If you're not sure which kind a file
 is, ask: would a future session **run** this, or does it only **read**
 this to see what a past session did? Running → procedure → root/skills.
