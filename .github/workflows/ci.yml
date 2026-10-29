@@ -85,6 +85,10 @@ jobs:
           version: "0.13.0"
       - name: Install dependencies
         run: uv sync --locked --all-extras
+      # W117 (ADR-0184): first after the install, so a committed key or home
+      # path fails this job in its first minutes, not after the unit tests.
+      - name: Security scan
+        run: make security-scan
       - name: Validate enterprise factory gates
         run: make validate
       - name: Assert openapi.yaml is in sync with app.openapi()
@@ -97,8 +101,6 @@ jobs:
         run: make type-check
       - name: Unit tests
         run: make test-report
-      - name: Security scan
-        run: make security-scan
       # W69 (ADR-0166): zizmor audits every workflow and composite action
       # under .github, offline, with .github/zizmor.yml (every outside action
       # pinned to a commit id; it flags ${{ }} in run: that may carry text

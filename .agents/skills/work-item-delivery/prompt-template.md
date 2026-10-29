@@ -2,19 +2,22 @@
 
 <!--
 How to use this template (ADR-0169):
-- Copy this file to the repository root as CONTINUE-AREA-ROWS-PROMPT.md, in capitals, digits
-  and dashes, with at least one board row: for example CONTINUE-SECURITY-W82-W71-W81-PROMPT.md.
+- Fill this in and keep it in the owner's private notes (CHG-102). Until W117 part 2, also commit a
+  short pointer at the root named CONTINUE-AREA-ROWS-PROMPT.md (capitals, digits and dashes, at
+  least one board row): the four headings and the Process line, "Read first" naming the full prompt
+  in the owner's private notes, and "Approvals" saying they are stated there. Nothing else from it.
 - Keep the four level-2 headings below exactly as written. `make prompt-check` refuses a root prompt
   without them, without the Process line, or with another name.
 - Name the items, the decisions to read and the approvals. Do not restate the process: it lives in
   the skill the Process line names. Scope belongs on the board (docs/65-open-work.md), not here.
-- Commit the prompt in the handoff pull request, so CI checks it too.
+- Keep the filled-in prompt in the owner's private notes (CHG-102). Until W117 changes
+  `make prompt-check`, only a short pointer file in this shape goes to the repository root.
 - Words such as merged, approved or in production need a cited pull request, commit or CHG row
   in the same paragraph, or `make validate` refuses the committed prompt (ADR-0162).
 - Delete this comment block when you fill the template in.
 -->
 
-Written by the session of DATE (transcript `SESSION-ID-8`). This file is
+Written by the session of DATE. This file is
 the session's wording. The owner's decisions are the CHG rows it names.
 
 **Process:** every item is built by `.agents/skills/work-item-delivery/SKILL.md`. Read it first,
@@ -53,8 +56,10 @@ Each needs every required gate green and every reproduced blocker fixed. Nothing
 ## End of session
 
 1. Write the narrative handoff. Every "merged" or "in production" must cite its pull request.
-2. Write the next session's prompt from `.agents/skills/work-item-delivery/prompt-template.md`.
+2. Write the next session's prompt from `.agents/skills/work-item-delivery/prompt-template.md`
+   and keep it in the owner's private notes (CHG-102).
 3. In the handoff pull request, move this file into `docs/archive/YYYY-MM/` (run `ls` there first;
-   add a date suffix if the name exists) and commit the next prompt at the root.
+   add a date suffix if the name exists). Until W117 changes `make prompt-check`, commit only a
+   short pointer file at the root, in this template's shape, naming the board rows.
 4. Run `make handoff` last. It prints the line for the owner to paste; end the closing status block
    with that line under "Next action".
