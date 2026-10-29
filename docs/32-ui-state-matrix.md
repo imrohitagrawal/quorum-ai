@@ -65,9 +65,12 @@ terminal failure. "—" means the state is structurally impossible for that view
   - **Running:** status `running` — blue; stage strip + per-model statuses advance; elapsed ticks; N/4 counts completed-only.
   - **Partial:** status `partial` (carries synthesis) — transitions to V-RESULT with disclosure of which steps did not complete (**AC-022**) via `#live-notices` + result notices; no fabricated N/4 richness.
   - **Failed:** status `failed` (no synthesis) — `showProviderFailure` raises the `#error-region` banner (user-safe, no secrets/slot#, **AC-015**) and STAYS on live-run.
-  - **Terminal:** a terminal status with `final_synthesis` present → transitions to V-RESULT (handled exactly once via `state.terminalHandled`); otherwise stays here (no premature result view). `timed_out` → generic TIMEOUT banner.
-- **Empty:** before the first poll returns, `#live-status-text` reads "Starting…"; no stage marked done, no invented latency.
-- **Loading:** the running sub-state *is* the loading state; `state.liveSig` per-region change-detection prevents 750ms churn / announce-spam.
+  - **Terminal:** a terminal status goes through `finishRun(result, scope)`, once per run scope (`state.runScope`, ADR-0187): it transitions to V-RESULT when the result is showable (`resultIsShowable`: a panel run with `final_synthesis`, or a quick run whose one answer completed with text, ADR-0128); otherwise it stays here (no premature result view). `timed_out` → generic TIMEOUT banner. Every terminal run gets one "This session" entry.
+  - **Quick:** a quick run's live view shows the answer stage alone; the debate area is emptied and hidden (`.live-debate[hidden]`), so no earlier panel run's round cards stay on screen.
+  - **Stop:** "Stop run" closes the run's scope and is disabled while its DELETE is in flight; a poll that answers meanwhile is dropped. The DELETE's answer goes through `finishRun` too, so the toast says what the server returned: "Run cancelled." only for `cancelled`, and a run that had already finished opens its result. A failed DELETE gives Stop back and polling goes on.
+  - **Late answers:** a poll's answer (or failure) is acted on only for the scope it was sent for, while that scope is open and not finished, and only when it is for that scope's run (ADR-0187).
+- **Empty:** before the first poll returns, `#live-status-text` reads "Starting…"; no stage marked done, no invented latency. A run adopted through "Go to run" shows "—" as its question (its answer carries none).
+- **Loading:** the running sub-state *is* the loading state; `state.liveSig` per-region change-detection prevents 750ms churn / announce-spam (reset for each new run scope).
 - **Error:** failed/partial disclosed in `#live-notices` in-card (the planning aside is `display:none` while active); `liveNoticesHaveContent()` keeps toast copy honest; correlation id surfaced where present.
 - **Mock-only richness deliberately DROPPED for honesty:** per-model debate stances, streaming/typing, "spend so far", per-stage timing/cost, queued/responding statuses.
 
