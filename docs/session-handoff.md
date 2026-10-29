@@ -1,7 +1,7 @@
 # Session Handoff
 
 ## Date/time
-2026-10-28T15:21:57+05:30
+2026-10-29T16:27:24+05:30
 
 ## Open work
 `docs/65-open-work.md` — the source of truth for what is open, what blocks what,
@@ -11,24 +11,24 @@ line further down this file is the factory router's view of the lifecycle, not a
 work status.
 
 ## Latest narrative handoff
-`docs/analysis/2026-10-28-session-handoff.md` — read this for full context before editing. (today)
+`docs/analysis/2026-10-29-session-handoff.md` — read this for full context before editing. (today)
 
 This file is a mechanical snapshot (branch/git-status/skill-route/live state) —
 regenerated fresh every `make handoff`. The narrative above (what happened,
 what's next, the traps) lives in the dated doc it points to, not here.
 
 ## Current branch/worktree
-docs/handoff-2026-10-28-b
+handoff/2026-10-29
 
 ## Live state (measured fresh by this run, not hand-carried)
 Run `make handoff` again for current numbers instead of trusting this file
 once it ages -- every value below is read from git/gh/`/status` at
 generation time, per #134.
 
-- **`origin/main` tip:** `a3f6a1441808`
+- **`origin/main` tip:** `0b3234fcbbd2`
 - **Last commit touching `src/`:** `e6d5300e955f`
-- **Production vs. last `src/` commit:** production build_sha a3f6a14 is in sync: it is `origin/main`'s tip, which holds the last src/ commit e6d5300
-- **pytest collected (no execution):** 8395
+- **Production vs. last `src/` commit:** production build_sha 0b3234f is in sync: it is `origin/main`'s tip, which holds the last src/ commit e6d5300
+- **pytest collected (no execution):** 8428
 - **e2e lane spec counts:** invariants: 27, ops: 2, degraded: 1
 - **Open issues:** 2
 - **Changed-lines coverage:** not computed here -- `make diff-cover` shares
@@ -44,17 +44,17 @@ product readiness: verdict Not ready, written to docs/product-readiness.md
 
 ## Board and GitHub
 From `make board-github-check`: DONE rows whose issue is still open, and open issues no row cites.
-board vs GitHub: 112 board rows, 2 open issues
+board vs GitHub: 118 board rows, 2 open issues
   the board and GitHub agree
 
 ## Root prompt check
-`PASSED` (checked 2, exempt 1; `make prompt-check`)
+`PASSED` (checked 1, exempt 1; `make prompt-check`)
 Prompt write hook: not installed in `.claude/settings.json`; run `.venv/bin/python scripts/prompt_write_hook.py --install .`
 
 ## Parked work and branches
 From `make parked-check`:
 ```text
-Parked work check: 1 remote branches, 0 open pull requests, 5 Parked lines, 0 branches with no open pull request, 0 Parked items due
+Parked work check: 1 remote branches, 0 open pull requests, 6 Parked lines, 0 branches with no open pull request, 0 Parked items due
 Remote branches with no open pull request (merge, park or delete each):
   - none
 Parked items whose resume-when has come (resume, re-park or close each):
@@ -63,18 +63,16 @@ PASSED
 ```
 
 ## Next session
-There are 2 validly named root prompts; only one should be left for the next session. Archive the others.
-The lines of those that pass:
+Paste this line to start the next session:
 ```text
-Read CONTINUE-BYOK-BUILD-W28-PROMPT.md in the repo root and follow it exactly.
-Read CONTINUE-CI-SECURITY-W115-W116-W114-W113-W80-W75-W76-PROMPT.md in the repo root and follow it exactly.
+Read CONTINUE-PUBLIC-CONTENT-W117-W118-PROMPT.md in the repo root and follow it exactly.
 ```
 
 ## Leftovers
 From `make session-clean`, which reports and never deletes.
 ```text
 Feature branches and worktrees:
-- `worktree ~/Projects/quorum-ai-handoff3` — remove with 'git worktree remove' once its branch is merged
+- `worktree ~/Projects/quorum-ai-handoff` — remove with 'git worktree remove' once its branch is merged
 - `worktree ~/Projects/quorum-ai-w113` — remove with 'git worktree remove' once its branch is merged
 - `worktree ~/Projects/quorum-ai-w873f` — remove with 'git worktree remove' once its branch is merged
 ```
@@ -134,20 +132,12 @@ Operate, learn, and improve
 
 ## Git status
 ```text
-M CONTINUE-CI-SECURITY-W115-W116-W114-W113-W80-W75-W76-PROMPT.md
- M docs/19-change-control-log.md
- M docs/65-open-work.md
- M docs/analysis/2026-10-28-session-handoff.md
-?? docs/owner-answers/CHG-098.json
+clean
 ```
 
 ## Diff stat
 ```text
-CONTINUE-CI-SECURITY-W115-W116-W114-W113-W80-W75-W76-PROMPT.md | 5 +++--
- docs/19-change-control-log.md                                  | 1 +
- docs/65-open-work.md                                           | 4 ++--
- docs/analysis/2026-10-28-session-handoff.md                    | 7 ++++++-
- 4 files changed, 12 insertions(+), 5 deletions(-)
+no unstaged diff
 ```
 
 ## Completed in this session
