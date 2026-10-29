@@ -6,7 +6,7 @@ original, because a gate and an offline agent can read it and cannot read `gh`.
 
 Verified at: `e6d5300e955fb25cf1c523b3c967953f31bc04f2`
 
-The board holds **118** rows, **62** of them unpinned.
+The board holds **119** rows, **62** of them unpinned.
 
 `scripts/check_open_work.py --check` reads every row's evidence off disk and
 refuses if a claim is false. It runs inside `make validate`, and
@@ -214,7 +214,7 @@ caught by any automated check and 10 of 16 by adversarial review
 | W119 | Process sized to risk (CHG-103): review tiers by risk, keeping at every tier the completeness critic, a Codex review of any document that carries a decision, and a final prose check of the pull request body; the tier and the roles stated in the pull request body, advisory; a weekly report; no net growth of `AGENTS.md`; and the handoff design reworked | UNPINNED | `—` | — | — |
 | W120 | Two mutants of `product_app.pdf_text.is_garbled` survive, `x_is_garbled__mutmut_9` and `x_is_garbled__mutmut_12`: found by the confirmation probe #598 (closed unmerged), run 40853766761, which printed a score of 86.7% (13 killed, 2 survived; threshold 80%). Strengthen the boundary tests until both are killed (CHG-103) | UNPINNED | `—` | — | — |
 | W121 | Flaky tests (CHG-103): `tests/unit/test_history_sweep.py::test_a_raising_purge_does_not_skip_the_sweep` races the cleanup daemon, seen as `['purge', 'purge'] == ['purge']` on #597's coverage job; the signed-in e2e `store-unchecked.spec.ts` test "J1p at 390" timed out once on #597. Reproduce each, then fix | UNPINNED | `—` | — | — |
-| W122 | CI actions on Node 20 (ADR-0186): five of the six actions the workflows pin target Node 20, which GitHub deprecates (main's CI warns "Node.js 20 is deprecated" and forces them onto Node 24): `actions/checkout` v4.4.0 (latest v7), `actions/setup-python` v5.6.0 (v7), `actions/upload-artifact` v4.6.2 (v7), `actions/setup-node` v4.4.0 (v7) and `astral-sh/setup-uv` v5.4.2 (v10). Dependabot opens each major as its own pull request; take each as its own work item, keeping the pin to a full commit | UNPINNED | `—` | — | — |
+| W122 | CI actions on Node 20 (ADR-0186): five of the six actions the workflows pin target Node 20, which GitHub deprecates (main's CI warns "Node.js 20 is deprecated" and forces them onto Node 24): `actions/checkout` v4.4.0 (latest v7), `actions/setup-python` v5.6.0 (v7), `actions/upload-artifact` v4.6.2 (v7), `actions/setup-node` v4.4.0 (v7) and `astral-sh/setup-uv` v5.4.2 (v10). Dependabot opens each major as its own pull request; take each as its own work item, keeping the pin to a full commit | PENDING | `PRESENT@e52646e .github/workflows/ci.yml :: actions/checkout@11d5960a326750d5838078e36cf38b85af677262` | — | — |
 
 **STOP** marks a row that cannot be finished without a human decision — a money,
 cost or safety guardrail value that only real measurement could justify. Do not
