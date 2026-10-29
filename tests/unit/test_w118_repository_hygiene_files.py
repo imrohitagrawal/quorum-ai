@@ -97,8 +97,12 @@ def test_every_dependabot_entry_is_monthly_grouped_and_waits_seven_days() -> Non
         assert group["update-types"] == ["minor", "patch"], name
         assert update["cooldown"]["default-days"] == 7, name
         # ADR-0186: a major is never ignored, so Dependabot opens it on its own.
+        # A rule with no update-types ignores every update, majors included.
         for rule in update.get("ignore", []):
-            assert "version-update:semver-major" not in rule.get("update-types", []), name
+            types = rule.get("update-types")
+            assert types and "version-update:semver-major" not in types, (name, rule)
+        # The default limit, 5, would hold back a sixth open major.
+        assert update["open-pull-requests-limit"] >= 10, name
 
 
 def test_security_policy_points_at_the_private_report_form() -> None:

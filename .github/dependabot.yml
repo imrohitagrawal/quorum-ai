@@ -1,6 +1,7 @@
 # Monthly updates for every lock file in the repository (W118). Minor and
 # patch updates are grouped; each major version arrives as its own pull request
-# and is its own work item (ADR-0186).
+# and is its own work item (ADR-0186). Up to 10 open version-update pull
+# requests per ecosystem (the default, 5, would hold back a sixth major).
 # Each waits 7 days after a release before it is proposed (zizmor's
 # dependabot-cooldown audit). Alerts for known vulnerabilities are separate
 # from this schedule.
@@ -12,6 +13,7 @@ updates:
       interval: "monthly"
     cooldown:
       default-days: 7
+    open-pull-requests-limit: 10
     groups:
       python:
         patterns: ["*"]
@@ -22,6 +24,7 @@ updates:
       interval: "monthly"
     cooldown:
       default-days: 7
+    open-pull-requests-limit: 10
     groups:
       e2e:
         patterns: ["*"]
@@ -32,6 +35,7 @@ updates:
       interval: "monthly"
     cooldown:
       default-days: 7
+    open-pull-requests-limit: 10
     groups:
       actions:
         patterns: ["*"]

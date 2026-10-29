@@ -23,12 +23,17 @@ would leave that to be noticed by hand.
 
 1. No `ignore` rule for major versions. Each group still takes only minor and patch updates, so a
    major falls outside every group and Dependabot opens it as its own pull request, on the same
-   monthly schedule and 7-day wait.
+   monthly schedule and 7-day wait. Each ecosystem allows 10 open version-update pull requests,
+   because Dependabot stops opening new ones at its default limit of 5, and the workflows' actions
+   alone have five majors waiting.
 2. Each such pull request is its own work item: its release notes and breaking changes read, its
    own CI run green, and, for an action, the pin kept to a full commit.
-3. Board row W122 tracks the five actions on Node 20.
+3. Board rows W122 to W126 track the five actions on Node 20, one row per action, each pinned on
+   that action's current pin, which its major pull request replaces in every workflow.
 
-`tests/unit/test_w118_repository_hygiene_files.py` fails if any entry ignores major versions.
+`tests/unit/test_w118_repository_hygiene_files.py` fails if any entry ignores major versions
+(including an ignore rule with no update types, which ignores everything) or allows fewer than 10
+open pull requests.
 
 ## Alternatives rejected
 
