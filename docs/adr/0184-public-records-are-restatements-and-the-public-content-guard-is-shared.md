@@ -33,7 +33,7 @@ written plan found five blocking gaps:
 A shared guard for the same purpose already exists outside this repository, and its design
 handles the first two. It was measured against a shared test set (planted values that must be
 blocked, clean text that must pass); the cases it does not yet cover were reported to its
-maintainers, who will fix them before this repository adopts it.
+maintainers, and this repository adopts it only once it passes that test set.
 
 ## Decision
 

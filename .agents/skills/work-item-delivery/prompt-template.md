@@ -54,8 +54,10 @@ Each needs every required gate green and every reproduced blocker fixed. Nothing
 ## End of session
 
 1. Write the narrative handoff. Every "merged" or "in production" must cite its pull request.
-2. Write the next session's prompt from `.agents/skills/work-item-delivery/prompt-template.md`.
+2. Write the next session's prompt from `.agents/skills/work-item-delivery/prompt-template.md`
+   and keep it in the owner's private notes (CHG-102).
 3. In the handoff pull request, move this file into `docs/archive/YYYY-MM/` (run `ls` there first;
-   add a date suffix if the name exists) and commit the next prompt at the root.
+   add a date suffix if the name exists). Until W117 changes `make prompt-check`, commit only a
+   short pointer file at the root, in this template's shape, naming the board rows.
 4. Run `make handoff` last. It prints the line for the owner to paste; end the closing status block
    with that line under "Next action".
