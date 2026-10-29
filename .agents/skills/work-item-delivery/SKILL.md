@@ -220,11 +220,11 @@ mode, never a shell `&`, and give every wait a time limit.
   the leftovers, and prints the line the owner pastes into the next session. Run it last.
 - The narrative goes in `docs/analysis/<date>-session-handoff.md`: what shipped, what is open, the
   traps. Every "merged" or "in production" cites the pull request or commit.
-- The next prompt is copied from `prompt-template.md`, beside this file, and named
-  `CONTINUE-AREA-ROWS-PROMPT.md` in capitals, digits and dashes, with at least one board row
-  (ADR-0169). It keeps the template's four sections and is short. `make prompt-check` refuses one
-  that does not. The handoff pull request commits it at the root, so CI checks it; the session that
-  runs it moves it to `docs/archive/YYYY-MM/`.
+- The next prompt is copied from `prompt-template.md`, beside this file, keeps the template's four
+  sections and is short. It is kept in the owner's private notes, not in this repository
+  (CHG-102). Until W117 changes `make prompt-check`, the root holds only a short pointer file named
+  `CONTINUE-AREA-ROWS-PROMPT.md` (ADR-0169) that names the board rows and none of the private
+  prompt's content; the session that runs it moves it to `docs/archive/YYYY-MM/`.
 - The closing status block ends with the line `make handoff` printed, under "Next action":
   `Read CONTINUE-AREA-ROWS-PROMPT.md in the repo root and follow it exactly.`
 - A session started inside a worktree runs

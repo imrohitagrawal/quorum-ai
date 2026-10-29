@@ -15,7 +15,9 @@ skill's inputs, prose auditor and quality bar; the next-session prompt template;
 identifiers into public files.
 
 Text published outside the tree (pull-request bodies, issue comments, merge messages) passes no
-scan at all. `scripts/security_scan.py` reads only the files git could commit.
+public-content scan. `scripts/security_scan.py` reads only the files git could commit; the
+close-keyword guard reads pull-request titles and bodies, and `make close-guard` the merge text,
+for issue-close keywords only.
 
 A scanner for this text was planned here, built from `scripts/security_scan.py`. A review of its
 written plan found five blocking gaps:
@@ -25,23 +27,22 @@ written plan found five blocking gaps:
 | The destination | visibility read from `origin`, while `git push other` or `gh api repos/OWNER/OTHER/...` writes elsewhere |
 | What a push sends | the current branch scanned, while `git push origin other:main`, `--all` or tags send other commits; `git log -p` leaves out merge resolutions |
 | Text outside the command line | `gh pr merge --body-file`, release notes, text typed in an editor |
-| An override | the term list found through an environment variable an agent can point at an empty list |
+| An override | a setting an agent could change to switch the check off |
 | The scan itself | an example line in the plan that the existing secret scan rejects |
 
-A shared guard built outside this repository was already in review and handles the first three.
-Measured against a shared test set (planted values that must be blocked, clean text that must
-pass): it blocks home paths, personal email addresses, GitHub tokens, AWS key ids, private-key
-blocks and every private term, in 68 ms a scan. It misses tool and transcript identifiers,
-session links and OpenRouter keys, and an environment variable can switch its term list off;
-those findings went to its maintainers.
+A shared guard for the same purpose already exists outside this repository, and its design
+handles the first two. It was measured against a shared test set (planted values that must be
+blocked, clean text that must pass); the cases it does not yet cover were reported to its
+maintainers, who will fix them before this repository adopts it.
 
 ## Decision
 
 1. A public record states the decision, its basis and its trade-offs, with the date. It quotes no
    one and carries no session identifier or internal discussion. The exact record stays in the
    owner's private notes. The four places that required exact words now say this.
-2. This repository builds no public-content scanner. It adopts the shared guard when it is
-   released: its CI step (advisory first) and a scan of the merge text in `make close-guard`.
+2. This repository builds no public-content scanner. It adopts the shared guard once it is
+   available and passes the shared test set: its CI step (advisory first) and a scan of the
+   merge text in `make close-guard`.
 3. The secret scan (`make security-scan`) runs first after the install step of
    `validate-and-test`, before the unit tests.
 
@@ -54,9 +55,11 @@ those findings went to its maintainers.
 
 ## Consequences
 
-- Until the shared guard is released, text is checked by hand with it before each publish.
+- Until the shared guard is available, text is checked by hand with it before each publish.
 - A reader can no longer compare a CHG row with the wording of the answer it records.
-- A committed key or home path fails `validate-and-test` before the unit tests (the full suite took 14 minutes
-  21 seconds in a local `make quality` run on 2026-10-29); `tests/unit/test_w117_secret_scan_runs_before_tests.py` pins the order.
+- A committed key or home path fails `validate-and-test` before the unit tests. On main's CI run
+  for `88f618d` (run 40868586655), the "Unit tests" step took 33 minutes 57 seconds and the
+  scan 20 seconds after it. `tests/unit/test_w117_secret_scan_runs_before_tests.py` pins the
+  order.
 - The files here from before CHG-102 that quote the owner are moved out by the cleanup of the
   existing public records (CHG-103), not by this change.

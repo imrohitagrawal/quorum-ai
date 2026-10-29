@@ -8,7 +8,8 @@ How to use this template (ADR-0169):
   without them, without the Process line, or with another name.
 - Name the items, the decisions to read and the approvals. Do not restate the process: it lives in
   the skill the Process line names. Scope belongs on the board (docs/65-open-work.md), not here.
-- Commit the prompt in the handoff pull request, so CI checks it too.
+- Keep the filled-in prompt in the owner's private notes (CHG-102). Until W117 changes
+  `make prompt-check`, only a short pointer file in this shape goes to the repository root.
 - Words such as merged, approved or in production need a cited pull request, commit or CHG row
   in the same paragraph, or `make validate` refuses the committed prompt (ADR-0162).
 - Delete this comment block when you fill the template in.
