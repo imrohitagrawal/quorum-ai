@@ -31,15 +31,15 @@ The four points that used to disagree are settled here (CHG-040 (b)):
 
 - Answering a question, or a read-only analysis that changes no file. Use a research fan-out, but
   still add the falsification lens and the completeness critic (see Procedure, step 1).
-- Another repository. The generic version is planned for `stackclimb-skills` (package E).
+- Another repository. This file is quorum-ai's own process.
 
 ## Inputs
 
-- The item: a board row in `docs/65-open-work.md`, or the owner's words.
+- The item: a board row in `docs/65-open-work.md`, or the owner's request.
 - The route: `make skill-route ITEM=<row id>` or `make skill-route DIFF=origin/main`. It names the
   classes the change touches and the roles, checks and owner decisions each class adds.
-- Decisions already made: `docs/19-change-control-log.md` and `docs/adr/`. The owner's words:
-  `docs/analysis/<date>/OWNER-DISCUSSION-LOG.md` or the transcript's `type: user` records.
+- Decisions already made: `docs/19-change-control-log.md` and `docs/adr/`. The exact record of
+  each decision is kept in the owner's private notes, outside this repository (CHG-102).
 - The approval in the prompt: which pull requests may be pushed, merged and deployed.
 
 ## Owned outputs
@@ -109,7 +109,7 @@ The four points that used to disagree are settled here (CHG-040 (b)):
 | User-journey tester | Before the build: writes what the owner expects to see and do, step by step, from `docs/113-user-journeys.md`, signed in and anonymous. After: drives the real app at desktop and phone widths and reports each expectation as met or not, with a screenshot | Any change a user can see |
 | Builder | Makes the tests pass. May not edit the test designer's files | Every change |
 | Break-it reviewer | Runs the code and tries to make it give a wrong answer. This is also the correctness pass `AGENTS.md` asks for | Each round |
-| Prose auditor | For every number, superlative and causal claim in comments, commits, PR body and docs, names the command that produces it, or marks it UNVERIFIED. Checks attributions against the transcript's `type: user` records | Each round |
+| Prose auditor | For every number, superlative and causal claim in comments, commits, PR body and docs, names the command that produces it, or marks it UNVERIFIED. Checks that an attribution to the owner matches a CHG row, and that the text would read as a principal engineer's work to a stranger: no quotes, ids, costs, paths or internal discussion | Each round |
 | Falsification lens | Plants one false claim, or deletes one guard, and checks that something goes red | Each round |
 | Codex | Reviews the written plan before any code, then the pull request's worktree in each round | The plan, and each round |
 | Completeness critic | Asks which questions and which kinds of evidence went unused | Once, after round 2 |
@@ -199,7 +199,7 @@ mode, never a shell `&`, and give every wait a time limit.
 - Every claim in the pull request names the command that produced it.
 - Count what the item asked for against what was built, line by line, before calling it done.
 - Every test has a "red when" line and was shown failing; a negative check has a positive partner.
-- Every owner decision cited has a CHG row with the owner's exact words and the time.
+- Every owner decision cited has a CHG row restating it plainly, with the date.
 - Production is checked by job, by `build_sha` and by something visible.
 
 ## Validation
@@ -220,11 +220,11 @@ mode, never a shell `&`, and give every wait a time limit.
   the leftovers, and prints the line the owner pastes into the next session. Run it last.
 - The narrative goes in `docs/analysis/<date>-session-handoff.md`: what shipped, what is open, the
   traps. Every "merged" or "in production" cites the pull request or commit.
-- The next prompt is copied from `prompt-template.md`, beside this file, and named
-  `CONTINUE-AREA-ROWS-PROMPT.md` in capitals, digits and dashes, with at least one board row
-  (ADR-0169). It keeps the template's four sections and is short. `make prompt-check` refuses one
-  that does not. The handoff pull request commits it at the root, so CI checks it; the session that
-  runs it moves it to `docs/archive/YYYY-MM/`.
+- The next prompt is copied from `prompt-template.md`, beside this file, keeps the template's four
+  sections and is short. It is kept in the owner's private notes, not in this repository
+  (CHG-102). Until W117 changes `make prompt-check`, the root holds only a short pointer file named
+  `CONTINUE-AREA-ROWS-PROMPT.md` (ADR-0169) that names the board rows and none of the private
+  prompt's content; the session that runs it moves it to `docs/archive/YYYY-MM/`.
 - The closing status block ends with the line `make handoff` printed, under "Next action":
   `Read CONTINUE-AREA-ROWS-PROMPT.md in the repo root and follow it exactly.`
 - A session started inside a worktree runs
