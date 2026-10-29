@@ -2,7 +2,8 @@
 
 ## Status
 
-Accepted — 2026-10-30, board rows W127 and W49.
+Proposed — 2026-10-30, board rows W127 and W49. Its status is settled when the pull request that
+builds it is decided.
 
 ## Context
 
