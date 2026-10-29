@@ -187,6 +187,7 @@ ways, so the record shows what was believed on a date and what replaced it.
 | [ADR-0183](adr/0183-a-test-leaves-the-trees-folder-only-through-a-folder-mutmut-can-run-in.md) | A test leaves the tree's folder only through a folder mutmut can run in | Architecture | Accepted — 2026-10-29, board row W116 |
 | [ADR-0184](adr/0184-public-records-are-restatements-and-the-public-content-guard-is-shared.md) | Public records are restatements, and the public-content guard is shared | Architecture | Accepted — 2026-10-29, board row W117 |
 | [ADR-0185](adr/0185-dependency-updates-are-monthly-grouped-and-wait-seven-days.md) | Dependency updates are monthly, grouped, and wait seven days | Architecture | Accepted — 2026-10-29, board rows W118 and W79 |
+| [ADR-0186](adr/0186-each-major-version-arrives-as-its-own-dependabot-pull-request.md) | Each major version arrives as its own Dependabot pull request | Architecture | Accepted — 2026-10-29, board rows W118 and W122 |
 
 **This index was itself stale** until 2026-07-30: ADR-0002 had existed since
 2026-07-19 and was never listed here. A hand-maintained index is a derived fact
