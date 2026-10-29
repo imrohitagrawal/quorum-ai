@@ -3,7 +3,8 @@
 Red when: ``.github/CODEOWNERS`` holds a placeholder owner or loses its
 catch-all rule; ``.github/dependabot.yml`` misses a lock file the tree has (the
 root ``uv.lock``, a tracked ``package-lock.json``, or the workflows folder), or
-an entry loses its group or cooldown; ``SECURITY.md`` stops pointing at this
+an entry stops being monthly, grouped to minor and patch updates, with
+majors ignored and a 7-day cooldown; ``SECURITY.md`` stops pointing at this
 repository's private vulnerability report form; a setting that
 ``src/product_app/config.py`` hides from ``repr`` or types as ``SecretStr`` (a
 secret), or a ``secrets.*`` a workflow reads, is missing from the "Replacing a
@@ -91,8 +92,13 @@ def test_every_dependabot_entry_is_monthly_grouped_and_waits_seven_days() -> Non
         assert update["schedule"]["interval"] == "monthly", name
         groups = update["groups"]
         assert len(groups) == 1, name
-        assert next(iter(groups.values()))["patterns"] == ["*"], name
+        group = next(iter(groups.values()))
+        assert group["patterns"] == ["*"], name
+        assert group["update-types"] == ["minor", "patch"], name
         assert update["cooldown"]["default-days"] == 7, name
+        assert {"dependency-name": "*", "update-types": ["version-update:semver-major"]} in update[
+            "ignore"
+        ], name
 
 
 def test_security_policy_points_at_the_private_report_form() -> None:

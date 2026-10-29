@@ -35,7 +35,8 @@ This creates the Fly app (`quorum-ai`) but does not deploy yet. If it asks for a
 ### 3. Set production secrets
 
 ```bash
-# Required: secret used to sign session tokens. Generate a random value:
+# Required: signs cost-confirmation tokens and keys the anonymous spend records
+# (see "Rotate the token secret" below). Generate a random value:
 fly secrets set QUORUM_TOKEN_SECRET="$(openssl rand -hex 32)"
 
 # Optional:  API key for live LLM execution.

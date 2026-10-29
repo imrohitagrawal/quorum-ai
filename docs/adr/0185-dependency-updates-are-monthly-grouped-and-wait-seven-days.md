@@ -23,7 +23,11 @@ for `88f618d`, run 40868586655), so the number of update pull requests matters.
 1. `.github/dependabot.yml` covers the three kinds of lock file the tree has: `uv` at the root,
    `npm` in `e2e/`, and the workflows' actions. Each runs monthly, as one grouped pull request
    per kind, and waits 7 days after a release before proposing it (zizmor's
-   `dependabot-cooldown` audit, which `make workflow-audit` runs, requires a wait).
+   `dependabot-cooldown` audit, which `make workflow-audit` runs, requires a wait). Only minor
+   and patch versions are proposed; major versions are ignored and each is taken on as its own
+   work item, because one breaking change would block the whole group (on 2026-10-29, five
+   of the six actions the workflows pin were two or more major versions behind their latest
+   release).
 2. `CODEOWNERS` names the repository owner for every path.
 3. `SECURITY.md` sends reports to GitHub's private vulnerability reporting for this repository
    and states the scope, including no automated scanning of production.
@@ -38,6 +42,8 @@ for `88f618d`, run 40868586655), so the number of update pull requests matters.
 
 - **Weekly or ungrouped updates.** Each pull request adds a full CI run to the queue; up to three grouped
   pull requests a month keep the cost bounded.
+- **Majors in the groups.** The first actions pull request would have bumped five major
+  versions at once, and any one breaking change would hold back the rest.
 - **No wait.** Proposing a release the day it appears leaves no time for a malicious or broken
   release to be found and withdrawn before it reaches a pull request.
 
