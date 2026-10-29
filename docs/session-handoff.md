@@ -1,7 +1,7 @@
 # Session Handoff
 
 ## Date/time
-2026-10-29T16:15:22+05:30
+2026-10-29T16:23:49+05:30
 
 ## Open work
 `docs/65-open-work.md` — the source of truth for what is open, what blocks what,
@@ -48,7 +48,7 @@ board vs GitHub: 118 board rows, 2 open issues
   the board and GitHub agree
 
 ## Root prompt check
-`PASSED` (checked 1, exempt 1; `make prompt-check`)
+`PASSED` (checked 2, exempt 1; `make prompt-check`)
 Prompt write hook: not installed in `.claude/settings.json`; run `.venv/bin/python scripts/prompt_write_hook.py --install .`
 
 ## Parked work and branches
@@ -63,9 +63,11 @@ PASSED
 ```
 
 ## Next session
-Paste this line to start the next session:
+There are 2 validly named root prompts; only one should be left for the next session. Archive the others.
+The lines of those that pass:
 ```text
 Read CONTINUE-BYOK-BUILD-W28-PROMPT.md in the repo root and follow it exactly.
+Read CONTINUE-PUBLIC-CONTENT-W117-W118-PROMPT.md in the repo root and follow it exactly.
 ```
 
 ## Leftovers
