@@ -209,12 +209,16 @@ fly scale vm shared-cpu-2x
 
 ### Rotate the token secret
 
-**Rotating this is cheap — it does NOT log anyone out.** `QUORUM_TOKEN_SECRET`
-signs cost-confirmation tokens, which live for `CONFIRMATION_TOKEN_TTL`
-(5 minutes, `src/product_app/costs.py`). Rotating invalidates only the
-confirmation tokens outstanding in that window; the worst a user sees is that
-one cost-confirmation click needs repeating. Sessions are unaffected — they do
-not use this secret (see the table below).
+**Rotating it does NOT log anyone out, but it restarts every network's
+anonymous allowance.** `QUORUM_TOKEN_SECRET` signs cost-confirmation tokens,
+which live for `CONFIRMATION_TOKEN_TTL` (5 minutes, `src/product_app/costs.py`);
+those outstanding in that window stop working, so one confirmation click may
+need repeating. It also keys each network's anonymous daily allowance and a
+deleted account's 24-hour spend carry (`src/product_app/session_store.py`):
+after a rotation every network's allowance starts again (ADR-0144), and an
+account deleted before it and re-created after it starts fresh (ADR-0136).
+Sessions and live accounts' allowances are unaffected. The full list of
+secrets is in `docs/84-incident-response.md`.
 
 ```bash
 # Generate a new secret

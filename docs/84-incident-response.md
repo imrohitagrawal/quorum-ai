@@ -30,10 +30,10 @@ of shell history (see `DEPLOY.md`, "Rotate the token secret").
 | Secret | Used for (where it is read) | Replace it at | What replacing it does |
 |---|---|---|---|
 | `OPENROUTER_API_KEY` | model calls (`src/product_app/config.py`) | OpenRouter's key settings | Runs started after the deploy use the new key |
-| `QUORUM_EVAL_JUDGE_API_KEY` | the optional answer judge (`config.py`) | the judge model's provider | As above, for the judge |
+| `QUORUM_EVAL_JUDGE_API_KEY` | the optional answer judge, an OpenRouter key (`config.py`, `src/product_app/evaluation.py`) | OpenRouter's key settings | As above, for the judge |
 | `TAVILY_API_KEY` | the optional web-search fallback (`config.py`) | Tavily's key settings | As above, for search |
 | `GOOGLE_OAUTH_CLIENT_SECRET` | the sign-in code exchange (`src/product_app/google_signin.py`) | the OAuth client in the Google Cloud console | Sign-ins started after the deploy use the new secret |
-| `QUORUM_TOKEN_SECRET` | signing cost-confirmation tokens (`config.py`, `costs.py`) | `openssl rand -hex 32` | Confirmation tokens issued in the last 5 minutes stop working; sessions are not affected (`DEPLOY.md`) |
+| `QUORUM_TOKEN_SECRET` | signing cost-confirmation tokens (`src/product_app/costs.py`); keying each network's anonymous daily allowance and a deleted account's 24-hour spend carry (`src/product_app/session_store.py`); required at startup (`config.py`) | `openssl rand -hex 32` | Confirmation tokens issued in the last 5 minutes stop working; every network's anonymous daily allowance starts again (ADR-0144); an account deleted before the change and re-created after it starts with a fresh allowance (ADR-0136). Sessions and live accounts' allowances are not affected |
 | `INVITE_LINK_SIGNING_KEY` | signing invite links (`src/product_app/invite_links.py`) | at least 32 random characters | Every invite link issued so far stops working (`config.py`) |
 | `SENTRY_DSN` | error reporting (`config.py`) | the Sentry project's client keys | Errors after the deploy go to the new key |
 | `FLY_API_TOKEN` | the deploy job (the GitHub environment `production`) | `fly tokens create deploy`, then the environment's secret | The next deploy uses the new token; revoke the old one with `fly tokens revoke` |

@@ -1,7 +1,7 @@
 # Grouped, monthly version updates for every lock file in the repository (W118).
 # Each waits 7 days after a release before it is proposed (zizmor's
-# dependabot-cooldown audit). Security updates for known vulnerabilities are
-# separate and not limited to this schedule.
+# dependabot-cooldown audit). Alerts for known vulnerabilities are separate
+# from this schedule.
 version: 2
 updates:
   - package-ecosystem: "uv"

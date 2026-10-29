@@ -10,7 +10,7 @@ engineering choices made in W118.
 
 The repository had no `.github/dependabot.yml`. Known vulnerabilities still raised Dependabot
 alerts, but nothing proposed routine updates, so dependencies moved only when an alert forced
-them: on 2026-10-29 five alerts were open, all in test tools, two of them high. `CODEOWNERS`
+them. `CODEOWNERS`
 held the template's placeholder owner, and the repository had no security policy of its own, so
 GitHub showed a generic one inherited from the owner's account. That generic policy asks for
 email and names a workflow this repository does not run.
@@ -28,14 +28,15 @@ for `88f618d`, run 40868586655), so the number of update pull requests matters.
 3. `SECURITY.md` sends reports to GitHub's private vulnerability reporting for this repository
    and states the scope, including no automated scanning of production.
 4. `docs/84-incident-response.md` lists every production secret with where it is read, where it
-   is replaced and what replacing it does, and the order: revoke first when it leaked.
+   is replaced and what replacing it does, and the order: revoke first when it leaked. `DEPLOY.md`'s
+   rotation note now names every effect of replacing `QUORUM_TOKEN_SECRET`, not only the first.
 
 `tests/unit/test_w118_repository_hygiene_files.py` pins all four, including that every setting
 `config.py` hides from `repr` has a row in the secrets table.
 
 ## Alternatives rejected
 
-- **Weekly or ungrouped updates.** Each pull request costs a full CI run; up to three grouped
+- **Weekly or ungrouped updates.** Each pull request adds a full CI run to the queue; up to three grouped
   pull requests a month keep the cost bounded.
 - **No wait.** Proposing a release the day it appears leaves no time for a malicious or broken
   release to be found and withdrawn before it reaches a pull request.
@@ -44,5 +45,5 @@ for `88f618d`, run 40868586655), so the number of update pull requests matters.
 
 - Security updates for known vulnerabilities are not limited by the monthly schedule. Opening
   them automatically needs the repository's Dependabot security updates setting, which is still
-  off; until it is on, alerts are fixed by hand as part of each session.
+  off; until it is on, maintainers fix alerts by hand.
 - A new secret setting fails a test until its replacement steps are written.
