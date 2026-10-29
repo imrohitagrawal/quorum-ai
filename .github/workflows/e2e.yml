@@ -231,6 +231,7 @@ jobs:
           tests/invariants/follow-up-context.spec.ts
           tests/invariants/help-and-tour.spec.ts
           tests/invariants/safety-acknowledgement.spec.ts
+          tests/invariants/run-scope.spec.ts
           --project=chromium
           --retries=0
 

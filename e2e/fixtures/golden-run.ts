@@ -1065,6 +1065,34 @@ export const goldenQuickRespSimulated = () => {
 };
 
 /**
+ * W127 (run-scope.spec.ts): a quick answer still running, one model, no
+ * answer yet. A DEDICATED builder (rule 13d): derived from `goldenQuickResp()`
+ * so the slots, cost and mode stay that run's, with only the in-progress
+ * fields changed.
+ */
+export const goldenQuickRunningResp = () => {
+  const resp = goldenQuickResp() as Record<string, any>;
+  resp.status = "initial_answers_running";
+  resp.elapsed_time_ms = 1200;
+  resp.progress = quickProgress("running", false);
+  resp.result = { ...resp.result, model_answers: [], safety_notice: null };
+  resp.quick_verdict = null;
+  resp.live_count = 0;
+  resp.actual_cost_usd = "0.000";
+  resp.actual_breakdown = null;
+  return resp;
+};
+
+/**
+ * W127 (run-scope.spec.ts): the same payload under another run id, so one
+ * spec can drive two or three runs whose answers must never be mixed up. The
+ * correlation id follows the run id, as the server's does.
+ */
+export function withRunId<T>(resp: T, runId: string): T {
+  return { ...(resp as Record<string, unknown>), query_run_id: runId, correlation_id: `corr-${runId.slice(0, 8)}` } as T;
+}
+
+/**
  * Drive the composer with the quick-answer control ON through to the quick
  * result view. Returns the POST bodies the page sent to the estimate and
  * create routes, in order, so a spec can assert what reached the wire.
