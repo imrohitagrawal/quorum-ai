@@ -1,7 +1,7 @@
 # Session Handoff
 
 ## Date/time
-2026-10-29T16:13:02+05:30
+2026-10-29T16:15:22+05:30
 
 ## Open work
 `docs/65-open-work.md` — the source of truth for what is open, what blocks what,
@@ -54,11 +54,11 @@ Prompt write hook: not installed in `.claude/settings.json`; run `.venv/bin/pyth
 ## Parked work and branches
 From `make parked-check`:
 ```text
-Parked work check: 1 remote branches, 0 open pull requests, 6 Parked lines, 0 branches with no open pull request, 1 Parked items due
+Parked work check: 1 remote branches, 0 open pull requests, 6 Parked lines, 0 branches with no open pull request, 0 Parked items due
 Remote branches with no open pull request (merge, park or delete each):
   - none
 Parked items whose resume-when has come (resume, re-park or close each):
-  - W114
+  - none
 PASSED
 ```
 
