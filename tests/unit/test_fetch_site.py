@@ -25,6 +25,7 @@ from typing import Any
 
 from starlette.datastructures import Headers
 from starlette.requests import Request
+from tests.repo_root import find_repo_root
 
 OWN = "https://quorum.stackclimb.com"
 REFUSAL_CLASSES = {"subresource", "frame", "navigation", "unknown", "origin-fallback"}
@@ -402,7 +403,11 @@ def test_an_allowed_request_gets_no_response() -> None:
 def test_the_module_defines_no_decorated_function() -> None:
     # RED-IF: fetch_site.py defines a decorated function (the decorated-function cap is 55 of 55,
     #   ADR-0142), lacks classify or cross_site_refusal, or does not exist.
-    path = Path(_fs().__file__)
+    # The real file, not ``_fs().__file__``: inside mutmut's copy that is the
+    # mutated file, where this census found decorated functions (#596; W116,
+    # ADR-0183).
+    path = find_repo_root(Path(__file__)) / "src" / "product_app" / "fetch_site.py"
+    assert _fs().__name__ == "product_app.fetch_site", "the module imports"
     tree = ast.parse(path.read_text(encoding="utf-8"))
     functions = [
         node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)

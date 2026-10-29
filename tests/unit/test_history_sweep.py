@@ -24,6 +24,7 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
+from tests.repo_root import find_repo_root
 
 from product_app import auth, session_store
 from product_app.config import settings
@@ -615,7 +616,10 @@ def test_the_daemons_own_state_is_stamped_at_import(monkeypatch: pytest.MonkeyPa
     auth._gc_tick(now_monotonic=4_600.0, sweep_state=state)
     assert len(sweeps) == 1, "positive partner: due at exactly the interval"
 
-    tree = ast.parse(Path(auth.__file__).read_text(encoding="utf-8"))
+    # The real file, not ``auth.__file__``: inside mutmut's copy that is the
+    # mutated file (W116, ADR-0183).
+    real_auth = find_repo_root(Path(__file__)) / "src" / "product_app" / "auth.py"
+    tree = ast.parse(real_auth.read_text(encoding="utf-8"))
     made = [
         node.value
         for node in tree.body

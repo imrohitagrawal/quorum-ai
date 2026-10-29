@@ -45,8 +45,9 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.error import HTTPError, URLError
 
 import pytest
+from tests.repo_root import find_repo_root
 
-from product_app import main, readiness
+from product_app import readiness
 from product_app.config import settings
 from product_app.readiness import (
     APPROVED_REASON_PREFIXES,
@@ -648,7 +649,10 @@ def test_importing_the_app_does_not_probe_the_credential() -> None:
     now runs from the app's lifespan, so it fires when the server starts
     and not when the module is read.
     """
-    source = pathlib.Path(main.__file__).read_text(encoding="utf-8")
+    # The real file, not ``main.__file__``: inside mutmut's copy that is the
+    # mutated file (W116, ADR-0183).
+    real_main = find_repo_root(pathlib.Path(__file__)) / "src" / "product_app" / "main.py"
+    source = real_main.read_text(encoding="utf-8")
     tree = ast.parse(source)
     module_level_calls = {
         node.value.func.id

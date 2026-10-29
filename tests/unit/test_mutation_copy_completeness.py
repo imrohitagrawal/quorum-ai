@@ -32,7 +32,7 @@ import subprocess
 import sys
 import tomllib
 import warnings
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 import pytest
@@ -95,9 +95,11 @@ ROOT_READING_MODULES = (
     "tests/test_doc_gate_consistency.py",
     "tests/contract/test_golden_fixture_matches_served_schema.py",
     # Reads e2e/playwright.config.ts and e2e/fixtures/ (W41, ADR-0149). The
-    # static check above sees only the root entry `e2e`, which `e2e/tests`
-    # already covers, so it could not see these two were missing: the
-    # mutation gate then failed to collect stats on PR #546.
+    # static check above then saw only the root entry `e2e`, which `e2e/tests`
+    # already covered, so it could not see these two were missing: the
+    # mutation gate then failed to collect stats on PR #546. Since W116 the
+    # static check compares full paths (the same hole let `e2e/servers` through
+    # on the #596 probe).
     "tests/unit/test_trust_score_visual_tolerance.py",
 )
 
@@ -117,23 +119,84 @@ def _mutmut_config() -> dict[str, Any]:
     return config
 
 
-def _copied_roots() -> set[str]:
+def _copied_paths() -> set[PurePosixPath]:
     config = _mutmut_config()
-    roots = set(IMPLICIT)
-    roots.update(Path(entry).parts[0] for entry in config["source_paths"])
-    roots.update(Path(entry).parts[0] for entry in config["also_copy"])
-    return roots
+    return {
+        PurePosixPath(entry) for entry in (*IMPLICIT, *config["source_paths"], *config["also_copy"])
+    }
 
 
-def _referenced_roots() -> dict[str, str]:
-    """Repo-root entries named by a string literal in the suite -> its module.
+def _is_copied(path: str, copied: set[PurePosixPath]) -> bool:
+    """``path`` is inside ``./mutants/`` when a copied entry is ``path`` itself
+    or one of its parent folders.
+
+    Until W116 this compared first parts only, so ``e2e/tests`` in ``also_copy``
+    counted every ``e2e/...`` path as copied, and ``e2e/servers`` was missing
+    from the copy on the #596 probe while this check stayed green.
+
+    One allowance, recorded rather than hidden: a FOLDER only part of which is
+    copied (``e2e``, when ``e2e/tests`` is) counts as copied. A bare folder
+    reference (``E2E = ROOT / "e2e"``, a working directory) says nothing about
+    which file under it is read, so this check cannot judge it.
+    """
+    target = PurePosixPath(path)
+    return any(
+        entry == target or entry in target.parents or target in entry.parents for entry in copied
+    )
+
+
+def _root_chain(node: ast.AST) -> str | None:
+    """The full path of ``ROOT / "a" / "b/c"`` (``"a/b/c"``), or None."""
+    parts: list[str] = []
+    while (
+        isinstance(node, ast.BinOp)
+        and isinstance(node.op, ast.Div)
+        and isinstance(node.right, ast.Constant)
+        and isinstance(node.right.value, str)
+    ):
+        parts.append(node.right.value)
+        node = node.left
+    if parts and isinstance(node, ast.Name) and node.id in {"REPO_ROOT", "ROOT"}:
+        return "/".join(reversed(parts))
+    return None
+
+
+def _root_paths_in(tree: ast.AST) -> list[str]:
+    """Repo-relative paths a module names: each ``ROOT / ...`` chain WHOLE
+    (only the outermost ``/`` of a chain, so ``ROOT / "e2e" / "servers"`` is
+    one path, not also ``e2e``), and each repo-relative string literal that
+    exists in the tree."""
+    inner = {
+        id(node.left)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div)
+    }
+    paths: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.BinOp) and id(node) not in inner:
+            chain = _root_chain(node)
+            if chain is not None:
+                paths.append(chain)
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+            text = node.value.strip()
+            if (_ROOT_PATH_LITERAL.match(text) and (REPO_ROOT / text).exists()) or (
+                _ROOT_FILE_LITERAL.match(text) and (REPO_ROOT / text).is_file()
+            ):
+                paths.append(text)
+    return paths
+
+
+def _referenced_paths() -> dict[str, str]:
+    """Repo-relative paths named by the suite -> the first module naming it.
 
     Two shapes, both real in this suite: `REPO_ROOT / "Makefile"` (an explicit
-    division on the root) and the table-driven form — `(REPO_ROOT / a).exists()`
-    over `"e2e/tests/invariants/visual-snapshots.spec.ts"` — which is picked up
-    as a repo-relative literal. A bare word is deliberately NOT: `"schemas"` is
-    an OpenAPI dict key, not the `schemas/` directory, and the filesystem here
-    is case-insensitive, so `"Tests"` would resolve to `tests/`.
+    division on the root, kept whole when chained) and the table-driven form —
+    `(REPO_ROOT / a).exists()` over `"e2e/tests/invariants/visual-snapshots.spec.ts"`
+    — which is picked up as a repo-relative literal. A bare word is
+    deliberately NOT: `"schemas"` is an OpenAPI dict key, not the `schemas/`
+    directory, and the filesystem here is case-insensitive, so `"Tests"` would
+    resolve to `tests/`. A path that does not exist in the tree is skipped:
+    mutmut cannot copy it either.
     """
     entries = {entry.name for entry in REPO_ROOT.iterdir()}
     found: dict[str, str] = {}
@@ -142,42 +205,59 @@ def _referenced_roots() -> dict[str, str]:
             warnings.simplefilter("ignore", SyntaxWarning)
             tree = ast.parse(path.read_text(encoding="utf-8"))
         module = str(path.relative_to(REPO_ROOT))
-        for node in ast.walk(tree):
-            head = ""
-            if (
-                isinstance(node, ast.BinOp)
-                and isinstance(node.op, ast.Div)
-                and isinstance(node.left, ast.Name)
-                and node.left.id in {"REPO_ROOT", "ROOT"}
-                and isinstance(node.right, ast.Constant)
-                and isinstance(node.right.value, str)
-            ):
-                head = node.right.value.split("/", 1)[0]
-            elif isinstance(node, ast.Constant) and isinstance(node.value, str):
-                text = node.value.strip()
-                if _ROOT_PATH_LITERAL.match(text) and (REPO_ROOT / text).exists():
-                    head = text.split("/", 1)[0]
-                elif _ROOT_FILE_LITERAL.match(text) and (REPO_ROOT / text).is_file():
-                    head = text
-            if head in entries:
-                found.setdefault(head, module)
+        for named in _root_paths_in(tree):
+            if named.split("/", 1)[0] in entries and (REPO_ROOT / named).exists():
+                found.setdefault(named, module)
     return found
 
 
 def test_every_root_path_the_suite_reads_is_copied_into_mutants() -> None:
-    """A root entry the suite reads but mutmut does not copy aborts the gate."""
-    copied = _copied_roots()
+    """A path the suite reads but mutmut does not copy aborts the gate.
+
+    Red when: a path the suite names is under no ``also_copy`` entry (on
+    ``7f8cf00``: ``e2e/servers/signed_in_server.py``, read by
+    ``test_w105_tabs_share_token.py`` and ``test_age_sessions_is_test_only.py``,
+    while ``also_copy`` copies only ``e2e/tests``, ``e2e/fixtures`` and
+    ``e2e/playwright.config.ts``)."""
+    copied = _copied_paths()
     missing = {
-        head: module
-        for head, module in _referenced_roots().items()
-        if head not in copied and head not in EXEMPT
+        named: module
+        for named, module in _referenced_paths().items()
+        if not _is_copied(named, copied) and named.split("/", 1)[0] not in EXEMPT
     }
     assert not missing, (
-        "these repo-root entries are read by the suite but are absent inside "
+        "these repo paths are read by the suite but are absent inside "
         "./mutants/, so `mutmut run` fails to collect stats and scores zero "
         "mutants — add them to [tool.mutmut].also_copy (or to EXEMPT with the "
         f"reason the absence is safe): {missing}"
     )
+
+
+def test_a_partly_copied_root_does_not_count_as_copied() -> None:
+    """The chain is read whole and compared by folder, not by first part.
+    Planted names (``pkg/...``) that exist nowhere, so this module's own
+    literals add nothing to the real census above.
+
+    Red when: ``_root_chain`` keeps only the first part of
+    ``ROOT / "pkg" / "servers" / ...``, inner links of a chain are reported as
+    paths of their own, or ``_is_copied`` goes back to comparing first parts
+    (``pkg/checks`` would then cover ``pkg/servers/...``) — the hole that let
+    ``e2e/servers`` through on the #596 probe."""
+    tree = ast.parse(
+        'ROOT / "pkg" / "servers" / "run.py"\n'
+        'REPO_ROOT / "pkg/checks" / "x.spec.ts"\n'
+        'OTHER / "pkg" / "servers"\n'
+    )
+    assert sorted(_root_paths_in(tree)) == ["pkg/checks/x.spec.ts", "pkg/servers/run.py"]
+    copied = {PurePosixPath("pkg/checks"), PurePosixPath("pkg/fixtures")}
+    assert not _is_copied("pkg/servers/run.py", copied)
+    assert not _is_copied("pkg/servers", copied)
+    assert _is_copied("pkg/servers/run.py", copied | {PurePosixPath("pkg/servers")})
+    assert _is_copied("pkg/checks/deeper/x.spec.ts", copied)
+    assert _is_copied("pkg/fixtures", copied)
+    # The recorded allowance: a folder only part of which is copied.
+    assert _is_copied("pkg", copied)
+    assert not _is_copied("Makefile", copied)
 
 
 def test_exempt_entries_are_not_also_copied() -> None:

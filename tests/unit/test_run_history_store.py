@@ -27,6 +27,7 @@ from decimal import Decimal
 
 import pytest
 
+from product_app import run_history_store
 from product_app.run_history_store import (
     RunHistoryRow,
     RunHistoryStore,
@@ -181,13 +182,37 @@ def test_module_record_noop_when_unconfigured() -> None:
     assert get_store() is None
 
 
-def test_configure_for_tests_isolation() -> None:
-    assert get_store() is None
+def test_configure_for_tests_isolation(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``configure_for_tests`` yields the configured store and leaves none
+    behind. The test sets its own starting state: importing or reloading
+    ``main`` and the background reopen from ``estimate()`` configure a
+    process-wide store, so an earlier test can leave one (#564's clean-test
+    failure: ``assert <...RunHistoryStore object...> is None`` when run after
+    ``test_sentry_init.py``; W116). ``monkeypatch`` puts that store back after.
+    Red when: ``configure_for_tests`` does not restore ``None`` on exit."""
+    monkeypatch.setattr(run_history_store, "_store", None)
     with configure_for_tests() as store:
         assert get_store() is store
         record_terminal_run(_row())
         assert store.run_count() == 1
     assert get_store() is None
+
+
+def test_the_isolation_test_passes_after_an_earlier_test_left_a_store(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An earlier test can leave a process-wide store set (importing ``main``
+    does it), and mutmut's clean-test step runs the covering tests in one
+    process in an order that changes between runs. So
+    ``test_configure_for_tests_isolation`` must pass from that start too.
+
+    Red when: ``test_configure_for_tests_isolation`` goes back to asserting
+    that no store is set at its start instead of setting that state itself."""
+    planted = object()
+    monkeypatch.setattr(run_history_store, "_store", planted)
+    # Partner: the planted store is what the module now hands out.
+    assert get_store() is planted
+    test_configure_for_tests_isolation(monkeypatch)
 
 
 def test_iter_runs_orders_by_completed_at_desc_with_filters() -> None:

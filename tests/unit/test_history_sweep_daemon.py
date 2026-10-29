@@ -21,6 +21,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+from tests.mutmut_cwd import mutmut_can_run_in
+from tests.repo_root import find_repo_root
 from tests.subprocess_env import env_without_coverage
 
 from product_app import auth, session_store
@@ -127,7 +129,7 @@ def test_the_daemons_own_tick_sweeps_when_its_own_state_is_due(tmp_path: Path) -
     path = tmp_path / "sessions.sqlite3"
     result = subprocess.run(
         [sys.executable, "-c", _OWN_TICK, str(path)],
-        cwd=tmp_path,
+        cwd=mutmut_can_run_in(tmp_path),
         env=env_without_coverage(
             PYTHONPATH=str(src),
             SESSION_DB_PATH=":memory:",
@@ -159,7 +161,10 @@ def test_the_daemon_loop_calls_the_tick_with_no_arguments() -> None:
     ``session_repository.purge_expired()`` instead (no sweep at all), or
     passes any argument (``_gc_tick(sweep_state=HistorySweepState())`` would
     make every tick's state new, so never due)."""
-    tree = ast.parse(Path(auth.__file__).read_text(encoding="utf-8"))
+    # The real file, not ``auth.__file__``: inside mutmut's copy that is the
+    # mutated file, whose renamed copies keep ``_gc_loop`` (W116, ADR-0183).
+    real_auth = find_repo_root(Path(__file__)) / "src" / "product_app" / "auth.py"
+    tree = ast.parse(real_auth.read_text(encoding="utf-8"))
     loops = [
         node
         for node in ast.walk(tree)
@@ -199,7 +204,7 @@ def test_a_fresh_import_leaves_the_daemon_stamped_at_import(tmp_path: Path) -> N
     src = Path(auth.__file__).resolve().parents[1]
     result = subprocess.run(
         [sys.executable, "-c", _FRESH_IMPORT],
-        cwd=tmp_path,
+        cwd=mutmut_can_run_in(tmp_path),
         env=env_without_coverage(
             PYTHONPATH=str(src),
             SESSION_DB_PATH=":memory:",

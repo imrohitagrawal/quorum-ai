@@ -178,6 +178,11 @@ also_copy = [
   # stylesheet and its pin live in fixtures. Missing, they made the mutation
   # gate fail to collect stats on PR #546.
   "e2e/playwright.config.ts", "e2e/fixtures",
+  # ``e2e/servers`` is read from ``ROOT = parents[2]`` (the copy, inside
+  # ./mutants/) by tests/unit/test_w105_tabs_share_token.py. Missing, it was one
+  # of the 26 failures on the W116 discovery probe (#596, run 40753467337;
+  # ADR-0183).
+  "e2e/servers",
   # ``PRODUCT_IDEA.md`` is read from ``REPO_ROOT`` by scripts/skill_router.py
   # (and therefore by tests/unit/test_skill_router_placeholder.py). Measured
   # with it absent: that spec fails inside ./mutants/ and mutmut aborts with

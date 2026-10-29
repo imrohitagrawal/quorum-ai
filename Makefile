@@ -318,8 +318,8 @@ api-contract:
 # the same 6.4-point harness-noise headroom the previous derivation used.
 MUTATION_MIN_SCORE ?= 80
 MUTMUT_MAX_CHILDREN ?= 8
-# Issue #182: the CI job's `timeout-minutes: 30` is a JOB-level GitHub
-# Actions setting. When IT fires mid-run, the whole job (including the
+# Issue #182: the CI job's `timeout-minutes` (30 then, 50 since W116) is a
+# JOB-level GitHub Actions setting. When IT fires mid-run, the whole job (including the
 # report() step below) dies with no score printed at all -- reproduced on
 # PR #181 (30m16s, killed mid-mutant, zero score line). `run_with_deadline.py`
 # gives `mutmut run` its OWN, shorter, internally-enforced deadline, so this
@@ -327,14 +327,15 @@ MUTMUT_MAX_CHILDREN ?= 8
 # `mutants/**/*.py.meta` state exists, partial or complete, since mutmut
 # writes those incrementally per mutant (verified against the installed
 # mutmut/mutation/data.py: `register_result` calls `self.save()` after every
-# completed mutant). 1440s (24m) leaves ~6 minutes of the 30-minute job
-# budget for checkout/setup/report -- a judgment call with margin, not a
-# freshly measured number (a real 24-minute mutation run was not executed
-# to re-derive it, to avoid burning CI minutes on this batch); the CI job's
-# own setup steps (checkout, fetch base ref, setup-uv, python install, uv
-# sync) are comfortably under a minute in the existing measured baseline
-# above, so the margin here is intentionally generous.
-MUTATION_RUN_DEADLINE_SECONDS ?= 1440
+# completed mutant). 2400s (40m) leaves 50*60 - 2400 = 600 s of the
+# 50-minute job budget for checkout/setup/report (580 s after
+# run_with_deadline.py's two 10 s kill waits) -- a proposed budget, not a
+# prediction. W116 raised it from 1440 s inside a 30-minute job: on the
+# discovery probe (#596, run 40753467337) the whole mutation step took
+# 1,373 s, about 36 s of it generating mutants (a FAILING run, so it does not
+# prove how long a passing one plus the clean test step and the mutants take),
+# which would have left about 67 s of the old 1440 s. The confirmation probe after W116 measures it (ADR-0183).
+MUTATION_RUN_DEADLINE_SECONDS ?= 2400
 
 # #337. scripts/run_with_deadline.py drops this file when it kills the run for
 # exceeding the deadline above, and deletes any stale one when it does not.
@@ -1038,13 +1039,19 @@ mutation-baseline:
 			echo "  score was produced. A red job here is not evidence that anything"; \
 			echo "  was measured — read the log and find the number before blaming the change."; \
 			echo "  'failed to collect stats' == the suite could not run inside ./mutants/."; \
-			echo "  Two causes, in the order they actually occur:"; \
-			echo "    1. a check that resolves the repo root from __file__/parents[n]. Inside"; \
-			echo "       ./mutants/ that points at the COPY, whose src/ carries one generated"; \
-			echo "       x_<name>__mutmut_N variant per mutant — so any census of the source"; \
-			echo "       counts mutmut's own output and blows its bound (#158). Resolve with"; \
+			echo "  Five known causes (A to E, ADR-0183), each a test that breaks in the copy:"; \
+			echo "    A. src code called after a chdir to a folder with no src/: mutmut finds"; \
+			echo "       its source relative to the current folder ('FileNotFoundError: src')."; \
+			echo "    B. a Python child that imports src, started in such a folder ('Could not"; \
+			echo "       figure out where the code to mutate is'). For A and B, use"; \
+			echo "       tests/mutmut_cwd.mutmut_can_run_in."; \
+			echo "    C. a function recognised by its frame's name (co_name): mutmut renames"; \
+			echo "       every function it wraps. Recognise it by a wrapper instead."; \
+			echo "    D. a structural count over src that reads the COPY, whose src/ carries"; \
+			echo "       one generated x_<name>__mutmut_N variant per mutant (#158): a root from"; \
+			echo "       __file__/parents[n], or a product_app module's __file__. Resolve with"; \
 			echo "       tests/repo_root.find_repo_root, or mark the module repo_introspection."; \
-			echo "    2. a repo-root file missing from [tool.mutmut].also_copy"; \
+			echo "    E. a repo-root file missing from [tool.mutmut].also_copy"; \
 			echo "       (guarded by tests/unit/test_mutation_copy_completeness.py)."; \
 			exit 1; }; \
 		tail -40 build/mutation/run.log; \

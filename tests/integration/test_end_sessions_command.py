@@ -57,6 +57,7 @@ from tests.end_sessions_harness import (
     seed,
     snapshot,
 )
+from tests.mutmut_cwd import mutmut_can_run_in
 
 from product_app import auth, feedback_store, session_store
 from product_app.costs import DAILY_CAP_USD, GLOBAL_DAILY_CEILING_USD, CostThresholdAction
@@ -201,7 +202,7 @@ def _scenario(case: str, path: Path, monkeypatch: pytest.MonkeyPatch) -> Scenari
     if case.startswith("SESSION_DB_PATH"):
         # Break-it R2-3. In a directory with no ``.data``, so a fallback to
         # the app's relative default could not reach any real file.
-        monkeypatch.chdir(path.parent)
+        monkeypatch.chdir(mutmut_can_run_in(path.parent))
         if case == "SESSION_DB_PATH unset":
             monkeypatch.delenv("SESSION_DB_PATH")
         else:
@@ -424,7 +425,7 @@ def test_no_session_db_path_is_exit_3_and_a_stray_store_is_untouched(
     stray = tmp_path / ".data" / "sessions.sqlite3"
     stray.parent.mkdir()
     seeded = seed(stray, created_at=_cutoff() - timedelta(hours=1))
-    monkeypatch.chdir(tmp_path)
+    monkeypatch.chdir(mutmut_can_run_in(tmp_path))
     before = snapshot(stray)
     for setting in (None, ""):
         if setting is None:

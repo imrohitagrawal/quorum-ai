@@ -80,8 +80,8 @@ DESELECTED_FROM_THE_MUTANT_RUN = (
     # test, across two such tests — FOUR full project copies per suite run
     # (measured by counting `_copy_project` calls). It imports nothing from the
     # application, so it can kill no `src/` mutant; and left selected it would
-    # build those four copies per MUTANT against a 1440-second deadline
-    # (Makefile MUTATION_RUN_DEADLINE_SECONDS), which is the "gate produces no
+    # build those four copies per MUTANT against the run deadline
+    # (Makefile MUTATION_RUN_DEADLINE_SECONDS, 2400 s), which is the "gate produces no
     # number" outcome it exists to prevent.
     "tests/unit/test_mutation_gate_root_resolution.py",
     "tests/unit/test_perf_gate_collection_floor.py",
@@ -136,7 +136,7 @@ DESELECTED_FROM_THE_MUTANT_RUN = (
     # the module attribute. So this module cannot register a kill for the very
     # function it guards, and deselecting it removes no kill from the score.
     # Left selected it would also re-mutate a 391-mutant file every time mutmut
-    # used it as an oracle, against a 1440-second deadline.
+    # used it as an oracle, against the 2400-second run deadline.
     "tests/unit/test_stance_majority_flags_has_no_equivalent_mutants.py",
     # #365. Tokenises every file under the real `src/` looking for
     # `# pragma: no mutate`, and parses `pyproject.toml`. Inside `./mutants/`

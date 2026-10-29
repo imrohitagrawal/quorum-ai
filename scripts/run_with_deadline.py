@@ -4,8 +4,9 @@ group (not just the direct child) if it has not finished in time -- and exit
 0 in that case specifically, distinct from the wrapped command's own exit
 codes.
 
-Issue #182: the mutation-baseline CI job's `timeout-minutes: 30` is a
-JOB-level GitHub Actions setting. When it fires mid-`mutmut run`, the whole
+Issue #182: the mutation-baseline CI job's `timeout-minutes` (30 then, 50
+since W116) is a JOB-level GitHub Actions setting. When it fires mid-`mutmut
+run`, the whole
 job (every later step, including the one that would have printed a score) is
 terminated -- there is no "after the timeout, still print what we have"
 hook at that level. The only way to guarantee a later step runs is to make
@@ -157,7 +158,7 @@ def run_with_deadline(deadline_seconds: float, command: list[str]) -> int:
                 # blocking syscall returns, which can be indefinite. An
                 # unbounded wait() here would defeat the one guarantee this
                 # whole script exists to make: control returns to the caller
-                # before the external 30-minute job timeout. If even this
+                # before the external job timeout. If even this
                 # bound is exceeded we give up on reaping and return anyway;
                 # the OS reclaims a truly-dead process eventually, and this
                 # process no longer waits on it.
