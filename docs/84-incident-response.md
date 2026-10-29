@@ -38,9 +38,9 @@ of shell history (see `DEPLOY.md`, "Rotate the token secret").
 | `SENTRY_DSN` | error reporting (`config.py`) | the Sentry project's client keys | Errors after the deploy go to the new key |
 | `FLY_API_TOKEN` | the deploy job (the GitHub environment `production`) | `fly tokens create deploy`, then the environment's secret | The next deploy uses the new token; revoke the old one with `fly tokens revoke` |
 
-After any replacement: check that `fly secrets list --app quorum-ai` shows a new digest for the
-secret (a `fly secrets set` has failed to apply without an error before, issue #26), that the
-deploy finished and `GET /ready` answers, then revoke the old value at its provider if that is
-not done yet. If the value was ever committed, assume it
+After any replacement of a Fly secret: check that `fly secrets list --app quorum-ai` shows a new
+digest for it (a `fly secrets set` has failed to apply without an error before, issue #26), that
+the deploy finished and `GET /ready` answers. For the deploy token, check that the next deploy
+succeeds. Then revoke the old value at its provider if that is not done yet. If the value was ever committed, assume it
 leaked even if the commit was removed: GitHub keeps pull-request history, and secret scanning
 alerts are listed under the repository's Security tab.
