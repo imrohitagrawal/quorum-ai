@@ -145,7 +145,7 @@ def test_a_poll_for_the_open_scope_is_drawn() -> None:
 def test_a_poll_answered_after_its_scope_was_replaced_draws_nothing() -> None:
     """RED IF ``pollRun`` draws an answer although ``state.runScope`` was
     replaced while it was in flight (a new run, "Go to run", a restore): on
-    ``f10c754`` it checks no scope at all (failure mode F3)."""
+    ``f10c754`` it checks no scope at all (a late answer for an earlier run)."""
     got = _poll(
         _REPLACE_SCOPE,
         _RUNNING,
@@ -155,7 +155,7 @@ def test_a_poll_answered_after_its_scope_was_replaced_draws_nothing() -> None:
 
 def test_a_poll_answered_after_stop_closed_the_scope_draws_nothing() -> None:
     """RED IF ``pollRun`` draws an answer that arrives after Stop set
-    ``scope.closed`` (failure mode F4: the pill goes back to Running)."""
+    ``scope.closed`` (the pill goes back to Running)."""
     got = _poll("scope.closed = true;", _RUNNING)
     assert got["calls"] == [], f"drawn for a closed scope: {got['calls']}"
 
@@ -170,7 +170,7 @@ def test_a_poll_answered_after_the_scope_finished_draws_nothing() -> None:
 
 def test_a_poll_answer_for_another_run_draws_nothing() -> None:
     """RED IF ``pollRun`` draws an answer whose ``query_run_id`` is not the
-    scope's run, with the scope itself untouched (F3's answer-side check)."""
+    scope's run, with the scope itself untouched (the answer-side check)."""
     got = _poll("", {**_RUNNING, "query_run_id": OTHER})
     assert got["calls"] == [], f"drawn for another run's answer: {got['calls']}"
 
@@ -213,7 +213,7 @@ def test_a_poll_rejected_after_its_scope_was_replaced_is_ignored() -> None:
 
 def test_a_poll_rejected_after_stop_is_ignored() -> None:
     """RED IF a rejected poll raises "Connection lost — retrying…" after Stop
-    closed the scope (failure mode F13: ``stopPolling`` had just cleared it)."""
+    closed the scope (``stopPolling`` had just cleared it)."""
     assert _rejected("scope.closed = true;") == []
 
 
@@ -287,11 +287,11 @@ def _finish(body: str) -> Any:
 
 def test_finish_run_toasts_the_status_the_server_returned() -> None:
     """RED IF ``finishRun(result, scope)`` does not exist (``f10c754``:
-    ``cancelRun`` toasts "Run cancelled." whatever the DELETE returned,
-    failure mode F2), or toasts anything but the poll's own message for a
-    status: a completed run is never called cancelled, and only a cancelled
-    one is. Each call also writes ONE session-list entry (``cancelRun``
-    writes none today) and marks its scope finished.
+    ``cancelRun`` toasts "Run cancelled." whatever the DELETE returned),
+    or toasts anything but the poll's own message for a status: a
+    completed run is never called cancelled, and only a cancelled one is.
+    Each call also writes ONE session-list entry (``cancelRun`` writes none
+    today) and marks its scope finished.
     """
     cases = [{**r, "query_run_id": RUN} for r in _FINISHED.values()]
     got = _finish(
@@ -327,7 +327,7 @@ def test_finish_run_toasts_the_status_the_server_returned() -> None:
 
 def test_finish_run_runs_once_per_scope() -> None:
     """RED IF a second ``finishRun`` for the same scope toasts or records
-    again (the double "Run cancelled." of F4 and F12), or if a NEW scope is
+    again (a double "Run cancelled." from a late poll or a second Stop), or if a NEW scope is
     blocked by the previous one's guard (the page-wide ``terminalHandled``
     left over from an earlier run is W49).
 
@@ -385,7 +385,7 @@ return out;
 def test_the_composer_total_is_derived_from_the_current_inputs() -> None:
     """RED IF ``renderComposerTotal()`` does not exist (``f10c754``: the total
     is written once by ``estimateRun`` and reset only by
-    ``holdForHighStakesAck``, failure mode F9), or shows the amount when any
+    ``holdForHighStakesAck``), or shows the amount when any
     ONE part of the priced inputs differs: the question, the order or number
     of models, quick mode, either follow-up value, or the context dropped.
 

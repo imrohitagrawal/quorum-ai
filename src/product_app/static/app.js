@@ -376,7 +376,7 @@
   const demoModeBanner = el("demo-mode-banner");
   const demoModeTarget = demoModeBanner ? demoModeBanner.querySelector("[data-demo-mode-target]") : null;
   const demoModeTitle = el("demo-mode-banner-title");
-  // W127 (F10): the transcript caption as the template ships it, put back on
+  // W127: the transcript caption as the template ships it, put back on
   // a run whose rounds are not peer-shaped (``renderTranscript``).
   const transcriptCaptionNode = document.querySelector(".transcript-debate-caption");
   const TRANSCRIPT_CAPTION_SHIPPED = transcriptCaptionNode ? transcriptCaptionNode.textContent : "";
@@ -532,8 +532,9 @@
     // an answer captured against an older scope can always tell it is late.
     // Navigation never clears it: Back to a kept result still names its run.
     runScope: null,
-    // W127 (F8): increases on every session-list click; a restore's answer is
-    // drawn only while its own click is the latest one.
+    // W127: increases on every session-list click, view change and new run
+    // scope; a restore's answer is drawn only while nothing has moved it on
+    // since its own click.
     restoreToken: 0,
     liveElapsedBaseMs: 0,
     liveElapsedStamp: 0,
@@ -660,6 +661,12 @@
     // W127 (ADR-0187): which run the visible view belongs to, derived here
     // on every view change rather than stored, so no path can forget it.
     syncPageRunId(name);
+    // W127: any view change abandons a session-list restore still waiting
+    // for its answer. Checking only that the view NAME matched when the
+    // answer came let a round trip (New question then Back, or the
+    // transcript then Back) or a new run started from that view draw the
+    // restored run over what the user had moved on to.
+    state.restoreToken += 1;
     // W127: the composer's amounts are painted when it comes on screen (and
     // on every input change while it is there), so arriving at it never shows
     // an estimate priced for other inputs.
@@ -767,12 +774,24 @@
       const node = el(id);
       if (node) node.hidden = true;
     }
-    for (const id of ["live-query", "live-corr"]) {
-      const node = el(id);
-      if (node) node.textContent = "";
+    const corr = el("live-corr");
+    if (corr) corr.textContent = "";
+    // The question line belongs to this run from the start: its own question
+    // when the caller knows it, else "—" (an adopted run's answer has none).
+    const queryEl = el("live-query");
+    if (queryEl) {
+      queryEl.textContent = state.liveQueryText || "—";
+      tagRunRegion(queryEl, state.runScope.runId);
     }
+    // The header is this run's too: until its first answer is drawn it is a
+    // run just starting, never the previous run's elapsed time or its
+    // finished pill ("Go to run" used to show both until the first poll).
     const statusText = el("live-status-text");
     if (statusText) statusText.textContent = "Starting…";
+    const pill = el("live-status-pill");
+    if (pill) pill.dataset.state = "running";
+    const elapsedEl = el("live-elapsed");
+    if (elapsedEl) elapsedEl.textContent = formatElapsed(0);
     // A new scope is a run in progress until its first answer says otherwise.
     const stopBtn = el("live-stop");
     if (stopBtn) {
@@ -781,6 +800,9 @@
     }
     const liveNewQuestion = el("live-new-question");
     if (liveNewQuestion) liveNewQuestion.hidden = true;
+    // A session-list restore still waiting for its answer belongs to the run
+    // that was current when it was clicked, not to this one.
+    state.restoreToken += 1;
     syncPageRunId(activeViewName());
   }
 
@@ -994,7 +1016,7 @@
     const audience = el("follow-up-context-audience");
     if (audience) audience.textContent = followUpAudience();
     if (line) line.hidden = !context;
-    // W127 (F9): the context is part of what an estimate priced, so the
+    // W127: the context is part of what an estimate priced, so the
     // running total follows it.
     updatePerSlotEstimates();
   }
@@ -2182,7 +2204,7 @@
   // the ``.model-slot-estimate`` text (never rebuilds the cards) so a focused
   // ``<select>`` or the user's typing is never disrupted.
   //
-  // W127 (ADR-0187, F9): the server's estimate is shown, in the cells and in
+  // W127 (ADR-0187): the server's estimate is shown, in the cells and in
   // the running total, only while the inputs on screen are the inputs it
   // priced (``renderComposerTotal``); otherwise the cells show this client
   // figure and the total "—". Its ``by_model`` rows used to be laid onto
@@ -2232,14 +2254,15 @@
     });
   }
 
-  // W127 (ADR-0187, F9): the running total beside "Run now", DERIVED: the
+  // W127 (ADR-0187): the running total beside "Run now", DERIVED: the
   // current estimate's amount while the inputs on screen equal the inputs it
-  // priced (``state.pricedRun``: the trimmed question, the ordered model ids,
-  // quick mode and both follow-up values, every one of which enters the
-  // estimate request), else "—", which is what the template ships. It used
-  // to be written once by ``estimateRun`` and reset only by the high-stakes
-  // hold, so "New question", an edit, a swapped model, the quick toggle or a
-  // dropped follow-up left an amount priced for something else. Returns
+  // priced (``state.pricedRun``: the trimmed question, the ordered model ids
+  // the request sends (slot 1 alone in quick mode), quick mode and both
+  // follow-up values, every one of which enters the estimate request), else
+  // "—", which is what the template ships. It used to be written once by
+  // ``estimateRun`` and reset only by the high-stakes hold, so "New
+  // question", an edit, a swapped model, the quick toggle or a dropped
+  // follow-up left an amount priced for something else. Returns
   // whether the inputs are the priced ones, which the slot cells follow too.
   // The comparison is written out here, not in a helper: the unit test runs
   // this function on its own (tests/unit/test_w127_run_scope_functions.py).
@@ -2250,15 +2273,20 @@
     let same = Boolean(priced && estimate && estimate.cost_estimate);
     if (same) {
       const text = queryTextarea ? queryTextarea.value.trim() : "";
-      const ids = getModelIds();
-      const pricedIds = Array.isArray(priced.modelIds) ? priced.modelIds : [];
+      // The model ids the request would SUBMIT: a quick body sends slot 1
+      // alone (``runRequestBody``), so the other slots change nothing it
+      // priced. A differing mode is caught below.
+      const quick = Boolean(state.quickMode);
+      const submitted = (list) => (quick ? list.slice(0, 1) : list);
+      const ids = submitted(getModelIds());
+      const pricedIds = submitted(Array.isArray(priced.modelIds) ? priced.modelIds : []);
       const context = state.followUpContext || null;
       const pricedContext = priced.context || null;
       same =
         text === priced.queryText &&
         ids.length === pricedIds.length &&
         ids.every((id, i) => id === pricedIds[i]) &&
-        Boolean(state.quickMode) === Boolean(priced.quick) &&
+        quick === Boolean(priced.quick) &&
         (context && pricedContext
           ? context.prior_question === pricedContext.prior_question &&
             context.prior_synthesis === pricedContext.prior_synthesis
@@ -2803,10 +2831,12 @@
     const caption = document.querySelector(".live-debate-caption");
     if (caption) caption.hidden = quick;
     if (quick) {
-      // W127 (F6): emptied as well as hidden. ``hidden`` alone did not hide
-      // it (``.live-debate`` sets a display, which beat the attribute until
-      // its ``[hidden]`` rule was added), so a quick run after a panel run
-      // showed that run's round cards as its own.
+      // W127: emptied as well as hidden, so a quick answer never sits over
+      // another run's round cards whatever the stylesheet does with
+      // ``hidden`` (``.live-debate`` sets a display, which beat the attribute
+      // until its ``[hidden]`` rule was added). ``beginRunScope`` has already
+      // emptied the host on every way into a run today, so this is a second
+      // guard, not the only one.
       host.replaceChildren();
       tagRunRegion(host, runIdOf(result));
       return;
@@ -6884,7 +6914,7 @@
     const isConsensus = isConsensusResult(result);
     const runId = runIdOf(result);
 
-    // W127 (ADR-0187, F5): the run-level disclosure of THIS run, drawn from
+    // W127 (ADR-0187): the run-level disclosure of THIS run, drawn from
     // the result shown rather than left as the last polled run's.
     renderDemoModeBanner(result, { force: true });
 
@@ -6911,7 +6941,7 @@
       "Below is the round-level critique; the per-model detail is recorded and " +
         "itemised on the receipt.",
     );
-    // W127 (F10): written on EVERY render. It used to be written only when
+    // W127: written on EVERY render. It used to be written only when
     // the run was peer-shaped, so a moderator-shaped run kept an earlier
     // peer run's sentence; such a run gets the shipped sentence back, which
     // is true of it.
@@ -7380,16 +7410,17 @@
     if (state.submittingRun) dropInFlightEstimate();
     stopPolling();
     setRunning(false);
-    // W127 (ADR-0187, F8): until its answer is accepted, the click changes
+    // W127 (ADR-0187): until its answer is accepted, the click changes
     // nothing on screen: the view, its run and its tags stay as they are. The
-    // answer is drawn only if this is still the latest click and the user is
-    // still on the view they clicked from. Without this, of two quick clicks
-    // whichever GET answered last was drawn, and a click followed by "New
-    // question" was pulled off the composer onto the result.
+    // answer is drawn only while nothing has happened since the click: no
+    // later click, no view change (``setView``) and no new run
+    // (``beginRunScope``) — each of them moves the token on. Without this, of
+    // two quick clicks whichever GET answered last was drawn, a click followed
+    // by "New question" was pulled off the composer onto the result, and one
+    // followed by New question and a new run replaced that run's scope.
     state.restoreToken += 1;
     const token = state.restoreToken;
-    const viewAtClick = activeViewName();
-    const isCurrent = () => token === state.restoreToken && activeViewName() === viewAtClick;
+    const isCurrent = () => token === state.restoreToken;
     // Re-fetch the run to populate lastResult, then render.
     api(`/v1/query-runs/${runId}`, { method: "GET" })
       .then((result) => {
@@ -7405,7 +7436,7 @@
         // The restored run's own scope (it is finished, so never polled).
         beginRunScope(runId, question, { finished: true });
         state.lastResult = result;
-        // W127 (F7): the error card of the run on screen before (a failed
+        // W127: the error card of the run on screen before (a failed
         // or timed-out run) does not belong above this one.
         clearError();
         // W37 review round 1: text typed for another result must not be sent
@@ -7446,7 +7477,7 @@
   // render "null of null model answers" which is dishonest copy.
   // The pre-run disclosure is the job of the readiness banner.
   //
-  // W127 (ADR-0187, F5): its own function, so the transcript can draw the
+  // W127 (ADR-0187): its own function, so the transcript can draw the
   // banner from the run it shows (``force``: past the cache, which belongs to
   // whichever run was polled last). It used to be drawn only from
   // ``pollRun``, so a restored run's transcript showed the banner of the
@@ -9764,7 +9795,7 @@
       state.pricedRun = priced;
       // Slice 1: fan the itemized ``by_model`` breakdown out onto the slot
       // cards and surface the grand total in the composer footer. W127
-      // (ADR-0187, F9): both are derived in ``updatePerSlotEstimates`` and
+      // (ADR-0187): both are derived in ``updatePerSlotEstimates`` and
       // ``renderComposerTotal``, which show the server's figures only while
       // the inputs on screen are still the ones just priced. An answer that
       // lands after a model was swapped no longer lays the priced panel's
@@ -10408,9 +10439,9 @@
     // and the answer is for that scope's run: checked BEFORE anything is
     // drawn. Polls overlap (one every 750 ms, whether or not the last has
     // answered), so without this a late answer for an earlier run was drawn
-    // as the current one (F3), a poll in flight when Stop was pressed brought
-    // the stopped run back as running (F4), and a failed one re-raised the
-    // connection notice after Stop (F13). ``false`` means "dropped".
+    // as the current one, a poll in flight when Stop was pressed brought
+    // the stopped run back as running, and a failed one re-raised the
+    // connection notice after Stop. ``false`` means "dropped".
     const scope = state.runScope;
     if (!scope || !scope.runId) return false;
     let result;
@@ -10456,11 +10487,11 @@
   // A run's terminal answer, from a poll or from Stop's DELETE: stop polling,
   // open the result when there is one to show, toast what the SERVER said
   // happened, and list the run in "This session". W127 (ADR-0187): this was
-  // ``pollRun``'s terminal branch, moved out unchanged in behaviour so that
-  // Stop shares it. Stop used to toast "Run cancelled." whatever the DELETE
-  // returned, opened a result only when ``final_synthesis`` existed (so a
+  // ``pollRun``'s terminal branch, moved out so that Stop shares it; its
+  // run-once guard is now per scope instead of page-wide. Stop used to toast
+  // "Run cancelled." whatever the DELETE returned, opened a result only when ``final_synthesis`` existed (so a
   // quick answer that had already completed was never shown, ADR-0128) and
-  // listed nothing (F2).
+  // listed nothing.
   function finishRun(result, scope) {
     // C-A: a slow poll response (server latency > the 750ms poll interval)
     // can re-enter this after it already ran, double-firing the completion
@@ -10599,12 +10630,12 @@
 
   // Stop. W127 (ADR-0187): Stop closes the run's scope while its DELETE is in
   // flight, so a poll that answers meanwhile is dropped instead of putting
-  // the run back on screen as running (F4), and ``#live-stop`` (the control
+  // the run back on screen as running, and ``#live-stop`` (the control
   // the page shows; ``cancelButton`` is the hidden aside one) is disabled, so
-  // a second click cannot send a second DELETE (F12). The DELETE's answer is
+  // a second click cannot send a second DELETE. The DELETE's answer is
   // the run's terminal answer and goes through ``finishRun``, which toasts
   // what the server says happened: a run that had already finished is shown
-  // as finished, never as cancelled (F2). If the DELETE fails, the scope
+  // as finished, never as cancelled. If the DELETE fails, the scope
   // opens again, polling goes on and Stop can be pressed again.
   async function cancelRun() {
     const scope = state.runScope;
@@ -11932,7 +11963,7 @@
     const audience = el("follow-up-context-audience");
     if (audience) audience.textContent = followUpAudience();
     renderFollowUpMode();
-    // W127 (F9): the mode is part of what an estimate priced; the slot cells
+    // W127: the mode is part of what an estimate priced; the slot cells
     // and the running total follow it (the cells used to keep the other
     // mode's figures).
     updatePerSlotEstimates();

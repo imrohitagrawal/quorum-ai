@@ -42,6 +42,7 @@ const VIEWPORTS = [
 
 const Q1 = "What are the key metrics for measuring SaaS customer retention?";
 const Q2 = "What is the capital of Australia and why was it chosen?";
+const Q3 = "Which European city has the most museums per person?";
 
 const RUN_A = "aaaaaaaa-0000-4000-8000-00000000000a";
 const RUN_B = "bbbbbbbb-0000-4000-8000-00000000000b";
@@ -282,7 +283,7 @@ for (const viewport of VIEWPORTS) {
     test.use({ viewport });
 
     test("(a) a quick run after a debate shows none of the debate's round cards", async ({ page }) => {
-      // Red when: renderLiveDebate's quick path returns before emptying #live-debate, and `.live-debate` has no [hidden] rule (app.css), so the earlier run's round cards stay painted.
+      // Red when: `.live-debate[hidden] { display: none; }` is removed from app.css (the display check below), or the debate host is never emptied before a quick run: beginRunScope's emptying, renderLiveDebate's quick-path emptying and that rule all removed (the round-card count).
       const fake = await installFake(page);
       fake.create = (n) => ({ body: n === 1 ? panelCreate(RUN_A) : quickCreate(RUN_B) });
       fake.get[RUN_A] = (route) => route.fulfill(json(panelDone(RUN_A)));
@@ -303,6 +304,13 @@ for (const viewport of VIEWPORTS) {
       await expect(page.locator("#live-stage-strip .live-stage")).toHaveCount(1);
       expect.soft(await assertNoForeignRunContent(page, "quick live run"), "the live view is run B's").toBe(RUN_B);
       await expect(page.locator("#live-debate .live-round-card").filter({ visible: true })).toHaveCount(0);
+      // The quick run hides the debate host, and hidden must mean not displayed:
+      // `.live-debate` sets `display: flex`, which the `hidden` attribute alone loses to.
+      const debate = await page
+        .locator("#live-debate")
+        .evaluate((node) => ({ hidden: (node as HTMLElement).hidden, display: getComputedStyle(node).display }));
+      expect(debate.hidden, "the quick run hides the debate host").toBe(true);
+      expect(debate.display, "a hidden #live-debate is not displayed").toBe("none");
     });
 
     test("(b) the composer total reads — whenever the question, panel or mode differs from the priced one", async ({ page }) => {
@@ -513,7 +521,7 @@ for (const viewport of VIEWPORTS) {
       await expect.poll(() => toastTexts(page)).toContain("Run cancelled.");
     });
 
-    test("F3: a late answer for an earlier run never reaches the run on screen", async ({ page }) => {
+    test("a late answer for an earlier run never reaches the run on screen", async ({ page }) => {
       // Red when: pollRun renders and finishes whatever answer arrives, with no check that it belongs to state.runScope's run.
       await recordToasts(page);
       const fake = await installFake(page);
@@ -547,7 +555,7 @@ for (const viewport of VIEWPORTS) {
       expect.soft(await assertNoForeignRunContent(page, "run B after A's late answer"), "still run B").toBe(RUN_B);
     });
 
-    test("F4: a poll answered 'running' after Stop does not bring the run back", async ({ page }) => {
+    test("a poll answered 'running' after Stop does not bring the run back", async ({ page }) => {
       // Red when: pollRun renders an answer that arrives after Stop closed the scope (renderLiveRun shows Stop again and hides New question).
       const fake = await installFake(page);
       fake.create = () => ({ body: panelCreate(RUN_A) });
@@ -569,7 +577,7 @@ for (const viewport of VIEWPORTS) {
       await assertNoForeignRunContent(page, "after the late running answer");
     });
 
-    test("F4: a poll answered 'cancelled' after Stop does not toast a second time", async ({ page }) => {
+    test("a poll answered 'cancelled' after Stop does not toast a second time", async ({ page }) => {
       // Red when: cancelRun never marks the scope finished, so a late cancelled poll takes pollRun's terminal branch and toasts "Run cancelled." again.
       await recordToasts(page);
       const fake = await installFake(page);
@@ -588,7 +596,7 @@ for (const viewport of VIEWPORTS) {
       await assertNoForeignRunContent(page, "after the late cancelled answer");
     });
 
-    test("F13: a poll that fails after Stop raises no connection-lost notice", async ({ page }) => {
+    test("a poll that fails after Stop raises no connection-lost notice", async ({ page }) => {
       // Red when: a rejected poll is handled (handlePollError) without checking that its scope is still open, so it re-raises "Connection lost — retrying…" after Stop.
       await recordToasts(page);
       const fake = await installFake(page);
@@ -674,7 +682,7 @@ for (const viewport of VIEWPORTS) {
       expect.soft(await assertNoForeignRunContent(page, "run C's result"), "the result is run C's").toBe(RUN_C);
     });
 
-    test("F7: opening a run from the session list clears the error card of the run before", async ({ page }) => {
+    test("opening a run from the session list clears the error card of the run before", async ({ page }) => {
       // Red when: restoreTrailRun renders the restored run without calling clearError.
       const fake = await installFake(page);
       fake.create = (n) => ({ body: n === 1 ? panelCreate(RUN_A) : panelCreate(RUN_B) });
@@ -695,7 +703,7 @@ for (const viewport of VIEWPORTS) {
       await expect(page.locator("#error-region")).toBeHidden();
     });
 
-    test("F8: of two quick session-list clicks, the second one's run stays on screen", async ({ page }) => {
+    test("of two quick session-list clicks, the second one's run stays on screen", async ({ page }) => {
       // Red when: restoreTrailRun renders whichever GET answers last, with no restore token.
       const fake = await installFake(page);
       fake.create = (n) => ({ body: n === 1 ? panelCreate(RUN_A) : panelCreate(RUN_B) });
@@ -721,7 +729,7 @@ for (const viewport of VIEWPORTS) {
       expect.soft(await assertNoForeignRunContent(page, "after A's late answer"), "the result is run B's").toBe(RUN_B);
     });
 
-    test("F8: a session-list answer that arrives after New question does not leave the composer", async ({ page }) => {
+    test("a session-list answer that arrives after New question does not leave the composer", async ({ page }) => {
       // Red when: restoreTrailRun's GET has no guard, so its late answer calls setView("result") over the composer.
       const fake = await installFake(page);
       fake.create = (n) => ({ body: n === 1 ? panelCreate(RUN_A) : panelCreate(RUN_B) });
@@ -746,6 +754,125 @@ for (const viewport of VIEWPORTS) {
       await assertNoForeignRunContent(page, "composer after A's late answer");
     });
 
+    test("a session-list answer abandoned by New question then Back is not drawn over the result the user came back to", async ({ page }) => {
+      // Red when: a view change does not abandon a pending session-list restore (setView no longer moves state.restoreToken on), so an answer that arrives after a round trip back to the same view is drawn over it.
+      const fake = await installFake(page);
+      fake.create = (n) => ({ body: n === 1 ? panelCreate(RUN_A) : panelCreate(RUN_B) });
+      const held = holder();
+      let holdA = false;
+      fake.get[RUN_A] = (route) => (holdA ? held.take(route) : route.fulfill(json(panelDone(RUN_A))));
+      fake.get[RUN_B] = (route) => route.fulfill(json(panelDone(RUN_B)));
+      await boot(page);
+      await ask(page, Q1);
+      await onPanelResult(page, Q1);
+      await newQuestionFromResult(page);
+      await ask(page, Q2);
+      await onPanelResult(page, Q2);
+      // Positive partner: the history entry the user will come back to names run B.
+      const entryB = await page.evaluate(() => window.history.state);
+      expect(entryB).toEqual({ quorumView: "result", runId: RUN_B });
+      holdA = true;
+      await trailEntry(page, RUN_A).click();
+      await held.ready;
+      await newQuestionFromResult(page);
+      await page.goBack();
+      await onPanelResult(page, Q2);
+      expect.soft(await assertNoForeignRunContent(page, "Back to run B's result"), "the result is run B's").toBe(RUN_B);
+      await deliver(page, held, panelDone(RUN_A));
+      await expect(view(page, "result")).toBeVisible();
+      await expect(page.locator("#result-question")).toHaveText(Q2);
+      expect.soft(await assertNoForeignRunContent(page, "after A's abandoned answer"), "still run B").toBe(RUN_B);
+      expect(await page.evaluate(() => window.history.state), "the history entry still names run B").toEqual(entryB);
+    });
+
+    test("a session-list answer abandoned by starting a new run never replaces that run", async ({ page }) => {
+      // Red when: neither the view change (setView) nor the new run's scope (beginRunScope) moves state.restoreToken on, so a session-list answer that arrives once a new run is on the live-run view replaces that run's scope and takes the page off it. Either move alone keeps it green; each is pinned on its own by the test above (setView) and tests/unit/test_w127_run_scope_round_one.py (beginRunScope).
+      const fake = await installFake(page);
+      fake.create = (n) => ({ body: panelCreate(n === 1 ? RUN_A : n === 2 ? RUN_B : RUN_C) });
+      const held = holder();
+      let holdA = false;
+      fake.get[RUN_A] = (route) => (holdA ? held.take(route) : route.fulfill(json(panelDone(RUN_A))));
+      fake.get[RUN_B] = (route) => route.fulfill(json(panelFailed(RUN_B)));
+      fake.get[RUN_C] = (route) => route.fulfill(json(panelRunning(RUN_C)));
+      fake.del[RUN_C] = (route) => route.fulfill(json(panelDone(RUN_C)));
+      await boot(page);
+      await ask(page, Q1);
+      await onPanelResult(page, Q1);
+      await newQuestionFromResult(page);
+      await ask(page, Q2);
+      // Positive partner: run B failed, and its live view offers New question.
+      await expect(page.locator("#live-status-text")).toHaveText("Failed", { timeout: 15000 });
+      await assertNoForeignRunContent(page, "failed run B");
+      holdA = true;
+      await trailEntry(page, RUN_A).click();
+      await held.ready;
+      await page.locator("#live-new-question").click();
+      await expect(view(page, "composer")).toBeVisible();
+      await ask(page, Q3);
+      await expect(view(page, "live-run")).toBeVisible({ timeout: 15000 });
+      await expect(page.locator("#live-query")).toHaveText(Q3);
+      expect.soft(await assertNoForeignRunContent(page, "run C live"), "the live view is run C's").toBe(RUN_C);
+      await deliver(page, held, panelDone(RUN_A));
+      await expect(view(page, "live-run"), "run C's live view stays on screen").toBeVisible();
+      await expect(page.locator("#live-query")).toHaveText(Q3);
+      expect.soft(await assertNoForeignRunContent(page, "run C after A's abandoned answer"), "still run C").toBe(RUN_C);
+      // Stop still works: the DELETE says run C had finished, and its answer opens.
+      await page.locator("#live-stop").click();
+      await expect.poll(() => fake.count("DELETE", `/${RUN_C}`)).toBe(1);
+      await onPanelResult(page, Q3);
+      expect.soft(await assertNoForeignRunContent(page, "run C's result"), "the result is run C's").toBe(RUN_C);
+      await newQuestionFromResult(page);
+      await assertNoForeignRunContent(page, "composer after run C");
+    });
+
+    test("Go to run shows nothing of the finished run while the adopted run's first answer is outstanding", async ({ page }) => {
+      // Red when: beginRunScope leaves the finished run's elapsed time, its pill state or its round cards and statuses on the live view, or leaves the question line empty and untagged, until the adopted run's first poll answers.
+      const fake = await installFake(page);
+      fake.create = (n) => (n === 1 ? { body: panelCreate(RUN_A) } : { status: 409, body: BUSY });
+      fake.get[RUN_A] = (route) => route.fulfill(json(panelDone(RUN_A)));
+      // Every poll of run C is held (they overlap, one every 750 ms) until the
+      // first is released, so nothing of run C is drawn while the checks run.
+      const held = holder();
+      const parked: Route[] = [];
+      let holdC = true;
+      fake.get[RUN_C] = (route, n) => {
+        if (!holdC) return route.fulfill(json(panelRunning(RUN_C)));
+        if (n === 1) return held.take(route);
+        parked.push(route);
+      };
+      await boot(page);
+      await ask(page, Q1);
+      await onPanelResult(page, Q1);
+      // Positive partner: run A left its header and its rounds in the hidden live view.
+      const left = await page.evaluate(() => ({
+        elapsed: document.getElementById("live-elapsed")?.textContent ?? "",
+        pill: document.getElementById("live-status-pill")?.dataset.state ?? "",
+        cards: document.querySelectorAll("#live-debate .live-round-card").length,
+      }));
+      expect(left.elapsed).not.toEqual("0.0s elapsed");
+      expect(left.pill).toEqual("completed");
+      expect(left.cards).toBeGreaterThan(0);
+      await newQuestionFromResult(page);
+      await ask(page, Q2);
+      await expect(errorCardAction(page, "Go to run")).toBeVisible({ timeout: 15000 });
+      fake.active = () => activeRun(RUN_C);
+      await errorCardAction(page, "Go to run").click();
+      await held.ready;
+      await expect(view(page, "live-run")).toBeVisible();
+      await expect.soft(page.locator("#live-elapsed"), "the adopted run's elapsed time").toHaveText("0.0s elapsed");
+      await expect.soft(page.locator("#live-status-pill"), "the adopted run's pill").toHaveAttribute("data-state", "running");
+      await expect.soft(page.locator("#live-query"), "the adopted run's question").toHaveText("—");
+      await expect.soft(page.locator("#live-debate .live-round-card").filter({ visible: true }), "run A's round cards").toHaveCount(0);
+      expect.soft(await assertNoForeignRunContent(page, "run C before its first answer"), "the live view is run C's").toBe(RUN_C);
+      // Nothing of run C has been drawn: its polls are all still held.
+      expect(fake.count("GET", `/${RUN_C}`)).toBeGreaterThan(0);
+      holdC = false;
+      await deliver(page, held, panelRunning(RUN_C));
+      for (const route of parked) await route.fulfill(json(panelRunning(RUN_C)));
+      await expect(page.locator("#live-status-text")).toHaveText("Running · initial answers");
+      expect.soft(await assertNoForeignRunContent(page, "run C after its first answer"), "the live view is run C's").toBe(RUN_C);
+    });
+
     test("Back to the kept result after New question shows it, still tagged with its run", async ({ page }) => {
       // Red when: setView does not derive <html data-run-id> from state.runScope on the result view, or renderResult does not tag the regions it fills (the visible result is unchanged today; only the invariant is red).
       const fake = await installFake(page);
@@ -761,7 +888,7 @@ for (const viewport of VIEWPORTS) {
       expect.soft(await assertNoForeignRunContent(page, "Back to run A's result"), "the result is run A's").toBe(RUN_A);
     });
 
-    test("F10: a moderator transcript after a peer one does not keep the peer caption", async ({ page }) => {
+    test("a moderator transcript after a peer one does not keep the peer caption", async ({ page }) => {
       // Red when: renderTranscript writes .transcript-debate-caption only when describePeerCritique returns a sentence, so a moderator run keeps the earlier peer run's sentence.
       const fake = await installFake(page);
       fake.create = (n) => ({ body: n === 1 ? panelCreate(RUN_A) : panelCreate(RUN_B) });
@@ -796,7 +923,7 @@ for (const viewport of VIEWPORTS) {
       expect.soft(await assertNoForeignRunContent(page, "run B's transcript"), "the transcript is run B's").toBe(RUN_B);
     });
 
-    test("F5: the transcript's demo banner describes the restored run, not the last one polled", async ({ page }) => {
+    test("the transcript's demo banner describes the restored run, not the last one polled", async ({ page }) => {
       // Red when: #demo-mode-banner is set only by renderModelPanels from pollRun, so a restored live run's transcript shows the simulated run's banner.
       const fake = await installFake(page);
       fake.create = (n) => ({ body: n === 1 ? panelCreate(RUN_A) : panelCreate(RUN_B) });

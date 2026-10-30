@@ -2228,8 +2228,10 @@ html[data-theme="dark"] .landing-preview-caption {
   gap: var(--space-4);
 }
 
-/* W127 (ADR-0187): the display above beat the hidden attribute, so a quick
-   run after a panel run kept that run's round cards on screen. */
+/* W127 (ADR-0187): the display above beats the hidden attribute, so without
+   this rule a hidden debate host stays on screen. Before it, a quick run after
+   a panel run showed that run's round cards. run-scope.spec.ts case (a)
+   checks that a hidden #live-debate is not displayed. */
 .live-debate[hidden] {
   display: none;
 }
