@@ -231,6 +231,7 @@ jobs:
           tests/invariants/follow-up-context.spec.ts
           tests/invariants/help-and-tour.spec.ts
           tests/invariants/safety-acknowledgement.spec.ts
+          tests/invariants/run-scope.spec.ts
           --project=chromium
           --retries=0
 
@@ -414,7 +415,20 @@ jobs:
         # floor keeps the slack it had: the W100 builder ran this lane's 24
         # specs locally (AGENTS.md rule 13 flags) and check_e2e_executed.py
         # printed "459 tests executed (floor 457), 0 skipped".
-        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 457 --lane "invariants lane"
+        # 457 -> 499 (W127, ADR-0187): run-scope.spec.ts joins this lane with
+        # 42 tests (21 cases at 1440 and 390 px). Added to the old floor, as
+        # above: the W127 builder ran this lane's 25 specs locally (AGENTS.md
+        # rule 13 flags) and check_e2e_executed.py printed "501 tests executed
+        # (floor 499), 0 skipped".
+        # 499 -> 505 (W127 review round 1): run-scope.spec.ts gains 3 cases at
+        # 1440 and 390 px, 6 tests. Added to the old floor, as above;
+        # `playwright test --list` over this lane's 25 specs printed
+        # "Total: 507 tests in 25 files".
+        # 505 -> 507 (W127 review round 2): run-scope.spec.ts gains 1 case at
+        # 1440 and 390 px, 2 tests. Added to the old floor, as above;
+        # `playwright test --list` over this lane's 25 specs printed
+        # "Total: 509 tests in 25 files".
+        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 507 --lane "invariants lane"
 
       - name: Clear the previous lane's JUnit report
         run: rm -f e2e/results.xml

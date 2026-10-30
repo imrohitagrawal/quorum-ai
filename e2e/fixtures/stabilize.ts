@@ -113,11 +113,15 @@ export async function waitForComposerReady(page: Page, slots = 4): Promise<void>
  * Regions whose text legitimately changes run-to-run (elapsed time, run ids).
  * Masked out of a screenshot so a real layout regression is the only thing
  * that can move the diff.
+ *
+ * No `[data-run-id]` locator here: since W127 (ADR-0187) that attribute tags
+ * every region a run fills, so masking it blanks most of the page. Before W127
+ * no element carried it and the locator matched nothing. The run id itself is
+ * `#result-run-id`, below.
  */
 export function masks(page: Page): Locator[] {
   return [
     page.locator("#live-elapsed"),
-    page.locator("[data-run-id]"),
     page.locator("#result-run-id"),
   ];
 }
