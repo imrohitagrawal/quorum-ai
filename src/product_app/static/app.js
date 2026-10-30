@@ -1962,11 +1962,14 @@
   }
 
   // W121 (ADR-0188): two steps of start-up a click may need. ``boot()``
-  // settles each when its step ends: ``true`` on success, ``false`` on
-  // failure, so a click is never held by a step that has failed. A write
-  // waits for the session (its anti-forgery token); an estimate also waits
-  // for the model list (the slots it prices). ``startUpFailure`` keeps the
-  // error a failed start-up showed, so a waiting estimate can show it again.
+  // settles each when its step ends, on success or failure, so a click is
+  // never held by a step that has ended. A write waits for the session (its
+  // anti-forgery token); an estimate also waits for the model list (the
+  // slots it prices). Whether the slots are drawn is read when the estimate
+  // runs (``modelSlotsDrawn``), never from the first start-up's outcome, so a
+  // recovered session ("Start a session") prices normally. ``startUpFailure``
+  // keeps the error a failed start-up showed, to show again while the slots
+  // are still not drawn.
   function startUpStep() {
     let settle = () => {};
     const done = new Promise((resolve) => {
@@ -2041,6 +2044,12 @@
   // ---------------------------------------------------------------------------
   // Model slot inputs
   // ---------------------------------------------------------------------------
+
+  // W121: the model slots are drawn as selects only once the model list has
+  // answered; before that they are placeholders without a value.
+  function modelSlotsDrawn() {
+    return document.querySelectorAll("select[data-model-slot]").length > 0;
+  }
 
   function getModelIds() {
     return [...document.querySelectorAll("[data-model-slot]")].map((input) =>
@@ -9782,11 +9791,12 @@
     try {
       // W121: a click while the page is still starting waits for the model
       // slots to be drawn, so it prices the panel, not the placeholders. If
-      // start-up failed, the slots were never drawn: show its error again
-      // (with its way to recover), never a crash on the placeholders.
-      const modelsDrawn = await modelsStarted.done;
+      // they are still not drawn (start-up failed and was not recovered),
+      // show its error again, with its way to recover, never a crash on the
+      // placeholders.
+      await modelsStarted.done;
       if (generation !== estimateGeneration) return null;
-      if (!modelsDrawn) {
+      if (!modelSlotsDrawn()) {
         throw (
           startUpFailure ||
           new ApiError({
@@ -13256,15 +13266,13 @@
     try {
       try {
         await initSession();
-        sessionStarted.settle(true);
       } finally {
-        sessionStarted.settle(false);
+        sessionStarted.settle();
       }
       try {
         await refreshDefaults();
-        modelsStarted.settle(true);
       } finally {
-        modelsStarted.settle(false);
+        modelsStarted.settle();
       }
       // CHG-070 (b): the question kept across "Sign in again", put back once,
       // only now (round 2): the model slots exist, so its costs can be shown,
@@ -13295,10 +13303,9 @@
       handleError(error);
       setConnectionPill("error", "Disconnected");
     } finally {
-      // A failed session skips the model step; release both (W121). A step
-      // already settled keeps its first answer.
-      sessionStarted.settle(false);
-      modelsStarted.settle(false);
+      // A failed session skips the model step; release both (W121).
+      sessionStarted.settle();
+      modelsStarted.settle();
     }
     // Pull the live readiness snapshot. ``/ready`` is
     // unauthenticated so this works even if the session bootstrap
@@ -13329,8 +13336,8 @@
   boot().catch((error) => {
     // W121: a boot that fails before its start-up steps releases them too.
     if (!startUpFailure) startUpFailure = error;
-    sessionStarted.settle(false);
-    modelsStarted.settle(false);
+    sessionStarted.settle();
+    modelsStarted.settle();
     if (!document.documentElement.dataset.appState) {
       document.documentElement.dataset.appState = "error";
     }

@@ -17,9 +17,9 @@ The window is normally short. On a slow server or connection it is long enough f
 
 ## Decision
 
-1. Start-up has two steps a click may need, each a promise that `boot()` settles when the step ends: `true` on success, `false` on failure. The session step comes first, then the model step. A boot that throws before reaching them settles both as failed. A step that has ended never holds a click.
+1. Start-up has two steps a click may need, each a promise that `boot()` settles when the step ends, on success or failure. The session step comes first, then the model step. A boot that throws before reaching them settles both. A step that has ended never holds a click.
 2. `api()` waits for the session step before sending any request that is not `GET` or `HEAD`, and builds the token header after the wait. After a successful start-up the write carries the token the session answer gave; after a failed one it is sent as before and the server refuses it.
-3. `estimateRun()`, the one path every estimate and run goes through, waits for the model step after showing its spinner and before reading the question and the slots. If the person left for another question meanwhile, it stops, as it already does when an answer arrives late. If start-up failed, the slots were never drawn: it shows start-up's own error again (`startUpFailure`, which keeps its way to recover, such as "Start a session"), never a crash on the placeholders.
+3. `estimateRun()`, the one path every estimate and run goes through, waits for the model step after showing its spinner and before reading the question and the slots. If the person left for another question meanwhile, it stops, as it already does when an answer arrives late. It then checks whether the slots are drawn at that moment (`modelSlotsDrawn()`), not what the first start-up reported. If they are not (start-up failed and was not recovered), it shows start-up's own error again (`startUpFailure`, which keeps its way to recover, such as "Start a session"), never a crash on the placeholders. After a successful "Start a session", which draws the slots, an estimate prices normally.
 4. A click made after start-up is unchanged: both promises are already settled.
 
 ## Measurements
@@ -35,9 +35,10 @@ The window is normally short. On a slow server or connection it is long enough f
 | Estimate clicked after a start-up has failed | error card "reading 'trim'" | the start-up card again |
 | `/v1/models/defaults` fails while an Estimate click waits | — | the click finishes without the crash card |
 | `/v1/session` fails while a sign-in click waits | — | the start goes out once, is refused, and the button is usable again |
-| start-up throws while wiring the page, with a sign-in click waiting | — | the same |
+| "Start a session" recovers a failed start-up, then Estimate | (the estimate is priced) | the same: one estimate request, the cost gate opens |
+| start-up throws while wiring the page, then "Sign in with Google" | — | the start goes out once and the button is usable again, never left waiting |
 
-On the code before this change, 5 of the 8 tests fail; the other 3 guard the failure paths this change adds. Five mutations each turn a named test red: no session wait in `api()`; the session step settled only on success; no release when `boot()` throws; no "were the slots drawn" check; no model wait in `estimateRun()`.
+On the code before this change, 5 of the 9 tests fail; the other 4 guard the failure and recovery paths this change must keep working. Six mutations each turn a named test red: no session wait in `api()`; the session step settled only on success; no release when `boot()` throws; no "are the slots drawn" check; no model wait in `estimateRun()`; and reading the first start-up's outcome instead of the slots (the recovery test). A review of an earlier version of this change found exactly that last defect: after "Start a session", every estimate showed the old start-up error again.
 
 ## Rejected alternatives
 

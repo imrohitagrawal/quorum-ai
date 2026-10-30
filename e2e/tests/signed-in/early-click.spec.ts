@@ -219,6 +219,42 @@ test.describe("a click while the workspace is still starting (W121)", () => {
     await expect(page.locator("#estimate-run")).toBeEnabled();
   });
 
+  test('after "Start a session" recovers a failed start-up, Estimate prices the panel', async ({ page }) => {
+    // RED-IF a recovered session still shows the first start-up's error on
+    // Estimate (the start-up outcome read once, at load) instead of pricing
+    // the panel the recovery drew. Partner: one estimate request, the cost
+    // gate opens, and the start-up's card is gone.
+    await page.setViewportSize({ width: 1440, height: 900 });
+    let sessionCalls = 0;
+    await page.route(
+      (url) => url.pathname === "/v1/session",
+      async (route) => {
+        sessionCalls += 1;
+        if (sessionCalls === 1) {
+          await route.fulfill({ status: 500, contentType: "application/json", body: "{}" });
+        } else {
+          await route.continue();
+        }
+      },
+    );
+    const writes = recordWrites(page);
+    await openWorkspace(page);
+    await expect(page.locator("html")).toHaveAttribute("data-app-state", "error");
+    const card = page.locator("#error-region");
+    await expect(card).toContainText(START_UP_500);
+    await card.getByRole("button", { name: "Start a session" }).click();
+    await expect(page.getByText("Session started. You can run a query now.")).toBeVisible({ timeout: 15000 });
+    await expect(card).toBeHidden();
+    await page.locator("#query-text").fill(QUESTION);
+    const estimate = page.waitForRequest((r) => new URL(r.url()).pathname === "/v1/query-runs/estimate");
+    await page.locator("#estimate-run").click();
+    const sent = await estimate;
+    expect((sent.postDataJSON() as { model_slots: string[] }).model_slots).toEqual(await drawnPanel(page));
+    await expect(page.locator('[data-view="cost-gate"]')).toBeVisible({ timeout: 15000 });
+    await expect(card).toBeHidden();
+    expect(paths(writes).filter((p) => p === "/v1/query-runs/estimate")).toHaveLength(1);
+  });
+
   test("a model list that fails releases a waiting Estimate without a crash", async ({ page }) => {
     // RED-IF the released click reads the placeholder slots and its "reading
     // 'trim'" card replaces the start-up's error. Partner: the session step
@@ -261,11 +297,13 @@ test.describe("a click while the workspace is still starting (W121)", () => {
     expect(paths(writes).filter((p) => p === "/v1/auth/google/start")).toHaveLength(1);
   });
 
-  test('a start-up that throws in its own wiring releases a waiting "Sign in with Google"', async ({ page }) => {
+  test('after a start-up that throws in its own wiring, "Sign in with Google" is not left waiting', async ({
+    page,
+  }) => {
     // RED-IF a boot that fails before its start-up steps (here: a throw while
     // wiring the info icons, after the sign-in button is wired) leaves the
-    // session step unsettled, so the start waits for good. Partner: the start
-    // goes out once and the button is usable again.
+    // session step unsettled, so a later sign-in start waits for good.
+    // Partner: the start goes out once and the button is usable again.
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.addInitScript(() => {
       const original = Document.prototype.querySelectorAll;
