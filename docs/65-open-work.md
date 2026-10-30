@@ -6,7 +6,7 @@ original, because a gate and an offline agent can read it and cannot read `gh`.
 
 Verified at: `e6d5300e955fb25cf1c523b3c967953f31bc04f2`
 
-The board holds **132** rows, **69** of them unpinned.
+The board holds **133** rows, **70** of them unpinned.
 
 `scripts/check_open_work.py --check` reads every row's evidence off disk and
 refuses if a claim is false. It runs inside `make validate`, and
@@ -228,6 +228,7 @@ caught by any automated check and 10 of 16 by adversarial review
 | W133 | Two offline holes around the blocking e2e lanes, seen again in W127's first review round (2026-10-30): deleting `run-scope.spec.ts` from the first lane's `playwright test` command passes the offline workflow and spec guards while its name stays in the floor comment above (`tests/test_e2e_workflow_covers_all_invariant_specs.py` matches the raw text of `e2e.yml`), and nothing offline checks a lane's `--min` floor, so lowering it as well would drop the spec from CI with every check green. Also, only the first invariant-spec count in `AGENTS.md` is pinned; the lane count, the "All N are named" count and the named list are not. Fix by reading the command's arguments and pinning each floor to the listed test count | UNPINNED | `—` | — | — |
 | W134 | When Stop's DELETE fails and the run then finishes with a result, the result view opens with the failed Stop's error card ("Something went wrong") still above it. Found with mocked responses by W127's first review round (2026-10-30), which reported the same on the build before W127 | UNPINNED | `—` | — | — |
 | W135 | In "This session", a run in demo mode with no live answer (`demoMode && liveCount === 0`) is labelled "simulated" whatever its status, so a simulated run that was cancelled, failed or timed out does not say so (the same line labels runs this way on `f10c754`; W127's Stop now adds a cancelled run to the list, where before only a poll did). Label it by the status the server reports, keeping "simulated" visible some other way | UNPINNED | `—` | — | — |
+| W136 | A run opened through "Go to run" ends on a result with no "Follow up on this" and a "This session" entry with no question text, because the tab never learned its question (`ActiveQueryRunResponse` has no question field and the result does not carry `query_text`). AC-057 offers a follow-up on every result with a final answer, so this case departs from it; found by W127's completeness review (2026-10-30), recorded in ADR-0187. Deciding between an exception in AC-057 and giving the tab the question is a product decision | UNPINNED | `—` | — | — |
 
 **STOP** marks a row that cannot be finished without a human decision — a money,
 cost or safety guardrail value that only real measurement could justify. Do not

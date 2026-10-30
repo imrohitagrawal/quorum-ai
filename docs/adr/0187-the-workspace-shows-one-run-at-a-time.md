@@ -6,8 +6,8 @@ Accepted — 2026-10-30, board rows W127 and W49. It makes the page meet ADR-014
 2026-10-03): decision 5, going home drops anything still in flight for the question being left, and
 decision 6, Back after "New question" returns to the result the user left; and ADR-0140's call (i),
 accepted by the owner in CHG-027 (b), that home is the composer. No new owner decision was needed.
-Everything below about how those decisions are met is the session's design; Codex reviewed the plan
-twice before any code.
+Everything below about how those decisions are met is the session's design; Codex reviewed the plan,
+and then its revision, before any code.
 
 ## Context
 
@@ -133,6 +133,12 @@ covers it; both tests were red on the first-round fix and are green after.
   composer is hidden there, so nothing visible changes.
 - A new run-scoped region must carry `data-run-scope` and be tagged by its renderer, or the
   invariant fails on it.
+- A run opened through "Go to run" ends on a result that offers no "Follow up on this": this tab
+  never learned its question (`ActiveQueryRunResponse` has none, and the result does not carry
+  `query_text`), so the page says the next question is answered on its own, and its "This session"
+  entry has no question text. AC-057 offers a follow-up on every result with a final answer; this
+  case departs from it, and is board row W136. Before this change the page paired that answer with
+  the composer's text, or never left the live view (W49).
 - Not covered: the signed-in History panel, because `run-scope.spec.ts` runs anonymous; and the
   boot path's adoption, which no page action reaches today.
 
