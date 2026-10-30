@@ -234,6 +234,7 @@ jobs:
           tests/invariants/run-scope.spec.ts
           --project=chromium
           --retries=0
+          --output=test-results/invariants
 
       # EXECUTED-COUNT FLOOR. Playwright exits 0 when a spec path matches nothing
       # and when every test it found was skipped, so a lane that quietly stopped
@@ -454,6 +455,7 @@ jobs:
           tests/invite/invite-link.spec.ts
           --project=chromium
           --retries=0
+          --output=test-results/parity
 
       # EXECUTED-COUNT FLOOR. Playwright exits 0 when a spec path matches nothing
       # and when every test it found was skipped, so a lane that quietly stopped
@@ -505,6 +507,7 @@ jobs:
           tests/navigation/tabs-share-token.spec.ts
           --project=chromium
           --retries=0
+          --output=test-results/workspace
 
       # EXECUTED-COUNT FLOOR, same reasoning as the two lanes above. Floor is
       # the EXACT count measured on 2026-08-03 (51 = 16 + 16 + 9 + 10).
@@ -549,6 +552,7 @@ jobs:
           --config=playwright.signed-in.config.ts
           --project=chromium
           --retries=0
+          --output=test-results/signed-in
 
       # EXECUTED-COUNT FLOOR, same reasoning as the lanes above. 25 is the four
       # specs' whole test count (history-refresh 14, follow-up-context 1, W37;
@@ -663,6 +667,7 @@ jobs:
           tests/invariants/trust-score-visual.spec.ts
           --project=chromium
           --retries=0
+          --output=test-results/visual
 
       # EXECUTED-COUNT FLOOR. Issue #162/#166: this step was the one gap left
       # by the two floors above, because its count was never measured on the
