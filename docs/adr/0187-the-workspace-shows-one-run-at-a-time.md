@@ -36,15 +36,17 @@ checked against the run it was asked for:
    every move that changes which run is current: a new run, "Go to run", the boot path and a
    session-list restore. It drops what the page kept for the previous run, untags every
    run-scoped region, empties the live view's run content and resets the live header to a run just
-   starting (no elapsed time, a running pill). An adopted run has no question the page knows
+   starting ("0.0s elapsed", a running pill). An adopted run has no question the page knows
    (`ActiveQueryRunResponse` carries none), so it shows "—", never the composer's text.
    Navigation never clears the scope, so Back to a kept result still names its run.
 2. **Every answer is checked against the scope it was asked for, before anything is drawn.** A poll
    captures the scope as it is sent and is dropped unless that scope is still current, open and
    not finished, and the answer is for its run. A failed poll is checked the same way, so it raises
    no connection notice after Stop. A session-list restore is drawn only while nothing has happened
-   since its click: no later click, no view change (`setView`) and no new run scope
-   (`beginRunScope`), each of which moves `state.restoreToken` on.
+   since its click: no later click, no view change (`setView` showing another view) and no new run
+   scope (`beginRunScope`), each of which moves `state.restoreToken` on. A `setView` call that keeps
+   the view on screen is not a change: "Go to run" answered "no active run" returns the composer to
+   the composer, and a session-list click made while it waited is still drawn.
 3. **One terminal path.** `finishRun(result, scope)`, `pollRun`'s terminal branch moved out with
    its run-once guard now per scope instead of page-wide, is shared by Stop. Stop closes the scope while its DELETE is
    in flight and disables `#live-stop`; a failed DELETE opens it again. The toast says what the
@@ -81,7 +83,7 @@ reaching its result (W49); a restore keeping the previous error card or answerin
 transcript keeping another run's caption or demo banner; two DELETEs from two clicks; and slot cells
 showing the priced panel's rows on a changed panel.
 
-The spec has 24 cases, each at 1440 and 390 px (48 tests). The first 21 cases (42 tests) were
+The spec has 25 cases, each at 1440 and 390 px (50 tests). The first 21 cases (42 tests) were
 written before the change: on `f10c754` all 42 failed, and after the change all 42 pass. The unit
 file `tests/unit/test_w127_run_scope_functions.py` has 14 tests (12 failed and 2 positive partners
 passed on `f10c754`; 14 pass after).
@@ -96,6 +98,11 @@ and `tests/unit/test_w127_run_scope_round_one.py` (5 tests) cover them. All 6 te
 unit tests were red on the first build; the other 2 unit tests pin what the first build already
 did (a panel total compares every slot; a new scope empties each live region). All are green
 after.
+
+The second review round found that the first-round fix went one step too far: `setView` abandoned
+a pending session-list restore even when the view did not change, so a session-list click made
+while "Go to run" waited was dropped when the answer was "no active run". One spec case (2 tests)
+covers it; both tests were red on the first-round fix and are green after.
 
 ## Rejected alternatives
 

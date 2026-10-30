@@ -424,7 +424,11 @@ jobs:
         # 1440 and 390 px, 6 tests. Added to the old floor, as above;
         # `playwright test --list` over this lane's 25 specs printed
         # "Total: 507 tests in 25 files".
-        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 505 --lane "invariants lane"
+        # 505 -> 507 (W127 review round 2): run-scope.spec.ts gains 1 case at
+        # 1440 and 390 px, 2 tests. Added to the old floor, as above;
+        # `playwright test --list` over this lane's 25 specs printed
+        # "Total: 509 tests in 25 files".
+        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 507 --lane "invariants lane"
 
       - name: Clear the previous lane's JUnit report
         run: rm -f e2e/results.xml

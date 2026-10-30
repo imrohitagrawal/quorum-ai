@@ -825,6 +825,38 @@ for (const viewport of VIEWPORTS) {
       await assertNoForeignRunContent(page, "composer after run C");
     });
 
+    test("a session-list click made while Go to run waits is still drawn when no run is active", async ({ page }) => {
+      // Red when: setView moves state.restoreToken on even when the view does not change, so "no active run" sending the composer back to the composer abandons the click made after Go to run.
+      const fake = await installFake(page);
+      fake.create = (n) => (n === 1 ? { body: panelCreate(RUN_A) } : { status: 409, body: BUSY });
+      const held = holder();
+      let holdA = false;
+      fake.get[RUN_A] = (route) => (holdA ? held.take(route) : route.fulfill(json(panelDone(RUN_A))));
+      await boot(page);
+      await ask(page, Q1);
+      await onPanelResult(page, Q1);
+      await newQuestionFromResult(page);
+      await ask(page, Q2);
+      await expect(errorCardAction(page, "Go to run")).toBeVisible({ timeout: 15000 });
+      await assertNoForeignRunContent(page, "composer with the busy card");
+      // Registered after installFake, so this handler answers /active first.
+      const activeHeld = holder();
+      await page.route(/\/v1\/query-runs\/active$/, (route) => activeHeld.take(route));
+      await errorCardAction(page, "Go to run").click();
+      await activeHeld.ready;
+      // Positive partner: while Go to run waits, the session-list entry can be clicked.
+      await expect(trailEntry(page, RUN_A)).toBeEnabled();
+      holdA = true;
+      await trailEntry(page, RUN_A).click();
+      await held.ready;
+      await deliver(page, activeHeld, activeRun(null));
+      await expect(view(page, "composer")).toBeVisible();
+      await assertNoForeignRunContent(page, "composer after no active run");
+      await deliver(page, held, panelDone(RUN_A));
+      await onPanelResult(page, Q1);
+      expect.soft(await assertNoForeignRunContent(page, "restored run A"), "the result is run A's").toBe(RUN_A);
+    });
+
     test("Go to run shows nothing of the finished run while the adopted run's first answer is outstanding", async ({ page }) => {
       // Red when: beginRunScope leaves the finished run's elapsed time, its pill state or its round cards and statuses on the live view, or leaves the question line empty and untagged, until the adopted run's first poll answers.
       const fake = await installFake(page);

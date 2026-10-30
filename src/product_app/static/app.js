@@ -618,6 +618,7 @@
     if (!views.length) return;
     const target = views.find((view) => view.dataset.view === name);
     if (!target) return;
+    const viewChanged = activeViewName() !== name;
     // Clear the landing's transient state on EVERY view change so it never
     // persists across a round-trip: the empty-submit error (which used to
     // survive a How-it-works round-trip) AND the one-shot transition note (shown
@@ -665,8 +666,11 @@
     // for its answer. Checking only that the view NAME matched when the
     // answer came let a round trip (New question then Back, or the
     // transcript then Back) or a new run started from that view draw the
-    // restored run over what the user had moved on to.
-    state.restoreToken += 1;
+    // restored run over what the user had moved on to. A call that keeps the
+    // view on screen is not a change: "Go to run" answered "no active run"
+    // returns the composer to the composer, and a session-list click made
+    // while it waited must still be drawn.
+    if (viewChanged) state.restoreToken += 1;
     // W127: the composer's amounts are painted when it comes on screen (and
     // on every input change while it is there), so arriving at it never shows
     // an estimate priced for other inputs.
