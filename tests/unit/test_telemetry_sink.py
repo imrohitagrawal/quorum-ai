@@ -683,14 +683,29 @@ def test_the_token_record_reaches_the_tokens_file_and_not_the_root_logger(
     ``test_the_token_record_never_becomes_a_sentry_breadcrumb`` is what pins
     it. This docstring claimed otherwise until that test was written.
     """
-    with caplog.at_level(logging.DEBUG):
-        _drive_successful_call(monkeypatch, model_id=f"{_MODEL_ID}:online")
-        # POSITIVE PARTNER on the same capture: the billing stream still
-        # reaches the root logger, so "absent from caplog" below is a property
-        # of the routing and not of the capture being switched off.
-        _drive_provider_error(monkeypatch, _http_error(503, _ROUTER_REFUSAL_BODY))
+    # The capture is a handler on the ROOT logger itself, not ``caplog.records``:
+    # since pytest 9, caplog also attaches to every logger with
+    # ``propagate=False``, so it sees the token record whatever the routing.
+    # ``caplog.at_level`` stays only to lower the level for the drive.
+    root_records: list[logging.LogRecord] = []
 
-    root_events = [r.msg for r in caplog.records]
+    class _RootCollector(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            root_records.append(record)
+
+    root_collector = _RootCollector(logging.DEBUG)
+    logging.getLogger().addHandler(root_collector)
+    try:
+        with caplog.at_level(logging.DEBUG):
+            _drive_successful_call(monkeypatch, model_id=f"{_MODEL_ID}:online")
+            # POSITIVE PARTNER on the same capture: the billing stream still
+            # reaches the root logger, so "absent from the root logger" below
+            # is a property of the routing and not of the capture being off.
+            _drive_provider_error(monkeypatch, _http_error(503, _ROUTER_REFUSAL_BODY))
+    finally:
+        logging.getLogger().removeHandler(root_collector)
+
+    root_events = [r.msg for r in root_records]
     assert "provider_call_tokens" not in root_events, (
         "the token record reached the root logger; it would evict Fly's log "
         "ring and become a Sentry breadcrumb"
