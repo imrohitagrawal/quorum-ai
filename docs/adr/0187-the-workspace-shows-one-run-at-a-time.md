@@ -42,11 +42,13 @@ checked against the run it was asked for:
 2. **Every answer is checked against the scope it was asked for, before anything is drawn.** A poll
    captures the scope as it is sent and is dropped unless that scope is still current, open and
    not finished, and the answer is for its run. A failed poll is checked the same way, so it raises
-   no connection notice after Stop. A session-list restore is drawn only while nothing has happened
-   since its click: no later click, no view change (`setView` showing another view) and no new run
-   scope (`beginRunScope`), each of which moves `state.restoreToken` on. A `setView` call that keeps
-   the view on screen is not a change: "Go to run" answered "no active run" returns the composer to
-   the composer, and a session-list click made while it waited is still drawn.
+   no connection notice after Stop. A session-list restore is dropped by a later session-list
+   click, a view change (`setView` showing another view) or a new run scope (`beginRunScope`), each
+   of which moves `state.restoreToken` on. A `setView` call that keeps the view on screen is not a
+   change: "Go to run" answered "no active run" returns the composer to the composer, and a
+   session-list click made while it waited is still drawn. The same rule means a click made from the
+   composer is still drawn after the logo or "New question" leaves the page on the composer (board
+   row W137).
 3. **One terminal path.** `finishRun(result, scope)`, `pollRun`'s terminal branch moved out with
    its run-once guard now per scope instead of page-wide, is shared by Stop. Stop closes the scope while its DELETE is
    in flight and disables `#live-stop`; a failed DELETE opens it again. The toast says what the
