@@ -36,12 +36,9 @@ def _steps() -> list[dict[str, Any]]:
 
 
 def _words(run: object) -> list[str]:
-    """The command's words; a step shlex cannot read (an apostrophe in a
-    comment) is split on whitespace instead of failing the whole test."""
-    try:
-        return shlex.split(str(run))
-    except ValueError:
-        return str(run).split()
+    """The command's words as the shell reads them: a ``#`` comment (which may
+    hold an apostrophe, or a flag the shell never sees) is dropped."""
+    return shlex.split(str(run), comments=True)
 
 
 def _runs_playwright_test(step: dict[str, Any]) -> bool:
