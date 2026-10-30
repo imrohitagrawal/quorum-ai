@@ -34,8 +34,8 @@ Written by the session. Decisions are the CHG rows named here, each a plain rest
 - CodeQL default setup: on (advisory, not a required check).
 - Branch protection on `main`: conversation resolution is required. The six required checks
   are unchanged.
-- Commits made in this repository's checkouts use the GitHub no-reply address (repository-local
-  git configuration).
+- No GitHub no-reply address is needed on commits or merges: the repository-local git setting
+  that used one was removed on 2026-10-29 (CHG-108).
 - Not changed, though approved in CHG-103: Dependabot security updates and secret scanning's
   non-provider patterns are still off. The owner turns them on.
 
@@ -72,4 +72,5 @@ Written by the session. Decisions are the CHG rows named here, each a plain rest
   account's 24-hour carry (`docs/84-incident-response.md`, ADR-0144, ADR-0136).
 - **`gh pr merge --author-email` with the GitHub no-reply address is refused** (`GraphQL: Invalid
   email address`) while the account does not keep its email private; squash commits then carry the
-  account's default address. Local commits in this repository already use the no-reply address.
+  account's default address. No no-reply address is needed: the repository-local setting that used
+  one was removed on 2026-10-29 (CHG-108).
