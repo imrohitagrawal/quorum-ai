@@ -1961,7 +1961,23 @@
     }
   }
 
+  // W121 (ADR-0188): two steps of start-up a click may need. ``boot()``
+  // settles each when its step ends, on success or failure, so nothing ever
+  // waits on them for good. A write waits for the session (its anti-forgery
+  // token); an estimate also waits for the model list (the slots it prices).
+  function startUpStep() {
+    let settle = () => {};
+    const done = new Promise((resolve) => {
+      settle = resolve;
+    });
+    return { done, settle };
+  }
+  const sessionStarted = startUpStep();
+  const modelsStarted = startUpStep();
+
   async function api(path, options = {}) {
+    const method = String(options.method || "GET").toUpperCase();
+    if (method !== "GET" && method !== "HEAD") await sessionStarted.done;
     let response;
     try {
       response = await fetch(path, {
@@ -9761,6 +9777,10 @@
     hideCostConfirmation();
     setButtonLoading(trigger, true);
     try {
+      // W121: a click while the page is still starting waits for the model
+      // slots to be drawn, so it prices the panel, not the placeholders.
+      await modelsStarted.done;
+      if (generation !== estimateGeneration) return null;
       const queryText = queryTextarea.value.trim();
       if (!queryText) {
         // W43: a submit attempt is what makes the empty box an error.
@@ -13219,8 +13239,16 @@
     }
     setConnectionPill("connecting", "Connecting");
     try {
-      await initSession();
-      await refreshDefaults();
+      try {
+        await initSession();
+      } finally {
+        sessionStarted.settle();
+      }
+      try {
+        await refreshDefaults();
+      } finally {
+        modelsStarted.settle();
+      }
       // CHG-070 (b): the question kept across "Sign in again", put back once,
       // only now (round 2): the model slots exist, so its costs can be shown,
       // and the bootstrap has named the account it must match. W87-2: only
@@ -13248,6 +13276,10 @@
       document.documentElement.dataset.appState = "error";
       handleError(error);
       setConnectionPill("error", "Disconnected");
+    } finally {
+      // A failed session skips the model step; release both (W121).
+      sessionStarted.settle();
+      modelsStarted.settle();
     }
     // Pull the live readiness snapshot. ``/ready`` is
     // unauthenticated so this works even if the session bootstrap
@@ -13276,6 +13308,9 @@
   // synchronous throw anywhere in it surfaces here as a rejection: this
   // guarantees the signal is ALWAYS written, exactly once, on every path.
   boot().catch((error) => {
+    // W121: a boot that fails before its start-up steps releases them too.
+    sessionStarted.settle();
+    modelsStarted.settle();
     if (!document.documentElement.dataset.appState) {
       document.documentElement.dataset.appState = "error";
     }
