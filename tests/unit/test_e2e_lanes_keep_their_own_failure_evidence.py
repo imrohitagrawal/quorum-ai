@@ -4,7 +4,7 @@ The job runs five ``npx playwright test`` lanes one after another. Playwright
 empties its output folder when a run starts, and every lane used the default
 ``e2e/test-results/``, so each lane deleted the traces and screenshots of the
 lane before it. The uploaded artifact held only the last lane's output: the
-signed-in lane's failures on 2026-10-29 and 2026-10-30 left nothing to read.
+signed-in lane's failures on 2026-10-29 and 2026-10-30 left no trace to read.
 Each lane now writes to its own sibling folder under ``test-results/``, and the
 upload, which runs whether or not a lane failed, takes all of them.
 """
@@ -35,8 +35,17 @@ def _steps() -> list[dict[str, Any]]:
     return [step for job in workflow["jobs"].values() for step in job.get("steps", [])]
 
 
+def _words(run: object) -> list[str]:
+    """The command's words; a step shlex cannot read (an apostrophe in a
+    comment) is split on whitespace instead of failing the whole test."""
+    try:
+        return shlex.split(str(run))
+    except ValueError:
+        return str(run).split()
+
+
 def _runs_playwright_test(step: dict[str, Any]) -> bool:
-    words = shlex.split(str(step.get("run", "")))
+    words = _words(step.get("run", ""))
     return any(a == "playwright" and b == "test" for a, b in zip(words, words[1:], strict=False))
 
 
@@ -47,7 +56,7 @@ def _playwright_steps() -> list[dict[str, Any]]:
 def _outputs(step: dict[str, Any]) -> list[str]:
     """Every output folder the command names, in either form Playwright reads
     (``--output=DIR`` or ``--output DIR``); the last one wins."""
-    words = shlex.split(str(step["run"]))
+    words = _words(step["run"])
     found = [w.split("=", 1)[1] for w in words if w.startswith("--output=")]
     found += [after for word, after in zip(words, words[1:], strict=False) if word == "--output"]
     return found
