@@ -35,20 +35,30 @@ def _steps() -> list[dict[str, Any]]:
     return [step for job in workflow["jobs"].values() for step in job.get("steps", [])]
 
 
+def _runs_playwright_test(step: dict[str, Any]) -> bool:
+    words = shlex.split(str(step.get("run", "")))
+    return any(a == "playwright" and b == "test" for a, b in zip(words, words[1:], strict=False))
+
+
 def _playwright_steps() -> list[dict[str, Any]]:
-    return [s for s in _steps() if "npx playwright test" in str(s.get("run", ""))]
+    return [s for s in _steps() if _runs_playwright_test(s)]
 
 
 def _outputs(step: dict[str, Any]) -> list[str]:
+    """Every output folder the command names, in either form Playwright reads
+    (``--output=DIR`` or ``--output DIR``); the last one wins."""
     words = shlex.split(str(step["run"]))
-    return [w.split("=", 1)[1] for w in words if w.startswith("--output=")]
+    found = [w.split("=", 1)[1] for w in words if w.startswith("--output=")]
+    found += [after for word, after in zip(words, words[1:], strict=False) if word == "--output"]
+    return found
 
 
 def test_each_lane_writes_its_failure_evidence_to_its_own_folder() -> None:
     """RED-IF a lane has no ``--output`` (it falls back to ``test-results/`` and
     empties the folder holding the other lanes' traces), two lanes share one,
-    one folder sits inside another, or a lane runs outside ``e2e/``. Partner:
-    exactly the five lanes are found."""
+    one folder sits inside another, or a lane runs outside ``e2e/``. A lane
+    started another way (``npx --yes playwright test``, ``npm exec --
+    playwright test``) is found too. Partner: exactly the five lanes are found."""
     steps = _playwright_steps()
     assert len(steps) == 5, [s.get("name") for s in steps]
     seen = []
@@ -62,8 +72,9 @@ def test_each_lane_writes_its_failure_evidence_to_its_own_folder() -> None:
 
 def test_the_upload_takes_every_lane_folder_even_when_a_lane_failed() -> None:
     """RED-IF the upload runs only on success (a failed lane would upload
-    nothing) or no longer includes ``e2e/test-results/``, the parent of every
-    lane's folder. Partner: the upload step is found."""
+    nothing), no longer includes ``e2e/test-results/``, the parent of every
+    lane's folder, or excludes anything from it (``!**/trace.zip``). Partner:
+    the upload step is found."""
     uploads = [s for s in _steps() if str(s.get("uses", "")).startswith("actions/upload-artifact@")]
     report = [s for s in uploads if s.get("with", {}).get("name") == "playwright-report"]
     assert len(report) == 1, [s.get("name") for s in uploads]
@@ -71,3 +82,4 @@ def test_the_upload_takes_every_lane_folder_even_when_a_lane_failed() -> None:
     assert step.get("if") == "${{ !cancelled() }}"
     paths = str(step["with"]["path"]).split()
     assert "e2e/test-results/" in paths, paths
+    assert not [p for p in paths if p.startswith("!")], paths
