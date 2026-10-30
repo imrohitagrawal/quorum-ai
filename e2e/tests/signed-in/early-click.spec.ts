@@ -76,6 +76,19 @@ function recordWrites(page: Page): Request[] {
 
 const paths = (writes: Request[]) => writes.map((r) => new URL(r.url()).pathname);
 
+/** The model ids the panel's drawn slots hold, in order. */
+async function drawnPanel(page: Page): Promise<string[]> {
+  // Read after the estimate: the cost gate then hides the composer, so the
+  // selects are drawn but not visible.
+  const slots = page.locator("select[data-model-slot]");
+  await expect(slots).not.toHaveCount(0);
+  return slots.evaluateAll((nodes) => nodes.map((n) => (n as HTMLSelectElement).value));
+}
+
+/** The card a failed start-up shows when the session request fails (it offers "Start a session"). */
+const START_UP_500 = "Start a session to run a query";
+const CRASH = "reading 'trim'";
+
 async function openWorkspace(page: Page) {
   await page.addInitScript(() => {
     try {
@@ -115,8 +128,8 @@ test.describe("a click while the workspace is still starting (W121)", () => {
     const token = ((await (await sessionAnswer).json()) as { csrf_token: string }).csrf_token;
     const sent = await estimate;
     expect(sent.headers()["x-csrf-token"], "the estimate carries the session's token").toBe(token);
-    const body = sent.postDataJSON() as { model_slots: unknown[] };
-    expect(body.model_slots.length, "the full panel is priced, not an empty one").toBeGreaterThanOrEqual(2);
+    const body = sent.postDataJSON() as { model_slots: string[] };
+    expect(body.model_slots, "the whole drawn panel is priced").toEqual(await drawnPanel(page));
     expect((await sent.response())?.status()).toBe(200);
     await expect(page.locator('[data-view="cost-gate"]')).toBeVisible({ timeout: 15000 });
     await expect(page.locator("#error-region")).toBeHidden();
@@ -141,8 +154,8 @@ test.describe("a click while the workspace is still starting (W121)", () => {
     const estimate = page.waitForRequest((r) => new URL(r.url()).pathname === "/v1/query-runs/estimate");
     defaults.release();
     const sent = await estimate;
-    const body = sent.postDataJSON() as { model_slots: unknown[] };
-    expect(body.model_slots.length).toBeGreaterThanOrEqual(2);
+    const body = sent.postDataJSON() as { model_slots: string[] };
+    expect(body.model_slots, "the whole drawn panel is priced").toEqual(await drawnPanel(page));
     await expect(page.locator('[data-view="cost-gate"]')).toBeVisible({ timeout: 15000 });
     await expect(page.locator("#error-region")).toBeHidden();
   });
@@ -169,10 +182,13 @@ test.describe("a click while the workspace is still starting (W121)", () => {
     await expect(page.locator("#account-email")).toHaveText(account.email, { timeout: 15000 });
   });
 
-  test("a start-up that fails releases a waiting click: it finishes and says why", async ({ page }) => {
+  test("a start-up that fails releases a waiting Estimate: it finishes and shows the start-up's error", async ({
+    page,
+  }) => {
     // RED-IF a failed start-up leaves the waiting click pending forever (the
-    // button stays busy). Partner: the error is shown and the button is
-    // usable again.
+    // button stays busy), or the released click crashes on the placeholder
+    // slots and its "reading 'trim'" card replaces the start-up's own error.
+    // Partner: the start-up's error is shown and the button is usable again.
     await page.setViewportSize({ width: 1440, height: 900 });
     const session = await hold(page, "/v1/session");
     await openWorkspace(page);
@@ -181,8 +197,93 @@ test.describe("a click while the workspace is still starting (W121)", () => {
     const button = page.locator("#estimate-run");
     await button.click();
     session.fail(500);
-    await expect(page.locator("#error-region")).toBeVisible({ timeout: 15000 });
     await expect(button).not.toHaveAttribute("data-loading", "true", { timeout: 15000 });
     await expect(button).toBeEnabled();
+    await expect(page.locator("#error-region")).toContainText(START_UP_500);
+    await expect(page.locator("#error-region")).not.toContainText(CRASH);
+  });
+
+  test("Estimate after a start-up has already failed shows the start-up's error, not a crash", async ({ page }) => {
+    // RED-IF a click after a failed start-up reads the placeholder slots
+    // (today: the "reading 'trim'" card) or shows nothing at all. Partner:
+    // the start-up's own error is shown again.
+    await page.setViewportSize({ width: 1440, height: 900 });
+    const session = await hold(page, "/v1/session");
+    session.fail(500);
+    await openWorkspace(page);
+    await expect(page.locator("html")).toHaveAttribute("data-app-state", "error");
+    await page.locator("#query-text").fill(QUESTION);
+    await page.locator("#estimate-run").click();
+    await expect(page.locator("#error-region")).toContainText(START_UP_500);
+    await expect(page.locator("#error-region")).not.toContainText(CRASH);
+    await expect(page.locator("#estimate-run")).toBeEnabled();
+  });
+
+  test("a model list that fails releases a waiting Estimate without a crash", async ({ page }) => {
+    // RED-IF the released click reads the placeholder slots and its "reading
+    // 'trim'" card replaces the start-up's error. Partner: the session step
+    // succeeded, so this is the model step's failure alone; the button is
+    // usable again.
+    await page.setViewportSize({ width: 1440, height: 900 });
+    const defaults = await hold(page, "/v1/models/defaults");
+    await openWorkspace(page);
+    await expect.poll(defaults.held).toBeGreaterThan(0);
+    await page.locator("#query-text").fill(QUESTION);
+    const button = page.locator("#estimate-run");
+    await button.click();
+    defaults.fail(500);
+    await expect(button).not.toHaveAttribute("data-loading", "true", { timeout: 15000 });
+    await expect(button).toBeEnabled();
+    await expect(page.locator("#error-region")).toBeVisible();
+    await expect(page.locator("#error-region")).not.toContainText(CRASH);
+  });
+
+  test('a session that fails releases a waiting "Sign in with Google": the start is sent and refused, never left waiting', async ({
+    page,
+  }) => {
+    // RED-IF the session step is released only on success: the start then
+    // waits for good and the button stays busy. Partner: the start goes out
+    // once (the server refuses it without a token, as before this change)
+    // and the button is usable again.
+    await page.setViewportSize({ width: 1440, height: 900 });
+    const writes = recordWrites(page);
+    const session = await hold(page, "/v1/session");
+    await openWorkspace(page);
+    await expect.poll(session.held).toBeGreaterThan(0);
+    const button = page.locator("#sign-in-google");
+    await button.click();
+    const start = page.waitForRequest((r) => new URL(r.url()).pathname === "/v1/auth/google/start");
+    session.fail(500);
+    expect([401, 403], "the server refuses a start sent without a session").toContain(
+      (await (await start).response())?.status(),
+    );
+    await expect(button).toBeEnabled({ timeout: 15000 });
+    expect(paths(writes).filter((p) => p === "/v1/auth/google/start")).toHaveLength(1);
+  });
+
+  test('a start-up that throws in its own wiring releases a waiting "Sign in with Google"', async ({ page }) => {
+    // RED-IF a boot that fails before its start-up steps (here: a throw while
+    // wiring the info icons, after the sign-in button is wired) leaves the
+    // session step unsettled, so the start waits for good. Partner: the start
+    // goes out once and the button is usable again.
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.addInitScript(() => {
+      const original = Document.prototype.querySelectorAll;
+      Document.prototype.querySelectorAll = function (this: Document, selector: string) {
+        if (typeof selector === "string" && selector.includes("data-info-icon")) {
+          throw new Error("wiring broken on purpose (W121 test)");
+        }
+        return original.call(this, selector);
+      } as typeof original;
+    });
+    const writes = recordWrites(page);
+    await openWorkspace(page);
+    await expect(page.locator("html")).toHaveAttribute("data-app-state", "error");
+    const button = page.locator("#sign-in-google");
+    const start = page.waitForRequest((r) => new URL(r.url()).pathname === "/v1/auth/google/start");
+    await button.click();
+    await start;
+    await expect(button).toBeEnabled({ timeout: 15000 });
+    expect(paths(writes).filter((p) => p === "/v1/auth/google/start")).toHaveLength(1);
   });
 });

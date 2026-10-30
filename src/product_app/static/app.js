@@ -1962,9 +1962,11 @@
   }
 
   // W121 (ADR-0188): two steps of start-up a click may need. ``boot()``
-  // settles each when its step ends, on success or failure, so nothing ever
-  // waits on them for good. A write waits for the session (its anti-forgery
-  // token); an estimate also waits for the model list (the slots it prices).
+  // settles each when its step ends: ``true`` on success, ``false`` on
+  // failure, so a click is never held by a step that has failed. A write
+  // waits for the session (its anti-forgery token); an estimate also waits
+  // for the model list (the slots it prices). ``startUpFailure`` keeps the
+  // error a failed start-up showed, so a waiting estimate can show it again.
   function startUpStep() {
     let settle = () => {};
     const done = new Promise((resolve) => {
@@ -1974,6 +1976,7 @@
   }
   const sessionStarted = startUpStep();
   const modelsStarted = startUpStep();
+  let startUpFailure = null;
 
   async function api(path, options = {}) {
     const method = String(options.method || "GET").toUpperCase();
@@ -9778,9 +9781,21 @@
     setButtonLoading(trigger, true);
     try {
       // W121: a click while the page is still starting waits for the model
-      // slots to be drawn, so it prices the panel, not the placeholders.
-      await modelsStarted.done;
+      // slots to be drawn, so it prices the panel, not the placeholders. If
+      // start-up failed, the slots were never drawn: show its error again
+      // (with its way to recover), never a crash on the placeholders.
+      const modelsDrawn = await modelsStarted.done;
       if (generation !== estimateGeneration) return null;
+      if (!modelsDrawn) {
+        throw (
+          startUpFailure ||
+          new ApiError({
+            status: 0,
+            code: null,
+            message: "The page did not finish loading. Reload the page and try again.",
+          })
+        );
+      }
       const queryText = queryTextarea.value.trim();
       if (!queryText) {
         // W43: a submit attempt is what makes the empty box an error.
@@ -13241,13 +13256,15 @@
     try {
       try {
         await initSession();
+        sessionStarted.settle(true);
       } finally {
-        sessionStarted.settle();
+        sessionStarted.settle(false);
       }
       try {
         await refreshDefaults();
+        modelsStarted.settle(true);
       } finally {
-        modelsStarted.settle();
+        modelsStarted.settle(false);
       }
       // CHG-070 (b): the question kept across "Sign in again", put back once,
       // only now (round 2): the model slots exist, so its costs can be shown,
@@ -13273,13 +13290,15 @@
       // on <html>), so it cannot affect layout, pixels, or the a11y tree.
       document.documentElement.dataset.appState = "ready";
     } catch (error) {
+      startUpFailure = error;
       document.documentElement.dataset.appState = "error";
       handleError(error);
       setConnectionPill("error", "Disconnected");
     } finally {
-      // A failed session skips the model step; release both (W121).
-      sessionStarted.settle();
-      modelsStarted.settle();
+      // A failed session skips the model step; release both (W121). A step
+      // already settled keeps its first answer.
+      sessionStarted.settle(false);
+      modelsStarted.settle(false);
     }
     // Pull the live readiness snapshot. ``/ready`` is
     // unauthenticated so this works even if the session bootstrap
@@ -13309,8 +13328,9 @@
   // guarantees the signal is ALWAYS written, exactly once, on every path.
   boot().catch((error) => {
     // W121: a boot that fails before its start-up steps releases them too.
-    sessionStarted.settle();
-    modelsStarted.settle();
+    if (!startUpFailure) startUpFailure = error;
+    sessionStarted.settle(false);
+    modelsStarted.settle(false);
     if (!document.documentElement.dataset.appState) {
       document.documentElement.dataset.appState = "error";
     }

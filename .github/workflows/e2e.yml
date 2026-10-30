@@ -603,11 +603,12 @@ jobs:
       # adds 10 tests (J1 at 1440 and 390, J1p, J2, J3 at 1440 and 390, J4,
       # J4c, J5, J6; `playwright test --list` on that spec counts 10), added
       # to the old floor.
-      # 74 -> 78 (W121, ADR-0188): early-click.spec.ts adds 4 tests (a click
+      # 74 -> 82 (W121, ADR-0188): early-click.spec.ts adds 8 tests (a click
       # while the page is still starting waits for the session and the model
-      # list); `playwright test --list` on the lane counts 78.
+      # list, and a failed start-up releases it); `playwright test --list` on
+      # the lane counts 82.
       - name: "signed-in History lane: floor on tests actually executed"
-        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 78 --lane "signed-in History lane"
+        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 82 --lane "signed-in History lane"
 
       - name: Clear the previous lane's JUnit report
         # Adversarial review (#162/#166): without this, a Playwright run that
