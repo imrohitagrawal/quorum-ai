@@ -11,15 +11,15 @@ dependencies = [
   # upper bound is the next major version (Pydantic v3, FastAPI
   # 1.0, etc.) so a major bump is an explicit decision rather
   # than something pip pulls in overnight.
-  "fastapi>=0.115.0,<1.0",
+  "fastapi>=0.162.0,<1.0",
   "uvicorn[standard]>=0.30.0,<1.0",
-  "pydantic-settings>=2.4.0,<3.0",
+  "pydantic-settings>=2.16.1,<3.0",
   # Sentry for error tracking in production. Optional - the app
   # boots without SENTRY_DSN set (it's a no-op). When the DSN is
   # present, exceptions and performance traces are reported to
   # the Sentry project configured for this deployment.
   "sentry-sdk[fastapi]>=2.0.0,<3.0",
-  "prometheus-fastapi-instrumentator>=8.0.2",
+  "prometheus-fastapi-instrumentator>=8.1.0",
   # CommonMark parsing for the Layer-A citation-marker scan
   # (`evaluation._prose_only`). A RUNTIME dependency deliberately, not a
   # test-only one: the grounding score must decide "is this bracket a
@@ -47,15 +47,15 @@ dev = [
   "pytest>=9.0.3,<10.0",
   "pytest-cov>=5.0.0,<7.0",
   "httpx>=0.27.0,<1.0",
-  "ruff>=0.6.0,<2.0",
+  "ruff>=0.17.2,<2.0",
   "mypy>=1.11.0,<2.0",
-  "playwright>=1.60.0,<2.0",
+  "playwright>=1.64.1,<2.0",
   # R2-S2 property tests for the evaluation engine
   # (tests/unit/test_evaluation_properties.py). Hypothesis was already
   # present TRANSITIVELY via schemathesis in the `quality` extra; declaring
   # it here makes the dependency explicit so `uv sync --extra dev` alone is
   # enough to run the suite and a schemathesis bump cannot silently remove it.
-  "hypothesis>=6.100.0,<7.0",
+  "hypothesis>=6.170.9,<7.0",
 ]
 # R2 Phase-0 enforcement machinery. These are CI/quality-gate tools only —
 # they are deliberately NOT in ``dependencies`` (and not in ``dev``) so the
@@ -66,15 +66,15 @@ dev = [
 # breaking release is an explicit decision.
 quality = [
   # P0-D: mutation testing (advisory gate, `make mutation-baseline`).
-  "mutmut>=3.0.0,<4.0",
+  "mutmut>=3.8.0,<4.0",
   # P0-F: API contract fuzzing against the app's own /openapi.json
   # (`make api-contract`, tests/contract).
-  "schemathesis>=4.0.0,<5.0",
+  "schemathesis>=4.32.4,<5.0",
   # P0-G: changed-lines coverage vs origin/main (`make diff-cover`).
-  "diff-cover>=9.0.0,<11.0",
+  "diff-cover>=10.6.0,<11.0",
   # W69 (ADR-0166): GitHub Actions workflow auditor (`make workflow-audit`),
   # run offline over .github; installed from uv.lock, never fetched by uvx.
-  "zizmor>=1.30.1,<2.0",
+  "zizmor>=1.31.1,<2.0",
 ]
 
 [tool.ruff]
