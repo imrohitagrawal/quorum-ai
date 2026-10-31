@@ -12,7 +12,7 @@ dependencies = [
   # 1.0, etc.) so a major bump is an explicit decision rather
   # than something pip pulls in overnight.
   "fastapi>=0.115.0,<1.0",
-  "uvicorn[standard]>=0.30.0,<1.0",
+  "uvicorn[standard]>=0.54.0,<1.0",
   "pydantic-settings>=2.4.0,<3.0",
   # Sentry for error tracking in production. Optional - the app
   # boots without SENTRY_DSN set (it's a no-op). When the DSN is
