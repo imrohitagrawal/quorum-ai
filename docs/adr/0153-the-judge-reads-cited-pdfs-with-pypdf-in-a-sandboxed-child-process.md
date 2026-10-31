@@ -9,7 +9,7 @@ may overturn any. `quorum_source_fetch_enabled` stays False in code and `fly.tom
 written before the code: `docs/analysis/2026-10-08-w54-step3-pdf-reading-failure-modes.md`. Decisions 1 and 4 are amended by ADR-0154
 (encrypted PDFs and PDFs served as binary downloads, 2026-10-09). Decision 4's garble rule is
 amended on 2026-10-23 (see "Amendment of 2026-10-23" below). pypdf moved to 6.21.2 on 2026-10-24
-(see "Amendment of 2026-10-24" below).
+(see "Amendment of 2026-10-24" below) and to 6.21.4 on 2026-10-31 (see "Amendment of 2026-10-31").
 
 ## Context
 
@@ -157,6 +157,28 @@ read better under 6.21.2. Some read worse; how common each is in real files is U
   (6.21.1 read them right), and so does a ToUnicode map whose only range has a negative bound.
 Under both versions the garble rule lets through text made of glyph numbers, text with NUL bytes
 between its letters, and CJK or Hangul read through the wrong codec.
+
+### Amendment of 2026-10-31: pypdf 6.21.4
+
+pypdf moved from 6.21.2 to 6.21.4 under ADR-0181 (CHG-110), because seven advisories against
+6.21.2, published on 2026-10-30 and all rated high, blocked every merge (`make vuln-audit`:
+CVE-2026-119206 to CVE-2026-119209 fixed in 6.21.3, CVE-2026-119203 to CVE-2026-119205 in
+6.21.4). api.osv.dev titles them long runtimes on page labels; long runtimes or large memory
+use on encrypted files; large memory use on the page tree, on cross-reference streams and on
+exceptions in strict mode; and infinite loops when cloning dictionaries and at an end of file
+inside a cross-reference table.
+
+The guard on a guessed encoding still works: 6.21.4 logs the same "Advanced encoding" messages
+from the same `pypdf._cmap` logger; only the exception it catches before logging changed (from
+any exception to `KeyError`). What the app reads was compared under both versions, through
+`pdf_text.extract_text` and through the sandboxed child (`read_pdf_text`), for 47 PDFs: the 11
+committed files in `tests/fixtures/pdf/` and 36 built by `tests/pdf_fixtures.py` (among them each CMap in
+`UNREADABLE_CMAPS`, `/90msp-RKSJ-H` and both UniGB-UTF16 CMaps, alone and mixed with a Latin
+page). All 47 gave the same text and the same outcome. Two changes in pypdf's diff can change
+text that no fixture here exercises: glyph names of the form `/uXXXX` in a font's
+`/Differences` now map to their character (before, only `/uniXXXX` did), and 6.21.3 reverted
+6.21.2's refusal of encryption dictionaries with unusual key lengths, so the files listed under
+the previous amendment as giving no usable text may read again (UNVERIFIED).
 
 ## Rejected alternatives
 
