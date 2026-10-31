@@ -179,7 +179,7 @@ still refused.
 Two reviews then built malformed files for the rest of pypdf's diff. No fixture here exercises
 these; each was measured under both versions:
 - Now read, as the page's own text, where 6.21.2 gave nothing: a UTF-16 string with an odd
-  trailing byte (pypdf decodes with "replace", not "surrogateescape"); a text position whose
+  trailing byte below 0x80 (pypdf decodes with "replace", not "surrogateescape"); a text position whose
   operand is a name; an encrypted file that opens with an empty password but states a wrong page
   count; and the two AES files with an unusual key length listed under the previous amendment
   (AES-128 whose crypt filter gives `/Length 128`, AES-256 with `/Length 32`), and some RC4
@@ -201,8 +201,9 @@ One test no longer guards the code it was written for: under 6.21.4 pypdf itself
 a mapped CMap cannot decode into U+FFFD, so with the child's surrogate substitution removed,
 `test_bytes_a_mapped_cmap_cannot_decode_come_back_as_u_fffd` still passes (it fails that way
 under 6.21.2). `test_an_escaped_byte_becomes_u_fffd_whatever_pypdf_returns` now hands the
-substitution escaped bytes directly and fails without it. The substitution stays; whether any
-input still reaches it under 6.21.4 is UNVERIFIED.
+substitution escaped bytes directly and fails without it. The substitution is still reached: a
+ToUnicode map to U+DC80 or U+DCFF gives those surrogates under both versions, and the app turns
+them into U+FFFD.
 
 ## Rejected alternatives
 
