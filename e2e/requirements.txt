@@ -1,6 +1,6 @@
 # Install Playwright for E2E testing
 # Install with: pip install -r e2e/requirements.txt
 
-playwright==1.42.0
+playwright==1.64.1
 # Note: For accessibility testing, you'll also need:
 # pip install playwright[accessibility]
