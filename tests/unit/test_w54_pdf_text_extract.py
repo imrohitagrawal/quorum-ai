@@ -189,6 +189,23 @@ def test_bytes_a_mapped_cmap_cannot_decode_come_back_as_u_fffd(encoding: bytes) 
     assert pdf_text.is_garbled(text) is True
 
 
+def test_an_escaped_byte_becomes_u_fffd_whatever_pypdf_returns(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """pypdf 6.21.4 turns the bytes of the test above into U+FFFD itself, so
+    that test no longer reaches the child's substitution (ADR-0153, amendment
+    of 2026-10-31); this one hands it escaped bytes directly. RED IF: U+DC80
+    or U+DCFF leaves ``extract_text`` as a surrogate. Partner: the characters
+    either side of that range (U+DC7F, U+D800) and the page's letters come
+    back unchanged."""
+    import pypdf
+
+    monkeypatch.setattr(
+        pypdf.PageObject, "extract_text", lambda *_a, **_k: "a\udc7f\udc80\udcff\ud800b"
+    )
+    assert pdf_text.extract_text(pdfs.valid_pdf()) == "a\udc7f\ufffd\ufffd\ud800b"
+
+
 def test_only_the_page_with_the_unreadable_cmap_is_dropped() -> None:
     """RED IF: the whole document is dropped (``""``), the unreadable page's
     text is kept, or the guard carries over to later pages (the second

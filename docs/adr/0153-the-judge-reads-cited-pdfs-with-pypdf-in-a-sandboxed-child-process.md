@@ -2,10 +2,10 @@
 
 ## Status
 
-Accepted — 2026-10-08, board row W54, step 3 (page reading still off). The product owner chose
+Accepted — 2026-10-08, board row W54, step 3 (page reading was then off; ADR-0156 turned it on in production). The product owner chose
 to read PDFs (CHG-033 (a)) and chose pypdf in a sandboxed process (CHG-034). The limits below
 are the session's, from the research in `docs/analysis/2026-10-08-w54-pdf-research/`; the owner
-may overturn any. `quorum_source_fetch_enabled` stays False in code and `fly.toml`. Failure modes,
+may overturn any. `quorum_source_fetch_enabled` stays False in code; `fly.toml` sets it true (ADR-0156). Failure modes,
 written before the code: `docs/analysis/2026-10-08-w54-step3-pdf-reading-failure-modes.md`. Decisions 1 and 4 are amended by ADR-0154
 (encrypted PDFs and PDFs served as binary downloads, 2026-10-09). Decision 4's garble rule is
 amended on 2026-10-23 (see "Amendment of 2026-10-23" below). pypdf moved to 6.21.2 on 2026-10-24
@@ -168,17 +168,41 @@ use on encrypted files; large memory use on the page tree, on cross-reference st
 exceptions in strict mode; and infinite loops when cloning dictionaries and at an end of file
 inside a cross-reference table.
 
-The guard on a guessed encoding still works: 6.21.4 logs the same "Advanced encoding" messages
-from the same `pypdf._cmap` logger; only the exception it catches before logging changed (from
-any exception to `KeyError`). What the app reads was compared under both versions, through
-`pdf_text.extract_text` and through the sandboxed child (`read_pdf_text`), for 47 PDFs: the 11
-committed files in `tests/fixtures/pdf/` and 36 built by `tests/pdf_fixtures.py` (among them each CMap in
+What the app reads was compared under both versions, through `pdf_text.extract_text` and
+through the sandboxed child (`read_pdf_text`), for 47 PDFs: the 11 committed files in
+`tests/fixtures/pdf/` and 36 built by `tests/pdf_fixtures.py` (among them each CMap in
 `UNREADABLE_CMAPS`, `/90msp-RKSJ-H` and both UniGB-UTF16 CMaps, alone and mixed with a Latin
-page). All 47 gave the same text and the same outcome. Two changes in pypdf's diff can change
-text that no fixture here exercises: glyph names of the form `/uXXXX` in a font's
-`/Differences` now map to their character (before, only `/uniXXXX` did), and 6.21.3 reverted
-6.21.2's refusal of encryption dictionaries with unusual key lengths, so the files listed under
-the previous amendment as giving no usable text may read again (UNVERIFIED).
+page). All 47 gave the same text and the same outcome. 6.21.4 still logs the same "Advanced
+encoding" messages from the same `pypdf._cmap` logger, and every CMap in `UNREADABLE_CMAPS` is
+still refused.
+
+Two reviews then built malformed files for the rest of pypdf's diff. No fixture here exercises
+these; each was measured under both versions:
+- Now read, as the page's own text, where 6.21.2 gave nothing: a UTF-16 string with an odd
+  trailing byte (pypdf decodes with "replace", not "surrogateescape"); a text position whose
+  operand is a name; an encrypted file that opens with an empty password but states a wrong page
+  count; and the two AES files with an unusual key length listed under the previous amendment
+  (AES-128 whose crypt filter gives `/Length 128`, AES-256 with `/Length 32`), and some RC4
+  files with `/Length 41` or over 128, because 6.21.3 reverted 6.21.2's refusal of unusual key
+  lengths.
+- A font whose `/BaseEncoding` is an array or a dictionary, not a name, no longer logs "Advanced
+  encoding", so the guard on a guessed encoding does not see it. Its characters come out as
+  U+FFFD instead. On a page that also holds readable text, that page is now read with the
+  placeholders (60 of 502 characters, under the garble rule's one in five); on a page of its own,
+  the placeholders can now make the whole document garbled, where 6.21.2 dropped that page and read
+  the rest.
+- Glyph names of the form `/uniXXXX` and `/uXXXX` in a font's `/Differences` now map to their
+  character; under 6.21.2 the glyph name itself appeared in the text. pypdf 6.21.4 maps `/u`
+  followed by any hex digits, so a font that names glyphs by number as `/uNN` now reads as
+  unrelated ASCII where 6.21.2 gave the names. The garble rule lets both through, as it already
+  lets through text made of glyph numbers.
+
+One test no longer guards the code it was written for: under 6.21.4 pypdf itself turns the bytes
+a mapped CMap cannot decode into U+FFFD, so with the child's surrogate substitution removed,
+`test_bytes_a_mapped_cmap_cannot_decode_come_back_as_u_fffd` still passes (it fails that way
+under 6.21.2). `test_an_escaped_byte_becomes_u_fffd_whatever_pypdf_returns` now hands the
+substitution escaped bytes directly and fails without it. The substitution stays; whether any
+input still reaches it under 6.21.4 is UNVERIFIED.
 
 ## Rejected alternatives
 
