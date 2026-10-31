@@ -45,7 +45,7 @@ jobs:
           # Full history: the full pytest suite includes the day-one carry-forward
           # audit, which reads a pre-supersede blob via `git show <sha>:...`.
           fetch-depth: 0
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.12'
       # Issue-close guard, pull-request lane. GitHub closes an issue whenever a
@@ -152,7 +152,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.12'
       # Stdlib-only validator: no uv sync needed.
