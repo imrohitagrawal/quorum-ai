@@ -1,9 +1,8 @@
 # W37 — follow-up context: failure modes before the code
 
 Written 2026-10-04 before the change (AGENTS.md rule 16e: this changes what a run
-costs). Board row W37. Decision: CHG-026 (g), the owner's M08 point 5 (*"If we do not
-have context or a track of those questions being sent to models, then how would the
-models understand that this is a follow-up question?"*), and, as a session recorded it on
+costs). Board row W37. Decision: CHG-026 (g), the owner's M08 point 5 (without the earlier question, the models cannot tell that
+a question is a follow-up), and, as a session recorded it on
 2026-07-23, *"prior question + final synthesis in the prompts"*
 (`docs/archive/2026-08/UI-BUG-TRIAGE-2026-07-23-ANALYSIS.md`, "User decisions"; no
 transcript of that day is kept, so the words cannot be checked against the owner's). On

@@ -57,15 +57,15 @@ OWASP texts are quoted briefly under their CC BY-SA 4.0 licence; most are paraph
 ## 1. The owner's words that bind this work
 
 Checked word for word against the transcripts' `type: user` records on 2026-10-17 [session: a
-script over transcripts `23fee4a3` and `20d36bac` found each quote at the time given].
+script over the session transcripts found each quote at the time given].
 
 | When (UTC) | Where | The owner's words |
 |---|---|---|
-| 2026-09-23 16:11:37Z | transcript `23fee4a3` | *"In the case of bring your own, the live execution should be turned on by default, and the judge should also be turned on by default. It should not need fly secrets settings."* and *"the per-IP limitations, the per-day charges, or per-run-per-day charges should not be enforced from the code side. It should be something that the user should be able to select. For example, we can have a $5 window or a limit"* |
-| 2026-09-23 16:17:23Z | `23fee4a3` | *"the quorum-ai judge API key should also be the same as the bring your own key which the user is providing as an open router key"* |
-| 2026-09-23 16:21:02Z | `23fee4a3` | *"For the rest, I agree with all your suggestions"* (the rails table ADR-0121 records) |
-| 2026-09-29 | `docs/analysis/2026-09-29/OWNER-DISCUSSION-LOG.md:111` (M03 point 5; CHG-026 (f)) | *"We should ensure that we are not storing it in any logs, any web sessions, or anywhere the user or an attacker can web-inspect and see the keys, and that any other security threats are not there."* |
-| 2026-10-13 06:18:27Z | `20d36bac` | the key must be stored so that *"it is not leaked, is not in the sessions, and is not being hunted by any attackers or stealers"* |
+| 2026-09-23 16:11:37Z | a session transcript | *"In the case of bring your own, the live execution should be turned on by default, and the judge should also be turned on by default. It should not need fly secrets settings."* and *"the per-IP limitations, the per-day charges, or per-run-per-day charges should not be enforced from the code side. It should be something that the user should be able to select. For example, we can have a $5 window or a limit"* |
+| 2026-09-23 16:17:23Z | a session transcript | *"the quorum-ai judge API key should also be the same as the bring your own key which the user is providing as an open router key"* |
+| 2026-09-23 16:21:02Z | a session transcript | *"For the rest, I agree with all your suggestions"* (the rails table ADR-0121 records) |
+| 2026-09-29 | `docs/analysis/2026-09-29/OWNER-DISCUSSION-LOG.md` (M03 point 5; CHG-026 (f)) | Restated, not quoted: the key is not stored in any logs or web sessions, or anywhere a user or an attacker can inspect it, and other security threats are ruled out |
+| 2026-10-13 06:18:27Z | a session transcript | the key must be stored so that *"it is not leaked, is not in the sessions, and is not being hunted by any attackers or stealers"* |
 | 2026-10-17 | CHG-059 | *"I don't think that, in enterprise applications, I need to repaste the key for each and every stop and deploy."*; *"Thorough research needs to be done here."*; decision 3: signed-in only |
 
 **A rule the owner sent but did not write** (found by the repository agent, [agent, `r6-repo.md`
@@ -661,7 +661,7 @@ quoted the owner's own words, and D6, which listed the conflicts. The option tex
 
 ## 15. The owner's answers
 
-Given in the question tool on 2026-10-17 between 17:02Z and 19:32Z UTC (transcript `8267786b`). The
+Given in the question tool on 2026-10-17 between 17:02Z and 19:32Z UTC. The
 option texts were the session's; the choices, and the questions the owner typed, are the owner's.
 The CHG rows quote them in full.
 
@@ -747,7 +747,7 @@ and `r1-fly.md` in the evidence folder):
 | Section 5 of `docs/analysis/2026-10-13-security-review.md` | The recommendation (OAuth, AES-256-GCM, Fly-secret master key, signed-in only) and the 21 tests' subjects | Sections 3, 14, 15; the 21 tests → section 13. A note at that section |
 | Section 3 of `docs/analysis/2026-10-17-w82-security-baseline.md` | Master key and database on one machine | Sections 2, 3 and 10 |
 | ADR-0121 (PROPOSED, not edited) | Two postures, the rails table, three pull requests | Superseded by ADR-0180 |
-| `docs/analysis/2026-09-29/OWNER-DISCUSSION-LOG.md` M03 point 5 | The owner's words of 2026-09-29 | Section 1; the record itself is unchanged |
+| `docs/analysis/2026-09-29/OWNER-DISCUSSION-LOG.md` M03 point 5 | The owner's point of 2026-09-29, restated | Section 1 |
 | June 2026 documents describing a built BYO key slice | — | Corrected or marked in the same pull request as this file (section 18) |
 
 ## 18. The requirement conflicts, resolved by decision 6
@@ -785,7 +785,7 @@ No check cost money or used a real key. Fuller output is in the evidence reports
 | session | `fly volumes list -a quorum-ai --json` | `quorum_data`: `encrypted: true`, `snapshot_retention: 5`, `auto_backup_enabled: true` |
 | session | `fly tokens list -a quorum-ai` | two app-scoped deploy tokens, each expiring in 2046 |
 | session | an `ast` walk of `src/product_app/*.py` with the cap test's glob | 55 decorated functions |
-| session | a script over transcripts `23fee4a3` and `20d36bac` | each owner quote in section 1, at its time |
+| session | a script over the session transcripts | each owner quote in section 1, at its time |
 | agent | `curl` POST to `https://openrouter.ai/api/v1/auth/keys` with a made-up code | `400 {"error":{"message":"Invalid code","code":400}}` |
 | agent | `curl https://openrouter.ai/api/v1/key` with no key, then a fake key | `401` "No cookie auth credentials found"; `401` "User not found." |
 | agent | `curl -X OPTIONS` preflights to completions, `/key`, `/auth/keys` | `204`, `access-control-allow-origin: *` |

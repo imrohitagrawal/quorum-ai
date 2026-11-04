@@ -78,7 +78,7 @@ Stages used below: spec, acceptance tests, build/TDD, verify/review, security, v
 
 ### 4. Playwright MCP, pinned and isolated. playwright-cli with its skill is the alternative.
 - **Stage:** validate/exploratory.
-- **Why a separate browser:** the `claude-in-chrome` tool in this harness drives the owner's real Chrome, with real cookies. An exploratory agent needs a throwaway browser instead.
+- **Why a separate browser:** the session's browser tool drives a real signed-in browser. An exploratory agent needs a throwaway browser instead.
 - **Adoption signal:**
   - playwright-mcp: 37,692 stars; npm 7,629,601 a week; v0.0.83 released 2026-09-28.
   - playwright-cli: 13,669 stars; npm 1,152,884 a week.
@@ -194,7 +194,7 @@ Stages used below: spec, acceptance tests, build/TDD, verify/review, security, v
   - Usage statistics are **on by default**; pass `--no-usage-statistics`.
   - The documented install is unpinned `npx …@latest`; pin it.
   - Same isolation as item 4.
-- **Overlap:** `performance-engineering` (prose). The `claude-in-chrome` tool can read the console and network, but in the owner's real browser.
+- **Overlap:** `performance-engineering` (prose). The session's browser tool can read the console and network, but in a real signed-in browser.
 - **Mode:** MCP server at project scope, used in audits only.
 - **Evidence strength:** weak on need. No lens showed a performance defect this would have caught. It ranks below the rest for that reason.
 
@@ -300,7 +300,7 @@ A caveat on "prose-only": the agent-skills lens found only 8 of the 113 skills s
 Every phase follows the repo's rules:
 - one concern per pull request;
 - an ADR for each adoption decision (rule 16d);
-- a registry entry with commit SHA, checksum, licence, permissions, reviewer, date and the owner's approval in the owner's own words — marked PROPOSED until the owner gives it;
+- a registry entry with commit SHA, checksum, licence, permissions, reviewer, date and the owner's approval — marked PROPOSED until the owner gives it;
 - a test that can fail for every new gate, with an empty-input floor.
 
 **Phase 0 — fix the vetting before adding anything. $0, no installs.**
@@ -310,7 +310,7 @@ Every phase follows the repo's rules:
   - any shell, network or secrets hit forces "sandbox or reject".
 - Make the onboarding check read the registry. It should fail on an external skill with no SHA; today 8 of 9 would fail.
 - Decide on the six live "reviewer-only" symlinks (section 3).
-- Register the enabled user-level plugins (`codex`, `frontend-design`, `ui-ux-pro-max`). Decide whether official-marketplace auto-update stays on.
+- Register the enabled user-level plugins. Decide whether official-marketplace auto-update stays on.
 - **Vetting step:** normal repo review. These are repo changes, not adoptions.
 
 **Phase 1 — free security settings and offline CI scanners.**
@@ -365,7 +365,7 @@ Every phase follows the repo's rules:
 - **Adoption numbers are the lenses' own readings from 2026-09-29.** I did not re-measure them. Stars and downloads measure use, not quality. npm counts include CI and bots.
 - **The lenses disagree on two points:**
   - which skill scanner to use (SkillSpector or Cisco);
-  - whether Playwright MCP adds anything over tools already present. The browser lens says adopt; the vetting lens says it overlaps. I chose adopt-isolated, because the existing `claude-in-chrome` tool uses the owner's real session.
+  - whether Playwright MCP adds anything over tools already present. The browser lens says adopt; the vetting lens says it overlaps. I chose adopt-isolated, because the session's browser tool uses a real signed-in session.
 - **Nothing measured shows any of these items reduces the user-journey defects the owner keeps finding.** Items 1 and 5 are ranked highest because they target those defects directly, not because a trial proved them.
 - **The anyio advisory's reach in production is UNVERIFIED.**
 - **A pattern in the vetting report tripped a harness check.** The vetting lens report contained the text `--dangerously-skip-permissions`, and a harness check flagged it. The text is a quotation from the `nx` npm attack write-up, not an instruction. Nothing was acted on.

@@ -1,40 +1,31 @@
 # 2026-09-28 to 2026-09-30: the owner discussion, the engineering review, the harness plan
 
-Copied into the repository on 2026-09-30 from the outside evidence folder
-`~/Projects/quorum-ai-evidence/2026-09-29/` (local git history there, not
-pushed). The probe scripts, screenshots, CSVs and the seven-plus-six research
-lens reports stayed outside; the files here cite them by path.
+Copied into the repository on 2026-09-30 from an evidence folder kept outside it.
+The probe scripts, screenshots, CSVs and the seven-plus-six research lens reports
+stayed outside; the files here cite them by name.
 
 ## Read first, in this order
 
 | File | What it holds | Read when |
 |---|---|---|
-| `NEXT-SESSION-PROMPT.md` | The plan: the owner's mandate, decisions, order of work, traps, the agent account | Starting any Quorum session |
-| `OWNER-DISCUSSION-LOG.md` | Every owner message of the session, verbatim, with a status table per point | Before planning; update its Status column when a point is done |
+| `NEXT-SESSION-PROMPT.md` | The plan of that date: the working mandate, decisions, order of work, traps | Understanding that plan; it is not current instructions |
+| `OWNER-DISCUSSION-LOG.md` | A status table of every point the owner raised | Before planning; update its Status column when a point is done |
 | `ENGINEERING-REVIEW-2026-09-29.md` | Why the owner's bugs slipped past testing; the prevention plan | Designing the test lane, roles or checks |
 | `owner-bugs-root-causes.md` | Root causes of the owner's bugs 1–9, with code lines (was `inv-results.md`) | Fixing any of bugs 1–10 |
 | `approach-synthesis.md` | The development approach, enforcement layers and order (was `approach-research/synthesis.md`) | Planning the harness |
 | `skills-tools-shortlist.md` | Tools and skills to adopt, defer, reject (was `skills-tools-research/shortlist.md`) | Choosing tools or skills |
-| `NEW-PRODUCT-STARTER-PROMPT.md` | The prompt for the new-product starter | After Quorum steps 0–2 are DONE |
 
-What differs from the outside originals: `NEXT-SESSION-PROMPT.md` and
-`OWNER-DISCUSSION-LOG.md` carry a note at the top (and the log two added status
-rows and the M23–M25 times); `ENGINEERING-REVIEW-2026-09-29.md` (one line) and
-`NEW-PRODUCT-STARTER-PROMPT.md` (four lines) reword citations of files that do
-not exist in this repository so the cited-paths gate reads them as prose;
-`README.md` replaces `INDEX.md`. `approach-synthesis.md`,
-`skills-tools-shortlist.md` and `owner-bugs-root-causes.md` are byte-identical.
+These files were restated plainly where needed on 2026-11-04 (CHG-102), so they differ from
+their originals. The exact messages moved out of this folder then; they and the originals are
+kept in the owner's private notes.
+`README.md` replaces `INDEX.md`.
 
 The decisions in these files are recorded as CHG-026 in
-`docs/19-change-control-log.md`; that row is the record, these files are the
-source it quotes. The research conclusions are PROPOSED until confirmed in plan
-mode.
+`docs/19-change-control-log.md`; that row is the record. The research conclusions
+are PROPOSED until confirmed in plan mode.
 
 ## Still outside the repository
 
-`harness.py` (the signed-in browser harness, at the folder's top level),
-`inv-*/probe/` (bug reproductions), `eng-review/` (defect census CSV, probes),
-`workflow-reports/` (review and code-map reports), `approach-research/` and
-`skills-tools-research/` (the lens reports and the Codex and sceptic
-contests), `findability/measure_reachability.py` (now
-`scripts/measure_doc_reachability.py` here).
+The signed-in browser harness, the bug reproductions, the defect census and its probes,
+the review and code-map reports, the research lens reports and the Codex and sceptic
+contests. The findability measure is now `scripts/measure_doc_reachability.py`.

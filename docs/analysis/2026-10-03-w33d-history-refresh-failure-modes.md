@@ -1,8 +1,7 @@
 # W33 slice D — History shows the current list without a reload: failure modes before the code
 
 Written 2026-10-03 before the change (AGENTS.md rule 16e: signed-in data and privacy).
-Slice D of board row W33 fixes bug 8a. The owner reported (M07 point 8: *"The history is
-shown when the user signs out and then signs in"*) that History appeared only after
+Slice D of board row W33 fixes bug 8a. The owner reported (M07 point 8) that History appeared only after
 signing out and back in; the session's probe traced it to the panel being built on the
 server once, when `/ui` loads, so it says "No questions yet" right after a question is
 asked. Root cause: `docs/analysis/2026-09-29/owner-bugs-root-causes.md`, Item

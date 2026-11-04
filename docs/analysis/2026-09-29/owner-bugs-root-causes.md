@@ -78,7 +78,7 @@ Nothing happens. The rows are an `<li>` with spans (`main.py:885-896`), no link 
 
 **(b) What a row holds, and so what a click could honestly do.**
 - A row holds: `query_run_id`, question, status, mode, model count, verdict, estimated cost and completion time (`session_store.py:114-129`, schema `:360-369`). It holds no answer, which CHG-023 and ADR-0135 decided.
-- The owner's stated purpose (CHG-012 D7, `docs/19-change-control-log.md:16`): "the purpose of sig-in is to preserve the history of the searches from a account".
+- The owner's stated purpose (CHG-012 D7): sign-in exists to keep an account's history of questions.
 - The run id is not in the page today. Probe output: `in /ui html: False`.
 - The full result can still be read for a while. `GET /v1/query-runs/{id}` is limited to the owning account (`query_runs.py:1049-1066`), and runs are kept in memory for 1 hour after they finish (`QUERY_RUN_TERMINAL_TTL`, `query_run_orchestration.py:137`). Probe `probe/reopen.py` output:
   ```
@@ -102,7 +102,7 @@ Nothing happens. The rows are an `<li>` with spans (`main.py:885-896`), no link 
 - On the result view, "Start fresh" calls `clearSessionTrail()` (`app.js:9661-9664`). That clears the in-page "This session" trail, which fits the owner's item 1.
 - The page has two separate histories: the top bar "History" (server-built, stale) and the in-page "This session" trail (live, cleared by Start fresh). The trail is the only one visible on the result view.
 
-Probe files and screenshots are in `/private/tmp/claude-501/-Users-<user>-Projects-quorum-ai/e25d3396-0a5c-412b-aabf-e12be1095139/scratchpad/inv-nav/probe/`: `nav_history.py`, `reopen.py`, `result-top.png`, `composer-history-stale.png`, `history-after-reload.png`. Nothing was written under `~/Projects`.
+Probe files and screenshots were kept in a session scratch folder: `nav_history.py`, `reopen.py`, `result-top.png`, `composer-history-stale.png`, `history-after-reload.png`. Nothing was written to the project folders.
 
 
 =================================================
@@ -111,10 +111,10 @@ All three reports reproduce in a real browser, both signed in and anonymous. Non
 
 Tree is build 7c74b4f. All code references are `src/product_app/static/app.js` unless another file is named.
 
-**How the probes were run** (probe files and screenshots are in `/private/tmp/claude-501/-Users-<user>-Projects-quorum-ai/e25d3396-0a5c-412b-aabf-e12be1095139/scratchpad/inv-trail/probe/`):
+**How the probes were run** (probe files and screenshots were kept in a session scratch folder):
 
 ```
-cd …/scratchpad/inv-trail && ROOT=$PWD PORT=18411 PYTHONDONTWRITEBYTECODE=1 ~/Projects/quorum-ai/.venv/bin/python probe/p1_trail.py      # signed in
+cd …/scratchpad/inv-trail && ROOT=$PWD PORT=18411 PYTHONDONTWRITEBYTECODE=1 <repo>/.venv/bin/python probe/p1_trail.py      # signed in
 SIGNED=0 … PORT=18412 … probe/p1_trail.py                                                                                                          # anonymous
 ```
 
@@ -192,14 +192,14 @@ sessionStorage keys: []  localStorage keys: ['quorum.workspaceSeen']
 ## Related findings from the same code (not asked)
 
 - **"Follow up on this" carries no context to the models.** `:98-100` says the browser sends no context on any run; the server accepts a `context` field (`query_runs.py:244`). `:9638-9640` and the page copy confirm that "Follow up" only pre-fills the box.
-  - The owner's "chat history" expectation is therefore not met by design. It was agreed on 2026-07-23 (triage "User decisions" item 2) and never built in the browser.
+  - The owner's expectation of a chat history is therefore not met by design. It was agreed on 2026-07-23 (triage "User decisions" item 2) and never built in the browser.
 - **The signed-in "History" list and the "THIS SESSION" trail are two unconnected lists.**
   - History is drawn on the server once, when the page loads (`main.py:835`, `:873-918`), as plain list items with no links. Nothing in `app.js` references it (`grep -n "account-history-list" app.js` found nothing).
   - So History only changes on reload, and its entries are not clickable. That is owner report 8, which belongs to another lens.
   - A signed-in run could be linked: `GET /v1/query-runs/{id}` returned 200 after sign-out and sign-in again (`probe/p4_resign.py`). How long a run stays readable in production is UNVERIFIED.
 - **Prior reports.** I searched 26 local session transcripts, the docs and the GitHub issues for earlier reports of items 2 and 9. The only earlier reports found are triage row 10 and issue #126, which was the trail being capped at one entry.
 
-Residue in the throwaway copy: the harness left `harness-18411..18415.sqlite3` files in the scratchpad copy's root. Nothing under `~/Projects` was written.
+Residue in the throwaway copy: the harness left `harness-18411..18415.sqlite3` files in the scratchpad copy's root. Nothing in the project folders was written.
 
 
 =================================================
@@ -319,14 +319,14 @@ Earlier reports:
   - Is nuclear power safer than wind and solar per unit of energy produced?
   - Why did the Western Roman Empire fall, and where do historians disagree?
 
-Files are in `/private/tmp/claude-501/-Users-<user>-Projects-quorum-ai/e25d3396-0a5c-412b-aabf-e12be1095139/scratchpad/inv-starters/probe/`:
+Files were kept in a session scratch folder:
 - `chips.py`
 - `hs.py`
 - `openai.txt` (the paper's extracted text)
 - `pdftext.swift` (the extractor)
 - `composer-chips.png`
 
-Nothing was written under `~/Projects`.
+Nothing was written to the project folders.
 
 
 =================================================
@@ -373,7 +373,7 @@ Every mutation proof targets server functions. Every review lens was privacy, co
 - **Earlier issue #126:** the same pattern was already seen once. The session trail could hold only one entry "and its blocking gate enforces that".
 - **GitHub issues:** searches for "follow up", "start fresh", "hard cap", "history", "logo", "homepage" and "example questions" found no issue for any of the five flows, only #126.
 - **Chat reports:** the local transcripts only go back to 2026-08-30. No earlier report of these flows appears in that range. Whether the owner reported them in chat before 2026-08-30 is UNVERIFIED.
-- **Owner's stated purpose:** on 2026-09-24 at 06:20:42 the owner wrote "the purpose of sig-in is to preserve the history of the searches from a account". PR #518 shipped history that cannot be opened, goes stale during the session, and is hidden on the result page. #518's own words say the session made the "no separate history endpoint" call, not the owner.
+- **Owner's stated purpose:** sign-in exists to keep an account's history of questions. PR #518 shipped history that cannot be opened, goes stale during the session, and is hidden on the result page. #518 itself says the session, not the owner, made the "no separate history endpoint" call.
 
 ## 5. The process gap
 1. **Tests were checked per feature, never per journey.** All the green e2e results (308, 108, 51) came from a server nobody can sign in to. The W7 sign-in, history and account screens were never tested together in a browser, and nothing blocked merging because of that.
@@ -392,13 +392,13 @@ Every mutation proof targets server functions. Every review lens was privacy, co
 - **Block message:** choose the sentence by which limit fired, and assert the text using an estimate under $0.50.
 
 ## Files
-All in `/private/tmp/claude-501/-Users-<user>-Projects-quorum-ai/e25d3396-0a5c-412b-aabf-e12be1095139/scratchpad/inv-process/`:
+All kept in a session scratch folder:
 - `probe/flows.py`
 - `probe/resultnav.py`
 - `probe/result_view_signed_in.png`
 - `harness-18451.sqlite3` (the test database the harness created; delete it by name when done)
 
-Nothing was written under `~/Projects`, and there were no production calls.
+Nothing was written to the project folders, and there were no production calls.
 
 
 =================================================
@@ -408,7 +408,7 @@ Nothing was written under `~/Projects`, and there were no production calls.
 **Short answer.** Reproduced. Every block the owner can hit with the default models is the $0.40 daily account cap, not the $0.50 per-run cap. The page labels every block "Over the hard cap" all the same. It has done this since the first UI in PR #7 (2026-07-11). This was never fixed and then broken again. It was always wrong, and no test reads the text on the block card.
 
 ### (a) Reproduced
-Probes `probe/cap.py`, `probe/resign.py` and `probe/rails.py` are in `/private/tmp/claude-501/-Users-<user>-Projects-quorum-ai/e25d3396-0a5c-412b-aabf-e12be1095139/scratchpad/inv-cost/probe/`. They run against the real routes on port 18421, with live execution off and a signed-in account.
+Probes `probe/cap.py`, `probe/resign.py` and `probe/rails.py` were kept in a session scratch folder. They run against the real routes on port 18421, with live execution off and a signed-in account.
 
 Three simulated runs, then the fourth estimate:
 ```
@@ -482,7 +482,7 @@ I did not find an earlier report from the owner of this exact problem:
 - A scan of the owner's own typed messages in 25 earlier transcripts for "hard cap", "daily cap", "charged", "won't start" and similar words found nothing.
 - The same wrong-label problem was written down by a session in `docs/archive/2026-08/COST-OPS-BACKLOG-ULTRACODE-PROMPT.md:80`: "the UI renders 'Over the hard cap', which blames the user's cost rather than a storage fault". It was not fixed.
 
-The owner's line "session history becomes zero" belongs to another lens. I did not investigate it.
+The owner's report that the session history was lost belongs to another lens. I did not investigate it.
 
 ### (d) Why tests missed it
 - The server tests check that the cap fires and what the reasons say, for example `tests/integration/test_query_run_cost_guardrails.py::test_daily_cap_admits_the_number_of_runs_its_dollar_value_pays_for`. None of them looks at the UI.
@@ -500,7 +500,7 @@ The owner's line "session history becomes zero" belongs to another lens. I did n
    - A positive partner test: a mocked `per_run_cap` block with a worst case of $0.60 still shows the hard-cap headline.
    - Replace the impossible 0.300 block fixture in the three spec files.
 
-Nothing was written under `~/Projects`. `git status` shows the same 6 untracked files as at the start. The probe server on port 18421 is stopped. Probe files stay in the scratchpad `probe/` folder.
+Nothing was written to the project folders. `git status` shows the same 6 untracked files as at the start. The probe server on port 18421 is stopped. Probe files stay in the scratchpad `probe/` folder.
 
 
 =================================================
@@ -546,19 +546,19 @@ Nothing was written under `~/Projects`. `git status` shows the same 6 untracked 
 
 - **Report 2's proposed fix is too small.** Clearing `#result-next-input` still leaves the old question in the main box. In Follow-up mode (the default), "Review & run" with an empty box fills `#query-text` from `state.liveQueryText` (`app.js:9674-9679`). `parity-behavior.spec.ts:567` requires that (`toHaveValue(QUESTION)`).
   - To give the owner a blank box, "Follow up" must stop pre-filling, or open empty with the previous question shown as context. That is a product decision, and it changes a second test that currently pins the behaviour.
-- **"Follow up on this" sends no context to the models.** The trail lens noted this (`app.js:98-100`). It means "follow up" and "fresh" behave the same for the models. The owner's picture of a "chat history" cannot be met by UI fixes alone. That needs a decision before building.
+- **"Follow up on this" sends no context to the models.** The trail lens noted this (`app.js:98-100`). It means "follow up" and "fresh" behave the same for the models. The owner's picture of a chat history cannot be met by UI fixes alone. That needs a decision before building.
 - **"Sign-in is not a factor" in report 1 is only mostly true.** Signed in, the trail is also wiped by the idle-expiry reload (`app.js:9995`, which goes to `/ui` after `signed_in_idle_minutes=120`, `config.py:824`). The sign-out and delete-account reloads (`:9901`, `:10064`) wipe it too. W7 added these paths. None is the owner's direct case.
 
 ## Questions none of them answered
 
-1. **Owner item 3's "session history becomes zero".** Nobody tied it to a cause. Nothing on the block card clears the trail (the only clear calls are `:9663` and `:10206`). The most likely cause is that the owner pressed Start fresh before the block. UNVERIFIED; a replay of the owner's exact steps would settle it.
+1. **Owner item 3's report that the session history was lost.** Nobody tied it to a cause. Nothing on the block card clears the trail (the only clear calls are `:9663` and `:10206`). The most likely cause is that the owner pressed Start fresh before the block. UNVERIFIED; a replay of the owner's exact steps would settle it.
 2. **Which limit fired for the owner in production, and at $0.136.** The harness gives a worst case of $0.159 with default models, so the owner's panel or mode was different. Reading production logs for that estimate's `correlation_id` would settle it. That was not allowed here. UNVERIFIED.
 3. **Whether production shows the same $0.40 daily cap.** `/status` (build `7c74b4f3…`) exposes no cap values. UNVERIFIED without the Fly settings.
 4. **Signed-in users get less than anonymous ones.** Signing out gives a fresh $0.40, so an account is held to a stricter limit than a visitor. None of the reports asked whether that is intended. It needs an owner decision.
-5. **Owner item 7's "45 questions".** The starter lens found 7 distinct chips. Nobody checked whether "45" meant "4–5" or another surface. The research numbers came through fetch-tool summaries, and some are marked UNVERIFIED in that report.
+5. **Owner item 7's count of 45 questions.** The starter lens found 7 distinct chips. Nobody checked whether 45 meant 4–5 or another surface. The research numbers came through fetch-tool summaries, and some are marked UNVERIFIED in that report.
 6. **Owner item 8: how long a History row can be reopened in production.** Runs stay readable in memory for 1 hour (`QUERY_RUN_TERMINAL_TTL`) on a single process. Whether production runs more than one machine is UNVERIFIED (`fly status`).
 7. **No report proposed a gate so a pinned defect cannot hide again.** Two blocking specs lock in behaviour the owner calls bugs. Nothing flags a test that asserts a user-reported defect as intended.
 
 ## Cleanup
 
-I deleted my residue by name: `inv-trail/harness-18471.sqlite3`, `harness-18472.sqlite3`, `probe/critic_p1.log`, `probe/critic_cap.log`. Ports 18471 and 18472 are free: `lsof` returned nothing. The main checkout's `git status` shows only the same 6 untracked files as at the start. Nothing was written under `~/Projects`, and production got only the one free `/status` GET.
+I deleted my residue by name: `inv-trail/harness-18471.sqlite3`, `harness-18472.sqlite3`, `probe/critic_p1.log`, `probe/critic_cap.log`. Ports 18471 and 18472 are free: `lsof` returned nothing. The main checkout's `git status` shows only the same 6 untracked files as at the start. Nothing was written to the project folders, and production got only the one free `/status` GET.

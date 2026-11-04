@@ -3,10 +3,9 @@
 ## Status
 
 Accepted — 2026-10-03, board row W33 (slice C). The product owner reported the
-wrong message on 2026-09-29 (M07 points 3 and 4: *"It is unclear which limit is
-applicable when and where. The error messages are not clear."*; M08 point 6:
-*"the message that was shown to the user was incorrect, and it did not convey the
-exact error or the exact cap that has been hit"*). CHG-026 (h) records the
+wrong message on 2026-09-29 (M07 points 3 and 4: it was unclear which limit applied, and the messages did
+not make it clear; M08 point 6: the message shown did not name the limit that had
+been hit). CHG-026 (h) records the
 decision: messages name the limit actually hit and show the remaining allowance
 (the session's wording, accepted by the owner in M10). The fields and the copy
 below are the session's design. No limit value changes.

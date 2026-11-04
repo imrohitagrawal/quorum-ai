@@ -134,7 +134,7 @@ caught by any automated check and 10 of 16 by adversarial review
 | W37 | Follow-up context: the previous question and final answer go to all four models; the next-question box opens empty with "Following up on: …" (CHG-026 g); both follow-up buttons back, the landing rename and the hint wording (CHG-027 b–d; ADR-0143) | DONE | `PRESENT src/product_app/query_runs.py :: A quick answer takes no follow-up context.` | — | W33 |
 | W38 | Starter questions: six audience groups, four complete questions each, with a wider high-stakes keyword list (CHG-026 j) | UNPINNED | `—` | — | — |
 | W39 | The engineering harness: agents run in a container with only the agent account's token; a signed-in real-backend journey lane with an execution-backed gate; release integrity; a slimmer AGENTS.md with tracked hooks; the skills audit (`docs/analysis/2026-09-29/NEXT-SESSION-PROMPT.md`, order steps 0–7; PROPOSED, confirm in plan mode) | UNPINNED | `—` | — | — |
-| W40 | The agent account's GitHub token expires 2026-12-29 (`NEXT-SESSION-PROMPT.md`, "Agent account DONE by the owner"); rotate it before then | UNPINNED | `—` | — | W39 |
+| W40 | W39's agent container (`docs/analysis/2026-09-29/NEXT-SESSION-PROMPT.md`, step 0) needs its own valid credential: create or renew it when W39 is scheduled (the details are in the owner's private notes) | UNPINNED | `—` | — | W39 |
 | W41 | The trust-score screenshot flake: Google Fonts sometimes serves a different version of the Geist font file (CHG-031, ADR-0149); the screenshot specs use a saved copy of Google's font stylesheet, the allowance stays 120 px, and the card's text is checked exactly (CHG-030). This replaces the 700 px of CHG-027 e | DONE | `ABSENT e2e/tests/invariants/trust-score-visual.spec.ts :: pinGoogleFonts(page)` | — | — |
 | W42 | The mutation gate's clean-test step inside `./mutants/` failed on PR #528 ("Failed to run clean test"): `tests/integration/test_spend_key.py::test_a_run_is_charged_under_the_spend_key` read `0.2104 == 0.1052` because `tests/conftest.py::_reset_state` never cleared the in-memory cost ring, and mutmut runs its clean tests in set order (the local half of PR #528's report moved to W44) | DONE | `ABSENT tests/conftest.py :: costs.cost_event_recorder.clear()` | — | — |
 | W43 | The empty question box is already red with "Question is required." on one plain load of `/ui` right after signing in, before anything is typed (four browser runs on 2026-09-30, W34's product review) (built in W33 slice A, ADR-0140 decision 9) | DONE | `ABSENT src/product_app/static/app.js :: const isInvalid = isEmpty && !!state.submissionAttempted;` | — | W33 |
@@ -857,7 +857,7 @@ after.
 unpinned: each is built in its own pull request, and that pull request pins
 the row (W34 first, pinned by ADR-0139's pull request) with the needle its change adds or deletes (memory of this repo:
 "pin a needle the fix must add or delete", not a line the fix edits around).
-The owner's words are in `docs/analysis/2026-09-29/OWNER-DISCUSSION-LOG.md`,
+The owner's points are in `docs/analysis/2026-09-29/OWNER-DISCUSSION-LOG.md`,
 the decisions in CHG-026, the bug root causes in
 `docs/analysis/2026-09-29/owner-bugs-root-causes.md`, and the plan and its
 order in `docs/analysis/2026-09-29/NEXT-SESSION-PROMPT.md`. W34 is first: the

@@ -581,12 +581,12 @@ def test_a_home_folder_path_is_named_and_placeholders_are_not(
 #: The committed lines that held a dash-encoded home folder (the form in a
 #: Claude project folder's name) when the W70 split was planned. Measured
 #: 2026-10-16 at 70080f3 with ``git grep -c -E -- '-Users-[A-Za-z0-9._]+-'``:
-#: 8 lines in these 4 files, and none for the ``-home-`` form. Paths are joined
+#: 8 lines in 4 files, and none for the ``-home-`` form. One of those files and its
+#: one line have since been removed, so this table pins 7 lines in 3 files. Paths are joined
 #: at run time so this table is not read as a citation by the cited-paths gate.
 _DASH_ENCODED_LINES = {
     "/".join(["docs", "analysis", "2026-08-26-b1-provider-billing-failure-modes.md"]): [27],
     "/".join(["docs", "analysis", "2026-09-22-decision-register.md"]): [25],
-    "/".join(["docs", "analysis", "2026-09-29", "NEW-PRODUCT-STARTER-PROMPT.md"]): [16],
     "/".join(["docs", "analysis", "2026-09-29", "owner-bugs-root-causes.md"]): [
         105,
         114,
@@ -632,9 +632,9 @@ def _dash_encoded_home_lines() -> list[tuple[str, int, str]]:
 
 
 def test_every_committed_dash_encoded_home_folder_is_named() -> None:
-    """Plan S3 on the real tree: the 8 lines committed before W70 were named until rewritten.
+    """Plan S3 on the real tree: the lines committed before W70 were named until rewritten.
 
-    Each of the 8 pinned lines is either still dash-encoded, and then the scan
+    Each of the pinned lines is either still dash-encoded, and then the scan
     must name it, or rewritten, and then it is no longer found. CHG-045 says
     "Rewrite them to ~"; for a name inside a folder name the W70 split plan
     used ``<user>`` instead, a session choice, not the owner's words. After
@@ -654,14 +654,14 @@ def test_every_committed_dash_encoded_home_folder_is_named() -> None:
             # Read directly, so a broken git grep cannot make this test vacuous.
             if "-" + "Users" + "-" in text[n - 1] and "<user>" not in text[n - 1]:
                 still_encoded.add((rel, n))
-    assert sum(len(numbers) for numbers in _DASH_ENCODED_LINES.values()) == 8
+    assert sum(len(numbers) for numbers in _DASH_ENCODED_LINES.values()) == 7
     assert still_encoded <= found_at, f"git grep missed pinned lines: {still_encoded - found_at}"
     missed = sorted(
         (rel, n) for rel, n, line in found if not scanner._contains_home_directory_path(line)
     )
     assert not missed, (
         f"{len(missed)} of {len(found)} dash-encoded home-folder lines are not named "
-        f"({len(still_encoded)} of the 8 pinned ones still encoded): {missed}"
+        f"({len(still_encoded)} of the 7 pinned ones still encoded): {missed}"
     )
 
 

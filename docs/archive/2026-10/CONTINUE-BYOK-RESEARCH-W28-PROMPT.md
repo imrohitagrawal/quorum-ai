@@ -1,6 +1,6 @@
 # Session prompt: bring-your-own key research, and the board row W28
 
-Written by the session of 2026-10-17 (transcript `21387da6`). This file is
+Written by the session of 2026-10-17. This file is
 the session's wording. The owner's decisions are the CHG rows it names.
 
 **Process:** every item is built by `.agents/skills/work-item-delivery/SKILL.md`. Read it first,
@@ -54,20 +54,20 @@ and follow it for roles, review rounds, gates, merging, production checks and cl
 ## The owner's words that bind this work
 
 Checked word for word against the transcripts on 2026-10-17. The first four are in no CHG row yet.
-- 2026-09-23 16:11:37Z (transcript `23fee4a3`): with the user's own key, live answers and the judge
+- 2026-09-23 16:11:37Z: with the user's own key, live answers and the judge
   should be on by default; *"It should not need fly secrets settings."*; *"the per-IP limitations,
   the per-day charges, or per-run-per-day charges should not be enforced from the code side. It
   should be something that the user should be able to select. For example, we can have a $5 window
   or a limit"*.
-- 2026-09-23 16:17:23Z (`23fee4a3`): *"the quorum-ai judge API key should also be the same as the
+- 2026-09-23 16:17:23Z: *"the quorum-ai judge API key should also be the same as the
   bring your own key which the user is providing as an open router key"*.
-- 2026-09-23 16:21:02Z (`23fee4a3`): *"For the rest, I agree with all your suggestions"*: the rails
+- 2026-09-23 16:21:02Z: *"For the rest, I agree with all your suggestions"*: the rails
   table ADR-0121 records.
-- 2026-10-13 06:18:27Z (`20d36bac`): the key must be stored so that *"it is not leaked, is not in
+- 2026-10-13 06:18:27Z: the key must be stored so that *"it is not leaked, is not in
   the sessions, and is not being hunted by any attackers or stealers"*.
-- 2026-09-29 (M03 point 5, `docs/analysis/2026-09-29/OWNER-DISCUSSION-LOG.md:111`): *"We should
-  ensure that we are not storing it in any logs, any web sessions, or anywhere the user or an
-  attacker can web-inspect and see the keys, and that any other security threats are not there."*
+- 2026-09-29 (M03 point 5, `docs/analysis/2026-09-29/OWNER-DISCUSSION-LOG.md`), restated, not quoted: the key is not
+  stored in any logs or web sessions, or anywhere a user or an attacker can inspect it, and other
+  security threats are ruled out.
 - 2026-10-17 (CHG-059): enterprise practice; no re-paste of the key after every stop and deploy;
   thorough research; decision 3 decided: signed-in only.
 

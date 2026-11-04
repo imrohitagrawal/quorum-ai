@@ -468,7 +468,7 @@ Given a signed-in person who asks questions in a tab, when they open History wit
 
 - Requirement: FR-019
 - Test: TEST-FR-019 (`tests/integration/test_account_history_route.py`, `tests/unit/test_history_markup.py`; the signed-in browser lane `e2e/tests/signed-in/history-refresh.spec.ts`, its own blocking step in `e2e.yml`; written before the code, and again before each review round's fix)
-- Reported by the product owner on 2026-09-29 (M07 point 8: *"The history is shown when the user signs out and then signs in"*); the cause is the session's probe (root causes, Item 8a); the design is the session's (ADR-0142). Opening a row is W36 (CHG-026 i).
+- Reported by the product owner on 2026-09-29 (M07 point 8); the cause is the session's probe (root causes, Item 8a); the design is the session's (ADR-0142). Opening a row is W36 (CHG-026 i).
 
 
 ## AC-057 A follow-up sends the previous question and final answer to every answering model
