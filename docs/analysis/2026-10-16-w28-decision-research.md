@@ -74,19 +74,17 @@ at the end).
 ### What the owner has actually said
 
 - **On 2026-09-29 the owner already agreed to a first answer to most of these
-  decisions, on condition that this research comes first.** The session's message of
-  09:31:37Z (transcript `e25d3396`, item 5) recommended: *"Keep the key in memory
-  only, never stored"*; *"Tie it to one browser session, for signed-in users only."*;
-  *"Drop it on sign-out."*; *"If the key is removed mid-run, stop the run at its next
-  step"*; and *"FR-012 should say "Optional bring-your-own key"."* The owner answered
-  (M03, point 5), verbatim: *"BYOK parked until W29 and item 1 are done. agree with
-  all other points just ensure that you Do thorough research and analysis of how
-  other websites are securing this BYOK feature. We should ensure that we are not
-  storing it in any logs, any web sessions, or anywhere the user or an attacker can
-  web-inspect and see the keys, and that any other security threats are not there."*
-  INHERITED (`docs/analysis/2026-09-29/OWNER-DISCUSSION-LOG.md:111`; the session's
-  message read from its transcript; CHG-026 (f) records the owner's words but not the
-  points they agree to).
+  decisions, on condition that this research comes first.** The session recommended
+  keeping the key in memory only, never stored; tying it to one browser session, for
+  signed-in users only; dropping it on sign-out; stopping the run at its next step if
+  the key is removed mid-run; and writing FR-012 as an optional bring-your-own key.
+  The owner agreed (M03, point 5), on condition that BYOK stays parked until W29 and
+  the session-limit item are done, that how other sites secure such keys is researched
+  first, that the key is not stored in any logs or web sessions, or anywhere a user or
+  an attacker can inspect it, and that other security threats are ruled out. INHERITED
+  (`docs/analysis/2026-09-29/OWNER-DISCUSSION-LOG.md`, row M03.5, for the owner's
+  conditions; the session's message itself is kept in the owner's private notes;
+  CHG-026 (f) records the decision but not the points it agrees to).
 - So decisions 1, 2, 3, 5 and 6 below re-test answers the owner has conditionally
   agreed to; decision 4 (a key entered before sign-in) was not among those points.
   Where this research differs from the agreed points, it says so. This file still

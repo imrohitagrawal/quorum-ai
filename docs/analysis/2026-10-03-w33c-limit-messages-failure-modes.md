@@ -2,11 +2,10 @@
 
 Written 2026-10-03 before the change (AGENTS.md rule 16e: money code). Slice C of board
 row W33 covers the owner's bugs 3 and 4 (M07 points 3 and 4; M08 point 6). Decision:
-CHG-026 (h), *"Messages name the limit actually hit and show today's remaining
-allowance"* — the session's wording, accepted by the owner in M10 (*"Rest, I agree with
-all your suggestions."*); the owner's own words are M07 point 4, *"It is unclear which
-limit is applicable when and where"*, and M08 point 6, *"did not convey … the exact cap
-that has been hit"*. Root causes: `docs/analysis/2026-09-29/owner-bugs-root-causes.md`,
+CHG-026 (h): messages name the limit actually hit and show today's remaining
+allowance (the session's wording, accepted by the owner in M10). The owner's reports
+are M07 point 4, that it was unclear which limit applied, and M08 point 6, that the
+message did not name the limit that had been hit. Root causes: `docs/analysis/2026-09-29/owner-bugs-root-causes.md`,
 "Cost-block and limits". Design: ADR-0141.
 
 Re-measured on `e2b32b2` by a read-only design reviewer with the real routes (TestClient,

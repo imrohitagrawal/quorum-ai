@@ -9,7 +9,7 @@ decision 8). The product owner
 reported bugs 1, 2, 6, 9 and 10 on 2026-09-29 and 2026-09-30 (M07 points 1, 2, 6,
 9; M23); W43 was found by W34's product review, not by the owner. The owner
 decided the follow-up box (CHG-026 g) and agreed the composer-hint fix the session
-proposed (CHG-026 m; M24, *"Rest, I agree"*). The shape below is the session's
+proposed (CHG-026 m; M24). The shape below is the session's
 design. The points that are the session's own calls, not the owner's, are listed
 under Consequences so the owner can overturn them.
 

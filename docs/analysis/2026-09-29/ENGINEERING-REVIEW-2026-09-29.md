@@ -5,9 +5,9 @@ How this was produced: six read-only evidence investigations (defect census,
 test anatomy, requirements, rules and skills, industry research, public skills),
 one synthesis draft, then two independent contests — Codex (through its Claude
 Code subagent) and a separate Claude sceptic — and my own re-checks of the
-load-bearing claims. Every figure below names its source. Full evidence:
-`~/Projects/quorum-ai-evidence/2026-09-29/` (probe scripts,
-`eng-review/probe_census/census.csv`, workflow reports, the draft and both contests).
+load-bearing claims. Every figure below names its source. Full evidence is kept
+outside the repository (probe scripts, the defect census, workflow reports, the draft
+and both contests).
 
 ---
 
@@ -128,23 +128,20 @@ Source: process and skills lenses; re-checked by the sceptic.
   looks at what a change touches; `e2e-testing-patterns` and `webapp-testing` are
   not even in its config. Your repo's own `e2e-testing-patterns` skill lists
   "Critical user journeys" and "Authentication flows" as must-test.
-- Your global triage rule (`~/.claude/CLAUDE.md:110`) blocks only an "executable
+- The triage rule in your global instructions blocks only an "executable
   violation of an explicit accepted requirement"; with no requirement written,
   "no e2e lane can sign in" was classed advisory and merged (#519 body line 38,
   #522 body line 42).
 
 ### 2.5 Governance — found by the sceptic, verified by me
-- Branch protection: `required_approving_review_count: 0`, no code-owner review.
-- Every PR (#517–#526) is authored and merged by `imrohitagrawal` — the agents act
-  on GitHub **as you**, with `repo`, `workflow` and `delete_repo` token scopes.
-- So any "owner-approved" label, PR section or column can be self-certified by an
-  agent, and an agent can edit the gate in the same PR. The only real boundary is a
-  separate agent identity plus required review by you on the files that define
-  intent.
+- Every merged PR in #517–#526 was authored and merged by one account, so the agents and the owner
+  were not separate identities on GitHub.
+- So an "owner-approved" label, PR section or column could not show that the owner had
+  approved. The only real boundary is a separate agent identity plus required review by you
+  on the files that define intent.
 
 ### 2.6 A product fact behind defect 3
-Production `/status`: `live_execution: false`, real spend `$0`, simulated spend
-`$0.4645`. Simulated runs count against the $0.40 daily cap by design (ADR-0074),
+Production `/status` showed live execution off and no real spend. Simulated runs count against the $0.40 daily cap by design (ADR-0074),
 so a user is blocked after about 3 practice questions — then shown the wrong
 limit. (You have since decided simulated runs should behave exactly like live,
 with clear messages.)
@@ -213,10 +210,8 @@ obra/superpowers TDD and verification skills repeat rules the repo already has.
 2. The merge checklist (`CONTINUE-2026-09-25-ULTRACODE-PROMPT.md:92-93`) names
    code-risk reviews and existing test lanes only.
 3. The UI rule is advisory and scoped to three files (`AGENTS.md:583-586`).
-4. The triage rule can't block a missing test when no requirement exists
-   (`~/.claude/CLAUDE.md:110`).
-5. No separate agent identity: "owner-approved" is self-certifiable (branch
-   protection: 0 approvals).
+4. The triage rule can't block a missing test when no requirement exists.
+5. No separate agent identity: "owner-approved" is self-certifiable.
 Plus one of mine: I wrote "no e2e lane can sign in" as a footnote instead of
 stopping and telling you.
 

@@ -156,7 +156,7 @@ _S3_NAMED = [
     " <DH>alice-x",  # the plan's line: after a space
     "projects/<DU>José-Projects-q",  # the plan's José form: Unicode name characters
     # The two shapes the 8 committed lines have (2026-10-16), with ``alice``:
-    "/private/tmp/claude-501/<DU>alice-Projects-quorum-ai/e25d3396/scratchpad/",
+    "/private/tmp/claude-501/<DU>alice-Projects-quorum-ai/abcd1234/scratchpad/",
     "`~/.claude/projects/<DU>alice-Projects-quorum-ai/memory/`",
 ]
 

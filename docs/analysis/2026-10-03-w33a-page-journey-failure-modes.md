@@ -2,7 +2,7 @@
 
 Written 2026-10-03 before the change (AGENTS.md rule 16e). Slice A of board row W33
 covers the owner's bugs 1, 2, 6, 9 and 10 of 2026-09-29/30 and board row W43, all in
-the browser page (`app.js`, `workspace.html`, `app.css`). The owner's words are in
+the browser page (`app.js`, `workspace.html`, `app.css`). The owner's points are in
 `docs/analysis/2026-09-29/OWNER-DISCUSSION-LOG.md` (M07 points 1, 2, 6, 9; M08 point
 5; M23; M24); the decisions are CHG-026 (g) and (m); the root causes are in
 `docs/analysis/2026-09-29/owner-bugs-root-causes.md`. Design: ADR-0140.

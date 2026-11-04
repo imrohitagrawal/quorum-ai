@@ -1,28 +1,29 @@
 # Next session — start here (written 2026-09-29 by the session that ran W7 part 3)
 
-> Copied into the repository on 2026-09-30, unchanged below this note. In this
+> A record of the plan on that date, not current instructions: the order of work is
+> set by CHG-103, and the process is `.agents/skills/work-item-delivery/SKILL.md`.
+> Copied into the repository on 2026-09-30 and restated plainly on 2026-11-04
+> (CHG-102), so it differs from the original. In this
 > folder `INDEX.md` is `README.md`, `inv-results.md` is
 > `owner-bugs-root-causes.md`, `approach-research/synthesis.md` is
 > `approach-synthesis.md` and `skills-tools-research/shortlist.md` is
 > `skills-tools-shortlist.md`; `findability/measure_reachability.py` became
-> `scripts/measure_doc_reachability.py`. Paths under
-> `~/Projects/quorum-ai-evidence/2026-09-29/` (probes, lens reports, contests)
+> `scripts/measure_doc_reachability.py`. Probes, lens reports and contests
 > stayed outside the repository. The "Findability" pull request at the end
 > is this one; its decisions are CHG-026.
 
 Read `INDEX.md` in this folder first for the catalog. Then read in order: `AGENTS.md`, `docs/analysis/2026-09-29-session-handoff.md`, then
-this file and `ENGINEERING-REVIEW-2026-09-29.md` (same folder as this file:
-`~/Projects/quorum-ai-evidence/2026-09-29/`). Evidence for every
-claim is in this folder: `inv-*/probe/` (reproductions of the owner's 9 bugs, with
-a signed-in browser harness `harness.py`), `eng-review/` (defect census CSV, probes),
-`workflow-reports/` (all review and map reports of 2026-09-28/29).
+this file and `ENGINEERING-REVIEW-2026-09-29.md` (same folder as this file). Evidence for
+every claim is in an evidence folder outside the repository: reproductions of the owner's
+9 bugs, with a signed-in browser harness; the defect census and its probes; and all review
+and map reports of 2026-09-28/29.
 
-## The owner's standing instruction (2026-09-29, their words, paraphrased closely)
+## The working mandate (2026-09-29, restated)
 Act as the autonomous orchestrator and owner's proxy: plan, build, test and review
 through fans of subagents, monitor them, and release when everything is green —
 without needing the owner in the loop before a release. Think through every angle
 of a feature before planning: all corner cases, negative cases, boundary values.
-Escalate only what the global CLAUDE.md reserves for the owner (new authority,
+Escalate only what stays with the owner (new authority,
 spending money, legal/privacy/provenance decisions, destructive actions).
 
 ## First task: redesign the engineering harness (plan mode first)
@@ -93,8 +94,8 @@ misses common medical/money questions and cites a test file that does not exist.
   15549945) — anyone with a Google account can sign in. Owner to choose: open, or an
   in-app email allow-list.
 - #511 retest steps 3–4 (run one question, then sign out).
-- A separate GitHub identity for agents (today every PR is authored and merged as the
-  owner, 0 required approvals) — proposed; owner's call given the autonomy mandate.
+- A separate GitHub identity for agents — proposed; owner's call given the autonomy
+  mandate.
 
 ## Traps from this session
 See `docs/analysis/2026-09-29-session-handoff.md` and the memory index. Especially:
@@ -126,8 +127,8 @@ Cucumber glue, canary/blue-green, DORA targets, Pact, sprint contracts, 3 evalua
 principles; escalates only money, legal/privacy, destructive actions, new authority; weekly async
 digest to the owner. Independence by separation of duties with separate credentials: builder,
 evaluator (Codex verdict on the exact commit, posted as a required check by a separate GitHub App),
-release controller. Needs owner actions: a separate GitHub identity/App for agents, and agents run in
-a separate OS user/container so the owner's `gh` token is not readable.
+release controller. Needs owner actions: a separate GitHub identity or App for agents, and a separate
+OS user or container for them to run in.
 
 **Enforcement (layers).** CI required checks + branch protection (6 checks, admins included — exists);
 new: an execution-backed signed-in journey gate (runs, unskipped, real API, criterion-linked, fails on
@@ -154,14 +155,11 @@ hosted eval platforms. Fix first: `scripts/audit_external_skill.py` passed 3 fak
 6 "reviewer-only" skills load live; only 8 of 113 in-house skills ship any non-prose file.
 
 ## Added 2026-09-29, end of session (measured, commands in this session)
-- **Agent identity is urgent, not optional.** `gh auth status`: the owner token on this Mac has scopes
-  `delete_repo, repo, workflow, …`; `gh api repos/:owner/:repo --jq .permissions` → `admin: true`.
-  Every agent here can therefore edit branch protection, workflow files, or delete the repo.
-  Plan: bot account (Write, not Admin) with a fine-grained token for this repo only; agents run in
-  Anthropic's reference dev container (https://code.claude.com/docs/en/devcontainer) with only
-  that token; no `~/.config/gh`, `~/.ssh` mounted. Docker 29.7.2 is running. Verify inside the
-  container: `gh auth status` shows the bot; editing branch protection returns 403 (negative), opening
-  a PR works (positive partner).
+- **Agent identity.** The session proposed a separate identity with fewer rights than the owner's
+  account, for agents running in Anthropic's reference dev container
+  (https://code.claude.com/docs/en/devcontainer) with only that identity's credential. Check inside the
+  container: editing branch protection is refused (negative), and opening a pull request works (positive
+  partner).
 - **Skills first pass** (`skills-tools-research/skills-firstpass.csv`, mechanical, NOT the full audit):
   113 folders; 6 are registered externals in `configs/external-skill-registry.json`, 107 unregistered.
   Of the 107: 2 ship a script (systematic-debugging, webapp-testing), 1 names a runnable command
@@ -173,19 +171,9 @@ hosted eval platforms. Fix first: `scripts/audit_external_skill.py` passed 3 fak
   25 of 41 spec files replace server replies. The journey lane (order step 2) closes this, faking only
   Google's token check (tests/google_token_stub.py) and the models (production runs simulated today).
 
-## Agent identity decided in outline (2026-09-29, owner offered `rohitagrawal4u`; PROPOSED)
-Use GitHub account `rohitagrawal4u` (exists, created 2020, 0 public repos — `gh api users/rohitagrawal4u`)
-as the AGENTS' identity, invited to `imrohitagrawal/quorum-ai` with Write (not Admin). Token: CLASSIC with
-`repo` scope only — GitHub docs list "contribute to repositories where the user is an outside or repository
-collaborator" as a gap of fine-grained tokens. Without `workflow` scope, agents cannot push changes to
-`.github/workflows/`; the owner applies those (or grants the scope deliberately per change).
-Order: this Quorum session first (steps 0–2); the starter (`NEW-PRODUCT-STARTER-PROMPT.md`) after, so it
-copies only what was proven here.
-
 ## Tracker and roles (2026-09-30, PROPOSED)
-- Correction: `imrohitagrawal/quorum-ai` is a personal-account repo, so collaborators have ONE level
-  (push; cannot change settings, branch protection or delete) — there is no Write/Admin choice (GitHub docs,
-  "Permission levels for a personal account repository").
+- Order: this Quorum session first (steps 0–2); the new-product starter after, so it copies only what
+  was proven here. The starter's prompt concerns another repository and is kept privately.
 - Track the harness work as rows in `docs/65-open-work.md` (state is derived from the tree by
   `scripts/check_open_work.py`, not typed). Mark rows that the starter should copy. The starter session
   starts when rows for steps 0–2 derive DONE; it copies only DONE rows.
@@ -194,16 +182,13 @@ copies only what was proven here.
   second model), release controller. Enforce: builder cannot edit acceptance tests (hook + CI rule);
   evaluator verdict is a required check.
 
-## Agent account DONE by the owner (verified 2026-09-30)
-- Token in macOS keychain, service `quorum-agent-gh`: `GH_TOKEN=$(security find-generic-password -s quorum-agent-gh -w)`.
-  Never print it; never mount the owner's `~/.config/gh` or `~/.ssh` into the agent container.
-- `gh api user` → `rohitagrawal4u`; scopes header → `repo` only; repo permissions → push true, admin false;
-  collaborator check → 204. Branch-protection read with the agent token → 404 (refused); with the owner
-  token → enforce_admins true, 6 required checks. Token expires 2026-12-29 04:55:55 UTC (GitHub `Github-Authentication-Token-Expiration` header) — add a board row.
-- Still to do in step 0: the dev container that runs agents with only this token, and proof that a pull
-  request opened from inside it works.
+## Agent identity set up by the owner (verified 2026-09-30)
+- The session recorded that the identity works as planned. Its details are kept in the owner's private
+  notes.
+- Still to do in step 0: the dev container that runs agents with only this credential, and proof that a
+  pull request opened from inside it works.
 
-## Owner decision 2026-09-30 (their words: "Google sign-in open to anyone.")
+## Owner decision 2026-09-30: Google sign-in is open to anyone
 - Sign-in stays open to any Google account; no in-app email allow-list. Record in `docs/19` with the others,
   and correct the runbook sentence that says "Testing" restricts sign-in (Google help 15549945: basic-scope
   apps are exempt). Revisit before live execution is turned on.
@@ -211,10 +196,9 @@ copies only what was proven here.
   2026-09-29. Only the sign-out-after-reload check with a real Google account remains (owner, 1 minute).
 
 ## Notes and records (2026-09-30)
-- `OWNER-DISCUSSION-LOG.md`: every owner message of this session, verbatim, with a status table. Update its
+- `OWNER-DISCUSSION-LOG.md`: the status of every point the owner raised in this session. Update its
   Status column as rows are done. Read it before planning.
-- This evidence folder now has LOCAL git history (`git -C ~/Projects/quorum-ai-evidence log`); not pushed.
-  Secret scan of the commit: only fake test keys (sk-or-v1-12345…, a1b2c…, abcde…, 01234…, OPERA…).
+- The outside evidence folder has local git history; it is not pushed.
 - First PR of the next session: copy the durable notes (this file, OWNER-DISCUSSION-LOG.md,
   ENGINEERING-REVIEW-2026-09-29.md, both research syntheses) into `docs/analysis/2026-09-29/` so they live on GitHub.
 - Conflict to resolve with the journey lane (step 2): AGENTS.md:587–590 prescribes the golden FIXTURE for UI

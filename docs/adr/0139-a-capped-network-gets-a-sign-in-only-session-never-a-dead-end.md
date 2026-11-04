@@ -3,9 +3,8 @@
 ## Status
 
 Accepted — 2026-09-30, board row W34. The product owner decided the rule on
-2026-09-29 (CHG-026 a; their words, M04: *"When a user is not signed in and he
-is trying to access the application, in that case, the 2-a-day limit should be
-applicable"*; M05: *"Agree with suggestion on both parts"* to the session's
+2026-09-29 (CHG-026 a; M04: the 2-a-day limit applies to a user who is not signed
+in; M05: the owner agreed to the session's
 proposal that the limit never stops sign-in and signed-in users are limited per
 account). The shape below — a sign-in-only session held in memory — is the
 session's design. Three points the plan raised are taken as assumptions, not

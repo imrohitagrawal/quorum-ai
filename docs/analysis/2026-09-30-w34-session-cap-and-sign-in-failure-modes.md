@@ -3,8 +3,8 @@
 Written 2026-09-30 before the change (AGENTS.md rule 16e), from the design and test-design
 lenses of that day. Decision: CHG-026 (a), the product owner on 2026-09-29 (M04, M05):
 the per-network 2-a-day limit applies to anonymous use only; signed-in users are limited
-per account only. The bug it fixes (owner, 2026-09-30, M23): *"I did 2 logins and then at
-logout got the 'This network has reached its session limit' message."* Design: ADR-0139.
+per account only. The bug it fixes (owner, 2026-09-30, M23): after two sign-ins, signing out
+showed the message that the network had reached its session limit. Design: ADR-0139.
 
 Mechanism today: `auth.issue_session` records one mint per NEW anonymous session against
 `SESSION_MINT_CAP_PER_IP = 2` per rolling 24 hours per visitor address; sign-in rotates the

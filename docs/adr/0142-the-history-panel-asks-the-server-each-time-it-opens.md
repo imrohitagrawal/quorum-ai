@@ -4,8 +4,7 @@
 
 Accepted — 2026-10-03, board row W33 (slice D). The product owner reported that
 History showed their questions only after signing out and back in, and that its
-rows could not be clicked (M07 point 8: *"The history is shown when the user
-signs out and then signs in"*). The session's probe found why: the panel says
+rows could not be clicked (M07 point 8). The session's probe found why: the panel says
 "No questions yet" until the page reloads (root cause in
 `docs/analysis/2026-09-29/owner-bugs-root-causes.md`, Item 8a). Clicking a row
 is W36. This amends

@@ -8,8 +8,8 @@ previous question and final answer go to all four models; the next-question box 
 empty with "Following up on: …"; bring back both follow-up buttons; plus the landing
 rename and the hint wording."* and *"In W37 bring back both "Follow up on this" and
 "Start fresh"."* It was first decided as CHG-026 (g), from M08 point 5 and M09 (the owner's reply to
-the session's question "send context to all four models?"), with M10's *"Rest, I
-agree with all your suggestions"*, and before that on 2026-07-23, as a
+the session's question "send context to all four models?"), with the owner's agreement in
+M10, and before that on 2026-07-23, as a
 session recorded it: *"prior question + final synthesis in the prompts"*. The shape below is the session's design; the
 points that are the session's own calls are listed under Consequences so the owner can
 overturn them. Failure modes, listed before the code:
