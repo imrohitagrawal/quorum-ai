@@ -551,6 +551,7 @@ jobs:
           tests/signed-in/store-unchecked.spec.ts
           tests/signed-in/early-click.spec.ts
           tests/signed-in/start-up-limit.spec.ts
+          tests/signed-in/start-up-limit-review.spec.ts
           --config=playwright.signed-in.config.ts
           --project=chromium
           --retries=0
@@ -611,8 +612,13 @@ jobs:
       # 83 -> 125 (W140): start-up-limit.spec.ts adds 42 tests (a time limit on
       # the two start-up requests, "Still connecting…", the card and "Try
       # again"); `playwright test --list` on the lane counts 125.
+      # 125 -> 154 (W140 review round 1): start-up-limit-review.spec.ts adds 29
+      # tests (what that spec let through: each operation settles its own
+      # steps, typing through a held click's card, the line on a phone, a run
+      # on screen through "Start a session", the card's exact sentence);
+      # `playwright test --list` on the lane counts 154.
       - name: "signed-in History lane: floor on tests actually executed"
-        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 125 --lane "signed-in History lane"
+        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 154 --lane "signed-in History lane"
 
       - name: Clear the previous lane's JUnit report
         # Adversarial review (#162/#166): without this, a Playwright run that

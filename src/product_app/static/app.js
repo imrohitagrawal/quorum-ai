@@ -437,10 +437,13 @@
     // identity than the one this page's HTML was drawn for. Never cleared for
     // the page load: no token is kept or taken, nothing saved or restored.
     drawnMismatch: false,
-    // W140: whether this page's last renewal got its answer, and whether a
-    // "Try again" or "Start a session" is running.
+    // W140: whether this page's last renewal got its answer, whether a
+    // "Try again" or "Start a session" is running, whether the fixed line holds
+    // the unreachable card's title, and whether a start-up has finished here.
     sessionAnswered: false,
     startUpRetrying: false,
+    startUpNoticeHeld: false,
+    startUpFinished: false,
     // W105 (ADR-0178): sharing the token with the site's other open tabs.
     // ``sharingOff`` is set for the rest of the page load once a renewal ran
     // without the lock or the counter; ``renewing`` while this tab's own
@@ -1151,7 +1154,6 @@
     detailRows,
     footer,
     actions,
-    keepFocus = false,
   } = {}) {
     // W87-2 review round 3: the error box wins over the restored question.
     endRestoredQuestionScroll("cancelled");
@@ -1269,8 +1271,15 @@
       }
     }
     errorRegion.hidden = false;
-    // ``role="alert"`` announces the card without the focus (W140).
-    if (keepFocus) return;
+    // W140: this card can come 31 s or more after load, by the boot, by a retry
+    // or by a click that was waiting. Whichever it is, someone typing keeps the
+    // keyboard and their place, ``role="alert"`` announces the card, and the
+    // fixed line says it on a screen where the card is out of view.
+    if (code === "START_UP_UNREACHABLE" && textFieldHasFocus()) {
+      holdStartUpNotice(title);
+      return;
+    }
+    releaseStartUpNotice();
     // Move focus so screen readers announce the error.
     errorRegion.focus({ preventScroll: true });
     // Bring the banner into view if it is below the fold (honour reduced motion).
@@ -1281,6 +1290,7 @@
   }
 
   function clearError() {
+    releaseStartUpNotice();
     errorRegion.hidden = true;
     errorRegion.dataset.severity = "error";
     errorTitle.textContent = "";
@@ -1972,8 +1982,8 @@
     }
   }
 
-  // W121 (ADR-0188): two steps of start-up a click may need. ``boot()``
-  // settles each when its step ends, on success or failure, so a click is
+  // W121 (ADR-0188): two steps of start-up a click may need. The operation that
+  // runs a step settles it when it ends, on success or failure, so a click is
   // never held by a step that has ended. A write waits for the session (its
   // anti-forgery token); an estimate also waits for the model list (the
   // slots it prices). Whether the slots are drawn is read when the estimate
@@ -1988,9 +1998,14 @@
     });
     return { done, settle };
   }
-  // ``retrySession`` replaces both, so a click waits for the retry as well.
-  let sessionStarted = startUpStep();
-  let modelsStarted = startUpStep();
+  // ``boot`` settles only these two, and ``retrySession`` only the two it makes,
+  // so a boot that ends during a retry cannot release a click waiting for that
+  // retry, and a click already waiting for boot is still released by boot.
+  const bootSessionStep = startUpStep();
+  const bootModelsStep = startUpStep();
+  // What a click made now waits for: boot's steps, then the latest retry's.
+  let sessionStarted = bootSessionStep;
+  let modelsStarted = bootModelsStep;
   let startUpFailure = null;
 
   async function api(path, options = {}) {
@@ -9088,9 +9103,7 @@
         throw new ApiError({
           status: 0,
           code: "START_UP_UNREACHABLE",
-          message:
-            "The page could not connect to the server, but nothing you typed was lost: " +
-            "check your connection and try again.",
+          message: "The page could not connect to the server. Check your connection and try again.",
         });
       }
       retriesLeft -= 1;
@@ -9098,38 +9111,57 @@
     }
   }
 
-  // W140: "Still connecting…". Reveal first and write after: a status line
-  // announces a text change made while it is in the accessibility tree (see
+  // W140: the fixed line. Reveal first and write after: a status line announces
+  // a text change made while it is in the accessibility tree (see
   // ``showLandingHandoffNote``). It holds no text while hidden.
   let startUpNoticeTimer = null;
 
-  function armStartUpNotice() {
-    clearTimeout(startUpNoticeTimer);
-    startUpNoticeTimer = setTimeout(() => {
-      const notice = el("start-up-notice");
-      if (!notice) return;
-      notice.hidden = false;
-      notice.textContent = "Still connecting…";
-    }, START_UP_NOTICE_MS);
+  function writeStartUpNotice(text) {
+    const notice = el("start-up-notice");
+    if (!notice) return;
+    notice.hidden = false;
+    notice.textContent = text;
   }
 
-  function clearStartUpNotice() {
-    clearTimeout(startUpNoticeTimer);
+  function hideStartUpNotice() {
     const notice = el("start-up-notice");
     if (!notice) return;
     notice.hidden = true;
     notice.textContent = "";
   }
 
-  // W140: the card a failed start-up shows. This can come 31 s or more after
-  // load, so someone typing keeps the keyboard and their place on the page. A
-  // click still waiting shows the card again through its own path, with focus.
-  function showStartUpFailure(error) {
+  function armStartUpNotice() {
+    clearTimeout(startUpNoticeTimer);
+    startUpNoticeTimer = setTimeout(
+      () => writeStartUpNotice("Still connecting…"),
+      START_UP_NOTICE_MS,
+    );
+  }
+
+  // The start-up phase has ended: "Still connecting…" goes. The title of a card
+  // shown to someone typing stays, for as long as that card does.
+  function clearStartUpNotice() {
+    clearTimeout(startUpNoticeTimer);
+    if (!state.startUpNoticeHeld) hideStartUpNotice();
+  }
+
+  function holdStartUpNotice(title) {
+    state.startUpNoticeHeld = true;
+    writeStartUpNotice(title);
+  }
+
+  function releaseStartUpNotice() {
+    if (!state.startUpNoticeHeld) return;
+    state.startUpNoticeHeld = false;
+    hideStartUpNotice();
+  }
+
+  function textFieldHasFocus() {
     const active = document.activeElement;
-    const typing =
+    return Boolean(
       active &&
-      active.matches("textarea, input:not([type]), input[type='text'], input[type='search']");
-    handleError(error, { keepFocus: error.code === "START_UP_UNREACHABLE" && Boolean(typing) });
+        active.matches("textarea, input:not([type]), input[type='text'], input[type='search']"),
+    );
   }
 
   async function initSession(byHand = false) {
@@ -10953,8 +10985,10 @@
     state.startUpRetrying = true;
     const noAnswerBefore = startUpFailure && startUpFailure.code === "START_UP_UNREACHABLE";
     const renew = !(noAnswerBefore && state.sessionAnswered);
-    sessionStarted = startUpStep();
-    modelsStarted = startUpStep();
+    const sessionStep = startUpStep();
+    const modelsStep = startUpStep();
+    sessionStarted = sessionStep;
+    modelsStarted = modelsStep;
     clearError();
     setConnectionPill("connecting", "Connecting");
     armStartUpNotice();
@@ -10962,7 +10996,7 @@
       try {
         if (renew) await initSession(true);
       } finally {
-        sessionStarted.settle();
+        sessionStep.settle();
       }
       // W105 guard: a page drawn for another identity reloads, as "Refresh
       // session" does, so the reload shows who is signed in now.
@@ -10974,7 +11008,9 @@
       startUpFailure = null;
       clearError();
       setConnectionPill("connected", connectedPillLabel());
-      finishStartUp();
+      // A page that has already started keeps its live run or its result.
+      if (state.startUpFinished) document.documentElement.dataset.appState = "ready";
+      else finishStartUp();
       toast({ message: "Session started. You can run a query now.", tone: "success" });
     } catch (error) {
       if (!error || error.code !== "START_UP_UNREACHABLE") {
@@ -10983,11 +11019,11 @@
       }
       startUpFailure = error;
       document.documentElement.dataset.appState = "error";
-      showStartUpFailure(error);
+      handleError(error);
       setConnectionPill("error", "Disconnected");
     } finally {
-      sessionStarted.settle();
-      modelsStarted.settle();
+      sessionStep.settle();
+      modelsStep.settle();
       clearStartUpNotice();
       state.startUpRetrying = false;
     }
@@ -11268,7 +11304,7 @@
     return null;
   }
 
-  function handleError(error, { retry, keepFocus } = {}) {
+  function handleError(error, { retry } = {}) {
     // Re-enable the Proceed button so a transient failure does not
     // strand the user. The button is gated again on a fresh estimate
     // in the REQUIRE_CONFIRMATION band, but stays clickable in the
@@ -11281,7 +11317,7 @@
     // first-class edge treatment before the generic fallback.
     const edge = edgeStateFromError(error, { retry });
     if (edge) {
-      showError({ ...edge, keepFocus });
+      showError(edge);
       return;
     }
     if (error instanceof ApiError) {
@@ -13179,8 +13215,10 @@
     });
   }
 
-  // What a start-up that worked does last, at boot and after "Try again".
+  // What a start-up that worked does last, at boot and after "Try again". Once
+  // per page: see ``retrySession``.
   function finishStartUp() {
+    state.startUpFinished = true;
     // CHG-070 (b): the question kept across "Sign in again", put back once,
     // only now (round 2): the model slots exist, so its costs can be shown,
     // and the bootstrap has named the account it must match. W87-2: only
@@ -13448,23 +13486,23 @@
       try {
         await initSession();
       } finally {
-        sessionStarted.settle();
+        bootSessionStep.settle();
       }
       try {
         await refreshDefaults();
       } finally {
-        modelsStarted.settle();
+        bootModelsStep.settle();
       }
       finishStartUp();
     } catch (error) {
       startUpFailure = error;
       document.documentElement.dataset.appState = "error";
-      showStartUpFailure(error);
+      handleError(error);
       setConnectionPill("error", "Disconnected");
     } finally {
       // A failed session skips the model step; release both (W121).
-      sessionStarted.settle();
-      modelsStarted.settle();
+      bootSessionStep.settle();
+      bootModelsStep.settle();
       clearStartUpNotice();
     }
     // Pull the live readiness snapshot. ``/ready`` is
@@ -13496,8 +13534,8 @@
   boot().catch((error) => {
     // W121: a boot that fails before its start-up steps releases them too.
     if (!startUpFailure) startUpFailure = error;
-    sessionStarted.settle();
-    modelsStarted.settle();
+    bootSessionStep.settle();
+    bootModelsStep.settle();
     clearStartUpNotice();
     if (!document.documentElement.dataset.appState) {
       document.documentElement.dataset.appState = "error";
