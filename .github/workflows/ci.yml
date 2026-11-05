@@ -122,7 +122,7 @@ jobs:
         run: make image-lock-check
       - name: Upload release evidence artifacts
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-hardening-evidence
           path: |
@@ -220,7 +220,7 @@ jobs:
 
       - name: Upload the percentiles artifact
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: perf-percentiles-${{ github.run_id }}-${{ github.run_attempt }}
           path: build/gates/perf-percentiles.json
@@ -291,7 +291,7 @@ jobs:
         run: make diff-cover "DIFF_BASE=origin/${BASE_REF}"
       - name: Upload diff-cover report
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: diff-cover-report
           path: build/coverage/diff-cover.md
@@ -460,7 +460,7 @@ jobs:
         run: uv run pytest tests/test_mutation_baseline_doc.py -v --no-cov -p no:randomly
       - name: Upload mutation report
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: mutation-report
           path: build/mutation/
