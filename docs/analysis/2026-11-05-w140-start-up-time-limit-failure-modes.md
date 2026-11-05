@@ -2,12 +2,12 @@
 
 Listed before the design (`.agents/skills/work-item-delivery/SKILL.md`: sign-in and session work). The decision is ADR-0189.
 
-"Design" means the design handles it, with a test in `e2e/tests/signed-in/start-up-limit.spec.ts`. "Accepted" means it is a stated risk in ADR-0189. "Unchanged" means the behaviour was already so.
+"Design" means the design handles it, with a test in `e2e/tests/signed-in/start-up-limit.spec.ts` or `start-up-limit-review.spec.ts`. "Accepted" means it is a stated risk in ADR-0189. "Unchanged" means the behaviour was already so.
 
 | # | Area | How it fails | What the person sees | Outcome |
 |---|---|---|---|---|
 | 1 | Typing | The card always takes focus and scrolls (`showError`). At 31 s or later it can arrive mid-sentence: the rest of the text is lost and the spaces scroll the page | Half a question | Design: no focus or scroll while a text field has focus, on every path that shows the card; the fixed line carries the title on a phone |
-| 2 | Phone | The pill and the card region are over 900 px above a pressed Estimate at 390 px, and the top bar is hidden on the landing | A spinner with no message | Design: the notice is fixed to the viewport |
+| 2 | Phone | The pill and the card region are above the screen once Estimate is in view at 390 px, and the top bar is hidden on the landing | A spinner with no message | Design: the notice is fixed to the viewport |
 | 3 | Sign-in | Start-up fails, the held sign-in write goes out on the dead connection and never ends | The button stays disabled for good | Design: refused in the page when no answer came and no token is held |
 | 4 | Try again | `showError` rebuilds buttons, so a click during a retry can draw a second, live "Try again"; a second retry queues behind the lock and can turn sharing off | A second retry, or a write with no token | Design: guard inside the function; both steps re-armed |
 | 5 | Recovery | The first-run work after a good boot was skipped by a retry | "Session started" with an empty box; the state stays `error` | Design: one shared function |
@@ -28,5 +28,5 @@ Listed before the design (`.agents/skills/work-item-delivery/SKILL.md`: sign-in 
 | 20 | Background or sleeping tab | Timers are throttled, so the limit fires late; on wake it may fire at once | The card on return; "Try again" works | No change needed (general browser behaviour, not measured here) |
 | 21 | Cold start | A cached page can make `/v1/session` the request that wakes a stopped machine | The retry covers a start of up to about 31 s; "Try again" allows 30 s more | Accepted; the time is not measured (ADR-0189) |
 | 22 | Overlap | A boot that ends during a retry could release a click waiting for that retry. No page path to this overlap was found; it was reached through a line served only in a test | A write with an old token | Design: each operation settles its own steps. A late boot can still show its card and stop the retry's notice timer (advisory) |
-| 23 | Live run | "Start a session" over a live run or a result reset its run details | Run state reset behind the view | Design: the end of start-up runs once per page |
+| 23 | Live run or result | "Start a session" over a live run or a result reset its run details, dropped the models chosen and hid a simulated-output notice (the last two before this change too) | State reset behind the view; a missing disclosure | Design: the end of start-up and the redraw run only on a page that has not started |
 | 24 | After start-up | A write with a token on a dead connection has no limit | A spinner with no end | Unchanged; W145 |

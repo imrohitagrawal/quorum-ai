@@ -849,6 +849,70 @@ test.describe("the start-up limit, review round 1 (W140)", () => {
     await expect(timeCard(page)).toHaveText(finishedAt as string);
   });
 
+  test('"Start a session" on a working page keeps the models chosen', async ({ page }) => {
+    // RED-IF a recovery on a page that has already started redraws the model
+    // slots from the defaults. Partner: the choice differed from the default
+    // before the card, and the session was renewed.
+    await page.setViewportSize(DESKTOP);
+    const session = await answering(page, SESSION, [], "pass");
+    await signIn(page, "w140-chosen-models");
+    const slot = page.locator("select[data-model-slot]").first();
+    const defaultModel = await slot.inputValue();
+    const other = await slot.locator("option").evaluateAll(
+      (options, current) => options.map((o) => (o as HTMLOptionElement).value).find((v) => v && v !== current),
+      defaultModel,
+    );
+    expect(other, "the catalog offers another model").toBeTruthy();
+    await slot.selectOption(other as string);
+    await midUseCard(page);
+    const before = session.sent();
+    await startASession(page).click();
+    await expect(page.locator(".toast", { hasText: "Session started" })).toBeVisible();
+    expect(session.sent(), "the session was renewed").toBe(before + 1);
+    await expect(page.locator("select[data-model-slot]").first()).toHaveValue(other as string);
+  });
+
+  test('"Start a session" over a transcript keeps its simulated-output notice', async ({ page }) => {
+    // RED-IF a recovery on a page that has already started redraws the model
+    // panels, which hides the notice that the answers were simulated. Partner:
+    // the notice was on screen before the card, and the session was renewed.
+    test.setTimeout(120000);
+    await page.setViewportSize(DESKTOP);
+    const session = await answering(page, SESSION, [], "pass");
+    await signIn(page, "w140-transcript-notice");
+    await pressRunNow(page);
+    await expect(page.locator("#result-verdict[data-consensus]")).toBeVisible({ timeout: 60000 });
+    await page.locator("#result-transcript-link").click();
+    const banner = page.locator("#demo-mode-banner");
+    await expect(banner, "the notice is on screen").toBeVisible();
+    await page.route(ONE_RUN, (route) => route.fulfill(WRONG_SESSION));
+    await page.locator(".session-trail-entry").first().click();
+    await expect(startASession(page)).toBeVisible();
+    const before = session.sent();
+    await startASession(page).click();
+    await expect(page.locator(".toast", { hasText: "Session started" })).toBeVisible();
+    expect(session.sent(), "the session was renewed").toBe(before + 1);
+    await expect(banner).toBeVisible();
+  });
+
+  test("a sign-in does not wait for the model list once the session has answered", async ({ page }) => {
+    // RED-IF boot releases a write's wait only when both steps end: this click
+    // would then sit behind a hung model list. Partner: the model list is seen
+    // to be unanswered, and the start carries the token the session gave.
+    await page.setViewportSize(DESKTOP);
+    const models = await answering(page, MODELS);
+    const starts = writesTo(page, SIGN_IN_START);
+    await page.route("https://accounts.google.com/**", (route) => route.abort());
+    const answer = nextAnswerFrom(page, SESSION);
+    await openWorkspace(page);
+    const token = await answerToken(answer);
+    await firstRequestSent(models);
+    await page.locator("#sign-in-google").click();
+    await expect.poll(() => starts.length, { timeout: SEEN_MS }).toBe(1);
+    expect(models.givenUp(), "the model list is still unanswered").toBe(0);
+    expect(starts[0].headers()["x-csrf-token"]).toBe(token);
+  });
+
   // ---------------------------------------------------------------------------
   // The card's sentence
   // ---------------------------------------------------------------------------

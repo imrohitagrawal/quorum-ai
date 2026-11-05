@@ -11004,7 +11004,9 @@
         location.reload();
         return;
       }
-      await refreshDefaults(true);
+      // A page that has already started has its slots: redrawing them would drop
+      // the models chosen, and the panels' redraw hides a simulated-output notice.
+      if (!state.startUpFinished) await refreshDefaults(true);
       startUpFailure = null;
       clearError();
       setConnectionPill("connected", connectedPillLabel());
