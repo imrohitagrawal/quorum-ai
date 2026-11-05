@@ -1459,7 +1459,7 @@ def test_a_message_from_before_a_storage_reset_is_ignored() -> None:
 # 8. The page's wiring: initSession, retrySession and the message handler
 # =============================================================================
 
-_WIRED = ["initSession", "retrySession", *_RENEW]
+_WIRED = ["initSession", "withStartUpLimit", "retrySession", "startUpStep", *_RENEW]
 
 
 def _bootstrap(identity: str, token: str) -> dict[str, Any]:

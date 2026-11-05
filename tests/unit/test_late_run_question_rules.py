@@ -313,6 +313,7 @@ def _page_load(*identities: str | None) -> Any:
     return _node(
         [
             "initSession",
+            "withStartUpLimit",
             "renewSessionToken",
             "takeTokenNumber",
             "sharedTokenIdentity",

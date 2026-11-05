@@ -59,7 +59,7 @@ GUARD = [
     "takeTokenNumber",
     "renewSessionToken",
 ]
-WIRED = ["initSession", "readDrawnIdentity", *GUARD]
+WIRED = ["initSession", "withStartUpLimit", "readDrawnIdentity", *GUARD]
 
 #: Harness helpers: a fake document with the island, and a renewal that
 #: passes the drawn identity the way the builder is asked to.
@@ -506,7 +506,7 @@ def test_start_a_session_reloads_instead_of_saying_it_started(setup: str, refuse
     session" shows the success toast, or does not reload. Partner: an
     unrefused retry shows the toast once and does not reload."""
     got = _run(
-        ["retrySession"],
+        ["retrySession", "startUpStep"],
         _TOAST + setup + "\nawait retrySession();\nreturn { toasts, reloads: __log.reloads };",
     )
     if refused:
@@ -525,7 +525,7 @@ def test_the_whole_retry_after_a_refused_boot_reloads(drawn: str, refused: bool)
     the reload is not a harness failure caught by ``retrySession``."""
     t1, t2 = "Y1".ljust(32, "q"), "Y2".ljust(32, "q")
     got = _run(
-        ["retrySession", *WIRED],
+        ["retrySession", "startUpStep", *WIRED],
         _TOAST + "navigator.locks = __makeLocks(); indexedDB = __makeIDB({}, __world());\n"
         f"document = __doc({json.dumps(json.dumps(drawn))});\n"
         "await initSession(); await retrySession();\n"

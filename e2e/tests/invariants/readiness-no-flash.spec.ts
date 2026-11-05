@@ -300,10 +300,11 @@ test.describe("a hung probe cannot silence the disclosure (#117 review 2)", () =
     // the banner was STILL suppressed". Measuring it turned up something
     // sharper: `boot()` awaits `refreshDefaults()` BEFORE it ever calls
     // `refreshReadiness()`, so hanging that endpoint stalls boot earlier still
-    // and `/ready` is never even requested. The disclosure therefore cannot
-    // come from the verdict — only from the seed — which is precisely why the
-    // time-bounded fallback exists. Asserting a `/ready` verdict here would be
-    // asserting a value the page never fetched.
+    // and `/ready` is not requested until that step's time limit has run out
+    // (about 31 s, W140), long after this test ends. The disclosure therefore
+    // cannot come from the verdict — only from the seed — which is precisely
+    // why the time-bounded fallback exists. Asserting a `/ready` verdict here
+    // would be asserting a value the page has not fetched.
     await recordBannerVisibility(page);
     await page.route("**/v1/models/defaults", () => {});
     await bootWithHungEndpoint(page, "**/v1/models/defaults", "offline_by_bad_key");
