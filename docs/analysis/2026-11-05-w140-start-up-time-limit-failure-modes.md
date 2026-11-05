@@ -1,12 +1,12 @@
 # W140: how a start-up time limit with a retry can fail
 
-Listed before the design (`.agents/skills/work-item-delivery/SKILL.md`: sign-in and session work). The decision is ADR-0189. Line references were read at `fbdb4a4` and will move; search for the function named.
+Listed before the design (`.agents/skills/work-item-delivery/SKILL.md`: sign-in and session work). The decision is ADR-0189.
 
 "Design" means the design handles it, with a test in `e2e/tests/signed-in/start-up-limit.spec.ts`. "Accepted" means it is a stated risk in ADR-0189. "Unchanged" means the behaviour was already so.
 
 | # | Area | How it fails | What the person sees | Outcome |
 |---|---|---|---|---|
-| 1 | Typing | The card always takes focus and scrolls (`showError`). At 31 s or later it can arrive mid-sentence: the rest of the text is lost and the spaces scroll the page | Half a question | Design: no focus or scroll while a text field has focus |
+| 1 | Typing | The card always takes focus and scrolls (`showError`). At 31 s or later it can arrive mid-sentence: the rest of the text is lost and the spaces scroll the page | Half a question | Design: no focus or scroll while a text field has focus, on every path that shows the card; the fixed line carries the title on a phone |
 | 2 | Phone | The pill and the card region are over 900 px above a pressed Estimate at 390 px, and the top bar is hidden on the landing | A spinner with no message | Design: the notice is fixed to the viewport |
 | 3 | Sign-in | Start-up fails, the held sign-in write goes out on the dead connection and never ends | The button stays disabled for good | Design: refused in the page when no answer came and no token is held |
 | 4 | Try again | `showError` rebuilds buttons, so a click during a retry can draw a second, live "Try again"; a second retry queues behind the lock and can turn sharing off | A second retry, or a write with no token | Design: guard inside the function; both steps re-armed |
@@ -21,10 +21,12 @@ Listed before the design (`.agents/skills/work-item-delivery/SKILL.md`: sign-in 
 | 13 | Token, two tabs | B's lock wait ends and it renews alone, then A's retry retires B's token, and B refuses A's post | B's next write is refused once | Accepted |
 | 14 | Daily limit | A lost answer loses its cookie, so a repeat can count a second session | One allowance spent early, only without a usable cookie | Accepted; bounded at one retry |
 | 15 | Limiter | Each retry that reaches the server spends one of 10 a minute. Several restored tabs on a slow link could reach a 429 | The session card | Accepted |
-| 16 | Lock | The first attempt hangs inside the lock | Other tabs wait 10 s, then go alone, as before; the lock is now freed within about 31 s | Design |
+| 16 | Lock | The first attempt hangs inside the lock | Other tabs wait 10 s, then go alone, as before; the lock is now freed within about 41 s (the counter also runs inside it) | Design |
 | 17 | Timers | A forgotten exit leaves the notice over the card | Two messages | Design: cleared on every exit, `boot().catch` included |
 | 18 | Screen reader | Writing the text before revealing the line may go unannounced | Silence | Design: reveal first, as `showLandingHandoffNote` does |
 | 19 | Duplicate message | A dead connection also fails `/ready`, whose toast is worded for operators | Two alerts, one in jargon | Design: no toast beside this card |
 | 20 | Background or sleeping tab | Timers are throttled, so the limit fires late; on wake it may fire at once | The card on return; "Try again" works | No change needed (general browser behaviour, not measured here) |
-| 21 | Cold start | A cached page can make `/v1/session` the request that wakes a stopped machine | The retry usually covers it; "Try again" allows 30 s | Accepted; the time is not measured (ADR-0189) |
-| 22 | After start-up | A write with a token on a dead connection has no limit | A spinner with no end | Unchanged; W145 |
+| 21 | Cold start | A cached page can make `/v1/session` the request that wakes a stopped machine | The retry covers a start of up to about 31 s; "Try again" allows 30 s more | Accepted; the time is not measured (ADR-0189) |
+| 22 | Overlap | A boot that ends during a retry could release a click waiting for that retry. No page path to this overlap was found; it was reached through a line served only in a test | A write with an old token | Design: each operation settles its own steps. A late boot can still show its card and stop the retry's notice timer (advisory) |
+| 23 | Live run | "Start a session" over a live run or a result reset its run details | Run state reset behind the view | Design: the end of start-up runs once per page |
+| 24 | After start-up | A write with a token on a dead connection has no limit | A spinner with no end | Unchanged; W145 |
