@@ -644,11 +644,12 @@ test.describe("the start-up limit, review round 1 (W140)", () => {
     await expect(notice(page)).toBeHidden();
   });
 
-  test('"Try again" clears the line, "Still connecting…" follows at 10 s, and a recovery leaves nothing', async ({
+  test('"Try again" turns the line to "Still connecting…" at once, and a recovery leaves nothing', async ({
     page,
   }) => {
-    // RED-IF the line stays while a retry runs (it would say the server cannot
-    // be reached while the page is trying), or blocks the retry's own notice.
+    // RED-IF the line keeps the card's title while a retry runs (it would say
+    // the server cannot be reached while the page is trying), or the retry's
+    // notice waits 10 s (CHG-113: it shows at once).
     // Partner: the line was up first, and the retry recovers the page.
     await page.setViewportSize(DESKTOP);
     await freezeClock(page);
@@ -661,10 +662,8 @@ test.describe("the start-up limit, review round 1 (W140)", () => {
     await expect(notice(page)).toHaveText(CARD_TITLE);
 
     await tryAgain(page).click();
-    await expect(notice(page), "a retry takes the line away at once").toBeHidden();
+    await expect(notice(page), "a retry says it is connecting, at once").toHaveText(NOTICE_TEXT);
     await expect.poll(session.sent).toBe(3);
-    await page.clock.runFor(NOTICE_MS);
-    await expect(notice(page)).toHaveText(NOTICE_TEXT);
 
     await session.finishHung("pass");
     await expect(appState(page)).toHaveAttribute("data-app-state", "ready");
@@ -911,6 +910,29 @@ test.describe("the start-up limit, review round 1 (W140)", () => {
     await expect.poll(() => starts.length, { timeout: SEEN_MS }).toBe(1);
     expect(models.givenUp(), "the model list is still unanswered").toBe(0);
     expect(starts[0].headers()["x-csrf-token"]).toBe(token);
+  });
+
+  test("typing an email address when start-up runs out: every character lands", async ({ page }) => {
+    // RED-IF the check for "someone is typing" leaves out email fields: the card
+    // then takes the focus from the account-deletion address. Partner: the
+    // field had the focus and the card came.
+    await page.setViewportSize(DESKTOP);
+    const label = "w140-email-field";
+    await signIn(page, label);
+    await freezeClock(page);
+    const session = await answering(page, SESSION);
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await firstRequestSent(session);
+    await page.locator("#account-history summary").click();
+    await page.locator("#account-delete-start").click();
+    const field = page.locator("#account-delete-email");
+    await field.click();
+    await page.keyboard.type("first.part");
+    await bothAttemptsRunOut(page, session);
+    await expect(card(page), "the card came").toBeVisible();
+    await page.keyboard.type("@example.com");
+    await expect(field).toHaveValue("first.part@example.com");
+    expect(await focusedId(page)).toBe("account-delete-email");
   });
 
   // ---------------------------------------------------------------------------

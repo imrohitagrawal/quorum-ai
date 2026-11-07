@@ -9160,7 +9160,11 @@
     const active = document.activeElement;
     return Boolean(
       active &&
-        active.matches("textarea, input:not([type]), input[type='text'], input[type='search']"),
+        active.matches(
+          "textarea, input:not([type]), input[type='text'], input[type='search'], " +
+            "input[type='email'], input[type='url'], input[type='tel'], " +
+            "input[type='password'], input[type='number']",
+        ),
     );
   }
 
@@ -10991,7 +10995,9 @@
     modelsStarted = modelsStep;
     clearError();
     setConnectionPill("connecting", "Connecting");
-    armStartUpNotice();
+    // The person has just asked for a connection, so this is true at once
+    // (CHG-113); at boot the line waits 10 s, so a healthy page shows nothing.
+    writeStartUpNotice("Still connecting…");
     try {
       try {
         if (renew) await initSession(true);

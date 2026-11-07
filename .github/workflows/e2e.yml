@@ -619,9 +619,11 @@ jobs:
       # `playwright test --list` on the lane counted 154. 154 -> 157 (W140 review
       # round 2): the same spec adds 3 tests (a recovery on a page that has started
       # keeps the models chosen and the simulated-output notice; a sign-in does not
-      # wait for the model list); the lane counts 157.
+      # wait for the model list); the lane counts 157. 157 -> 158 (W140 third
+      # pass): an email field keeps the keyboard through the card; the lane
+      # counts 158.
       - name: "signed-in History lane: floor on tests actually executed"
-        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 157 --lane "signed-in History lane"
+        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 158 --lane "signed-in History lane"
 
       - name: Clear the previous lane's JUnit report
         # Adversarial review (#162/#166): without this, a Playwright run that

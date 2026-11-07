@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted — 2026-11-05, board row W140. The product owner chose to build this ahead of the dependency updates (CHG-111). The limits, the retry rule and everything else below about how it is met are the session's design; Codex reviewed the plan, and then its revision, before any code.
+Accepted — 2026-11-05, board row W140. The product owner chose to build this ahead of the dependency updates (CHG-111), approved the words the page shows, and chose that "Still connecting…" shows at once after "Try again" (CHG-113). The limits, the retry rule and everything else below about how it is met are the session's design; Codex reviewed the plan, and then its revision, before any code.
 
 **Supersedes**, without editing it (`docs/README.md`: "superseded never edited"): ADR-0178, decision 6, the clauses "The fetch inside the lock is deliberately NOT bounded" and "nothing renews twice", and its rejected alternative "A time bound on the fetch". The rest of ADR-0178 stands, including decision 7, "No retry anywhere" (case 2, the owner's choice in CHG-089): a write that left with an old token is still refused once and never repeated. What this adds is a repeat of the start-up's own session request, which that decision does not cover.
 
@@ -26,7 +26,7 @@ So the retry is kept, and limited to what these facts allow: once, and only when
 
 1. Each start-up request is given up at 15 s, headers and body together, and tried again once, about 1 s later, only if it got **no HTTP answer** (the limit, or a connection that failed). Any HTTP answer ends the step exactly as before: 401 `SESSION_UNCHECKED`, 429, 403 and 500 are never repeated, so the session cards and the daily limit behave as they did.
 2. The session retry runs inside `fetchSession`, so it stays inside the Web Lock and under one token number, and a successful retry reaches other tabs through the existing post.
-3. "Still connecting…" appears 10 s after start-up begins, fixed to the viewport, because at 390 px the Estimate button sits more than 1,500 px down the page, so once it is on screen the pill and the card are above the screen, and the top bar does not exist on the landing. It clears on every way out of start-up, except as decision 5 says.
+3. "Still connecting…" appears 10 s after start-up begins, and at once after "Try again", fixed to the viewport, because at 390 px the Estimate button sits more than 1,500 px down the page, so once it is on screen the pill and the card are above the screen, and the top bar does not exist on the landing. It clears on every way out of start-up, except as decision 5 says.
 4. When a step gets no answer, it fails with `START_UP_UNREACHABLE`. The card reads "Can't reach the server", with one button, "Try again". Held clicks finish, as ADR-0188 arranged.
 5. That card does not take the keyboard from someone typing. `showError` always moves focus and scrolls; this card can arrive 31 s or more after load, when a person may be mid-sentence. If a text field has focus, the card appears without either, whichever path shows it (the boot, a retry, or a click that was waiting), and `role="alert"` announces it. On a phone that card is off screen, so the fixed line then reads "Can't reach the server" until the card goes or a retry starts.
 6. A write is refused in the page, without being sent, when start-up got no answer and no token is held. The server could only refuse it, and on a dead connection it would hang with no limit, leaving the sign-in button disabled for good. A start-up that got an HTTP answer still sends it (ADR-0188).
@@ -50,7 +50,7 @@ The timings are named constants beside `SESSION_TOKEN_WAIT_MS` in `app.js`. They
 
 ### Tests
 
-`e2e/tests/signed-in/start-up-limit.spec.ts` has 42 tests, driven by Playwright's fake clock so none waits for a limit in real time. On the code before this change 35 fail; the other 7 guard behaviour that must not change (an HTTP answer is never repeated, and a held sign-in still goes out after a 500). `start-up-limit-review.spec.ts` adds 32 tests from the two review rounds: defects the reviews reproduced, and guards whose mutants the first file let survive. The lane's floor moves from 83 to 157. One of those tests reaches a retry during boot through a line served only in the test, because no page path to that overlap was found.
+`e2e/tests/signed-in/start-up-limit.spec.ts` has 42 tests, driven by Playwright's fake clock so none waits for a limit in real time. On the code before this change 35 fail; the other 7 guard behaviour that must not change (an HTTP answer is never repeated, and a held sign-in still goes out after a 500). `start-up-limit-review.spec.ts` adds 33 tests from the review rounds: defects the reviews reproduced, and guards whose mutants the first file let survive. The lane's floor moves from 83 to 158. One of those tests reaches a retry during boot through a line served only in the test, because no page path to that overlap was found.
 
 ## Rejected alternatives
 
@@ -70,7 +70,7 @@ The timings are named constants beside `SESSION_TOKEN_WAIT_MS` in `app.js`. They
 - A request that would have answered after 15 s is abandoned.
 - The put-back of a kept question now yields to any text in the box, at boot as well, including text the browser restored on a reload or Back. The saved copy is consumed either way.
 - Writes after a session has answered have no time limit: on a dead connection, a sign-in click after only the model step failed can still hang with its button disabled. True of every write before this change; recorded as W145.
-- "Try again" followed by an HTTP failure still reloads the page, which loses a typed question. It is the old recovery path, and `store-unchecked.spec.ts` depends on it; recorded under W145, with two others: after "Start a session" gets no answer on a working page, a person who carries on sees "Disconnected" through a finished run; and a page drawn for another identity reloads on "Try again" even on a dead connection.
+- "Try again" followed by an HTTP failure still reloads the page, which loses a typed question. It is the old recovery path, and `store-unchecked.spec.ts` depends on it; recorded under W145, with others: a Stop pressed while "Start a session" waits for an unanswered session request is held until that attempt ends, up to 30 s; "Refresh session" also reloads and empties the box; after "Start a session" gets no answer on a working page, a person who carries on sees "Disconnected" through a finished run; and a page drawn for another identity reloads on "Try again" even on a dead connection.
 - During the model step the pill reads "Session active" beside "Still connecting…". Each is true of what it describes.
 - "Could not connect" and "Check your connection" are plain approximations in two cases that reach the card: a body that stalls after a good status, and a server that is itself down.
 

@@ -1059,11 +1059,11 @@ test.describe("the page's start-up requests have a time limit (W140)", () => {
 
     await tryAgain(page).click();
     await expect.poll(session.sent).toBe(3);
-    await page.clock.runFor(NOTICE_MS - 1);
-    await expect(notice(page), "no notice before 10 s of the retry").toBeHidden();
-    await page.clock.runFor(1);
-    await expect(notice(page), "the retry runs the notice too").toBeInViewport();
-    await page.clock.runFor(BY_HAND_MS - NOTICE_MS - 1);
+    // The owner chose (CHG-113) that the notice shows as soon as "Try again"
+    // is pressed: the person has just asked for a connection.
+    await expect(notice(page), "the retry shows the notice at once").toBeInViewport();
+    await expect(notice(page)).toHaveText("Still connecting…");
+    await page.clock.runFor(BY_HAND_MS - 1);
     await page.waitForTimeout(QUIET_MS);
     expect(session.givenUp(), "the attempt is still running 1 ms before 30 s").toBe(2);
     await attemptGivenUpAfter(page, session, 1);
