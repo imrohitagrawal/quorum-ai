@@ -699,6 +699,28 @@ a { color: var(--accent); text-underline-offset: 2px; }
   max-width: min(420px, calc(100vw - var(--space-5) * 2));
 }
 
+/* W140: "Still connecting…". Fixed to the viewport so it is on screen wherever
+   the person has scrolled, on every view; the top centre is clear of the
+   corner the toasts use on a wide screen, and of a phone's session trail. It
+   takes no clicks and has no animation, so it has nothing to reduce. */
+.start-up-notice {
+  position: fixed;
+  top: var(--space-3);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1999;
+  margin: 0;
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-md);
+  background: var(--panel-strong);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow-md);
+  color: var(--ink);
+  font-size: 0.95rem;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
 /* W7 part 3 (ADR-0138): the idle reminder, on every view. */
 .idle-reminder {
   position: fixed;

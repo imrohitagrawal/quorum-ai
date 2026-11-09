@@ -437,6 +437,13 @@
     // identity than the one this page's HTML was drawn for. Never cleared for
     // the page load: no token is kept or taken, nothing saved or restored.
     drawnMismatch: false,
+    // W140: whether this page's last renewal got its answer, whether a
+    // "Try again" or "Start a session" is running, whether the fixed line holds
+    // the unreachable card's title, and whether a start-up has finished here.
+    sessionAnswered: false,
+    startUpRetrying: false,
+    startUpNoticeHeld: false,
+    startUpFinished: false,
     // W105 (ADR-0178): sharing the token with the site's other open tabs.
     // ``sharingOff`` is set for the rest of the page load once a renewal ran
     // without the lock or the counter; ``renewing`` while this tab's own
@@ -1108,6 +1115,7 @@
     QUERY_TOO_LONG: "Question is too long",
     QUERY_REQUIRED: "Question is required",
     NETWORK_UNREACHABLE: "Can't reach the server",
+    START_UP_UNREACHABLE: "Can't reach the server",
     RUN_FAILED: "One model didn't finish",
     TIMEOUT: "Run timed out",
   };
@@ -1263,6 +1271,15 @@
       }
     }
     errorRegion.hidden = false;
+    // W140: this card can come 31 s or more after load, by the boot, by a retry
+    // or by a click that was waiting. Whichever it is, someone typing keeps the
+    // keyboard and their place, ``role="alert"`` announces the card, and the
+    // fixed line says it on a screen where the card is out of view.
+    if (code === "START_UP_UNREACHABLE" && textFieldHasFocus()) {
+      holdStartUpNotice(title);
+      return;
+    }
+    releaseStartUpNotice();
     // Move focus so screen readers announce the error.
     errorRegion.focus({ preventScroll: true });
     // Bring the banner into view if it is below the fold (honour reduced motion).
@@ -1273,6 +1290,7 @@
   }
 
   function clearError() {
+    releaseStartUpNotice();
     errorRegion.hidden = true;
     errorRegion.dataset.severity = "error";
     errorTitle.textContent = "";
@@ -1566,12 +1584,15 @@
       }
     } catch (error) {
       // Keep the previous snapshot; surface a non-blocking toast so
-      // the operator knows the probe is unreachable.
-      toast({
-        message: `Live-readiness probe failed: ${error.message || "unknown error"}`,
-        tone: "warn",
-        timeout: 5000,
-      });
+      // the operator knows the probe is unreachable. W140: not beside the
+      // card that already says the server cannot be reached.
+      if (!startUpFailure || startUpFailure.code !== "START_UP_UNREACHABLE") {
+        toast({
+          message: `Live-readiness probe failed: ${error.message || "unknown error"}`,
+          tone: "warn",
+          timeout: 5000,
+        });
+      }
     }
     // #117, review round 2. CONFIRM HERE — after /ready has settled, and
     // BEFORE the second fetch. Measured: with the confirmation after BOTH
@@ -1616,8 +1637,8 @@
   /**
    * Guarantee the disclosure appears even if the probe never answers.
    *
-   * #117, review round 2. `api()` uses a bare `fetch` with NO timeout
-   * (measured: zero AbortController/AbortSignal uses in this file), so a
+   * #117, review round 2. `api()` sets no time limit of its own (only the
+   * start-up steps pass it one, W140, and this probe is not one of them), so a
    * request that HANGS never resolves and never rejects — and a `finally`
    * that waits on it never runs either. Measured against a hung `/ready` on
    * an offline deployment: the banner stayed hidden indefinitely, including
@@ -1961,8 +1982,8 @@
     }
   }
 
-  // W121 (ADR-0188): two steps of start-up a click may need. ``boot()``
-  // settles each when its step ends, on success or failure, so a click is
+  // W121 (ADR-0188): two steps of start-up a click may need. The operation that
+  // runs a step settles it when it ends, on success or failure, so a click is
   // never held by a step that has ended. A write waits for the session (its
   // anti-forgery token); an estimate also waits for the model list (the
   // slots it prices). Whether the slots are drawn is read when the estimate
@@ -1977,13 +1998,27 @@
     });
     return { done, settle };
   }
-  const sessionStarted = startUpStep();
-  const modelsStarted = startUpStep();
+  // ``boot`` settles only these two, and ``retrySession`` only the two it makes,
+  // so a boot that ends during a retry cannot release a click waiting for that
+  // retry, and a click already waiting for boot is still released by boot.
+  const bootSessionStep = startUpStep();
+  const bootModelsStep = startUpStep();
+  // What a click made now waits for: boot's steps, then the latest retry's.
+  let sessionStarted = bootSessionStep;
+  let modelsStarted = bootModelsStep;
   let startUpFailure = null;
 
   async function api(path, options = {}) {
     const method = String(options.method || "GET").toUpperCase();
-    if (method !== "GET" && method !== "HEAD") await sessionStarted.done;
+    if (method !== "GET" && method !== "HEAD") {
+      await sessionStarted.done;
+      // W140: no answer and no token, so the server could only refuse this
+      // write, and on a dead connection it would hang with no limit. A start-up
+      // that got an HTTP answer still sends it (ADR-0188).
+      if (!state.csrfToken && startUpFailure && startUpFailure.code === "START_UP_UNREACHABLE") {
+        throw startUpFailure;
+      }
+    }
     let response;
     try {
       response = await fetch(path, {
@@ -8781,6 +8816,16 @@
   // The wait for the lock, and for the counter, before a tab renews without
   // them and stops sharing for the rest of the page load.
   const SESSION_TOKEN_WAIT_MS = 10000;
+  // W140: the limits on the two start-up requests. These are published
+  // timings (the spec pins them), not per-environment values.
+  // When "Still connecting…" appears, from the start of the start-up phase.
+  const START_UP_NOTICE_MS = 10000;
+  // One automatic attempt, headers and body; the wait before its one retry.
+  const START_UP_ATTEMPT_MS = 15000;
+  const START_UP_RETRY_GAP_MS = 1000;
+  // The one attempt "Try again" makes: someone on a link slower than the
+  // automatic limit must still have a way to succeed.
+  const START_UP_BY_HAND_MS = 30000;
 
   // The identity a renewal is shared under: the account the server names, or
   // "anonymous" only when it said ``anonymous: true`` (W87-2, ADR-0175: a
@@ -8932,17 +8977,18 @@
   // answer. Inside the Web Lock (one tab at a time, so the messages follow
   // the server's order): the counter's number, then exactly one
   // ``fetchSession()``, then the token, then one post. The waits for the lock
-  // and for the counter are bounded (10 s each); the fetch inside the lock
-  // waits as long as the network takes, as today. A tab with no lock, a lock
-  // refused before its callback runs, a wait that times out, or no number
-  // renews once without them and stops sharing for the rest of the page load.
-  // From then on it behaves as today, but a timed-out wait has cost it 10 s,
-  // and a tab that got the lock late can wait up to 10 s more for the counter
-  // (about 20 s in the worst order). A failure INSIDE the lock is thrown out
-  // as today; nothing renews twice and nothing is retried. Both paths keep
-  // the token only through ``keepRenewedToken``; a refused locked renewal
-  // still posts it under the ANSWER's identity, since the server has retired
-  // the old one for that identity's tabs.
+  // and for the counter are bounded (10 s each), and so is ``fetchSession()``:
+  // W140 gives it a time limit and one retry on no answer, inside itself, so
+  // the retry stays inside the lock and under this one number. A tab with no
+  // lock, a lock refused before its callback runs, a wait that times out, or no
+  // number renews once without them and stops sharing for the rest of the page
+  // load. From then on it behaves as today, but a timed-out wait has cost it
+  // 10 s, and a tab that got the lock late can wait up to 10 s more for the
+  // counter (about 20 s in the worst order). A failure INSIDE the lock is
+  // thrown out as today; this function never calls ``fetchSession()`` twice.
+  // Both paths keep the token only through ``keepRenewedToken``; a refused
+  // locked renewal still posts it under the ANSWER's identity, since the server
+  // has retired the old one for that identity's tabs.
   async function renewSessionToken({
     locks,
     indexedDB: factory,
@@ -9032,7 +9078,98 @@
   // Run lifecycle
   // ---------------------------------------------------------------------------
 
-  async function initSession() {
+  // W140: one start-up request, given up at its limit, the body read included.
+  // Only no answer (the limit, or a connection that failed) is tried again, once
+  // and never for "Try again" (``byHand``). Any HTTP answer ends the step as it
+  // always has, and so does a body that arrived but is not JSON.
+  async function withStartUpLimit(request, byHand = false) {
+    let retriesLeft = byHand ? 0 : 1;
+    for (;;) {
+      const attempt = new AbortController();
+      const timer = setTimeout(
+        () => attempt.abort(),
+        byHand ? START_UP_BY_HAND_MS : START_UP_ATTEMPT_MS,
+      );
+      try {
+        return await request(attempt.signal);
+      } catch (error) {
+        if (error instanceof SyntaxError || (error instanceof ApiError && error.status !== 0)) {
+          throw error;
+        }
+      } finally {
+        clearTimeout(timer);
+      }
+      if (retriesLeft === 0) {
+        throw new ApiError({
+          status: 0,
+          code: "START_UP_UNREACHABLE",
+          message: "The page could not connect to the server. Check your connection and try again.",
+        });
+      }
+      retriesLeft -= 1;
+      await new Promise((resolve) => setTimeout(resolve, START_UP_RETRY_GAP_MS));
+    }
+  }
+
+  // W140: the fixed line. Reveal first and write after: a status line announces
+  // a text change made while it is in the accessibility tree (see
+  // ``showLandingHandoffNote``). It holds no text while hidden.
+  let startUpNoticeTimer = null;
+
+  function writeStartUpNotice(text) {
+    const notice = el("start-up-notice");
+    if (!notice) return;
+    notice.hidden = false;
+    notice.textContent = text;
+  }
+
+  function hideStartUpNotice() {
+    const notice = el("start-up-notice");
+    if (!notice) return;
+    notice.hidden = true;
+    notice.textContent = "";
+  }
+
+  function armStartUpNotice() {
+    clearTimeout(startUpNoticeTimer);
+    startUpNoticeTimer = setTimeout(
+      () => writeStartUpNotice("Still connecting…"),
+      START_UP_NOTICE_MS,
+    );
+  }
+
+  // The start-up phase has ended: "Still connecting…" goes. The title of a card
+  // shown to someone typing stays, for as long as that card does.
+  function clearStartUpNotice() {
+    clearTimeout(startUpNoticeTimer);
+    if (!state.startUpNoticeHeld) hideStartUpNotice();
+  }
+
+  function holdStartUpNotice(title) {
+    state.startUpNoticeHeld = true;
+    writeStartUpNotice(title);
+  }
+
+  function releaseStartUpNotice() {
+    if (!state.startUpNoticeHeld) return;
+    state.startUpNoticeHeld = false;
+    hideStartUpNotice();
+  }
+
+  function textFieldHasFocus() {
+    const active = document.activeElement;
+    return Boolean(
+      active &&
+        active.matches(
+          "textarea, input:not([type]), input[type='text'], input[type='search'], " +
+            "input[type='email'], input[type='url'], input[type='tel'], " +
+            "input[type='password'], input[type='number']",
+        ),
+    );
+  }
+
+  async function initSession(byHand = false) {
+    state.sessionAnswered = false;
     try {
       // ``window.indexedDB`` can throw in some private modes: no counter then.
       let storage = null;
@@ -9047,18 +9184,20 @@
         channel: sessionTokenChannel,
         state,
         drawnIdentity: readDrawnIdentity(document),
-        fetchSession: async () => {
-          const response = await fetch("/v1/session", { credentials: "same-origin" });
-          if (!response.ok) {
-            throw new ApiError({
-              status: response.status,
-              code: "AUTH_REQUIRED",
-              message: STATUS_COPY[response.status] || "Could not start a session.",
-            });
-          }
-          return response.json();
-        },
+        fetchSession: () =>
+          withStartUpLimit(async (signal) => {
+            const response = await fetch("/v1/session", { credentials: "same-origin", signal });
+            if (!response.ok) {
+              throw new ApiError({
+                status: response.status,
+                code: "AUTH_REQUIRED",
+                message: STATUS_COPY[response.status] || "Could not start a session.",
+              });
+            }
+            return response.json();
+          }, byHand),
       });
+      state.sessionAnswered = true;
       // W87-1 round 2: the signed-in account the server names ("" anonymous).
       state.sessionAccountId = typeof session.account_id === "string" ? session.account_id : "";
       // W87-2 (ADR-0175): anonymity only when the server says so; a missing
@@ -9081,8 +9220,11 @@
     }
   }
 
-  async function refreshDefaults() {
-    const response = await api("/v1/models/defaults", { method: "GET" });
+  async function refreshDefaults(byHand = false) {
+    const response = await withStartUpLimit(
+      (signal) => api("/v1/models/defaults", { method: "GET", signal }),
+      byHand,
+    );
     // Re-seed the drift cache from the live payload so the drift
     // banner reflects the current catalog, not the boot-time
     // snapshot. The banner is rendered by the next ``applyReadinessState``
@@ -10835,22 +10977,63 @@
     returnToComposer();
   }
 
-  // AC-001 "Start a session": retry the session bootstrap in place. Falls
-  // back to a full reload if the retry itself fails.
+  // AC-001 "Start a session", and W140's "Try again": retry start-up in place,
+  // one attempt per step. A click made meanwhile waits for the retry, as it does
+  // at boot. An HTTP failure falls back to a full reload. No answer shows the
+  // card again instead: a reload on a dead connection replaces the page with the
+  // browser's error page and loses the typed question. After no answer, only
+  // the step that failed runs again, so a session that answered is not rotated.
+  // The guard is here because ``showError`` rebuilds the card's buttons.
   async function retrySession() {
+    if (state.startUpRetrying) return;
+    state.startUpRetrying = true;
+    const noAnswerBefore = startUpFailure && startUpFailure.code === "START_UP_UNREACHABLE";
+    const renew = !(noAnswerBefore && state.sessionAnswered);
+    const sessionStep = startUpStep();
+    const modelsStep = startUpStep();
+    sessionStarted = sessionStep;
+    modelsStarted = modelsStep;
+    clearError();
+    setConnectionPill("connecting", "Connecting");
+    // The person has just asked for a connection, so this is true at once
+    // (CHG-113); at boot the line waits 10 s, so a healthy page shows nothing.
+    writeStartUpNotice("Still connecting…");
     try {
-      await initSession();
+      try {
+        if (renew) await initSession(true);
+      } finally {
+        sessionStep.settle();
+      }
       // W105 guard: a page drawn for another identity reloads, as "Refresh
       // session" does, so the reload shows who is signed in now.
       if (state.drawnMismatch) {
         location.reload();
         return;
       }
-      await refreshDefaults();
+      // A page that has already started has its slots: redrawing them would drop
+      // the models chosen, and the panels' redraw hides a simulated-output notice.
+      if (!state.startUpFinished) await refreshDefaults(true);
+      startUpFailure = null;
       clearError();
+      setConnectionPill("connected", connectedPillLabel());
+      // A page that has already started keeps its live run or its result.
+      if (state.startUpFinished) document.documentElement.dataset.appState = "ready";
+      else finishStartUp();
       toast({ message: "Session started. You can run a query now.", tone: "success" });
-    } catch (_) {
-      location.reload();
+    } catch (error) {
+      if (!error || error.code !== "START_UP_UNREACHABLE") {
+        location.reload();
+        return;
+      }
+      startUpFailure = error;
+      document.documentElement.dataset.appState = "error";
+      handleError(error);
+      setConnectionPill("error", "Disconnected");
+    } finally {
+      sessionStep.settle();
+      modelsStep.settle();
+      clearStartUpNotice();
+      state.startUpRetrying = false;
     }
   }
 
@@ -10956,6 +11139,17 @@
         severity: "warning",
         message: error.message,
         actions: typeof retry === "function" ? [{ label: "Try again", primary: true, action: retry }] : [],
+      };
+    }
+
+    // W140: start-up got no answer. "Try again" re-runs the step that failed,
+    // in place, so the typed question stays.
+    if (code === "START_UP_UNREACHABLE") {
+      return {
+        code,
+        severity: "error",
+        message: error.message,
+        actions: [{ label: "Try again", primary: true, action: retrySession }],
       };
     }
 
@@ -12435,6 +12629,9 @@
       nowMs: Date.now(),
     });
     if (question) {
+      // W140: this can now run long after load ("Try again"). What the person
+      // has typed since stays; the saved copy is already gone from storage.
+      if (queryTextarea.value.trim()) return;
       queryTextarea.value = question;
       queryTextarea.dispatchEvent(new Event("input", { bubbles: true }));
       // W87-2 review rounds 1 to 3 (ADR-0175, CHG-074): the box is brought
@@ -13026,6 +13223,35 @@
     });
   }
 
+  // What a start-up that worked does last, at boot and after "Try again". Once
+  // per page: see ``retrySession``.
+  function finishStartUp() {
+    state.startUpFinished = true;
+    // CHG-070 (b): the question kept across "Sign in again", put back once,
+    // only now (round 2): the model slots exist, so its costs can be shown,
+    // and the bootstrap has named the account it must match. W87-2: only
+    // its other-account line waits on a request, so the boot does not.
+    restoreLateRunQuestion().catch(() => {});
+    // W87-2: back from a sign-in for deletion, the account panel opens.
+    openAccountPanelAfterReturn();
+    renderProgress(null);
+    renderDebateAndSynthesis(null);
+    renderNotices(null);
+    // PR-0 / Bug 8: on a fresh page load with no run in flight,
+    // the "Current time" card should read "Not started" rather
+    // than the wall-clock at the moment ``boot()`` ran.
+    resetRunTime();
+    // Deterministic readiness signal. The model slots are painted by
+    // ``refreshDefaults`` above, i.e. only AFTER two network round-trips —
+    // so "the composer is usable" is not observable from the initial HTML.
+    // Stamping the outcome here gives automation a single settled fact to
+    // wait on, and — critically — stamps ``error`` on the failure path too,
+    // so a broken bootstrap fails fast and loudly instead of leaving a
+    // waiter to spin until its timeout. Presentation-free (a data attribute
+    // on <html>), so it cannot affect layout, pixels, or the a11y tree.
+    document.documentElement.dataset.appState = "ready";
+  }
+
   async function boot() {
     // First-visit gate: show the marketing landing (screen 01) as the front
     // door to first-time visitors, and boot returning visitors straight into
@@ -13263,40 +13489,19 @@
       });
     }
     setConnectionPill("connecting", "Connecting");
+    armStartUpNotice();
     try {
       try {
         await initSession();
       } finally {
-        sessionStarted.settle();
+        bootSessionStep.settle();
       }
       try {
         await refreshDefaults();
       } finally {
-        modelsStarted.settle();
+        bootModelsStep.settle();
       }
-      // CHG-070 (b): the question kept across "Sign in again", put back once,
-      // only now (round 2): the model slots exist, so its costs can be shown,
-      // and the bootstrap has named the account it must match. W87-2: only
-      // its other-account line waits on a request, so the boot does not.
-      restoreLateRunQuestion().catch(() => {});
-      // W87-2: back from a sign-in for deletion, the account panel opens.
-      openAccountPanelAfterReturn();
-      renderProgress(null);
-      renderDebateAndSynthesis(null);
-      renderNotices(null);
-      // PR-0 / Bug 8: on a fresh page load with no run in flight,
-      // the "Current time" card should read "Not started" rather
-      // than the wall-clock at the moment ``boot()`` ran.
-      resetRunTime();
-      // Deterministic readiness signal. The model slots are painted by
-      // ``refreshDefaults`` above, i.e. only AFTER two network round-trips —
-      // so "the composer is usable" is not observable from the initial HTML.
-      // Stamping the outcome here gives automation a single settled fact to
-      // wait on, and — critically — stamps ``error`` on the failure path too,
-      // so a broken bootstrap fails fast and loudly instead of leaving a
-      // waiter to spin until its timeout. Presentation-free (a data attribute
-      // on <html>), so it cannot affect layout, pixels, or the a11y tree.
-      document.documentElement.dataset.appState = "ready";
+      finishStartUp();
     } catch (error) {
       startUpFailure = error;
       document.documentElement.dataset.appState = "error";
@@ -13304,8 +13509,9 @@
       setConnectionPill("error", "Disconnected");
     } finally {
       // A failed session skips the model step; release both (W121).
-      sessionStarted.settle();
-      modelsStarted.settle();
+      bootSessionStep.settle();
+      bootModelsStep.settle();
+      clearStartUpNotice();
     }
     // Pull the live readiness snapshot. ``/ready`` is
     // unauthenticated so this works even if the session bootstrap
@@ -13336,8 +13542,9 @@
   boot().catch((error) => {
     // W121: a boot that fails before its start-up steps releases them too.
     if (!startUpFailure) startUpFailure = error;
-    sessionStarted.settle();
-    modelsStarted.settle();
+    bootSessionStep.settle();
+    bootModelsStep.settle();
+    clearStartUpNotice();
     if (!document.documentElement.dataset.appState) {
       document.documentElement.dataset.appState = "error";
     }
