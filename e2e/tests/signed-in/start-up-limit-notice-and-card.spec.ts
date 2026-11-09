@@ -712,10 +712,20 @@ test.describe("the start-up limit, review round 1 (W140)", () => {
 
       const hits = await notice(page).evaluate((node) => {
         const box = node.getBoundingClientRect();
+        // Points clear of the rounded corners: a point 4 px in from a corner of
+        // radius 14 px lies just outside the shape, so whether it hit the line
+        // depended on sub-pixel layout (it failed once in CI with the line
+        // visibly on top). Both ends of the middle line, and the top and bottom
+        // of the centre, where the edge is straight, so a strip over either
+        // half is still seen.
+        const middle = box.top + box.height / 2;
+        const centre = box.left + box.width / 2;
         const points = [
-          [box.left + box.width / 2, box.top + box.height / 2],
-          [box.left + 4, box.top + 4],
-          [box.right - 4, box.bottom - 4],
+          [centre, middle],
+          [box.left + 16, middle],
+          [box.right - 16, middle],
+          [centre, box.top + 3],
+          [centre, box.bottom - 3],
         ];
         const hitIsLine = () =>
           points.map(([x, y]) => document.elementFromPoint(x, y)?.id === "start-up-notice");
@@ -726,8 +736,8 @@ test.describe("the start-up limit, review round 1 (W140)", () => {
         return { width: box.width, asShipped, switchedOn };
       });
       expect(hits.width).toBeGreaterThan(0);
-      expect(hits.asShipped, "a click at the line reaches what is under it").toEqual([false, false, false]);
-      expect(hits.switchedOn, "the line is what is on top at each point").toEqual([true, true, true]);
+      expect(hits.asShipped, "a click at the line reaches what is under it").toEqual([false, false, false, false, false]);
+      expect(hits.switchedOn, "the line is what is on top at each point").toEqual([true, true, true, true, true]);
     });
   }
 
