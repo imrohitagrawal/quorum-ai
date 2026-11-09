@@ -12,7 +12,7 @@ and follow it for roles, review rounds, gates, merging, production checks and cl
 1. The full prompt in the owner's private notes, which this file does not reproduce.
 2. `docs/README.md`, then `docs/analysis/2026-11-09-session-handoff.md`.
 3. `docs/65-open-work.md`: rows W122 to W126, W136, W137, W141 to W145, W51, W129, W117, W118,
-   W121 and the Parked table (`make parked-check`); `docs/19-change-control-log.md`: CHG-111 to
+   W121 and the Parked table (`make parked-check`); `docs/19-change-control-log.md`: CHG-102 to
    CHG-113.
 
 ## The items, in order

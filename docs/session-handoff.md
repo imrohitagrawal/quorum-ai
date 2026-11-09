@@ -1,7 +1,7 @@
 # Session Handoff
 
 ## Date/time
-2026-11-09T09:50:41-06:00
+2026-11-09T10:42:39-06:00
 
 ## Open work
 `docs/65-open-work.md` — the source of truth for what is open, what blocks what,
@@ -25,10 +25,10 @@ Run `make handoff` again for current numbers instead of trusting this file
 once it ages -- every value below is read from git/gh/`/status` at
 generation time, per #134.
 
-- **`origin/main` tip:** `94cfd2ae1bf0`
+- **`origin/main` tip:** `850e355ca098`
 - **Last commit touching `src/`:** `94cfd2ae1bf0`
 - **Production vs. last `src/` commit:** production build_sha 94cfd2a is in sync with last src/ commit
-- **pytest collected (no execution):** unavailable: could not parse a collected-count summary line from: 'unavailable: error: Failed to spawn: `pytest`\n  Caused by: No such file or directory (os error 2)'
+- **pytest collected (no execution):** 8471
 - **e2e lane spec counts:** invariants: 28, ops: 2, degraded: 1
 - **Open issues:** 2
 - **Changed-lines coverage:** not computed here -- `make diff-cover` shares
@@ -142,14 +142,15 @@ Operate, learn, and improve
 
 ## Git status
 ```text
-R  CONTINUE-GUARD-HYGIENE-FLAKES-W117-W118-W121-W62-PROMPT.md -> docs/archive/2026-11/CONTINUE-GUARD-HYGIENE-FLAKES-W117-W118-W121-W62-PROMPT.md
-?? CONTINUE-DEPS-W136-W141-W117-PROMPT.md
-?? docs/analysis/2026-11-09-session-handoff.md
+M CONTINUE-DEPS-W136-W141-W117-PROMPT.md
+ M docs/analysis/2026-11-09-session-handoff.md
 ```
 
 ## Diff stat
 ```text
-no unstaged diff
+CONTINUE-DEPS-W136-W141-W117-PROMPT.md      |  2 +-
+ docs/analysis/2026-11-09-session-handoff.md | 21 +++++++++++++++------
+ 2 files changed, 16 insertions(+), 7 deletions(-)
 ```
 
 ## Completed in this session
