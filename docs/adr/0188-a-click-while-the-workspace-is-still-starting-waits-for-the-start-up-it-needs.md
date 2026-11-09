@@ -4,6 +4,8 @@
 
 Accepted — 2026-10-31, board row W121. The owner put this fix ahead of the dependency updates (CHG-109).
 
+Its consequence that start-up requests have no time limit is resolved by ADR-0189 (2026-11-05).
+
 ## Context
 
 The workspace wires its buttons before its start-up finishes. Start-up is two requests: `GET /v1/session` (which gives the page its anti-forgery token) and `GET /v1/models/defaults` (which draws the model slots). Until they answer, the model slots are placeholders and the page has no token.

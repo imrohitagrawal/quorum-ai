@@ -14,6 +14,8 @@ guard, decision 8, which was NOT the session's recommendation; and "Continue, st
 plan five times, and the guard's plan twice, before any code (ADR-0168, decision 7); the
 reviews and the plans are kept outside the repository and none has a committed record.
 
+Superseded in part by ADR-0189 (2026-11-05): decision 6's clauses that the fetch inside the lock is not bounded and that nothing renews twice, and the rejected alternative of a time bound on the fetch. Decision 7 stands.
+
 **Supersedes**, without editing them (`docs/README.md`: "superseded never edited"):
 
 - ADR-0131, Consequences, first bullet ("Two tabs still invalidate each other's token"): for open
