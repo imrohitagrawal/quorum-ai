@@ -2,7 +2,7 @@
 
 Listed before the design (`.agents/skills/work-item-delivery/SKILL.md`: sign-in and session work). The decision is ADR-0189.
 
-"Design" means the design handles it, with a test in `e2e/tests/signed-in/start-up-limit.spec.ts` or `start-up-limit-review.spec.ts`. "Accepted" means it is a stated risk in ADR-0189. "Unchanged" means the behaviour was already so.
+"Design" means the design handles it, with a test in `e2e/tests/signed-in/start-up-limit-retries.spec.ts`, `start-up-limit-notice-and-card.spec.ts` or `start-up-limit-recovery.spec.ts`. "Accepted" means it is a stated risk in ADR-0189. "Unchanged" means the behaviour was already so.
 
 | # | Area | How it fails | What the person sees | Outcome |
 |---|---|---|---|---|

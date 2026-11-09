@@ -550,8 +550,9 @@ jobs:
           tests/signed-in/tabs-drawn-identity.spec.ts
           tests/signed-in/store-unchecked.spec.ts
           tests/signed-in/early-click.spec.ts
-          tests/signed-in/start-up-limit.spec.ts
-          tests/signed-in/start-up-limit-review.spec.ts
+          tests/signed-in/start-up-limit-retries.spec.ts
+          tests/signed-in/start-up-limit-notice-and-card.spec.ts
+          tests/signed-in/start-up-limit-recovery.spec.ts
           --config=playwright.signed-in.config.ts
           --project=chromium
           --retries=0
@@ -621,7 +622,12 @@ jobs:
       # keeps the models chosen and the simulated-output notice; a sign-in does not
       # wait for the model list); the lane counts 157. 157 -> 158 (W140 third
       # pass): an email field keeps the keyboard through the card; the lane
-      # counts 158.
+      # counts 158. Still 158 (W140, before merge): those two specs were
+      # regrouped by topic into start-up-limit-retries.spec.ts (24 tests),
+      # start-up-limit-notice-and-card.spec.ts (33) and
+      # start-up-limit-recovery.spec.ts (18), with their shared helpers in
+      # e2e/fixtures/start-up-limit.ts. The same 75 tests, titles and steps
+      # unchanged; `playwright test --list` on the lane counts 158.
       - name: "signed-in History lane: floor on tests actually executed"
         run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 158 --lane "signed-in History lane"
 
