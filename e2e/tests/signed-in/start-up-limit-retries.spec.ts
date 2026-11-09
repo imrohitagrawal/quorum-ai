@@ -561,7 +561,7 @@ test.describe("the start-up limit, review round 1 (W140)", () => {
 
   test("start-up fine and the readiness read fails: the operator's toast is still shown", async ({ page }) => {
     // RED-IF the toast is held back for good, not only beside the unreachable
-    // card. The positive partner of the other spec's check that it is absent
+    // card. The positive partner of this file's check that it is absent
     // there. Partner of this one: the readiness read really was refused.
     await page.setViewportSize(DESKTOP);
     const ready = await answering(page, READY, [], "refuse");

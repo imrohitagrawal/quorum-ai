@@ -384,7 +384,7 @@ test.describe("the start-up limit, review round 1 (W140)", () => {
 
   test('typing while "Try again" runs out: focus stays in the box and every character lands', async ({ page }) => {
     // RED-IF a failed "Try again" shows the card with focus, by whatever route
-    // it reaches it. The other spec tests typing only at boot's failure.
+    // it reaches it. The tests above cover typing only at boot's failure.
     // Partner: the card did arrive, mid-sentence.
     await page.setViewportSize(PHONE);
     const session = await atTheCard(page);
