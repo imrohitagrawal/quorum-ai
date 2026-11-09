@@ -1,7 +1,7 @@
 # Session Handoff
 
 ## Date/time
-2026-10-29T23:09:38+05:30
+2026-11-09T09:50:41-06:00
 
 ## Open work
 `docs/65-open-work.md` — the source of truth for what is open, what blocks what,
@@ -11,32 +11,40 @@ line further down this file is the factory router's view of the lifecycle, not a
 work status.
 
 ## Latest narrative handoff
-`docs/analysis/2026-10-29-session-handoff-2.md` — read this for full context before editing. (today)
+`docs/analysis/2026-11-09-session-handoff.md` — read this for full context before editing. (today)
 
 This file is a mechanical snapshot (branch/git-status/skill-route/live state) —
 regenerated fresh every `make handoff`. The narrative above (what happened,
 what's next, the traps) lives in the dated doc it points to, not here.
 
 ## Current branch/worktree
-docs/handoff-2026-10-29-2
+docs/handoff-2026-11-09
 
 ## Live state (measured fresh by this run, not hand-carried)
 Run `make handoff` again for current numbers instead of trusting this file
 once it ages -- every value below is read from git/gh/`/status` at
 generation time, per #134.
 
-- **`origin/main` tip:** `e52646e0082d`
-- **Last commit touching `src/`:** `e6d5300e955f`
-- **Production vs. last `src/` commit:** production build_sha e52646e is in sync: it is `origin/main`'s tip, which holds the last src/ commit e6d5300
-- **pytest collected (no execution):** 8438
-- **e2e lane spec counts:** invariants: 27, ops: 2, degraded: 1
+- **`origin/main` tip:** `94cfd2ae1bf0`
+- **Last commit touching `src/`:** `94cfd2ae1bf0`
+- **Production vs. last `src/` commit:** production build_sha 94cfd2a is in sync with last src/ commit
+- **pytest collected (no execution):** unavailable: could not parse a collected-count summary line from: 'unavailable: error: Failed to spawn: `pytest`\n  Caused by: No such file or directory (os error 2)'
+- **e2e lane spec counts:** invariants: 28, ops: 2, degraded: 1
 - **Open issues:** 2
 - **Changed-lines coverage:** not computed here -- `make diff-cover` shares
   coverage data with every pytest-invoking target and races with them if run
   concurrently (AGENTS.md rule 15), so this file does not run it. Run
   `make quality && make diff-cover DIFF_BASE=origin/main` for a current number.
 - **Remote branches not merged into `origin/main`:**
-- `w118/hygiene-files`
+- `dependabot/github_actions/actions/checkout-7.0.1`
+- `dependabot/github_actions/actions/setup-node-7.1.0`
+- `dependabot/github_actions/actions/setup-python-7.1.0`
+- `dependabot/github_actions/actions/upload-artifact-7.0.2`
+- `dependabot/github_actions/astral-sh/setup-uv-10.3.2`
+- `dependabot/npm_and_yarn/e2e/e2e-7d5c8b5c19`
+- `dependabot/uv/python-88b4e5b089`
+- `dependabot/uv/sentry-sdk-fastapi--gte-2.73.0-and-lt-3.0`
+- `dependabot/uv/uvicorn-standard--gte-0.54.0-and-lt-1.0`
 
 ## Product readiness
 `docs/product-readiness.md`, regenerated from production's `/status` and `/ready` by this run (`make readiness`):
@@ -44,7 +52,7 @@ product readiness: verdict Not ready, written to docs/product-readiness.md
 
 ## Board and GitHub
 From `make board-github-check`: DONE rows whose issue is still open, and open issues no row cites.
-board vs GitHub: 118 board rows, 2 open issues
+board vs GitHub: 142 board rows, 2 open issues
   the board and GitHub agree
 
 ## Root prompt check
@@ -54,9 +62,9 @@ Prompt write hook: not installed in `.claude/settings.json`; run `.venv/bin/pyth
 ## Parked work and branches
 From `make parked-check`:
 ```text
-Parked work check: 6 remote branches, 4 open pull requests, 6 Parked lines, 1 branches with no open pull request, 0 Parked items due
+Parked work check: 10 remote branches, 9 open pull requests, 6 Parked lines, 0 branches with no open pull request, 0 Parked items due
 Remote branches with no open pull request (merge, park or delete each):
-  - w118/hygiene-files
+  - none
 Parked items whose resume-when has come (resume, re-park or close each):
   - none
 PASSED
@@ -65,7 +73,7 @@ PASSED
 ## Next session
 Paste this line to start the next session:
 ```text
-Read CONTINUE-GUARD-HYGIENE-FLAKES-W117-W118-W121-W62-PROMPT.md in the repo root and follow it exactly.
+Read CONTINUE-DEPS-W136-W141-W117-PROMPT.md in the repo root and follow it exactly.
 ```
 
 ## Leftovers
@@ -73,10 +81,10 @@ From `make session-clean`, which reports and never deletes.
 ```text
 Feature branches and worktrees:
 - `worktree ~/Projects/quorum-ai-handoff` — remove with 'git worktree remove' once its branch is merged
-- `worktree ~/Projects/quorum-ai-w113` — remove with 'git worktree remove' once its branch is merged
-- `worktree ~/Projects/quorum-ai-w118` — remove with 'git worktree remove' once its branch is merged
-- `worktree ~/Projects/quorum-ai-w873f` — remove with 'git worktree remove' once its branch is merged
-- `branch w118/hygiene-files` — content already on refs/remotes/origin/main, squash-aware; CHECKED OUT at ~/Projects/quorum-ai-w118 -- remove that worktree first. Delete by hand: git branch -D -- w118/hygiene-files
+- `worktree ~/Projects/quorum-ai-setupuv` — remove with 'git worktree remove' once its branch is merged
+
+Containers and images:
+- `image quorum-ai:local` — built by this repo. Remove by name: docker image rm quorum-ai:local
 ```
 
 ## Current phase
@@ -134,16 +142,14 @@ Operate, learn, and improve
 
 ## Git status
 ```text
-M docs/65-open-work.md
-R  CONTINUE-PUBLIC-CONTENT-W117-W118-PROMPT.md -> docs/archive/2026-10/CONTINUE-PUBLIC-CONTENT-W117-W118-PROMPT.md
-?? CONTINUE-GUARD-HYGIENE-FLAKES-W117-W118-W121-W62-PROMPT.md
-?? docs/analysis/2026-10-29-session-handoff-2.md
+R  CONTINUE-GUARD-HYGIENE-FLAKES-W117-W118-W121-W62-PROMPT.md -> docs/archive/2026-11/CONTINUE-GUARD-HYGIENE-FLAKES-W117-W118-W121-W62-PROMPT.md
+?? CONTINUE-DEPS-W136-W141-W117-PROMPT.md
+?? docs/analysis/2026-11-09-session-handoff.md
 ```
 
 ## Diff stat
 ```text
-docs/65-open-work.md | 4 ++--
- 1 file changed, 2 insertions(+), 2 deletions(-)
+no unstaged diff
 ```
 
 ## Completed in this session
