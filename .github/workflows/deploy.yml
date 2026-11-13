@@ -161,7 +161,7 @@ jobs:
           echo "triggering_conclusion=${TRIGGER_CONCLUSION:-(none)}"
           echo "triggering_event=${TRIGGER_EVENT:-(none)}"
           echo "head_sha=${TRIGGER_SHA:-$DISPATCH_SHA}"
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           # Same pin as the deploy job's checkout: for a dispatch, github.sha
@@ -219,7 +219,7 @@ jobs:
     environment: production
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           # For a workflow_run trigger, check out the EXACT commit that passed
