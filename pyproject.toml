@@ -18,7 +18,7 @@ dependencies = [
   # boots without SENTRY_DSN set (it's a no-op). When the DSN is
   # present, exceptions and performance traces are reported to
   # the Sentry project configured for this deployment.
-  "sentry-sdk[fastapi]>=2.0.0,<3.0",
+  "sentry-sdk[fastapi]>=2.73.0,<3.0",
   "prometheus-fastapi-instrumentator>=8.0.2",
   # CommonMark parsing for the Layer-A citation-marker scan
   # (`evaluation._prose_only`). A RUNTIME dependency deliberately, not a
