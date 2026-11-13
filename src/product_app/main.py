@@ -318,10 +318,20 @@ def _redact_sentry_transaction(event: SentryEvent, _hint: dict[str, Any]) -> Sen
 def _drop_sentry_metric(_metric: dict[str, Any], _hint: dict[str, Any]) -> None:
     """Drop every Sentry metric (``trace_metric`` item) before it is sent.
 
-    ``enable_metrics=False`` alone is not enough: sentry-sdk 2.72.0, which the
-    image built from the Dockerfile installs (W56 review round 3), ignores that
-    option and sends metrics anyway. Returning ``None`` drops them on every
-    version.
+    ``enable_metrics=False`` alone is not enough: sentry-sdk 2.72.0 and later
+    (2.73.0 is locked today) ignore that option and send metrics anyway.
+    Returning ``None`` drops them on every version.
+    """
+    return None
+
+
+def _drop_sentry_log(_log: dict[str, Any], _hint: dict[str, Any]) -> None:
+    """Drop every Sentry log (``log`` item) before it is sent.
+
+    ``enable_logs=False`` alone is not enough: sentry-sdk 2.73.0 sends a line
+    written through ``sentry_sdk.logger`` whatever ``enable_logs`` says, and a
+    ``log`` item passes through neither event hook. Returning ``None`` drops
+    every log on every version.
     """
     return None
 
@@ -384,6 +394,10 @@ def _sentry_options() -> dict[str, Any]:
         # when ``_experiments["enable_logs"]`` is true, so the off switch is
         # written here and a test pins both switches.
         enable_logs=False,
+        # sentry-sdk 2.73.0 no longer checks ``enable_logs`` for lines written
+        # through ``sentry_sdk.logger``, so this hook drops every log whatever
+        # the switches say, as ``before_send_metric`` does for metrics.
+        before_send_log=_drop_sentry_log,
     )
 
 
