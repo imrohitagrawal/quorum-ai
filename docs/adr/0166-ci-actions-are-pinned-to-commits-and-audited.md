@@ -207,3 +207,16 @@ a pending review, was not tested either (the environment has no reviewers or wai
 `production`, and every workflow job that reads `FLY_API_TOKEN` to name it too; today that is
 the `deploy` job alone, with 3 uses. The first deploy after this merge is the test that the
 environment's token works.
+
+## Update, 2026-11-13: `setup-uv` now checks the uv download
+
+The limitation above about `setup-uv` at `d4b2f3b` no longer applies. W126 moved every
+`setup-uv` step to v10.3.3 (`68559e9`). That version downloads uv from Astral's mirror by
+default and checks the bytes before using them. It takes the expected checksum from, in order:
+a `checksum:` input (this repository sets none), the list built into the action
+(`known-checksums.json` at that commit), then the checksum in the version list it fetches from
+Astral at run time. The built-in list has an entry for uv 0.13.0 on `x86_64-unknown-linux-gnu`,
+and that entry equals the `.sha256` file uv publishes with the 0.13.0 release, so the version
+pinned today is checked against a value fixed in the pinned commit. A later uv version that the
+built-in list does not yet have is still checked, but against the run-time list, which comes
+from the same supplier as the download and so is the weaker check.
