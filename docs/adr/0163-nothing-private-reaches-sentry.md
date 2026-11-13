@@ -240,6 +240,11 @@ update. The failure modes checked for the move are in
   `data_collection` is not set, the library derives it from `send_default_pii=False`, so the
   request's headers, cookies and address are handled as before; the header and key tests above
   pass on 2.73.0. `data_collection` can also be switched on through `_experiments`, a second
-  switch like the one `enable_logs` had. Neither is set here.
+  switch like the one `enable_logs` has. Neither is set here.
+- **Two more channels skip every hook, on both versions: attachments and session attributes.**
+  An attachment added with `scope.add_attachment`, and a session started after `set_user`, carry
+  what the caller put in them past both hooks. Nothing in `src/` calls `add_attachment`,
+  `set_user`, `start_session` or `sentry_sdk.logger`, so neither channel is used today; a change
+  that adds such a call must add its own scrub and a test.
 - **Unchanged.** Span streaming stays off (no `trace_lifecycle`), metrics are still dropped by
   their hook, and the envelope still carries no `trace` header.
