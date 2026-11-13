@@ -36,7 +36,7 @@ jobs:
     # (3300s) cover 45.
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # W69 (zizmor artipacked): no job in this file pushes, and fetching
           # from this public repository needs no credentials, so the token is
@@ -149,7 +149,7 @@ jobs:
     # ADR-0157: it had no limit, so GitHub's 360-min default applied, unseen by the gate check; it takes about 7 s.
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
@@ -178,7 +178,7 @@ jobs:
       OPENROUTER_LIVE_EXECUTION_ENABLED: "false"
       QUORUM_RUNTIME_ENVIRONMENT: "ci"
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
@@ -235,7 +235,7 @@ jobs:
       OPENROUTER_LIVE_EXECUTION_ENABLED: "false"
       QUORUM_RUNTIME_ENVIRONMENT: "ci"
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
@@ -264,7 +264,7 @@ jobs:
       OPENROUTER_LIVE_EXECUTION_ENABLED: "false"
       QUORUM_RUNTIME_ENVIRONMENT: "ci"
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           # diff-cover diffs against the merge-base with the PR base branch, so
@@ -403,7 +403,7 @@ jobs:
       # project into ./mutants/ and re-runs the suite hundreds of times.
       SENTRY_DSN: ""
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           fetch-depth: 0
