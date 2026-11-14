@@ -1,7 +1,7 @@
 # Session Handoff
 
 ## Date/time
-2026-11-09T10:42:39-06:00
+2026-11-13T20:14:41-06:00
 
 ## Open work
 `docs/65-open-work.md` — the source of truth for what is open, what blocks what,
@@ -11,24 +11,24 @@ line further down this file is the factory router's view of the lifecycle, not a
 work status.
 
 ## Latest narrative handoff
-`docs/analysis/2026-11-09-session-handoff.md` — read this for full context before editing. (today)
+`docs/analysis/2026-11-13-session-handoff.md` — read this for full context before editing. (today)
 
 This file is a mechanical snapshot (branch/git-status/skill-route/live state) —
 regenerated fresh every `make handoff`. The narrative above (what happened,
 what's next, the traps) lives in the dated doc it points to, not here.
 
 ## Current branch/worktree
-docs/handoff-2026-11-09
+docs/handoff-2026-11-13
 
 ## Live state (measured fresh by this run, not hand-carried)
 Run `make handoff` again for current numbers instead of trusting this file
 once it ages -- every value below is read from git/gh/`/status` at
 generation time, per #134.
 
-- **`origin/main` tip:** `850e355ca098`
-- **Last commit touching `src/`:** `94cfd2ae1bf0`
-- **Production vs. last `src/` commit:** production build_sha 94cfd2a is in sync with last src/ commit
-- **pytest collected (no execution):** 8471
+- **`origin/main` tip:** `e2cf4ad361bc`
+- **Last commit touching `src/`:** `29135116ef71`
+- **Production vs. last `src/` commit:** production build_sha e2cf4ad is in sync: it is `origin/main`'s tip, which holds the last src/ commit 2913511
+- **pytest collected (no execution):** 8474
 - **e2e lane spec counts:** invariants: 28, ops: 2, degraded: 1
 - **Open issues:** 2
 - **Changed-lines coverage:** not computed here -- `make diff-cover` shares
@@ -43,6 +43,7 @@ generation time, per #134.
 - `dependabot/github_actions/astral-sh/setup-uv-10.3.2`
 - `dependabot/npm_and_yarn/e2e/e2e-7d5c8b5c19`
 - `dependabot/uv/python-88b4e5b089`
+- `dependabot/uv/python-f4752791c6`
 - `dependabot/uv/sentry-sdk-fastapi--gte-2.73.0-and-lt-3.0`
 - `dependabot/uv/uvicorn-standard--gte-0.54.0-and-lt-1.0`
 
@@ -52,7 +53,7 @@ product readiness: verdict Not ready, written to docs/product-readiness.md
 
 ## Board and GitHub
 From `make board-github-check`: DONE rows whose issue is still open, and open issues no row cites.
-board vs GitHub: 142 board rows, 2 open issues
+board vs GitHub: 143 board rows, 2 open issues
   the board and GitHub agree
 
 ## Root prompt check
@@ -62,9 +63,12 @@ Prompt write hook: not installed in `.claude/settings.json`; run `.venv/bin/pyth
 ## Parked work and branches
 From `make parked-check`:
 ```text
-Parked work check: 10 remote branches, 9 open pull requests, 6 Parked lines, 0 branches with no open pull request, 0 Parked items due
+Parked work check: 7 remote branches, 2 open pull requests, 6 Parked lines, 4 branches with no open pull request, 0 Parked items due
 Remote branches with no open pull request (merge, park or delete each):
-  - none
+  - dependabot/github_actions/actions/upload-artifact-7.0.2
+  - dependabot/github_actions/astral-sh/setup-uv-10.3.2
+  - dependabot/uv/sentry-sdk-fastapi--gte-2.73.0-and-lt-3.0
+  - dependabot/uv/uvicorn-standard--gte-0.54.0-and-lt-1.0
 Parked items whose resume-when has come (resume, re-park or close each):
   - none
 PASSED
@@ -73,7 +77,7 @@ PASSED
 ## Next session
 Paste this line to start the next session:
 ```text
-Read CONTINUE-DEPS-W136-W141-W117-PROMPT.md in the repo root and follow it exactly.
+Read CONTINUE-DEPS-REST-W136-W141-W117-PROMPT.md in the repo root and follow it exactly.
 ```
 
 ## Leftovers
@@ -81,7 +85,6 @@ From `make session-clean`, which reports and never deletes.
 ```text
 Feature branches and worktrees:
 - `worktree ~/Projects/quorum-ai-handoff` — remove with 'git worktree remove' once its branch is merged
-- `worktree ~/Projects/quorum-ai-setupuv` — remove with 'git worktree remove' once its branch is merged
 
 Containers and images:
 - `image quorum-ai:local` — built by this repo. Remove by name: docker image rm quorum-ai:local
@@ -142,15 +145,12 @@ Operate, learn, and improve
 
 ## Git status
 ```text
-M CONTINUE-DEPS-W136-W141-W117-PROMPT.md
- M docs/analysis/2026-11-09-session-handoff.md
+clean
 ```
 
 ## Diff stat
 ```text
-CONTINUE-DEPS-W136-W141-W117-PROMPT.md      |  2 +-
- docs/analysis/2026-11-09-session-handoff.md | 21 +++++++++++++++------
- 2 files changed, 16 insertions(+), 7 deletions(-)
+no unstaged diff
 ```
 
 ## Completed in this session
