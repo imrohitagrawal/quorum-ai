@@ -218,3 +218,35 @@ This record changes three earlier statements without editing their bodies:
   test here.
 - **`docs/48-data-retention.md` has no gate.** A false sentence re-added there, or a citation
   of a CHG row that does not exist, passes every check. This predates W56 and is advisory.
+
+## Update, 2026-11-13: sentry-sdk 2.73.0 and a fourth guard for logs
+
+The lock moved sentry-sdk from 2.63.0 to 2.73.0, which production installs (ADR-0164). The tests
+now run on 2.73.0; the sentence above that they run on 2.63.0 describes the tree before this
+update. The failure modes checked for the move are in
+`docs/analysis/2026-11-13-sentry-sdk-2-73-failure-modes.md`.
+
+- **Logs: `enable_logs=False` no longer covers every path.** In 2.63.0 a line written through
+  `sentry_sdk.logger` was dropped when logs were off. In 2.73.0 that path no longer checks the
+  switch: a line holding a key reached the transport as a `log` item, through neither event
+  hook. Nothing in `src/` calls `sentry_sdk.logger` today, so nothing private was sent, but the
+  promise of this record would have held only by accident. Decision 1 gains a fourth guard:
+  `_sentry_options()` passes `before_send_log=_drop_sentry_log`, a hook that returns `None` for
+  every log, the same pattern as `before_send_metric`. Two tests in
+  `tests/security/test_w56_regressions.py` pin it, one by driving `sentry_sdk.logger` and
+  counting `log` items.
+- **`data_collection` and `send_default_pii`.** 2.73.0 adds a `data_collection` option that
+  supersedes `send_default_pii`, and warns that `send_default_pii` is deprecated. When
+  `data_collection` is not set, the library derives it from `send_default_pii=False`, so the
+  request's headers, cookies and address are handled as before; the header and key tests above
+  pass on 2.73.0. `data_collection` can also be switched on through `_experiments`, a second
+  switch like the one `enable_logs` has. Neither is set here.
+- **Two more channels are not scrubbed, on both versions: attachments and session
+  attributes.** An attachment added with `scope.add_attachment` reaches `before_send` only in
+  the hook's `hint`, which `_redact_sentry_event` ignores, so its contents are sent as they are.
+  A session started after `set_user` carries the user's values in a `session` item that runs no
+  hook at all. Nothing in `src/` calls `add_attachment`, `set_user`, `start_session` or
+  `sentry_sdk.logger`, so neither channel is used today; a change that adds such a call must add
+  its own scrub and a test.
+- **Unchanged.** Span streaming stays off (no `trace_lifecycle`), metrics are still dropped by
+  their hook, and the envelope still carries no `trace` header.

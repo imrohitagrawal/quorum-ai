@@ -250,6 +250,71 @@ def test_the_metric_hook_drops_metrics_even_when_metrics_are_on() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Logs sent through sentry_sdk.logger skip both hooks
+# ---------------------------------------------------------------------------
+
+
+def test_a_sentry_logger_call_produces_no_log_item(envelopes: _Envelopes) -> None:
+    """A log line written through ``sentry_sdk.logger`` must not leave the process.
+
+    sentry-sdk 2.63.0 dropped such a line when ``enable_logs`` was off; 2.73.0
+    no longer checks that switch on this path and sends a ``log`` item, which
+    runs ``before_send_log`` and neither event hook.
+
+    Red when: ``_sentry_options()`` stops passing
+    ``before_send_log=_drop_sentry_log``, or that hook returns the log, on a
+    sentry-sdk that sends ``sentry_sdk.logger`` lines whatever ``enable_logs``
+    says (2.73.0 does).
+    """
+    sentry_sdk.logger.info("w56r logger line {detail}", detail=KEY)
+    sentry_sdk.capture_message("w56r logger partner")
+
+    types = envelopes.item_types()
+    assert "log" not in types, types
+    assert KEY not in envelopes.wire()
+    # Partner: the transport is live and saw the message sent beside the log.
+    assert [e.get("message") for e in envelopes.items("event")] == ["w56r logger partner"]
+
+
+def test_without_the_log_hook_a_sentry_logger_call_does_send_a_log_item() -> None:
+    """Partner: on the locked sentry-sdk, the logger path really can send.
+
+    Without this, the test above would pass over nothing on a version whose
+    ``sentry_sdk.logger`` sends no item at all (2.63.0 is one).
+
+    Red when: the locked sentry-sdk stops sending ``sentry_sdk.logger`` lines
+    as ``log`` items with ``enable_logs=False``, so the test above no longer
+    proves the hook does anything (re-read ADR-0163's update of 2026-11-13).
+    """
+    options = {k: v for k, v in main._sentry_options().items() if k != "before_send_log"}
+    transport = _EnvelopeTransport()
+    with sentry_sdk.isolation_scope():
+        sentry_sdk.init(dsn=FAKE_DSN, transport=transport, **options)
+        try:
+            sentry_sdk.logger.info("w56r logger partner line {detail}", detail=KEY)
+            got = _Envelopes(transport)
+            assert got.item_types().count("log") == 1, got.item_types()
+            assert KEY in got.wire()
+        finally:
+            client = sentry_sdk.get_client()
+            client.flush(timeout=5)
+            client.close()
+            sentry_sdk.get_global_scope().set_client(None)
+
+
+def test_the_log_hook_is_passed_and_drops_every_log() -> None:
+    """The options carry the log hook, and the hook returns ``None``.
+
+    Red when: ``_sentry_options()`` stops passing
+    ``before_send_log=_drop_sentry_log``, or the hook returns its argument.
+    """
+    options = main._sentry_options()
+    assert options["before_send_log"] is main._drop_sentry_log
+    sample = {"severity_text": "info", "body": "w56r", "attributes": {}}
+    assert main._drop_sentry_log(sample, {}) is None
+
+
+# ---------------------------------------------------------------------------
 # Finding 3: the real ceiling alert, inside a request from the visitor's address
 # ---------------------------------------------------------------------------
 
