@@ -40,7 +40,8 @@ on each with the `Dockerfile`'s flags.
 - Item 2 did not happen. Every flag in the `CMD` exists in 0.54.0; the built image starts and
   `/ready` answers 200.
 - Item 3: keep-alive handling changed in small ways (h11 stops its keep-alive timer sooner
-  between back-to-back requests; httptools reads a `Connection` header with several values).
+  between back-to-back requests; httptools now reads every value of the app's `Connection`
+  response header, and asks its parser whether the request allows keep-alive).
   Both timeout flags still exist under the same names; no long run was streamed across a
   deploy to compare timing.
 - Item 4 did not happen. The three ADR-0171 behaviours hold on 0.54.0 as on 0.49.0, checked by
