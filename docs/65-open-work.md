@@ -6,7 +6,7 @@ original, because a gate and an offline agent can read it and cannot read `gh`.
 
 Verified at: `e6d5300e955fb25cf1c523b3c967953f31bc04f2`
 
-The board holds **142** rows, **78** of them unpinned.
+The board holds **143** rows, **79** of them unpinned.
 
 `scripts/check_open_work.py --check` reads every row's evidence off disk and
 refuses if a claim is false. It runs inside `make validate`, and
@@ -238,6 +238,7 @@ caught by any automated check and 10 of 16 by adversarial review
 | W143 | On load, check for a running run and reopen it (CHG-112). First check how the page before W127 behaved | UNPINNED | `—` | — | — |
 | W144 | Browser coverage and failure evidence (CHG-112): video kept on failure in the signed-in lane, which keeps a trace and a screenshot only; an advisory WebKit lane (desktop Safari and iPhone 13) on the main user journeys; and, in the same change, what makes it blocking, measured in clean runs. One pull request | UNPINNED | `—` | — | — |
 | W145 | Left by W140 (ADR-0189): a write made after the session answered has no time limit, so on a dead connection a sign-in click can hang with its button disabled; "Try again" followed by an HTTP failure still reloads the page and loses a typed question (`store-unchecked.spec.ts` depends on that reload); a Stop pressed while "Start a session" waits for an unanswered session request is held up to 30 s; "Refresh session" reloads and empties a typed question, as before W140; after "Start a session" gets no answer on a working page, "Disconnected" stays on screen through a finished run; a page drawn for another identity reloads on "Try again" even on a dead connection; the fixed line overlaps "How it works" by a few pixels at 1440 px and clips at 320 px with 200% text; the cold-start time of a stopped machine, still unmeasured (ADR-0189); and the comments at `config.py` and `costs.py` that state the session limiter as 30 a minute, where `query_runs.py` sets 10 | UNPINNED | `—` | — | — |
+| W146 | Two Sentry test files interfere out of order: `tests/unit/test_sentry_init.py` run before `test_reentrant_logging_does_not_recurse_through_redaction` leaves a Sentry client attached, and the second then fails (sentry-sdk 2.73.0) or hangs (2.63.0). The default order runs them the other way round, so the suite passes | UNPINNED | `—` | — | — |
 
 **STOP** marks a row that cannot be finished without a human decision — a money,
 cost or safety guardrail value that only real measurement could justify. Do not
