@@ -11,6 +11,7 @@ defaults that the auth layer refuses to bypass.
 
 from __future__ import annotations
 
+import logging
 import math
 import os
 from enum import StrEnum
@@ -18,6 +19,11 @@ from typing import Annotated, Any, ClassVar
 
 from pydantic import BeforeValidator, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# pydantic-settings 2.16 dumps every settings source value, secrets included,
+# at DEBUG when PYDANTIC_SETTINGS_DEBUG is set; this pin keeps that dump off
+# whatever the environment says (ADR-0190).
+logging.getLogger("pydantic_settings").setLevel(logging.WARNING)
 
 
 class RuntimeEnvironment(StrEnum):

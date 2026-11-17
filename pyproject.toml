@@ -19,7 +19,10 @@ dependencies = [
   # present, exceptions and performance traces are reported to
   # the Sentry project configured for this deployment.
   "sentry-sdk[fastapi]>=2.73.0,<3.0",
-  "prometheus-fastapi-instrumentator>=8.0.2",
+  # Held below 8.1: 8.1.0 labels a redirected (trailing-slash) request by
+  # its raw path in /metrics, so every probe path becomes its own label.
+  # ADR-0190.
+  "prometheus-fastapi-instrumentator>=8.0.2,<8.1",
   # CommonMark parsing for the Layer-A citation-marker scan
   # (`evaluation._prose_only`). A RUNTIME dependency deliberately, not a
   # test-only one: the grounding score must decide "is this bracket a
