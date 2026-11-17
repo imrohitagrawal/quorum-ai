@@ -17,6 +17,10 @@ updates:
     groups:
       python:
         patterns: ["*"]
+        # Held below 8.1 in pyproject.toml (ADR-0190). Kept out of the group
+        # so its update arrives as its own pull request instead of holding
+        # every other Python update back with it.
+        exclude-patterns: ["prometheus-fastapi-instrumentator"]
         update-types: ["minor", "patch"]
   - package-ecosystem: "npm"
     directory: "/e2e"

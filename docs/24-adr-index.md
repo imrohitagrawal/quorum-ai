@@ -191,6 +191,7 @@ ways, so the record shows what was believed on a date and what replaced it.
 | [ADR-0187](adr/0187-the-workspace-shows-one-run-at-a-time.md) | The workspace shows one run at a time | Architecture | Accepted — 2026-10-30, board rows W127 and W49 |
 | [ADR-0188](adr/0188-a-click-while-the-workspace-is-still-starting-waits-for-the-start-up-it-needs.md) | A click while the workspace is still starting waits for the start-up it needs | Architecture | Accepted — 2026-10-31, board row W121 |
 | [ADR-0189](adr/0189-the-page-s-start-up-requests-have-a-time-limit-and-a-way-out.md) | The page's start-up requests have a time limit and a way out | Architecture | Accepted — 2026-11-05, board row W140 |
+| [ADR-0190](adr/0190-the-metrics-library-stays-below-8-1-and-the-settings-debug-dump-is-kept-off.md) | The metrics library stays below 8.1, and the settings library's debug dump is kept off | Architecture | Accepted — 2026-11-17, in the dependency updates that CHG-109 placed after the browser-lane fixes |
 
 **This index was itself stale** until 2026-07-30: ADR-0002 had existed since
 2026-07-19 and was never listed here. A hand-maintained index is a derived fact
