@@ -298,9 +298,9 @@ def scope(base: str, head: str) -> tuple[list[str], dict[str, int]]:
             be walked against the LAST file's changed lines/source (ruff
             B023).
 
-            `frozen` mirrors the Makefile: a DECORATED CLASS is skipped by
-            mutmut together with its whole subtree, so every method inside it
-            is unmutatable, decorated or not (e.g. every @dataclass).
+            `frozen` mirrors the Makefile. mutmut 3.8 recurses into a
+            DECORATED CLASS and skips only the decorator, so the methods of
+            e.g. a @dataclass stay in scope (3.6 skipped the whole subtree).
             """
             nonlocal skipped_count
             hits = 0
@@ -313,7 +313,7 @@ def scope(base: str, head: str) -> tuple[list[str], dict[str, int]]:
                         mod,
                         src,
                         child.name,
-                        frozen or bool(child.decorator_list),
+                        frozen,
                     )
                 elif isinstance(child, ast.FunctionDef | ast.AsyncFunctionDef):
                     span = set(range(child.lineno, (child.end_lineno or child.lineno) + 1))
