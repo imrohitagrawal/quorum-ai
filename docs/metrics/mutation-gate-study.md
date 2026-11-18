@@ -121,7 +121,7 @@ every `def`**: `config.py` is 75% module-level, `catalog_fetcher.py` 52%
 
 mutmut 3.6.0 skips decorated functions — **except** a single bare
 `@staticmethod` or `@classmethod`, which it does handle
-(`mutmut/mutation/file_mutation.py:230-235`, read). Of the **40** decorated
+(`mutmut/mutation/file_mutation.py:230-235` in mutmut 3.6, read; `:342-347` in 3.8). Of the **40** decorated
 functions under `src/product_app`, **34 are unmutatable** and 6 are fine.
 Probed live on `@property api_docs_enabled`:
 

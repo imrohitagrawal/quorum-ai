@@ -115,7 +115,8 @@ def variants() -> tuple[Callable[..., Any], dict[str, Callable[..., Any]]]:
     `pyproject.toml` — so what is executed here is what the gate would run.
     """
     source = MODULE_PATH.read_text(encoding="utf-8")
-    mutated, names = mutate_file_contents(str(MODULE_PATH), source)
+    mutated_file = mutate_file_contents(str(MODULE_PATH), source)
+    mutated, names = mutated_file.code, mutated_file.mutant_names
 
     original_ns: dict[str, Any] = {}
     exec(compile(source, str(MODULE_PATH), "exec"), original_ns)  # noqa: S102
