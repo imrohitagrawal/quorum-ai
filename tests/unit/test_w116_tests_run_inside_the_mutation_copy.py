@@ -450,16 +450,27 @@ def test_g1b_partner_a_planted_frame_read_is_flagged_and_a_thread_id_is_not() ->
 
 _HIT = (
     "import mutmut.mutation.trampoline\n"
-    "from mutmut.__main__ import record_trampoline_hit\n"
+    "from mutmut.stats import record_trampoline_hit\n"
     "record_trampoline_hit('product_app.x.x_f')\n"
     "print('HIT OK')\n"
 )
 _HIT_AFTER_CHDIR = (
     "import os, sys\n"
     "import mutmut.mutation.trampoline\n"
-    "from mutmut.__main__ import record_trampoline_hit\n"
+    "from mutmut.stats import record_trampoline_hit\n"
     "os.chdir(sys.argv[1])\n"
     "record_trampoline_hit('product_app.x.x_f')\n"
+    "print('HIT OK')\n"
+)
+
+
+_FIRST_HIT_THEN_CHDIR = (
+    "import os, sys\n"
+    "import mutmut.mutation.trampoline\n"
+    "from mutmut.stats import record_trampoline_hit\n"
+    "record_trampoline_hit('product_app.x.x_f')\n"
+    "os.chdir(sys.argv[1])\n"
+    "record_trampoline_hit('product_app.x.x_g')\n"
     "print('HIT OK')\n"
 )
 
@@ -513,24 +524,28 @@ def test_g2b_the_helper_makes_a_folder_mutmut_can_start_in(tmp_path: Path) -> No
     assert list((folder / "src").iterdir()) == []
 
 
-def test_g2c_mutmut_needs_src_again_at_every_hit(tmp_path: Path) -> None:
-    """Imported in a prepared folder, mutmut still resolves the RELATIVE
-    ``src`` at each recorded hit, so a later ``chdir`` to a bare folder fails
-    with ``FileNotFoundError: 'src'``; staying in the prepared folder works.
+def test_g2c_mutmut_needs_src_at_its_first_hit_only(tmp_path: Path) -> None:
+    """mutmut 3.8 reads its settings at the FIRST recorded hit and stores
+    ``src`` there as an absolute path: a ``chdir`` to a bare folder BEFORE the
+    first hit fails with "Could not figure out where the code to mutate is",
+    while a ``chdir`` AFTER a first hit in the prepared folder is harmless.
+    (mutmut 3.6 resolved the relative ``src`` again at every hit.) So G1a's
+    in-process ``chdir`` rule now guards a narrower hazard: a move made before
+    the process has recorded any hit.
 
-    Red when: a mutmut upgrade resolves ``source_paths`` once, absolutely (then
-    G1a's in-process ``chdir`` rule guards a hazard that is gone), or the
-    prepared-folder partner fails."""
+    Red when: a mutmut upgrade stops failing on a first hit in a bare folder
+    (then the in-process rule guards nothing), or starts failing a hit made
+    after a ``chdir`` that followed a first hit (the hazard widened again)."""
     prepared = tmp_path / "prepared"
     (prepared / "src").mkdir(parents=True)
     bare = tmp_path / "bare"
     bare.mkdir()
     done = _mutmut_child(_HIT_AFTER_CHDIR, prepared, str(bare))
     assert done.returncode != 0, done
-    assert "FileNotFoundError: [Errno 2] No such file or directory: 'src'" in done.stderr, (
-        done.stderr
-    )
+    assert "Could not figure out where the code to mutate is" in done.stderr, done.stderr
     done = _mutmut_child(_HIT_AFTER_CHDIR, prepared, str(prepared))
+    assert (done.returncode, done.stdout) == (0, "HIT OK\n"), done
+    done = _mutmut_child(_FIRST_HIT_THEN_CHDIR, prepared, str(bare))
     assert (done.returncode, done.stdout) == (0, "HIT OK\n"), done
 
 
