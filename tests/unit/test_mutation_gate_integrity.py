@@ -262,7 +262,7 @@ def test_an_entirely_untested_function_names_the_real_cause(
 # `{0: "survived", 33: "no_tests", 37: "type_check"}.get(code, "killed" if
 # code > 0 else "timeout")` — so ANY positive exit code not in that three-entry
 # dict scored as `killed`, and any negative one scored as `timeout`. Checked
-# against mutmut's own `status_by_exit_code` map (mutmut/__main__.py), five
+# against mutmut's own `status_by_exit_code` map (mutmut/stats.py), five
 # real codes fell through: pytest's NO_TESTS_COLLECTED (5, mutmut's OWN second
 # no-tests code alongside 33), pytest's USAGE_ERROR (4), mutmut's other timeout
 # codes (24/36/152/255 — this file already covers -24), mutmut's `skipped` (34,
@@ -650,7 +650,7 @@ def test_only_the_unmutatable_functions_are_dropped(scope_script: Path, tmp_path
     """Positive partner: the exclusion must not swallow mutatable functions.
 
     A bare @staticmethod IS mutated by mutmut
-    (mutmut/mutation/file_mutation.py:230-235), so it must stay in scope — and
+    (mutmut/mutation/file_mutation.py:342-347), so it must stay in scope — and
     an undecorated function obviously must. Without this, the two assertions
     above are equally satisfied by a scope() that drops everything.
 
@@ -682,35 +682,28 @@ class Session:
 DATACLASS_AFTER = DATACLASS_BEFORE.replace("return 1", "return 2")
 
 
-def test_a_decorated_class_hides_every_method_it_contains(
+def test_a_decorated_class_keeps_its_undecorated_methods_in_scope(
     scope_script: Path, tmp_path: Path
 ) -> None:
-    """A DECORATED CLASS is skipped by mutmut together with its whole subtree.
+    """A DECORATED CLASS is recursed into by mutmut 3.8: only the decorator
+    itself is skipped (`file_mutation.py:349-354`, "A decorated class is still
+    recursed into"), so an undecorated method of a `@dataclass` gets mutants and
+    must stay in scope. mutmut 3.6 skipped the whole class subtree, and the
+    scope then had to leave such methods out (#136).
 
-    `file_mutation.py:236-237` returns True from `_skip_node_and_children` for a
-    decorated ClassDef, and `on_visit` then stops descending — so every method
-    inside is unmutatable, decorated or not. Every `@dataclass` is this shape.
-
-    Missing this left #136 reachable from four real functions on main
-    (`auth._Session.is_expired`, two `RunEvaluationResult` properties,
-    `feedback_audit.Finding.to_markdown`) — a PR touching only session expiry
-    would still have aborted with the misleading also_copy message. Found by
-    adversarial review; the first fix only handled decorated FUNCTIONS.
-
-    Turns red if: `walk()` stops propagating the enclosing class's decorators
-    to its methods.
+    Turns red if: `walk()` propagates the enclosing class's decorators to its
+    methods again, which would leave mutatable methods out of the score while
+    reporting them as decorated.
     """
     repo = _repo_with(tmp_path, DATACLASS_BEFORE, DATACLASS_AFTER)
     result = _run(scope_script, repo, "scope", "HEAD", "80")
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert result.stdout == "", (
-        "an undecorated method of a @dataclass was scoped; mutmut skips the "
-        f"whole class subtree, so the glob matches nothing: {result.stdout!r}"
+    assert "is_expired" in result.stdout, (
+        "an undecorated method of a @dataclass was left out of scope; mutmut 3.8 "
+        f"mutates it:\nstdout={result.stdout!r}\nstderr={result.stderr!r}"
     )
-    assert "pkg.thing.is_expired" in result.stderr, (
-        f"the exclusion must name the method:\n{result.stderr}"
-    )
+    assert "pkg.thing.is_expired [decorated]" not in result.stderr, result.stderr
 
 
 UNDECORATED_CLASS_BEFORE = """\
@@ -1507,11 +1500,11 @@ def test_the_scope_names_the_tests_that_will_be_the_oracles(
     companion pattern. Verified by deleting that `globs.append` line —
     `assert set() == {'pkg_tests/test_value.py::test_one'}`.
     """
-    import mutmut
     from mutmut.__main__ import tests_for_mutant_names
+    from mutmut.state import state
 
     patterns = _scope_patterns(scope_script, tmp_path)
-    associations = mutmut.tests_by_mangled_function_name
+    associations = state().tests_by_mangled_function_name
     assert not set(SYNTHETIC_ASSOCIATIONS) & set(associations), (
         "a synthetic key collides with a real recorded one; the assertion "
         "below would be measuring mutmut's own stats, not this scope"
@@ -1532,7 +1525,7 @@ def test_the_scope_still_selects_exactly_the_changed_functions_mutants(
     """Positive partner: the mutant selection must be unchanged and precise.
 
     The lookup mirrored here is `collect_source_file_mutation_data()`'s filter
-    (`mutmut/__main__.py`: `fnmatch.fnmatch(key, mutant_name)`). It is the half
+    (`mutmut/__main__.py`: `fnmatch.fnmatch(key, mutant_name)`, still there in 3.8). It is the half
     of the contract the companion pattern must not disturb: a pattern that
     matched the mangled name by trailing-globbing the function name instead
     (`<name>*`) would also select `value_extra`'s mutants and silently mutate a
@@ -1567,7 +1560,7 @@ def test_an_empty_oracle_set_makes_mutmut_run_the_whole_suite() -> None:
     at which point the companion pattern above is solving a different problem
     and this whole section needs re-deriving.
     """
-    from mutmut.__main__ import PytestRunner
+    from mutmut.runners.harness import PytestRunner
 
     # A duck-typed stand-in: the method reads exactly one attribute, and
     # constructing a real PytestRunner would require mutmut's Config to be

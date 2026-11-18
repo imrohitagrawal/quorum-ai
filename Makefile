@@ -382,7 +382,7 @@ def changed_lines():
 def unmutatable(node):
     """True when mutmut will not generate mutants for this function.
 
-    Mirrors mutmut/mutation/file_mutation.py:230-235 - decorated functions are
+    Mirrors mutmut/mutation/file_mutation.py:342-347 - decorated functions are
     skipped because the trampoline copy re-runs decorators, EXCEPT a lone bare
     @staticmethod/@classmethod, which it handles. Measured on this tree: 34 of
     the 40 decorated functions under src/product_app are unmutatable.
@@ -616,13 +616,11 @@ def scope():
         def walk(node, cls=None, frozen=False):
             for child in ast.iter_child_nodes(node):
                 if isinstance(child, ast.ClassDef):
-                    # A DECORATED class is skipped by mutmut together with its
-                    # WHOLE SUBTREE (file_mutation.py:236-237 returns True from
-                    # _skip_node_and_children, and on_visit stops descending).
-                    # So every method inside it is unmutatable, decorated or not
-                    # - e.g. every @dataclass. Missing this left #136 reachable
-                    # from _Session.is_expired and three others.
-                    walk(child, child.name, frozen or bool(child.decorator_list))
+                    # mutmut 3.8 recurses into a DECORATED class and skips only
+                    # the decorator node (file_mutation.py:349-354), so the
+                    # methods of e.g. a @dataclass are mutated and stay in
+                    # scope. (3.6 skipped the whole subtree; #136.)
+                    walk(child, child.name, frozen)
                 elif isinstance(child, ast.FunctionDef | ast.AsyncFunctionDef):
                     span = range(child.lineno, (child.end_lineno or child.lineno) + 1)
                     if lines & set(span):
@@ -702,7 +700,7 @@ def report():
     """Score the run. Timeouts are reported but excluded: measured, they are a
     harness artifact of mutmut's fork-based runner on this app, not evidence
     that a test caught the mutant."""
-    # #142: mirrors mutmut's own status_by_exit_code map (mutmut/__main__.py)
+    # #142: mirrors mutmut's own status_by_exit_code map (mutmut/stats.py)
     # instead of a sign test on the raw exit code. `"killed" if code > 0 else
     # "timeout"` treated ANY positive code not in a three-entry dict as a kill
     # — silently scoring pytest's NO_TESTS_COLLECTED (5, the same meaning as

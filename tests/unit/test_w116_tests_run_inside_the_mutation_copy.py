@@ -490,11 +490,12 @@ def _mutmut_child(script: str, folder: Path, *args: str) -> subprocess.Completed
 
 
 def test_g2a_mutmut_cannot_start_in_a_folder_without_src(tmp_path: Path) -> None:
-    """mutmut's import fails in a bare folder and works once ``src`` exists
-    (the folder is made by hand here, not by the helper).
+    """mutmut's first recorded hit fails in a bare folder and works once
+    ``src`` exists (the folder is made by hand here, not by the helper). Since
+    mutmut 3.8 the import itself succeeds; the settings are read at that hit.
 
-    Red when: a mutmut upgrade stops failing at import in a folder with no
-    ``src`` (then G1a guards a hazard that is gone), or the child cannot run
+    Red when: a mutmut upgrade stops failing at the first hit in a folder with
+    no ``src`` (then G1a guards a hazard that is gone), or the child cannot run
     mutmut at all (the hand-made partner fails)."""
     bare = tmp_path / "bare"
     bare.mkdir()
@@ -512,7 +513,7 @@ def test_g2b_the_helper_makes_a_folder_mutmut_can_start_in(tmp_path: Path) -> No
     it, leaves an EMPTY ``src`` there (nothing importable), and mutmut starts
     and records a hit from it.
 
-    Red when: the helper stops making ``src`` (mutmut then fails at import),
+    Red when: the helper stops making ``src`` (mutmut then fails at its first hit),
     returns another folder, puts something in ``src``, or fails on a second
     call."""
     folder = tmp_path / "child"

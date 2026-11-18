@@ -266,7 +266,7 @@ def test_the_decorated_function_blind_spot_is_recorded() -> None:
     surfaced to the author as the recipe's "missing from also_copy" message,
     which is the wrong cause. mutmut skips a decorated function unless its ONLY
     decorator is a bare @staticmethod/@classmethod
-    (mutmut/mutation/file_mutation.py:230-235). Of the 40 decorated functions
+    (mutmut/mutation/file_mutation.py:342-347). Of the 40 decorated functions
     under src/product_app, 34 are unmutatable — every FastAPI route, every
     Pydantic validator. Replayed over history: **7%** of pull requests with a
     non-empty scope would abort this way, and **38%** have unmutatable
